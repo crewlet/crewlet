@@ -2,8 +2,11 @@ package store_test
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/store"
@@ -34,16 +37,36 @@ import (
 //     regression; one that appeared without the matrix knowing is a matrix
 //     that has stopped describing the build.
 //
-// turso.tech/database/tursogo v0.8.0-pre.7: the vector functions ship;
-// libsql_vector_idx() in CREATE INDEX and the fts() index expression are both
-// parse errors, fts5 is not a registered module, and WITHOUT ROWID is refused
-// as an experimental feature.
+// A FOURTH OUTCOME IS THE GATE, and it is why `gated` is in the matrix beside
+// the booleans. Turso refuses `USING <method>` and `WITHOUT ROWID` as
+// experimental BEFORE it resolves the module or builds the table, so an
+// unflagged connection cannot tell a feature that exists behind the gate from
+// one that was never written — all three read false and only one of them is
+// actually missing. [store.Capabilities.Gated] carries what the probe found
+// behind the gate, so a feature landing in a gated build is recorded here
+// rather than discovered the day somebody tries to use it.
+//
+// turso.tech/database/tursogo v0.8.0-pre.8, measured both ways:
+//
+//   - the vector functions ship, unflagged.
+//   - fts5 is not a registered module, and behind `experimental=index_method`
+//     `USING fts`, `USING vector` and `USING diskann` all answer `unknown
+//     module name` — so the full-text and ANN indexes are genuinely ABSENT
+//     rather than gated.
+//   - WITHOUT ROWID is PRESENT AND GATED: refused on the pool as an
+//     experimental feature, accepted on a connection carrying
+//     `experimental=without_rowid`.
 var capabilityMatrix = struct {
 	vectorFunctions bool
 	vectorIndex     bool
 	fullTextSearch  bool
 	withoutRowid    bool
-}{vectorFunctions: true, vectorIndex: false, fullTextSearch: false, withoutRowid: false}
+	gated           []string
+}{
+	vectorFunctions: true, vectorIndex: false,
+	fullTextSearch: false, withoutRowid: false,
+	gated: []string{"without_rowid"},
+}
 
 func TestCapabilityMatrix(t *testing.T) {
 	t.Parallel()
@@ -75,6 +98,21 @@ func TestCapabilityMatrix(t *testing.T) {
 		gate(t, caps.WithoutRowid, want.withoutRowid,
 			"WITHOUT ROWID tables reach the Go driver")
 		exerciseWithoutRowid(t, db)
+	})
+	// THE GATED SET IS ASSERTED AS A WHOLE rather than per capability,
+	// because both directions are the notification this file exists to
+	// give: a name ARRIVING is a feature Turso implemented while this
+	// engine's connections still cannot reach it — the day to decide
+	// whether to opt the DSN in — and a name LEAVING is either the gate
+	// lifting (the boolean above turns true and its exercise runs) or the
+	// probe's flag name going stale, which is silent by construction
+	// because the engine ignores an experimental name it does not know.
+	t.Run("Gated", func(t *testing.T) {
+		if !slices.Equal(caps.Gated, want.gated) {
+			t.Fatalf("gated = %v, matrix records %v — a capability moved "+
+				"across Turso's experimental gate; re-measure and update "+
+				"capabilityMatrix", caps.Gated, want.gated)
+		}
 	})
 }
 
@@ -162,6 +200,15 @@ func exerciseVectorFunctions(t *testing.T, db *store.DB) {
 	}
 }
 
+// exerciseVectorIndex builds the index the probe measured — in TURSO'S
+// grammar, which is the only one that can ever run here.
+//
+// It asked for `libsql_vector_idx(e)` until this was written: a function of
+// the C fork, a parse error on this driver whatever it ever ships, and
+// therefore an exercise that could only fail — on the one day it runs, which
+// is the day the capability lands. The probe had already been corrected to
+// Turso's spelling; this had not, so the two disagreed about what the
+// capability even is.
 func exerciseVectorIndex(t *testing.T, db *store.DB) {
 	t.Helper()
 	ctx := t.Context()
@@ -169,10 +216,19 @@ func exerciseVectorIndex(t *testing.T, db *store.DB) {
 		`CREATE TABLE cap_ann (id TEXT PRIMARY KEY, e F32_BLOB(4))`); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := db.SQL().ExecContext(ctx,
-		`CREATE INDEX cap_ann_idx ON cap_ann (libsql_vector_idx(e))`); err != nil {
-		t.Fatalf("ANN index: %v", err)
+	// Both spellings, in the probe's own order: whichever method the
+	// driver landed is the one that answered true.
+	var errs []error
+	for _, method := range []string{"vector", "diskann"} {
+		_, err := db.SQL().ExecContext(ctx,
+			`CREATE INDEX cap_ann_idx ON cap_ann USING `+method+` (e)`)
+		if err == nil {
+			return
+		}
+		errs = append(errs, fmt.Errorf("USING %s: %w", method, err))
 	}
+	t.Fatalf("ANN index: the probe reports one, but neither method builds one: %v",
+		errors.Join(errs...))
 }
 
 func exerciseFullText(t *testing.T, db *store.DB) {
@@ -180,9 +236,11 @@ func exerciseFullText(t *testing.T, db *store.DB) {
 	ctx := t.Context()
 	if _, err := db.SQL().ExecContext(ctx,
 		`CREATE VIRTUAL TABLE cap_fts USING fts5(body)`); err != nil {
-		// The other mechanism the probe accepts is Turso's own fts()
-		// index expression; a driver that offers only that one still
-		// reports the capability, and the query layer would branch.
+		// The other mechanism the probe accepts is Turso's own `USING
+		// fts` index method, whose MATCH is written against the indexed
+		// columns rather than the table; a driver that offers only that
+		// one still reports the capability, and the query layer would
+		// branch.
 		t.Skipf("full text is available through the non-fts5 mechanism: %v", err)
 	}
 	if _, err := db.SQL().ExecContext(ctx,
