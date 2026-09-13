@@ -116,6 +116,21 @@ func TestARenameMovesTheAddressAndFreesTheOldOne(t *testing.T) {
 	if _, err := r.reader.Get(t.Context(), "ENG/Old Name", statelog.ReadSession); !errors.Is(err, pages.ErrNotFound) {
 		t.Fatalf("the old address still resolves: %v", err)
 	}
+	// AND THE PAGE RENDERS THE NAME IT MOVED TO. The address is a COLUMN
+	// and the title a reader renders comes out of the `document`, so a
+	// rename written to the columns alone resolves at the new address and
+	// goes on displaying the old name — on every node, for ever, with
+	// nothing anywhere reporting a disagreement.
+	if got := r.get(page.Page.ID); got.Page.Title != "New Name" {
+		t.Errorf("the page reads as %q after being renamed to %q — the new "+
+			"address resolves and the page still renders the name it had",
+			got.Page.Title, "New Name")
+	}
+	if head, _, err := r.store.Page(t.Context(), page.Page.ID); err != nil ||
+		head.Title != "New Name" {
+		t.Errorf("the head reads as %q (%v) — this is the value every write "+
+			"path's own snapshot decides from", head.Title, err)
+	}
 	// AND THE FREED NAME IS TAKEABLE, which is the half a claim that was
 	// never released would silently break.
 	if _, err := r.store.Create(t.Context(), author("bob"), pages.NewPage{
@@ -419,4 +434,377 @@ func manyLabels(n int) []string {
 		out[i] = "label-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 	}
 	return out
+}
+
+// A NO-OP SAVE STILL ANSWERS WITH THE PAGE IT DID NOT CHANGE.
+//
+// "Nothing changed" is a success, and a caller told its write landed reads the
+// page out of that answer — the page tool serializes the id, the title and the
+// version straight into the model's result. Answering with a zero page reports
+// success on a page with no id, no title and version zero, which is
+// indistinguishable from a write that landed somewhere nobody can name.
+func TestANoOpSaveStillAnswersWithThePage(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	got, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("prose")})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if got.Page.ID != page.Page.ID || got.Page.Title != "Runbook" ||
+		got.Page.Version != 1 {
+		t.Errorf("an idempotent save answered with %+v, want the page it read "+
+			"— id %s, title %q, version 1", got.Page, page.Page.ID, "Runbook")
+	}
+	if got.Outcome.Outcome != statelog.OutcomeApplied {
+		t.Errorf("outcome = %q, want %q: an update that changes no field is "+
+			"one the caller should be told landed",
+			got.Outcome.Outcome, statelog.OutcomeApplied)
+	}
+	// AND THE REVISION IS THE ROW'S OWN, in the number space the reader
+	// answers in. Nothing landed, so the only number there is is the one
+	// the decision read — and a literal zero is the value this package
+	// refuses to answer a head read with, for the reason it is unusable
+	// here too: it is both "this node has applied nothing for this page"
+	// and "nobody answered", and it goes straight into the map a page tool
+	// serializes for a model.
+	if got.Revision == 0 {
+		t.Errorf("an idempotent save reported revision 0 while reporting " +
+			"success")
+	}
+	if head := r.get(page.Page.ID); got.Revision != head.Revision {
+		t.Errorf("the write reports revision %d and the reader answers %d — "+
+			"two numbers under one name is a comparison that silently never "+
+			"holds", got.Revision, head.Revision)
+	}
+}
+
+// A WRITE THAT LANDS REPORTS THE REVISION ITS OWN RECORD PUT THE ROW AT.
+//
+// The two arms of [Written.Revision] have to be ONE number space or the field
+// means nothing: a caller comparing what a write reported against what a later
+// read answers is doing the only thing the number is for. A record's position
+// is what the applier stamps into the row, so the write's answer and the
+// reader's are the same integer by construction — and the sequence alone is
+// NOT that integer, because a row's version composes the generation with it.
+func TestAWriteReportsTheRevisionTheReaderAnswersWith(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "v1"})
+	r.drain()
+	if got := r.get(page.Page.ID); got.Revision != page.Revision {
+		t.Errorf("the create reports revision %d and the reader answers %d",
+			page.Revision, got.Revision)
+	}
+
+	saved, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Body: ptr("v2")})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	if saved.Revision <= page.Revision {
+		t.Errorf("the save reports revision %d and the create reported %d — a "+
+			"later write is at a later revision", saved.Revision, page.Revision)
+	}
+	if got := r.get(page.Page.ID); got.Revision != saved.Revision {
+		t.Errorf("the save reports revision %d and the reader answers %d",
+			saved.Revision, got.Revision)
+	}
+}
+
+// AN UNCHANGED COMMENT EDIT ANSWERS WITH A REVISION TOO.
+//
+// It is the third no-op on this write path and the one furthest from anybody's
+// eye: re-sending a comment's own text appends nothing, and the tool that
+// serializes the answer reads `revision` out of it exactly as the page tools
+// do.
+func TestAnUnchangedCommentEditStillAnswersWithARevision(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	comment, _, err := r.store.Comment(t.Context(), author("jane"), page.Page.ID,
+		pages.NewComment{Body: "is this still right?"})
+	if err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+	before := r.consumed
+
+	_, got, err := r.store.EditComment(t.Context(), author("jane"), page.Page.ID,
+		comment.ID, "is this still right?")
+	if err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	r.drain()
+	if r.consumed != before {
+		t.Errorf("re-sending a comment's own text appended a record (%d -> %d)",
+			before, r.consumed)
+	}
+	if got.Revision == 0 {
+		t.Errorf("an unchanged comment edit reported revision 0 while " +
+			"reporting success")
+	}
+	if head := r.get(page.Page.ID); got.Revision != head.Revision {
+		t.Errorf("the edit reports revision %d and the reader answers %d",
+			got.Revision, head.Revision)
+	}
+}
+
+// A RENAME TO THE TITLE A PAGE ALREADY DISPLAYS ANSWERS `applied` AND WRITES
+// NOTHING.
+//
+// THE TRUE NO-OP IS BOTH HALVES: the same address AND the same displayed
+// title. Only then is there nothing left to write — `pages_titles` is keyed on
+// the normalised title and `pages_heads.title` already reads exactly what was
+// asked for. Publishing anyway would take a create-only append at an address
+// this page already holds, lose to its own claim, and be reported as a name
+// somebody else took.
+//
+// It is the one write here that never reaches the broker, so it is the one
+// whose outcome the framework's own no-op arm has to answer: an empty outcome
+// is not one of the three the contract has, and a caller reading it cannot
+// tell a move that has already happened from a write nothing could be
+// established about — the honest response to the second being to retry.
+func TestARenameToTheTitleItAlreadyDisplaysAnswersApplied(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	before := r.consumed
+
+	got, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
+		"  Runbook ", false)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if got.Outcome.Outcome != statelog.OutcomeApplied {
+		t.Errorf("outcome = %q, want %q — a rename to the title the page "+
+			"already displays has happened, and an absent outcome is not one "+
+			"of the three answers a caller may act on",
+			got.Outcome.Outcome, statelog.OutcomeApplied)
+	}
+	if got.Outcome.OpID != got.ChangeID || got.ChangeID == "" {
+		t.Errorf("the outcome carries op id %q and the write reports %q — a "+
+			"retry is only safe under the same one", got.Outcome.OpID, got.ChangeID)
+	}
+	if got.Page.ID != page.Page.ID {
+		t.Errorf("answered with page %+v, want %s", got.Page, page.Page.ID)
+	}
+	// AND THE REVISION IS THE ROW'S OWN, never zero: nothing landed, so
+	// the only number there is is the one the decision read — and zero is
+	// both "this node has applied nothing for this page" and "nobody
+	// answered", which a caller cannot act on either way.
+	if got.Revision == 0 {
+		t.Errorf("an idempotent rename reported revision 0 while reporting " +
+			"success — the same literal this package refuses to answer a head " +
+			"read with, in the same map a page tool serializes for a model")
+	}
+	if head := r.get(page.Page.ID); got.Revision != head.Revision {
+		t.Errorf("the write reports revision %d and the reader answers %d — "+
+			"two numbers under one name is a comparison that silently never "+
+			"holds", got.Revision, head.Revision)
+	}
+	r.drain()
+	if r.consumed != before {
+		t.Errorf("renaming a page to the title it already displays appended a "+
+			"record (%d -> %d), which would lose to its own claim",
+			before, r.consumed)
+	}
+}
+
+// A CAPITALISATION CHANGE IS A RENAME, and it is the case the address cannot
+// see.
+//
+// `title` is the DISPLAYED title and `title_norm` the address it was
+// arbitrated on, kept apart precisely because a link is resolved by the second
+// and rendered from the first. So "Runbook" -> "RUNBOOK" moves a real field
+// every reader sees while the address stays exactly where it is — and
+// discarding it as a no-op told the caller `applied`, handed back the OLD
+// title, and left the stored one untouched.
+//
+// It arbitrates on the PAGE rather than on the title: the address does not
+// move, so the title subject it would otherwise take is the one this page
+// already holds, where a create-only append loses to its own claim.
+func TestACapitalisationChangeIsARenameAndLands(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	before := r.consumed
+
+	got, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
+		"RUNBOOK", false)
+	if err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if got.Page.Title != "RUNBOOK" {
+		t.Errorf("the write answered with title %q, want %q — a caller told "+
+			"its rename landed reads the new title out of that answer",
+			got.Page.Title, "RUNBOOK")
+	}
+	r.drain()
+	if r.consumed == before {
+		t.Fatalf("a capitalisation change appended no record (%d), so the "+
+			"displayed title every reader renders was silently discarded",
+			r.consumed)
+	}
+	head := r.get(page.Page.ID)
+	if head.Page.Title != "RUNBOOK" {
+		t.Errorf("the stored displayed title is %q, want %q", head.Page.Title,
+			"RUNBOOK")
+	}
+	// AND THE ADDRESS DID NOT MOVE, which is what makes this the page's
+	// write rather than the title's: the old spelling still resolves,
+	// because the claim is on the normalised title and that did not
+	// change.
+	if by := r.get("ENG/runbook"); by.Page.ID != page.Page.ID {
+		t.Errorf("the address resolves to %s, want %s — a retitle must leave "+
+			"the claim exactly where it was", by.Page.ID, page.Page.ID)
+	}
+	if head.Page.Version != page.Page.Version {
+		t.Errorf("the page's edit version moved %d -> %d — a rename changes an "+
+			"address and a displayed title, never the body's own version",
+			page.Page.Version, head.Page.Version)
+	}
+	// AND THE HISTORY SAYS IT WAS A RENAME, so a card renders the verb a
+	// person would use for it.
+	if len(head.History) == 0 {
+		t.Fatalf("the page has no history after a rename")
+	}
+}
+
+// AN OPERATOR'S `watch` TOGGLE CHANGES NOTHING AND PUBLISHES NOTHING.
+//
+// An operator write names no seat — the ops surface deliberately refuses to
+// let a token act as one — so there is no subscription for `watch` to move.
+// The set-size comparison this used to rest on could not see that: it was
+// covered by a clause that is false by construction once the mutator has run,
+// and true only for the empty handle, so the one caller it fired for was the
+// one caller with nothing to change.
+func TestAnOperatorsWatchToggleChangesNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	before := r.consumed
+
+	operator := pages.Actor{Kind: pages.AuthorOperator, OperatorID: "ci"}
+	if _, err := r.store.SavePage(t.Context(), operator, page.Page.ID,
+		pages.Save{BaseVersion: 1, Watch: ptr(false)}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	if r.consumed != before {
+		t.Errorf("an operator's watch toggle appended a record (%d -> %d) and "+
+			"woke every watcher, for a change to nobody's subscription",
+			before, r.consumed)
+	}
+	if got := r.get(page.Page.ID); len(got.Page.Muted) != 0 {
+		t.Errorf("muted = %v after an operator unwatch — a token has no seat "+
+			"to mute", got.Page.Muted)
+	}
+}
+
+// A RE-WATCH IS A CHANGE THE SET SIZES CANNOT SEE, and the case that proves it
+// needs a handle that was NEVER a watcher.
+//
+// MUTED IS NOT A SUBSET OF WATCHERS: a `watch: false` from somebody who does
+// not follow the page adds them to the muted set alone, so the page sits at
+// watchers=[jane] muted=[carla]. Their later `watch: true` takes them OUT of
+// muted and INTO watchers — two rows moved, and a total that does not budge.
+// A mutator that compared the sizes before and after would read that as
+// "nothing changed", publish nothing, and leave somebody who asked to follow
+// the page muted on every record it writes.
+//
+// An unwatch by somebody who WAS a watcher is the easy half and cannot stand
+// in for it: their handle stays in the watcher set and the mute is added
+// beside it, so the total moves and the sizes agree with the truth by
+// accident.
+func TestARewatchIsAChangeAlthoughTheSetsStaySameSize(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	// carla is not a watcher — jane created the page, so she is the only
+	// one — and muting as a non-watcher is what produces the same-size
+	// case below.
+	if _, err := r.store.SavePage(t.Context(), author("carla"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Watch: ptr(false)}); err != nil {
+		t.Fatalf("mute: %v", err)
+	}
+	r.drain()
+	muted := r.get(page.Page.ID)
+	if !slices.Contains(muted.Page.Muted, "carla") ||
+		slices.Contains(muted.Page.Watchers, "carla") {
+		t.Fatalf("after a non-watcher's mute watchers = %v, muted = %v — this "+
+			"test's whole premise is that the two sets are disjoint here",
+			muted.Page.Watchers, muted.Page.Muted)
+	}
+	sizeBefore := len(muted.Page.Watchers) + len(muted.Page.Muted)
+	before := r.consumed
+
+	if _, err := r.store.SavePage(t.Context(), author("carla"), page.Page.ID,
+		pages.Save{BaseVersion: 1, Watch: ptr(true)}); err != nil {
+		t.Fatalf("re-watch: %v", err)
+	}
+	r.drain()
+	if r.consumed == before {
+		t.Fatalf("a re-watch appended nothing — somebody who asked to follow " +
+			"a page again is still muted on every record it writes")
+	}
+	got := r.get(page.Page.ID)
+	if slices.Contains(got.Page.Muted, "carla") ||
+		!slices.Contains(got.Page.Watchers, "carla") {
+		t.Errorf("after a re-watch muted = %v, watchers = %v",
+			got.Page.Muted, got.Page.Watchers)
+	}
+	if size := len(got.Page.Watchers) + len(got.Page.Muted); size != sizeBefore {
+		t.Errorf("the two sets hold %d handles and held %d — if the re-watch "+
+			"moves the total, this case is not the one a size comparison "+
+			"misses and the test is not exercising the rule it names",
+			size, sizeBefore)
+	}
+}
+
+// A HEAD READ REPORTS THE REVISION IT WAS READ AT, never a constant zero.
+//
+// The number is what a caller compares to decide whether its own write is
+// visible on this node. A literal zero is the one value it cannot act on: it
+// is both "this node has applied nothing for this page" and "nobody answered".
+func TestAHeadReadReportsTheRevisionItWasReadAt(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+
+	head, revision, err := r.store.Page(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("read the head: %v", err)
+	}
+	if head.ID != page.Page.ID {
+		t.Fatalf("read page %s, want %s", head.ID, page.Page.ID)
+	}
+	if revision == 0 {
+		t.Fatalf("the head of an applied page reads at revision 0, which is " +
+			"the answer a node that has applied nothing gives")
+	}
+	// AND IT IS THE SAME NUMBER THE READER ANSWERS WITH. Two expressions
+	// for one revision is two things to keep in step, and the one that
+	// moves on a rename is MAX(version, scoped_through).
+	if got := r.get(page.Page.ID).Revision; got != revision {
+		t.Errorf("the head reads at %d and the reader answers %d", revision, got)
+	}
+	if _, err := r.store.Rename(t.Context(), author("jane"), page.Page.ID,
+		"New Name", false); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	r.drain()
+	_, moved, err := r.store.Page(t.Context(), page.Page.ID)
+	if err != nil {
+		t.Fatalf("read the head after a rename: %v", err)
+	}
+	if moved <= revision {
+		t.Errorf("a rename left the head at revision %d (was %d) — a rename "+
+			"stamps `scoped_through` and never `version`, so a revision taken "+
+			"from the version alone never moves for one", moved, revision)
+	}
 }

@@ -94,6 +94,21 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	if err := addressMatches(at, container, token, p.Container, p.Title); err != nil {
 		return 0, err
 	}
+	// A RENAME OF A PURGED PAGE APPLIES NOWHERE, on [Applier.applyCreate]'s
+	// reasoning and for a sharper consequence. The deletion gate cannot see
+	// this record — a title subject names its page only in a payload the
+	// gate may not be able to read — so a rename that lost its race with a
+	// purge would otherwise claim an address for a page whose every row is
+	// gone. Nothing releases such a claim and nothing can re-take it: the
+	// claim row IS the first-writer guard, so the name is dead for the life
+	// of the deployment.
+	purged, err := pageIsPurged(ctx, tx, p.PageID)
+	if err != nil {
+		return 0, err
+	}
+	if purged {
+		return 0, nil
+	}
 	rows := 0
 	claimed, err := claimTitle(ctx, tx, at, container, token, p.Title, p.PageID)
 	if err != nil {
@@ -117,19 +132,46 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	n, _ := res.RowsAffected()
 	rows += int(n)
 
-	res, err = tx.ExecContext(ctx, `
-		UPDATE pages_heads
-		SET title = ?, title_norm = ?, container = ?, updated_at = ?,
-		    scoped_through = ?
-		WHERE id = ? AND scoped_through < ? AND version < ?`,
-		p.Title, NormalizeTitle(p.Title), container,
-		store.EncodeTime(at.brokerAt), at.packed, p.PageID, at.packed, at.packed)
+	// THE DOCUMENT MOVES WITH THE COLUMNS, which is the same rule
+	// [Applier.applyStatusChange] states for a trash: every reader here
+	// decodes `document` — the reader's own Get, each write path's
+	// snapshot, the head a caller compares its rename against — so a title
+	// moved in the columns alone is a rename NOBODY CAN SEE. The new
+	// address resolves (that is a column) and the page goes on rendering
+	// the name it had (that is the document), for ever, on every node.
+	//
+	// It cannot simply call [Applier.writeHead], which is the reason this
+	// diverged in the first place: that writer stamps `version`, and a
+	// rename arbitrates on the TITLE and writes the page's row from
+	// another subject — so it must move `scoped_through` and leave
+	// `version` exactly where the page's own last record put it.
+	head, found, err := readHead(ctx, tx, p.PageID)
 	if err != nil {
-		return 0, fmt.Errorf("pages: rename %s at %s: %w",
-			p.PageID, at.position, err)
+		return 0, err
 	}
-	n, _ = res.RowsAffected()
-	rows += int(n)
+	if found {
+		head.Title = p.Title
+		head.Container = container
+		head.UpdatedAt = at.brokerAt
+		var document []byte
+		if document, err = EncodePage(head); err != nil {
+			return 0, err
+		}
+		res, err = tx.ExecContext(ctx, `
+			UPDATE pages_heads
+			SET title = ?, title_norm = ?, container = ?, updated_at = ?,
+			    scoped_through = ?, document = ?
+			WHERE id = ? AND scoped_through < ? AND version < ?`,
+			p.Title, NormalizeTitle(p.Title), container,
+			store.EncodeTime(at.brokerAt), at.packed, document,
+			p.PageID, at.packed, at.packed)
+		if err != nil {
+			return 0, fmt.Errorf("pages: rename %s at %s: %w",
+				p.PageID, at.position, err)
+		}
+		n, _ = res.RowsAffected()
+		rows += int(n)
+	}
 
 	entry, err := a.writeHistory(ctx, tx, at, p.PageID, ChangeRenamed, "")
 	if err != nil {
@@ -147,11 +189,68 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	switch p := payload.(type) {
 	case PagePatch:
 		return a.applyPatch(ctx, tx, at, p)
+	case RetitlePayload:
+		return a.applyRetitle(ctx, tx, at, p)
 	case StatusPayload:
 		return a.applyStatusChange(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("pages: the page record at %s carries a %T",
 		at.position, payload)
+}
+
+// applyRetitle writes a page's new DISPLAYED title, leaving its address where
+// it is.
+//
+// NOTHING IN pages_titles MOVES, and that is the operation: the claim is keyed
+// on the NORMALISED title, which is byte-identical either side of this record,
+// so there is no claim to take and none to release. The head's `title_norm`
+// does not move either — [Applier.writeHead] recomputes it from the title, and
+// for a capitalisation or a spacing change it lands on the same value.
+//
+// THE GUARD IS THE ADDRESS THE RECORD WAS DECIDED AGAINST. A concurrent rename
+// that MOVES the page arbitrates on the new title's subject, which this record
+// never touches, so the broker cannot order the two — and applying this one
+// after that one would park the page at a displayed title whose address it no
+// longer holds, which is a name no link resolves and no claim protects. Skipped
+// rather than refused, because it is ordinary traffic rather than a malformed
+// record, and it is a pure function of the record and the row, so every node
+// skips exactly the same records.
+func (a *Applier) applyRetitle(ctx context.Context, tx *sql.Tx, at applyContext,
+	p RetitlePayload) (int, error) {
+
+	head, found, err := readHead(ctx, tx, at.subject().ID)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		// Same reasoning as [Applier.applyPatch]: under a STRICT replay
+		// the create is below this position on the same ordered log, so
+		// a missing row is a record this build applied incorrectly
+		// rather than one that has not arrived.
+		return 0, fmt.Errorf("pages: the retitle at %s names page %s, which this "+
+			"node has no row for — under a strict replay its create is below "+
+			"this position", at.position, at.subject().ID)
+	}
+	if NormalizeTitle(head.Title) != NormalizeTitle(p.FormerTitle) ||
+		NormalizeTitle(p.Title) != NormalizeTitle(p.FormerTitle) {
+		// EITHER THE ROW MOVED or the record is not a retitle at all —
+		// a payload whose two titles normalise differently is an
+		// ADDRESS change published on the page's subject, which
+		// arbitrated nothing at the address and must never be allowed
+		// to take one.
+		return 0, nil
+	}
+	head.Title = p.Title
+	head.UpdatedAt = at.brokerAt
+	rows, err := a.writeHead(ctx, tx, at, head)
+	if err != nil {
+		return 0, err
+	}
+	entry, err := a.writeHistory(ctx, tx, at, head.ID, ChangeRenamed, "")
+	if err != nil {
+		return 0, err
+	}
+	return rows + entry, nil
 }
 
 // applyPatch writes one change to a page head.

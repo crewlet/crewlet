@@ -433,3 +433,136 @@ func containsSubstring(haystack, needle string) bool {
 	}
 	return false
 }
+
+// TestARetitleWritesOnlyWhileThePageStillHoldsTheAddressItWasDecidedAgainst.
+//
+// A RETITLE ARBITRATES ON THE PAGE, because the address it changes the display
+// of is the one the page already holds — so the broker cannot order it against
+// a rename that MOVES the address, which contends on the new title's subject
+// instead. What covers that is the record's own statement of the address it
+// was decided against: the applier writes only while the row still reads it.
+//
+// Without the guard a retitle applied after a rename leaves `title` reading
+// one name and `title_norm` another — a displayed title no link resolves and
+// no claim protects — and it does so on every node, identically and for ever.
+func TestARetitleWritesOnlyWhileThePageStillHoldsTheAddressItWasDecidedAgainst(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	if _, _, err := h.apply(create("page-1", "ENG", "Runbook", "prose")); err != nil {
+		t.Fatalf("apply a create: %v", err)
+	}
+	// The page moves to a new address, exactly as a concurrent rename
+	// would — the retitle below never contended with this, because the two
+	// arbitrate on different subjects.
+	moved := record(pages.TitleSubject("ENG", "Deploy Guide"), pages.OpRename,
+		"op-rename", pages.RenamePayload{
+			V: pages.DocumentVersion, PageID: "page-1", Container: "ENG",
+			Title: "Deploy Guide", FormerContainer: "ENG", FormerTitle: "Runbook",
+		}, pages.ScopeSet{Subject: true, Container: "ENG"})
+	if _, _, err := h.apply(moved); err != nil {
+		t.Fatalf("apply the rename: %v", err)
+	}
+
+	stale := record(pages.PageSubject("page-1"), pages.OpRetitle, "op-retitle",
+		pages.RetitlePayload{
+			V: pages.DocumentVersion, PageID: "page-1",
+			Title: "RUNBOOK", FormerTitle: "Runbook",
+		}, pages.ScopeSet{Subject: true, Container: "ENG"})
+	rows, gate, err := h.apply(stale)
+	if err != nil || gate != "" {
+		t.Fatalf("apply the retitle: %v (gate %q) — a record that lost this "+
+			"race is ordinary traffic, not a malformed record that stops "+
+			"every node's log", err, gate)
+	}
+	if rows != 0 {
+		t.Errorf("the stale retitle wrote %d rows", rows)
+	}
+	if got := h.scalar(`SELECT title FROM pages_heads WHERE id = ?`, "page-1"); got != "Deploy Guide" {
+		t.Errorf("the displayed title is %q, want %q — a retitle that lost to "+
+			"a rename must leave the page at the name it actually holds",
+			got, "Deploy Guide")
+	}
+	if got := h.scalar(`SELECT title_norm FROM pages_heads WHERE id = ?`, "page-1"); got != "deploy guide" {
+		t.Errorf("the address is %q, want %q", got, "deploy guide")
+	}
+
+	// AND A RETITLE WHOSE OWN TWO TITLES ARE DIFFERENT ADDRESSES is not a
+	// retitle at all: it is an address change published on the page's
+	// subject, which arbitrated nothing at either address.
+	smuggled := record(pages.PageSubject("page-1"), pages.OpRetitle, "op-smuggled",
+		pages.RetitlePayload{
+			V: pages.DocumentVersion, PageID: "page-1",
+			Title: "Something Else", FormerTitle: "Deploy Guide",
+		}, pages.ScopeSet{Subject: true, Container: "ENG"})
+	if rows, _, err := h.apply(smuggled); err != nil || rows != 0 {
+		t.Errorf("a page-subject record moved the address (%d rows, %v) — the "+
+			"name it took is held by no claim and resolves for nobody", rows, err)
+	}
+	if got := h.scalar(`SELECT title FROM pages_heads WHERE id = ?`, "page-1"); got != "Deploy Guide" {
+		t.Errorf("the displayed title is %q after a smuggled address change", got)
+	}
+
+	// AND THE ORDINARY CASE STILL LANDS, so the guard is not simply
+	// refusing everything.
+	good := record(pages.PageSubject("page-1"), pages.OpRetitle, "op-good",
+		pages.RetitlePayload{
+			V: pages.DocumentVersion, PageID: "page-1",
+			Title: "DEPLOY GUIDE", FormerTitle: "Deploy Guide",
+		}, pages.ScopeSet{Subject: true, Container: "ENG"})
+	if rows, _, err := h.apply(good); err != nil || rows == 0 {
+		t.Fatalf("a retitle at the address it was decided against wrote %d "+
+			"rows: %v", rows, err)
+	}
+	if got := h.scalar(`SELECT title FROM pages_heads WHERE id = ?`, "page-1"); got != "DEPLOY GUIDE" {
+		t.Errorf("the displayed title is %q, want %q", got, "DEPLOY GUIDE")
+	}
+}
+
+// TestARenameOfAPurgedPageClaimsNothing.
+//
+// A purge destroys every row a page has, the title claim included. A rename
+// that was already in flight arbitrates on the TITLE, so the deletion gate
+// cannot see it — a title subject names its page only in a payload the gate
+// may not be able to read — and applying it would write a claim for a page
+// that no longer exists.
+//
+// THAT CLAIM IS UNRECOVERABLE. Nothing releases it (a release is a rename by
+// the page that holds it, and there is no such page) and nothing can re-take
+// it, because the claim row IS the first-writer guard a create is refused by.
+// The address is dead for the life of the deployment.
+func TestARenameOfAPurgedPageClaimsNothing(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, nil)
+	if _, _, err := h.apply(create("page-1", "ENG", "Runbook", "prose")); err != nil {
+		t.Fatalf("apply a create: %v", err)
+	}
+	purge := record(pages.PageSubject("page-1"), pages.OpPurge, "op-purge",
+		pages.StatusPayload{V: pages.DocumentVersion, Reason: "duplicate"},
+		pages.ScopeSet{Subject: true, Container: "ENG"})
+	if _, _, err := h.apply(purge); err != nil {
+		t.Fatalf("apply the purge: %v", err)
+	}
+	if got := h.count("pages_titles"); got != 0 {
+		t.Fatalf("the purge left %d claims", got)
+	}
+
+	moved := record(pages.TitleSubject("ENG", "Deploy Guide"), pages.OpRename,
+		"op-rename", pages.RenamePayload{
+			V: pages.DocumentVersion, PageID: "page-1", Container: "ENG",
+			Title: "Deploy Guide", FormerContainer: "ENG", FormerTitle: "Runbook",
+		}, pages.ScopeSet{Subject: true, Container: "ENG"})
+	rows, gate, err := h.apply(moved)
+	if err != nil {
+		t.Fatalf("apply the rename: %v (gate %q)", err, gate)
+	}
+	if rows != 0 {
+		t.Errorf("a rename of a purged page wrote %d rows", rows)
+	}
+	if got := h.count("pages_titles"); got != 0 {
+		t.Errorf("%d addresses are claimed by a page that was destroyed — "+
+			"nothing releases such a claim and nothing can re-take it", got)
+	}
+	if got := h.count("pages_history"); got != 0 {
+		t.Errorf("%d history rows survive a purge", got)
+	}
+}

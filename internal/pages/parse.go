@@ -36,16 +36,19 @@ const (
 const RoutedViaField = "routed_via"
 
 // The metadata keys the prompt reads back.
+//
+// EVERY ONE HAS A PRODUCER AND A READER. The set used to carry three more — a
+// status, a comment id and a head revision — each read by nothing, and each
+// written from a shape this domain stopped putting on the wire when it moved
+// onto its log. A key nobody sets and nobody reads is indistinguishable from
+// one whose producer broke, which is exactly what had happened to all three.
 const (
 	MetaPageID     = "page_id"
 	MetaContainer  = "container"
 	MetaTitle      = "title"
-	MetaStatus     = "status"
 	MetaVersion    = "version"
 	MetaChangeID   = "change_id"
 	MetaChangeKind = "change_kind"
-	MetaCommentID  = "comment_id"
-	MetaRevision   = "head_revision"
 )
 
 // Leads maps a container key to the handle that owns it.
@@ -76,35 +79,54 @@ func NewParser(opts ParserOptions) *Parser {
 func (p *Parser) Source() string { return Source }
 
 // Parse reports which seats a page change concerns.
+//
+// IT READS THE RECORD THE FEED DELIVERS, which is a [MutationRecord] — the
+// same shape [Translator.Translate] encodes and the same one the tracker's own
+// parser reads. It used to decode the body as a [Change], the shape the
+// coordination family this domain replaced put on the wire; the two share a
+// version field and almost no key, so every delivery decoded cleanly into a
+// change with no page id, and every page notification in the company was
+// silently dropped one line later.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) ([]notify.Routed, error) {
-	change, err := changeFromBody(w.Body)
+	record, err := recordFromBody(w.Body)
 	if err != nil {
 		return nil, err
 	}
-	if change.PageID == "" {
-		log.DebugContext(ctx, "pages_change_names_no_page", "change", change.ID)
+	if record.Notify == nil {
+		// A RECORD NOBODY ANNOUNCED reaching the parser at all means the
+		// feed's own decision was bypassed — a replayed body, a test, a
+		// second producer. Answering "nobody" rather than erroring keeps
+		// the two layers independent: the feed decides what to relay and
+		// this decides who it is for.
 		return nil, nil
 	}
-	base := p.inbound(change)
-	actor := change.Actor
+	if record.Notify.PageID == "" {
+		log.DebugContext(ctx, "pages_change_names_no_page", "change", record.OpID)
+		return nil, nil
+	}
+	base := p.inbound(record)
+	actor := record.Actor
 
 	var targets []target
-	for _, handle := range change.Mentions {
+	for _, handle := range record.Notify.Mentions {
 		targets = append(targets, target{handle: handle, via: ViaMention})
 	}
-	for _, handle := range change.Snapshot.Watchers {
+	// THE RECIPIENTS ARE THE WATCHERS MINUS THE MUTED, subtracted once at
+	// write time — so this can never forget to, and a handle that unwatched
+	// is not woken by a set that still remembers them.
+	for _, handle := range record.Notify.Recipients {
 		targets = append(targets, target{handle: handle, via: ViaWatcher})
 	}
 	if copies := p.directed(base, targets, actor, reg); len(copies) > 0 {
 		return copies, nil
 	}
-	if !LeadWorthy(change.Kind) {
+	if !LeadWorthy(record.Notify.Kind) {
 		// An ordinary save nobody follows. A wiki fills up with pages
 		// nobody watches, and waking a lead for every one of them is how a
 		// lead learns to ignore the knowledge base entirely.
 		return nil, nil
 	}
-	return p.leadCopy(base, change.Snapshot.Container, actor, reg), nil
+	return p.leadCopy(base, record.Notify.Container, actor, reg), nil
 }
 
 // LeadWorthy reports whether a change reaches the container's lead when
@@ -174,32 +196,26 @@ func (p *Parser) leadCopy(base notify.Inbound, container, actor string, reg *not
 	}}
 }
 
-func (p *Parser) inbound(change Change) notify.Inbound {
+func (p *Parser) inbound(record MutationRecord) notify.Inbound {
+	n := record.Notify
 	meta := map[string]string{
-		notify.ActorField: change.Actor,
-		MetaPageID:        change.PageID,
-		MetaContainer:     change.Snapshot.Container,
-		MetaTitle:         change.Snapshot.Title,
-		MetaStatus:        string(change.Snapshot.Status),
-		MetaVersion:       fmt.Sprint(change.Snapshot.Version),
-		MetaChangeID:      change.ID,
-		MetaChangeKind:    string(change.Kind),
+		notify.ActorField: record.Actor,
+		MetaPageID:        n.PageID,
+		MetaContainer:     n.Container,
+		MetaTitle:         n.Title,
+		MetaVersion:       fmt.Sprint(n.Version),
+		MetaChangeID:      record.OpID,
+		MetaChangeKind:    string(n.Kind),
 	}
-	if change.CommentID != "" {
-		meta[MetaCommentID] = change.CommentID
-	}
-	if change.HeadRevision != 0 {
-		meta[MetaRevision] = fmt.Sprint(change.HeadRevision)
-	}
-	if link := p.link(change.PageID); link != "" {
+	if link := p.link(n.PageID); link != "" {
 		meta["url"] = link
 	}
 	return notify.Inbound{
 		Source:    Source,
-		EventType: string(change.Kind),
-		Sender:    change.Actor,
-		Subject:   change.Snapshot.Title,
-		Body:      change.Excerpt,
+		EventType: string(n.Kind),
+		Sender:    record.Actor,
+		Subject:   n.Title,
+		Body:      n.Excerpt,
 		Metadata:  meta,
 	}
 }
@@ -221,15 +237,20 @@ func withVia(base notify.Inbound, via string) notify.Inbound {
 	return base
 }
 
-func changeFromBody(body map[string]any) (Change, error) {
+// recordFromBody recovers the record the feed relayed.
+//
+// THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote reaches
+// this parser with everything it carried: the body is exactly the record,
+// unknown fields included, and re-encoding it later must not strip them.
+func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
-		return Change{}, fmt.Errorf("pages: the delivery carries no change record")
+		return MutationRecord{}, fmt.Errorf("pages: the delivery carries no record")
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
-		return Change{}, fmt.Errorf("pages: read the delivery: %w", err)
+		return MutationRecord{}, fmt.Errorf("pages: read the delivery: %w", err)
 	}
-	return DecodeChange(data)
+	return Decode(data)
 }
 
 // AddressedKinds are the routing reasons that mean somebody is waiting.

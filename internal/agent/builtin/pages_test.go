@@ -27,6 +27,18 @@ type fakeKB struct {
 	readErr  error
 	writeErr error
 
+	// awaited is every position [builtin.PageDeps.Await] was handed, in
+	// order, so a tool that waited for the wrong write — or waited before
+	// making the write that needs it — is visible rather than merely
+	// plausible.
+	awaited []uint64
+
+	// renameResult is what Rename answers. Nil takes an ordinary rename
+	// that landed a record; a test pins it to model the idempotent shape,
+	// where nothing was appended and the answer carries the revision this
+	// node had already applied.
+	rename func(pageID, title string) pages.Written
+
 	// levels is every read level these tools asked for, so a tool that
 	// stopped naming one — or named the wrong one — is visible. A seat
 	// reads at `session` because it must see its own writes.
@@ -83,11 +95,19 @@ func (f *fakeKB) SavePage(_ context.Context, actor pages.Actor, _ string, save p
 	}
 	f.saved = append(f.saved, save)
 	f.actors = append(f.actors, actor)
-	return pages.Written{Page: pages.Page{ID: "p1", Version: 5}, Revision: 11}, nil
+	return pages.Written{
+		Page: pages.Page{ID: "p1", Version: 5}, Revision: 11,
+		Outcome: landedAt(11),
+	}, nil
 }
 
-// renamed is one Rename call the fake took.
-type renamed struct{ pageID, title string }
+// renamed is one Rename call the fake took, with everything the fake had
+// already been asked to wait for when it arrived — which is what makes the
+// ORDER of the save, the settle and the rename assertable.
+type renamed struct {
+	pageID, title string
+	awaitedBefore []uint64
+}
 
 func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title string,
 	_ bool) (pages.Written, error) {
@@ -95,10 +115,12 @@ func (f *fakeKB) Rename(_ context.Context, actor pages.Actor, pageID, title stri
 	if f.writeErr != nil {
 		return pages.Written{}, f.writeErr
 	}
-	f.renames = append(f.renames, renamed{pageID: pageID, title: title})
+	f.renames = append(f.renames, renamed{
+		pageID: pageID, title: title,
+		awaitedBefore: slices.Clone(f.awaited),
+	})
 	f.actors = append(f.actors, actor)
-	return pages.Written{Page: pages.Page{ID: pageID, Title: title, Version: 5},
-		Revision: 13}, nil
+	return f.renameResult(pageID, title), nil
 }
 
 func (f *fakeKB) Comment(_ context.Context, actor pages.Actor, _ string, in pages.NewComment) (pages.Comment, pages.Written, error) {
@@ -122,6 +144,31 @@ func (f *fakeKB) EditComment(_ context.Context, actor pages.Actor, _, commentID,
 	f.actors = append(f.actors, actor)
 	return pages.Comment{ID: commentID, Body: body},
 		pages.Written{Page: pages.Page{ID: "p1"}, Revision: 13}, nil
+}
+
+// landedAt is a write that appended a record at one position on the pages log.
+func landedAt(seq uint64) statelog.Result {
+	return statelog.Result{
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: seq},
+	}
+}
+
+// renameResult is the fake's answer to a rename: an ordinary one a record
+// landed for, unless the test pinned another shape.
+func (f *fakeKB) renameResult(pageID, title string) pages.Written {
+	if f.rename != nil {
+		return f.rename(pageID, title)
+	}
+	return pages.Written{
+		Page: pages.Page{ID: pageID, Title: title, Version: 5}, Revision: 13,
+		Outcome: landedAt(13),
+	}
+}
+
+func (f *fakeKB) await(_ context.Context, at statelog.Position) error {
+	f.awaited = append(f.awaited, at.Seq)
+	return nil
 }
 
 func kbRegistry(t *testing.T, deps builtin.PageDeps) *tools.Registry {
@@ -483,4 +530,82 @@ func (p *partialKB) List(_ context.Context, _ pages.Filter,
 		Level:    level,
 		Complete: false,
 	}, nil
+}
+
+// A SAVE THAT ALSO RENAMES REPORTS THE LATER OF THE TWO WRITES, AND WAITS FOR
+// BOTH.
+//
+// save_page is two records — the content contends for the page and the address
+// for the title, and one record cannot arbitrate both — so the tool makes two
+// writes and has to combine their answers rather than let the second overwrite
+// the first.
+//
+// THE RENAME'S ANSWER IS NOT ALWAYS THE LATER ONE. A rename to the title a
+// page already displays appends no record at all: its position is zero and its
+// revision is whatever this node had applied when it decided, which is BELOW
+// the save's. Taking it outright told the model its edit was at a revision
+// that predates the edit, and handed the settle the earlier position — so a
+// re-read in the same turn could still show the page before either write.
+func TestASaveThatAlsoRenamesReportsTheLaterWriteAndWaitsForBoth(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	// The idempotent rename: nothing appended, and the revision is the one
+	// this node had already applied — three behind the save's.
+	kb.rename = func(pageID, title string) pages.Written {
+		return pages.Written{
+			Page:     pages.Page{ID: pageID, Title: title, Version: 5},
+			Revision: 8,
+			Outcome:  pages.Written{}.Outcome,
+		}
+	}
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
+
+	got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten", "title": "Deploy Runbook",
+	})
+	if got.Failed {
+		t.Fatalf("save: %s", got.Output)
+	}
+	if !strings.Contains(got.Output, `"revision": 11`) {
+		t.Errorf("the result reports %s — a rename that appended nothing "+
+			"carries the revision this node had BEFORE the save, and reporting "+
+			"it tells the model its own edit is not there yet", got.Output)
+	}
+	if len(kb.renames) != 1 {
+		t.Fatalf("%d renames reached the store", len(kb.renames))
+	}
+	// THE SAVE IS WAITED FOR BEFORE THE RENAME IS MADE. A rename decides
+	// from this node's own applied rows, so one issued first reads the
+	// pre-save head and answers with its version — which this tool hands
+	// back as `version` and the model passes to the next save.
+	if len(kb.renames[0].awaitedBefore) != 1 || kb.renames[0].awaitedBefore[0] != 11 {
+		t.Errorf("the rename was made having waited for %v, want the save's "+
+			"own position", kb.renames[0].awaitedBefore)
+	}
+}
+
+// AND WHEN THE RENAME DOES LAND A RECORD, THAT IS WHAT THE TURN WAITS FOR.
+//
+// The rename is the second write, so its position is strictly later. Settling
+// on the save's instead leaves a turn that renames and re-reads looking at the
+// old title — the projection has caught up to the edit and not to the move.
+func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb, Await: kb.await})
+
+	got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "body": "rewritten", "title": "Deploy Guide",
+	})
+	if got.Failed {
+		t.Fatalf("save: %s", got.Output)
+	}
+	if !strings.Contains(got.Output, `"revision": 13`) {
+		t.Errorf("the result reports %s, want the rename's own revision", got.Output)
+	}
+	if len(kb.awaited) == 0 || kb.awaited[len(kb.awaited)-1] != 13 {
+		t.Errorf("the turn waited for %v — the rename is the second write, so "+
+			"a re-read in this turn has to be past ITS position, not the "+
+			"save's", kb.awaited)
+	}
 }

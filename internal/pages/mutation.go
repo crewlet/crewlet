@@ -84,6 +84,33 @@ type RenamePayload struct {
 	FormerTitle     string `json:"former_title"`
 }
 
+// RetitlePayload changes a page's DISPLAYED title. Its subject is the PAGE.
+//
+// It carries NO CONTAINER and NO TOKEN because it moves neither: the address
+// is unchanged by construction, so there is no claim to take and none to
+// release, and the one row it writes is the head's `title` column. That is the
+// whole difference from [RenamePayload], and it is why the two are separate
+// shapes rather than one with half its fields unused.
+type RetitlePayload struct {
+	V int `json:"v"`
+
+	PageID string `json:"page_id"`
+
+	// Title is the new displayed form.
+	Title string `json:"title"`
+
+	// FormerTitle is the displayed title this record was DECIDED AGAINST,
+	// and the applier's guard: it writes only while the row still holds
+	// that same address.
+	//
+	// IT IS THE GUARD RATHER THAN PROVENANCE, because the page's subject
+	// cannot arbitrate against a rename that MOVES the address — that
+	// contends on the new title's subject, which this record never touches.
+	// Stating the address here makes the skip a deterministic function of
+	// the record and the row, so every node reaches the same answer.
+	FormerTitle string `json:"former_title"`
+}
+
 // PagePatch is a change to a page head. Every field is a pointer or a
 // collection, and absent means unchanged.
 type PagePatch struct {
@@ -206,6 +233,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[RenamePayload](rec)
 	case rec.Subject.Kind == KindPage && rec.Op == OpPatch:
 		return decodePayload[PagePatch](rec)
+	case rec.Subject.Kind == KindPage && rec.Op == OpRetitle:
+		return decodePayload[RetitlePayload](rec)
 	case rec.Subject.Kind == KindPage &&
 		(rec.Op == OpTombstone || rec.Op == OpRestore || rec.Op == OpPurge):
 		return decodePayload[StatusPayload](rec)

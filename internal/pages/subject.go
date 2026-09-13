@@ -67,13 +67,17 @@ const (
 	KindPage ObjectKind = "page"
 
 	// KindTitle is a container's hold on one normalised title, and the
-	// subject a CREATE or a RENAME arbitrates on.
+	// subject a CREATE or an address-MOVING rename arbitrates on.
 	//
 	// THE TITLE IS THE ADDRESS, so making a page is a create-only append
 	// at an expectation of zero on the title itself: two nodes creating
 	// "Deploy Runbook" contend at the broker and exactly one wins, where
 	// two nodes publishing on their own new pages' uuids would not contend
 	// at all and would both succeed.
+	//
+	// A rename that changes only the DISPLAYED title does not come here:
+	// the address is unchanged, so there is nothing to contend for and the
+	// record goes to the page's own subject as [OpRetitle].
 	KindTitle ObjectKind = "title"
 
 	// KindEviction is a node's eviction from THIS log, or its readmission.

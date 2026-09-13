@@ -402,7 +402,7 @@ func (r *Reader) Get(ctx context.Context, ref string, level statelog.ReadLevel) 
 // locate resolves a reference to a page row.
 func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document string, revision uint64, id string, err error) {
 	var rev int64
-	query := `SELECT id, document, MAX(version, scoped_through) FROM pages_heads WHERE id = ?`
+	query := `SELECT id, document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
 	args := []any{ref}
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		// "CONTAINER/Title", which is how a person and a model name a page
@@ -415,7 +415,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 		// address, because the claim lowercased it with Go's Unicode case
 		// tables and the lookup did not. It also could not use an index,
 		// so every address lookup scanned the container.
-		query = `SELECT id, document, MAX(version, scoped_through) FROM pages_heads
+		query = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
 		          WHERE container = ? AND title_norm = ?`
 		args = []any{strings.ToUpper(strings.TrimSpace(container)), NormalizeTitle(title)}
 	}

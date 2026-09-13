@@ -24,9 +24,9 @@ import (
 //
 // A body save, a label, a watch, a comment, a trash and a restore all contend
 // for THE PAGE, so they arbitrate on its own subject and its version is the
-// expectation. A create and a rename contend for THE ADDRESS — two people
-// making "Deploy Runbook" must fight, and two fresh uuids never would — so
-// they arbitrate on the title, create-only.
+// expectation. A create and a rename that MOVES the address contend for THE
+// ADDRESS — two people making "Deploy Runbook" must fight, and two fresh uuids
+// never would — so they arbitrate on the title, create-only.
 //
 // That is why a rename is its own operation rather than a field of a save. One
 // record has one subject, and a record that changed both a body and an address
@@ -40,6 +40,18 @@ import (
 // row's broker expectation still matches its subject's last message and cannot
 // be poisoned into permanent unwritability, and a read barrier compares the
 // MAX of the two.
+//
+// # The third case: a rename that does NOT move the address
+//
+// "Runbook" -> "RUNBOOK" changes the DISPLAYED title and nothing else. The
+// claim is keyed on the normalised title, so it does not move; the only row
+// the write touches is the page's own head. It therefore arbitrates on THE
+// PAGE, like every other write to a field of the head, and carries its own op
+// — see [OpRetitle] and [Store.retitle]. Sending it to the title's subject
+// instead would take a create-only append at an address this page already
+// holds, lose to its own claim, and report a name somebody else took; and the
+// version of this that DISCARDED it as a no-op answered `applied` while the
+// displayed title every reader renders stayed where it was.
 
 // Store is the knowledge base's write path.
 type Store struct {
@@ -332,18 +344,45 @@ func (s *Store) checkLabels(labels []string) error {
 	return nil
 }
 
-// readHeadTx reads one page's head from inside a decision's own transaction.
-func readHeadTx(ctx context.Context, tx *sql.Tx, id string) (Page, error) {
+// HeadRevision is the SQL expression a page's own log revision is read with,
+// written ONCE because three readers compare against it and none may disagree:
+// a decision's own read ([readHeadTx]), the head read a caller measures its
+// write against ([Store.Page]), and [Reader.locate], which is what a read
+// barrier reports.
+//
+// MAX(version, scoped_through) RATHER THAN version. A rename stamps
+// `scoped_through` and deliberately never `version` — so the row's broker
+// expectation still matches its subject's last message and cannot be poisoned
+// into permanent unwritability — and a number taken from the version column
+// alone therefore does not move when a page changes address. A caller
+// comparing it to decide whether its own rename is visible here would wait for
+// ever.
+const HeadRevision = `MAX(version, scoped_through)`
+
+// readHeadTx reads one page's head from inside a decision's own transaction,
+// and the log revision the row was written through.
+//
+// THE REVISION TRAVELS WITH THE PAGE rather than being read again afterwards,
+// because the two are one fact about one row: read separately they would come
+// from two statements, and a decision that paired a page with a revision taken
+// after a concurrent apply would report a number its own answer is not at.
+func readHeadTx(ctx context.Context, tx *sql.Tx, id string) (Page, uint64, error) {
 	var document []byte
+	var revision int64
 	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM pages_heads WHERE id = ?`, id).Scan(&document)
+		`SELECT document, `+HeadRevision+` FROM pages_heads WHERE id = ?`, id).
+		Scan(&document, &revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return Page{}, fmt.Errorf("%w: page %s", ErrNotFound, id)
+		return Page{}, 0, fmt.Errorf("%w: page %s", ErrNotFound, id)
 	case err != nil:
-		return Page{}, fmt.Errorf("pages: read the head of %s: %w", id, err)
+		return Page{}, 0, fmt.Errorf("pages: read the head of %s: %w", id, err)
 	}
-	return DecodePage(document)
+	page, err := DecodePage(document)
+	if err != nil {
+		return Page{}, 0, err
+	}
+	return page, uint64(revision), nil
 }
 
 // slicesSort is an ascending sort in place, named so every call site reads as

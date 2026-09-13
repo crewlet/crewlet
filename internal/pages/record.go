@@ -40,6 +40,19 @@ const (
 	// title, create-only, and its scope names the old one too.
 	OpRename OpKind = "rename"
 
+	// OpRetitle changes a page's DISPLAYED title while its ADDRESS stays
+	// where it is — a capitalisation or a spacing change, which
+	// [NormalizeTitle] folds away.
+	//
+	// ITS SUBJECT IS THE PAGE, not the title, and that is the whole reason
+	// it is a second op rather than a rename with a narrower payload: the
+	// address it would arbitrate on is the one this page already holds, so
+	// a create-only append there loses to its own claim, and the only row
+	// it writes is the head. The dispatch is on (kind, op) together, so
+	// (page, retitle) and (title, rename) can never be confused for one
+	// another by an applier or by an operator reading the log.
+	OpRetitle OpKind = "retitle"
+
 	// OpTombstone trashes a page, and OpRestore takes it back. Both are
 	// reversible and neither removes a row.
 	OpTombstone OpKind = "tombstone"
@@ -59,9 +72,9 @@ const (
 	OpBarrier OpKind = "barrier"
 )
 
-// OpKinds are the nine, in the order they are documented.
+// OpKinds are the ten, in the order they are documented.
 var OpKinds = []OpKind{
-	OpCreate, OpPatch, OpRename, OpTombstone, OpRestore, OpPurge,
+	OpCreate, OpPatch, OpRename, OpRetitle, OpTombstone, OpRestore, OpPurge,
 	OpEviction, OpGeneration, OpBarrier,
 }
 
@@ -183,9 +196,30 @@ type MutationRecord struct {
 
 // Notify is the routing snapshot a wake is derived from, copied at write time
 // so the node that wins a feed message routes without reading anything.
+//
+// EVERYTHING A NOTIFICATION IS BUILT FROM IS HERE, and that is the contract
+// rather than a convenience: the feed relays the RECORD, and the node that
+// wins that message may be one whose applier has not reached the change — so a
+// parser that read a page row instead would route from a stale head, or block
+// the feed until it had caught up.
 type Notify struct {
 	// Kind is what happened, in the vocabulary a card renders.
 	Kind ChangeKind `json:"kind"`
+
+	// PageID is the page the change is about.
+	//
+	// ON THE NOTIFICATION rather than taken from the subject, because half
+	// the records that wake somebody do not have it there: a create and an
+	// address-moving rename arbitrate on the TITLE, and their page id is
+	// inside a payload whose shape a parser would otherwise have to decode
+	// per op. A wake with no page id reaches nobody at all — there is
+	// nothing for a recipient to open.
+	PageID string `json:"page_id,omitempty"`
+
+	// Version is the page's own edit number at the moment of the change,
+	// which is what a rendered wake says about it ("version 7") and what
+	// its reader passes to `save_page` as `base_version`.
+	Version int `json:"version,omitempty"`
 
 	// Recipients is the watcher set MINUS the muted, computed once at
 	// write time so the feed never has to subtract and can never forget

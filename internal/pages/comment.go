@@ -86,7 +86,7 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			head, err := readHeadTx(ctx, tx, pageID)
+			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -112,8 +112,10 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	if err != nil {
 		return Comment{}, Written{}, err
 	}
+	// A COMMENT ALWAYS LANDS A RECORD — the decision is unconditional — so
+	// there is no read arm for [writtenRevision] to fall back on.
 	return comment, Written{
-		Revision: result.Position.Seq, ChangeID: opID, Outcome: result,
+		Revision: writtenRevision(result, 0), ChangeID: opID, Outcome: result,
 	}, nil
 }
 
@@ -137,6 +139,10 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 	opID := s.newSeqID()
 	subject := PageSubject(pageID)
 	var out Comment
+	// THE REVISION AN UNCHANGED EDIT ANSWERS WITH, taken in the decision's
+	// own snapshot: re-editing a comment to the text it already has appends
+	// nothing, so the row's own number is the only one there will be.
+	var read uint64
 
 	result, err := s.publish(ctx, statelog.Request{
 		Subject:  statelog.Subject{Kind: string(KindPage), ID: pageID},
@@ -145,10 +151,11 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			head, err := readHeadTx(ctx, tx, pageID)
+			head, revision, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
+			read = revision
 			held, err := readCommentTx(ctx, tx, pageID, commentID)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -186,7 +193,7 @@ func (s *Store) EditComment(ctx context.Context, actor Actor, pageID,
 		return Comment{}, Written{}, err
 	}
 	return out, Written{
-		Revision: result.Position.Seq, ChangeID: opID, Outcome: result,
+		Revision: writtenRevision(result, read), ChangeID: opID, Outcome: result,
 	}, nil
 }
 
@@ -208,7 +215,7 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
-			head, err := readHeadTx(ctx, tx, pageID)
+			head, _, err := readHeadTx(ctx, tx, pageID)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
@@ -223,8 +230,11 @@ func (s *Store) RemoveComment(ctx context.Context, actor Actor, pageID,
 	if err != nil {
 		return Written{}, err
 	}
+	// UNCONDITIONAL LIKE THE COMMENT ITSELF: removing a comment that is
+	// already gone still writes a record, because only the applier can see
+	// whether the row is there on every node.
 	return Written{
-		Revision: result.Position.Seq, ChangeID: opID, Outcome: result,
+		Revision: writtenRevision(result, 0), ChangeID: opID, Outcome: result,
 	}, nil
 }
 
@@ -324,13 +334,16 @@ func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
 	return out, err
 }
 
-// Page is one page's head, read outside a decision.
+// Page is one page's head, read outside a decision, and the log revision it
+// was read at.
+//
+// THE REVISION IS THE ROW'S OWN, never a constant. It was the coordination
+// bucket's version before this domain moved onto its log, and the move left a
+// literal zero in its place — which is the one value a caller cannot act on,
+// being both "this node has applied nothing for this page" and "nobody
+// answered". See [Store.headAt] for which number it is and why.
 func (s *Store) Page(ctx context.Context, pageID string) (Page, uint64, error) {
-	head, err := s.head(ctx, pageID)
-	if err != nil {
-		return Page{}, 0, err
-	}
-	return head, 0, nil
+	return s.headAt(ctx, pageID)
 }
 
 // Revision is one immutable body.

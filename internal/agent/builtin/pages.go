@@ -477,12 +477,21 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return failed(pageWriteFailure(SavePageTool, err)), nil
 	}
+	at := got.Outcome.Position
+	revision := got.Revision
 	// A RENAME IS ITS OWN WRITE, and it goes SECOND. An address change
 	// contends for the address and a content change contends for the page,
 	// so one record cannot arbitrate both — and doing the content first
 	// means a refused rename leaves the edit saved under the old name
 	// rather than the reverse, which is the half a person can act on.
 	if title, renaming := args["title"]; renaming {
+		// AND IT WAITS FOR THE SAVE FIRST. A rename decides from this
+		// node's own applied rows, so one issued before the save has
+		// reached them reads the PRE-SAVE head and answers with its
+		// version — which this result hands the model as `version` and
+		// the model passes back as `base_version`, where it is refused
+		// as stale. See [PageDeps.Await], which exists for exactly this.
+		t.deps.settle(ctx, at)
 		want := strings.TrimSpace(fmt.Sprint(title))
 		renamed, err := t.deps.Writer.Rename(ctx, actor, detail.Page.ID, want, false)
 		if err != nil {
@@ -491,12 +500,25 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 				pageWriteFailure(SavePageTool, err))), nil
 		}
 		got.Page = renamed.Page
-		got.Revision = renamed.Revision
+		// THE LATER OF THE TWO, never the rename's outright. A rename to
+		// the title a page already displays appends no record at all, so
+		// its position is zero and its revision is whatever this node
+		// had applied when it decided — which can be BELOW the save's.
+		// Overwriting with it told the model the edit was at a revision
+		// that predates it, and handed `settle` the earlier of the two
+		// positions to wait for, so a re-read in the same turn could
+		// still show the old title.
+		if renamed.Revision > revision {
+			revision = renamed.Revision
+		}
+		if renamed.Outcome.Position.Packed() > at.Packed() {
+			at = renamed.Outcome.Position
+		}
 	}
-	t.deps.settle(ctx, got.Outcome.Position)
+	t.deps.settle(ctx, at)
 	return jsonResult(map[string]any{
 		"id": got.Page.ID, "title": got.Page.Title,
-		"version": got.Page.Version, "revision": got.Revision,
+		"version": got.Page.Version, "revision": revision,
 	})
 }
 
