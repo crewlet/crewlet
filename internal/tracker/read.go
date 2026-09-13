@@ -1517,7 +1517,15 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []TaskRow
+	// ALLOCATED RATHER THAN NIL, and this is the one reader in the tree
+	// where that is a wire contract rather than a style: a nil slice
+	// marshals to `null`, every answer carrying task rows declares the key
+	// as an array, and a client doing `rows.length` on the empty case
+	// throws where it should have drawn "nothing here". A collection is
+	// EMPTY or it is absent; it is never null. The three-valued nils in
+	// this tree are pointers and maps precisely so that a nil SLICE can
+	// mean this and only this.
+	out := []TaskRow{}
 	var pageKeys [][]any
 	for rows.Next() {
 		var row TaskRow

@@ -310,7 +310,10 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, err
 	}
 	if !held || len(person.Priorities) == 0 {
-		return nil, nil
+		// EMPTY, NOT NIL — see [readTasksJoined]. A person with no
+		// stored list has an empty one, and the block renders as
+		// absent rather than throwing on its own length.
+		return []TaskRow{}, nil
 	}
 	ids := person.Priorities
 	if len(ids) > MyWorkRows {
@@ -383,7 +386,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 			handle, err)
 	}
 	if len(pending) == 0 {
-		return nil, nil
+		return []AskRow{}, nil
 	}
 
 	ids := make([]any, 0, len(pending))
@@ -441,7 +444,7 @@ func readChecklistClaims(ctx context.Context, tx *sql.Tx, handle string) (
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []ChecklistRow
+	out := []ChecklistRow{}
 	for rows.Next() {
 		var row ChecklistRow
 		var done int
