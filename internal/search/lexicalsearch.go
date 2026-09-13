@@ -44,6 +44,20 @@ type SearchHit struct {
 	Score     float64
 }
 
+// FusedHit is one document from a FUSED answer, in the order the fusion put it
+// in and with no score.
+//
+// SEPARATE FROM [SearchHit] BY ONE FIELD, deliberately — see [Indexer.Hydrate].
+// Carrying the field and leaving it zero is what this pair of types exists to
+// make impossible.
+type FusedHit struct {
+	Source    string
+	ID        string
+	Container string
+	Title     string
+	Snippet   string
+}
+
 // maxPostingScan bounds how many postings one term contributes to a query.
 //
 // Five thousand. A term in nearly every document — a company's own name, or
@@ -301,7 +315,22 @@ func binds(n int) string {
 // [Indexer.hydrateHits]'s terms: between the scan and this read the indexer
 // may have removed a document, and a document that no longer exists is not an
 // answer.
-func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]SearchHit, error) {
+//
+// # IT RETURNS [FusedHit], WHICH HAS NO SCORE, AND THAT IS THE POINT
+//
+// A [SearchHit] carries the BM25 number one ranker gave one document, which is
+// comparable within that ranker and is what the fan-out merges its own slices
+// on. What comes back HERE has been through reciprocal rank fusion across two
+// rankers and across disjoint slices, so the only thing left is an ORDER — the
+// fused number is a sum of reciprocal placements and means nothing beside a
+// BM25 score.
+//
+// It used to return [SearchHit] and set no score at all, so every hit the two
+// ranked readers in this tree render carried a confident `Score: 0`. A zero
+// that is not a value is exactly the shape a type has to refuse rather than
+// document, so this one does: a caller cannot read a score that does not
+// exist.
+func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]FusedHit, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
@@ -317,10 +346,10 @@ func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]Se
 	}
 	defer rows.Close()
 	terms := textindex.Terms(text)
-	byKey := make(map[string]SearchHit, len(keys))
+	byKey := make(map[string]FusedHit, len(keys))
 	for rows.Next() {
 		var id, excerpt string
-		var hit SearchHit
+		var hit FusedHit
 		if err := rows.Scan(&id, &hit.Source, &hit.ID, &hit.Container,
 			&hit.Title, &excerpt); err != nil {
 			return nil, fmt.Errorf("search: scan a fused hit: %w", err)
@@ -331,7 +360,7 @@ func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]Se
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: read fused hits: %w", err)
 	}
-	out := make([]SearchHit, 0, len(keys))
+	out := make([]FusedHit, 0, len(keys))
 	for _, key := range keys {
 		if hit, ok := byKey[key]; ok {
 			out = append(out, hit)

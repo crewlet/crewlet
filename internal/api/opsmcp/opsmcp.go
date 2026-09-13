@@ -47,6 +47,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/logging"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -136,9 +137,36 @@ func New(opts Options) *Server {
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			InputSchema: tool.Parameters(),
+			// AND THE HINTS, which this surface published none of.
+			// The engine decides each tool's read-only, destructive,
+			// idempotent and open-world hints in one switch and the
+			// registry has carried them the whole time — and the two
+			// places that hand the catalogue to somebody else's client
+			// dropped them, so an operator's assistant saw
+			// `search_work_items` and `remove_work_item` as identically
+			// unannotated. A client that asks before a destructive call
+			// had nothing to ask on.
+			Annotations: crewletmcp.SDKAnnotations(
+				builtin.AnnotationsFor(tool.Name())),
 		}, handlerFor(tool))
 	}
 	return s
+}
+
+// Annotations is the behavioural hints this surface advertises for one tool,
+// or the zero set for a name it does not serve.
+//
+// It exists because the hints were invisible from outside: the surface
+// published a name, a description and a schema and nothing else, so an
+// operator's own assistant saw `search_work_items` and `remove_work_item` as
+// identically unannotated and had nothing to ask a person on before an
+// irreversible call. Exposing what is advertised is what lets that be
+// asserted rather than assumed.
+func (s *Server) Annotations(name string) tools.Annotations {
+	if s == nil {
+		return tools.Annotations{}
+	}
+	return builtin.AnnotationsFor(name)
 }
 
 // Tools names what this surface serves, for the operator log line.

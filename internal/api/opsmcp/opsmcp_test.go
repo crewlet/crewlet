@@ -10,8 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
+	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -259,4 +261,44 @@ func (stubPageWriter) Comment(context.Context, pages.Actor, string, pages.NewCom
 
 func (stubPageWriter) EditComment(context.Context, pages.Actor, string, string, string) (pages.Comment, pages.Written, error) {
 	return pages.Comment{}, pages.Written{}, nil
+}
+
+// TestEveryToolAnOperatorIsOfferedCarriesItsHints is the finding. This surface
+// published a name, a description and a schema and NOTHING else, so an
+// operator's own AI assistant — the premise of the whole endpoint — saw
+// `search_work_items` and `remove_work_item` as identically unannotated. A
+// client that asks before a destructive call had nothing to ask on, and a
+// client that skips the prompt for a read prompted on every one.
+func TestEveryToolAnOperatorIsOfferedCarriesItsHints(t *testing.T) {
+	t.Parallel()
+	s := opsmcp.New(opsmcp.Options{
+		Work: builtin.WorkDeps{
+			Reader: stubWorkReader{}, Writer: stubWorkWriter,
+			Merges: stubWorkMerger, Actor: opsmcp.WorkActor,
+		},
+		Pages: builtin.PageDeps{
+			Reader: stubPageReader{}, Writer: stubPageWriter{},
+			Actor: opsmcp.PageActor,
+		},
+	})
+	if s == nil {
+		t.Fatal("a company on both native backends got no surface")
+	}
+	for _, name := range s.Tools() {
+		if got := s.Annotations(name); got == (tools.Annotations{}) {
+			t.Errorf("%q is advertised with no hints at all — a client "+
+				"cannot tell it from an irreversible write", name)
+		}
+	}
+
+	// AND THE TWO ENDS OF THE RANGE ARE WHAT THEY CLAIM, or the check
+	// above would pass on a surface that annotated everything the same.
+	if got := s.Annotations(tracker.SearchWorkItemsTool); !crewletmcp.ReadOnlyProven(got) {
+		t.Errorf("the ranked search advertises %+v, which is not a proven "+
+			"read", got)
+	}
+	if got := s.Annotations(tracker.MergeWorkItemTool); got.Destructive != crewletmcp.Yes {
+		t.Errorf("a fold advertises %+v — it closes somebody's item on every "+
+			"board and moves its subtasks, which is what the flag asks", got)
+	}
 }

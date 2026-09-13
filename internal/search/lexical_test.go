@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -709,3 +710,29 @@ func (unreachableSource) Live(context.Context, *sql.Tx, []string) (map[string]bo
 }
 
 func (unreachableSource) Count(context.Context, *sql.Tx) (int, error) { return 0, nil }
+
+// TestAFusedHitCarriesNoScore is a type-level claim, and it is the point of
+// [search.FusedHit] existing at all. Hydrate returned [search.SearchHit] and
+// never set its Score, so every hit the two ranked readers in this tree render
+// carried a confident zero — and a zero that is not a value is exactly what a
+// type must refuse rather than document.
+//
+// It is asserted by REFLECTION rather than by reading a field, because the
+// claim is that the field is ABSENT: a test that read `hit.Score` and expected
+// zero would pass on the very shape this change removed.
+func TestAFusedHitCarriesNoScore(t *testing.T) {
+	t.Parallel()
+	if _, held := reflect.TypeFor[search.FusedHit]().FieldByName("Score"); held {
+		t.Fatal("a fused hit carries a Score — the fused number is a sum of " +
+			"reciprocal placements across two rankers and disjoint slices, " +
+			"so it is not comparable with a BM25 score and a caller reading " +
+			"it is reading a number that means nothing")
+	}
+	// AND THE RANKED ONE STILL DOES, or the split would have moved the
+	// problem rather than fixed it: a per-ranker BM25 score is exactly
+	// what the fan-out merges its own slices on.
+	if _, held := reflect.TypeFor[search.SearchHit]().FieldByName("Score"); !held {
+		t.Fatal("a ranked hit lost its Score, which is what a slice merge " +
+			"orders on")
+	}
+}

@@ -253,6 +253,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 // builtin nobody classified is treated as a shared write, so a future tool
 // that posts somewhere is denied to workers until someone says otherwise.
 // See docs/concepts/tool-capabilities.md.
+//
+// EXPORTED AS [AnnotationsFor], because two MCP surfaces this engine SERVES
+// have to advertise the same decision: a hint written down here and thrown
+// away at the edge is a hint nobody outside this process ever sees.
 func annotationsFor(name string) tools.Annotations {
 	switch name {
 	case LookupColleagueTool, UseSkillTool, QueryEpisodesTool, RefreshMemoryTool,
@@ -299,7 +303,9 @@ func annotationsFor(name string) tools.Annotations {
 		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
 		tracker.DescribeProjectTool, tracker.SprintReportTool,
 		tracker.TaskActivityTool, tracker.MyWorkTool,
-		tracker.ListWorkGoalsTool, tracker.SearchWorkItemsTool:
+		tracker.ListWorkGoalsTool, tracker.SearchWorkItemsTool,
+		tracker.GetPersonTool, tracker.WorkInboxTool,
+		tracker.ListWorkViewsTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -308,6 +314,38 @@ func annotationsFor(name string) tools.Annotations {
 		// lookup was refused it as a write to a surface a human reads
 		// while list_work_items beside it was admitted.
 		return tools.Annotations{ReadOnly: mcp.Yes, Idempotent: mcp.Yes}
+	case tracker.MarkInboxTool, tracker.SetPinsTool:
+		// A PERSON'S OWN STATE IS NOT A SHARED SURFACE, and saying so
+		// takes an explicit `OpenWorld: No` — these two fell to the
+		// default arm, whose `ReadOnly: No` with OpenWorld UNSET is
+		// exactly what [mcp.WritesToSharedSurface] reads as true. Each
+		// is written only on behalf of the person whose it is (the
+		// tracker refuses anything else), so there is no second party
+		// to be surprised by one, which is the question the flag asks
+		// rather than "does this write".
+		//
+		// IDEMPOTENT, because each REPLACES the list it names: calling
+		// twice with the same argument leaves the same state, which is
+		// what makes a retry after a lost answer safe.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.No,
+		}
+	case tracker.SetPrioritiesTool:
+		// THE ONE PERSON WRITE THAT REACHES ACROSS PEOPLE, which is why
+		// it is not in the arm above: a LEAD may set the queue of
+		// somebody in their line, and that person opens their day on
+		// work they did not choose. `priorities_set_by` is what makes
+		// the authority visible to them, and OpenWorld is Yes because
+		// the surface it writes is somebody else's.
+		//
+		// Idempotent for the same reason the two above are — the list
+		// replaces — and not destructive: the previous order is not
+		// work, and the person's own next write takes their queue back.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.No,
+			Idempotent: mcp.Yes, OpenWorld: mcp.Yes,
+		}
 	case tracker.ManageSprintTool:
 		// A WRITE EVERYBODY SEES — a start changes what a whole team is
 		// expected to work on — so OpenWorld is Yes. Not destructive: a
@@ -468,3 +506,23 @@ func feedReads(deps WorkDeps) bool {
 	_, ok := deps.Reader.(FeedReader)
 	return ok
 }
+
+// AnnotationsFor is one builtin's hints, for a surface that SERVES the
+// catalogue to somebody else's MCP client.
+//
+// # Why an exported accessor rather than a field on the tool
+//
+// The decision is a property of the NAME rather than of the implementation —
+// one tool type serves a seat and an operator, and the hints are the same on
+// both — so it belongs in one switch rather than on a method every tool would
+// have to remember to write. What made it worth exporting is that both surfaces
+// the engine serves published every tool with a name, a description and a
+// schema and nothing else: [internal/api/opsmcp] hands a company's whole
+// tracker to an operator's own assistant, and [internal/api/mcpbridge] hands a
+// seat's tools to a sandboxed coding agent, and neither client could tell a
+// read from an irreversible write. The registry has carried these hints the
+// whole time; nothing outside this process had ever been told one.
+//
+// A name this package does not classify gets the same conservative default the
+// switch gives a seat's own registration — see [annotationsFor].
+func AnnotationsFor(name string) tools.Annotations { return annotationsFor(name) }

@@ -219,3 +219,66 @@ func TestHintString(t *testing.T) {
 		}
 	}
 }
+
+// TestSDKAnnotationsNeverInventsAnAssertion is the outbound conversion's one
+// safety property. Two of the SDK's four hint fields are plain bools, so
+// "unknown" and "false" serialize identically — which is tolerable in one
+// direction and not the other. An unclassified tool advertising
+// `readOnlyHint: false` is the conservative reading a client should already
+// default to; one advertising `readOnlyHint: true` because the engine happened
+// to leave the field alone would be the engine telling a client a write is
+// safe.
+func TestSDKAnnotationsNeverInventsAnAssertion(t *testing.T) {
+	t.Parallel()
+	if got := SDKAnnotations(Annotations{}); got != nil {
+		t.Fatalf("an all-unknown set converted to %+v — a tool nobody "+
+			"classified must advertise nothing, not four false hints it "+
+			"would be read as having asserted", got)
+	}
+	// ONLY Yes SETS A HINT. Every other value on the lossy pair has to
+	// come out false, because false is the only other thing the wire can
+	// carry and "not asserted" is the reading a client must take.
+	for name, in := range map[string]Annotations{
+		"unknown read-only": {Destructive: No},
+		"an explicit no":    {ReadOnly: No, Idempotent: No},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := SDKAnnotations(in)
+			if got == nil {
+				t.Fatal("a set with a decision in it converted to nothing")
+			}
+			if got.ReadOnlyHint {
+				t.Error("read-only was asserted and the engine never said so")
+			}
+			if got.IdempotentHint {
+				t.Error("idempotent was asserted and the engine never said so")
+			}
+		})
+	}
+
+	// AND THE TRI-STATE PAIR KEEPS ITS THIRD VALUE, which is the whole
+	// reason an absent open-world hint is dangerous: unset, it is exactly
+	// what [WritesToSharedSurface] reads as a write.
+	full := SDKAnnotations(Annotations{
+		Title: "Read a page", ReadOnly: Yes, Idempotent: Yes,
+		Destructive: No, OpenWorld: No,
+	})
+	switch {
+	case full.Title != "Read a page":
+		t.Errorf("the title is %q", full.Title)
+	case !full.ReadOnlyHint || !full.IdempotentHint:
+		t.Errorf("an asserted hint did not survive: %+v", full)
+	case full.DestructiveHint == nil || *full.DestructiveHint:
+		t.Errorf("destructive is %v, want an explicit false", full.DestructiveHint)
+	case full.OpenWorldHint == nil || *full.OpenWorldHint:
+		t.Errorf("open-world is %v, want an explicit false", full.OpenWorldHint)
+	}
+
+	// AN UNSET OPEN-WORLD HINT STAYS UNSET on the wire rather than
+	// becoming a false the engine did not state.
+	partial := SDKAnnotations(Annotations{ReadOnly: Yes})
+	if partial.OpenWorldHint != nil {
+		t.Errorf("an unstated open-world hint serialized as %v",
+			*partial.OpenWorldHint)
+	}
+}
