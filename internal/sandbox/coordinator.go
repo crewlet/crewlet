@@ -508,15 +508,11 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"started it cannot be continued")
 		return nil
 	}
-	if c.resume == nil {
-		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, run.AgentHandle)
-	}
-
 	// Freed only NOW, immediately before the resume, so no queued event can
 	// take the slot first.
 	c.clearBusy(run.AgentHandle)
 
-	if err := c.resume.Resume(ctx, ResumeRequest{
+	if err := c.dispatchResume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
@@ -584,6 +580,20 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		log.WarnContext(ctx, "sandbox_done_mark_failed", "turn_id", run.TurnID, "error", err.Error())
 	}
 	return nil
+}
+
+// dispatchResume hands a claimed run to the resumer.
+//
+// A node with NO resumer answers [ErrResumeUnavailable] from here, inside the
+// failure handling every other unavailable resume goes through, rather than
+// before it. Returned ahead of that handling it left the claim taken: the
+// NAK'd completion came back to a claim that refused it, and the suspended
+// conversation was stranded in resumed until the seat next changed hands.
+func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) error {
+	if c.resume == nil {
+		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, req.Run.AgentHandle)
+	}
+	return c.resume.Resume(ctx, req)
 }
 
 // settleFailed marks a run failed, reaps its box, frees the seat, and SAYS SO.
