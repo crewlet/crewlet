@@ -8,8 +8,8 @@ import (
 	"syscall"
 )
 
-// The two signals this package sends, named here so the portable file does
-// not have to import syscall.
+// The signals this package sends, named here so the portable file does not
+// have to import syscall.
 const (
 	sigTerm = syscall.SIGTERM
 	sigKill = syscall.SIGKILL
@@ -28,8 +28,8 @@ func set(cmd *exec.Cmd) {
 }
 
 // detach makes the child a SESSION leader, which implies its own process
-// group. Setsid and Setpgid are mutually exclusive in SysProcAttr — the
-// kernel refuses both — so this sets only the one that subsumes the other.
+// group. Setsid and Setpgid are mutually exclusive in SysProcAttr (the
+// kernel refuses both), so this sets only the one that subsumes the other.
 func detach(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
