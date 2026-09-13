@@ -14,7 +14,7 @@
  * knowledge base. On Confluence there is no local copy to browse, by design:
  * search there is live at query time and there is no index to walk.
  *
- * # Read-only, for the reason the work board is
+ * # Read-only, for the reason the tracker is
  *
  * A page is written by a seat's own tools or by an operator through MCP, both
  * attributed to somebody. A dashboard button would write as "the dashboard",
