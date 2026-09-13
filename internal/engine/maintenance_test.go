@@ -69,6 +69,36 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 	}
 }
 
+// THE NODE THE ENGINE BUILDS REGISTERS EVERY SEAT'S MAILBOX WITH THE FLEET.
+// The sweep above can only retire a mailbox the registry remembers, and the
+// registry is fed by the node's walk. A node built without it creates every
+// mailbox exactly as before and remembers none, so every removed seat's mail is
+// retained for ever with nothing failing anywhere: the unit suites in node and
+// maintenance each pass against their own fakes while the engine joins neither.
+func TestTheEngineRegistersEverySeatMailboxWithTheFleet(t *testing.T) {
+	t.Parallel()
+	e := newEngine(t, engine.Options{})
+
+	e.Node().EnsureMailboxes(t.Context())
+
+	records, err := e.Backends().Fleet.Mailboxes(t.Context())
+	if err != nil {
+		t.Fatalf("Mailboxes: %v", err)
+	}
+	var handles []string
+	for _, rec := range records {
+		handles = append(handles, rec.Handle)
+	}
+	var seats []string
+	for _, seat := range e.Company().Seats() {
+		seats = append(seats, seat.Handle)
+	}
+	slices.Sort(seats)
+	if len(seats) == 0 || !slices.Equal(handles, seats) {
+		t.Fatalf("registered mailboxes %v, want every agent seat %v", handles, seats)
+	}
+}
+
 // The tick must stay shorter than every horizon, or a table sits past its
 // own horizon for the difference and the horizon stops describing the table.
 // [maintenance.New] enforces this at runtime by raising a short horizon; this
