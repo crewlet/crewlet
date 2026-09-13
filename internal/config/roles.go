@@ -2,7 +2,6 @@ package config
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -230,7 +229,7 @@ type RoleSandboxMCP struct {
 // IsZero lets an unset scope drop out of a round trip.
 func (m RoleSandboxMCP) IsZero() bool { return len(m.Servers) == 0 }
 
-func (s *RoleSandbox) validate(path string) error {
+func (s *RoleSandbox) validate(path Path) error {
 	var p problems
 	if s.RunIn != "" && !slices.Contains(Placements, s.RunIn) {
 		// Only the SPELLING is checked here. Whether the cell is actually
@@ -374,7 +373,7 @@ func (g *RoleGitHub) Held() bool {
 // can be wrong in a way worth refusing. Everything else is written by the
 // engine after GitHub has answered, and refusing a half-built record would
 // refuse the document between the two clicks that build it.
-func (g *RoleGitHub) validate(path string) error {
+func (g *RoleGitHub) validate(path Path) error {
 	var p problems
 	if tier := normalTier(g.Tier); tier != "" && !slices.Contains(CodeAccessTiers, tier) {
 		p.add(at(path, "tier"), ErrUnknownValue,
@@ -385,7 +384,7 @@ func (g *RoleGitHub) validate(path string) error {
 	}
 	for i, repo := range g.Repos {
 		if name := strings.TrimSpace(repo); name == "" || !strings.Contains(name, "/") {
-			p.add(at(path, "repos["+strconv.Itoa(i)+"]"), ErrUnknownValue,
+			p.add(idx(at(path, "repos"), i), ErrUnknownValue,
 				"%q is not a repository; give it as owner/name, which is how "+
 					"GitHub addresses one and how an installation lists them",
 				repo)
@@ -448,7 +447,7 @@ type RoleSlack struct {
 // answer; without a signing secret its route answers 503 to every delivery
 // while the app's own settings page reports a healthy request URL. So
 // declaring the block at all means declaring both.
-func (s *RoleSlack) validate(path string) error {
+func (s *RoleSlack) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(s.BotToken) == "" {
 		p.add(at(path, "bot_token"), ErrMissing,
@@ -486,7 +485,7 @@ type RoleMattermost struct {
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Default channel name for this seat."`
 }
 
-func (m *RoleMattermost) validate(path string) error {
+func (m *RoleMattermost) validate(path Path) error {
 	if m.Username == "" || envref.Has(m.Username) {
 		// A reference resolves later; rejecting the unresolved form would
 		// forbid configuring the username from the environment.
@@ -500,7 +499,7 @@ func (m *RoleMattermost) validate(path string) error {
 	return nil
 }
 
-func (r *Role) validate(path string) error {
+func (r *Role) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(r.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every seat needs a name")
@@ -700,7 +699,7 @@ func (u UnitIntegrations) IsZero() bool {
 	return u.Jira == nil && u.Confluence == nil
 }
 
-func (u *Unit) validate(path string) error {
+func (u *Unit) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(u.Name) == "" {
 		p.add(at(path, "name"), ErrMissing, "every unit needs a name")

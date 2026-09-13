@@ -282,7 +282,7 @@ func TestAHumanSeatReachesNoExecutorEntry(t *testing.T) {
 
 	// And an AGENT seat falling through the same fallback still reaches it,
 	// or this would just be "the fallback never counts".
-	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", agentModeEntryPath("coder"))
+	rejects(t, providers+"roles:\n"+founder+"  - name: SWE\n", agentModeEntryPath("coder").String())
 }
 
 // THE FALLBACK IS THE COMPANY'S, NOT THE SEAT'S — the entry called "default",

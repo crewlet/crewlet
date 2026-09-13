@@ -58,6 +58,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -103,7 +104,7 @@ var (
 // The path comes first because that is what a reader scans for. It is the
 // authored path (providers.llm.default.model), never a Go field name the
 // operator has never seen.
-func fault(path string, kind error, detail string, args ...any) error {
+func fault(path Path, kind error, detail string, args ...any) error {
 	if len(args) > 0 {
 		detail = fmt.Sprintf(detail, args...)
 	}
@@ -125,9 +126,9 @@ func fault(path string, kind error, detail string, args ...any) error {
 // an operator reads at a prompt and reflowing it would churn every test that
 // asserts on a message.
 type Fault struct {
-	// Path is the AUTHORED path — providers.llm.default.model — never a Go
+	// Path is the AUTHORED path (providers.llm.default.model), never a Go
 	// field name the operator has never seen. Empty at the document root.
-	Path string
+	Path Path
 	// Kind is one of the ErrMissing / ErrShape / … sentinels, kept as the
 	// error itself so errors.Is still answers.
 	Kind error
@@ -136,10 +137,10 @@ type Fault struct {
 }
 
 func (f *Fault) Error() string {
-	if f.Path == "" {
+	if len(f.Path) == 0 {
 		return f.Kind.Error() + ": " + f.Detail
 	}
-	return f.Path + ": " + f.Kind.Error() + ": " + f.Detail
+	return f.Path.String() + ": " + f.Kind.Error() + ": " + f.Detail
 }
 
 // Unwrap exposes the sentinel, so errors.Is(err, ErrMissing) keeps working.
@@ -207,27 +208,82 @@ func (f Fault) KindName() string {
 	}
 }
 
-// at joins a parent path with a child field. The empty parent is the
-// document root, where a path is just the field name.
-func at(parent, field string) string {
-	if parent == "" {
-		return field
+// Path is a place in an authored document, held as its SEGMENTS: a string
+// for a field or a map key, an int for a list index.
+//
+// # Why segments rather than the rendered string
+//
+// Because the string cannot be taken apart again. A path renders as dotted
+// keys with `[i]` indexes (roles[0].mcp_env.jira.API_TOKEN), and a map key is
+// the operator's own text, which may itself hold a dot or a bracket: a
+// provider called `claude-3.5` renders as providers.llm.claude-3.5.model, and
+// nothing reading that string can tell where the key ends. A consumer that
+// has to find the field (an editor pointing at a line, a form marking the
+// input a problem is about) needs the segments, so they are what every
+// validator builds and the string is only ever rendered from them.
+//
+// It is a value: every helper that extends a path returns a new one and never
+// writes into the parent's backing array, because sibling fields are built
+// from one parent and a shared array would make each overwrite the other.
+type Path []any
+
+// String renders the path as an operator reads it in their file: fields and
+// map keys joined with dots, list indexes as `[i]`. The empty path renders as
+// the empty string, which is the document root.
+func (p Path) String() string {
+	var b strings.Builder
+	for _, segment := range p {
+		switch s := segment.(type) {
+		case int:
+			b.WriteString("[" + strconv.Itoa(s) + "]")
+		case string:
+			if b.Len() > 0 {
+				b.WriteByte('.')
+			}
+			b.WriteString(s)
+		}
 	}
-	return parent + "." + field
+	return b.String()
 }
 
-// idx renders a list element's path as the operator sees it in their file:
-// the index they can count to, not an opaque identity.
-func idx(parent string, i int) string {
-	return fmt.Sprintf("%s[%d]", parent, i)
+// extend returns parent with segments appended, in a new backing array.
+func extend(parent Path, segments ...any) Path {
+	out := make(Path, 0, len(parent)+len(segments))
+	out = append(out, parent...)
+	return append(out, segments...)
 }
+
+// at extends a path with FIELD NAMES, written dotted when there are several
+// (at(path, "integrations.github")). Only ever a schema's own field names,
+// which never contain a dot; a map key goes through [entry], because it is the
+// operator's text and a dot in it is part of the key.
+func at(parent Path, fields string) Path {
+	names := strings.Split(fields, ".")
+	segments := make([]any, len(names))
+	for i, name := range names {
+		segments[i] = name
+	}
+	return extend(parent, segments...)
+}
+
+// field is a path from the document root, for the rules that name a fixed
+// place (field("integrations.datadog.route_to")).
+func field(fields string) Path { return at(nil, fields) }
+
+// entry extends a path with one MAP KEY, verbatim: a provider name, an MCP
+// server, a variable. See [at] for why it is not split.
+func entry(parent Path, k string) Path { return extend(parent, k) }
+
+// idx extends a path with a list index, the position the operator can count
+// to in their file rather than an opaque identity.
+func idx(parent Path, i int) Path { return extend(parent, i) }
 
 // problems accumulates validation failures so a Validate reports all of
 // them at once. The zero value is ready to use.
 type problems []error
 
 // add records one failure.
-func (p *problems) add(path string, kind error, detail string, args ...any) {
+func (p *problems) add(path Path, kind error, detail string, args ...any) {
 	*p = append(*p, fault(path, kind, detail, args...))
 }
 

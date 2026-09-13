@@ -648,9 +648,9 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 			t.Parallel()
 			var err error
 			if tc.in.Jira != nil {
-				err = tc.in.Jira.validate(tc.path, false)
+				err = tc.in.Jira.validate(field(tc.path), false)
 			} else {
-				err = tc.in.Confluence.validate(tc.path, false)
+				err = tc.in.Confluence.validate(field(tc.path), false)
 			}
 			if err == nil {
 				t.Fatal("a block naming no instance was accepted")
@@ -676,7 +676,7 @@ func TestAnUnidentifiedAtlassianInstanceAsksOnlyToBeNamed(t *testing.T) {
 func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://jira.example.com", Token: "${JIRA_TOKEN}"}
-	err := jira.validate("integrations.jira", false)
+	err := jira.validate(field("integrations.jira"), false)
 	if err == nil || !strings.Contains(err.Error(), "required for a Data Center instance") {
 		t.Fatalf("a Data Center instance was not asked for a signing secret: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestANamedDataCentreInstanceStillNeedsASigningSecret(t *testing.T) {
 func TestACloudSiteIsNotAskedForASigningSecret(t *testing.T) {
 	t.Parallel()
 	jira := &Jira{URL: "https://acme.atlassian.net", Token: "${JIRA_TOKEN}"}
-	if err := jira.validate("integrations.jira", false); err != nil {
+	if err := jira.validate(field("integrations.jira"), false); err != nil {
 		t.Fatalf("a Cloud site was refused: %v", err)
 	}
 }
@@ -711,7 +711,7 @@ func TestConnectingAtlassianOnCloudIsNotRefusedForAnUndiscoveredSite(t *testing.
 		Jira:       &Jira{Email: "ops@example.com", Token: "${ATLASSIAN_TOKEN}"},
 		Confluence: &Confluence{Email: "ops@example.com", Token: "${ATLASSIAN_TOKEN}"},
 	}
-	if err := in.validate("integrations"); err != nil {
+	if err := in.validate(field("integrations")); err != nil {
 		t.Fatalf("connecting Atlassian on Cloud was refused: %v", err)
 	}
 }
@@ -726,7 +726,7 @@ func TestAConfluenceBlockWithNoOrganizationStillNeedsASite(t *testing.T) {
 	in := Integrations{
 		Confluence: &Confluence{Email: "ops@example.com", Token: "${CONFLUENCE_TOKEN}"},
 	}
-	err := in.validate("integrations")
+	err := in.validate(field("integrations"))
 	if err == nil || !strings.Contains(err.Error(), "nowhere to search") {
 		t.Fatalf("a Confluence block nothing can locate was accepted: %v", err)
 	}

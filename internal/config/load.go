@@ -91,7 +91,7 @@ func refuseUnresolvedLogFile(missing []Unresolved) error {
 		if u.Path != "logging.file.path" {
 			continue
 		}
-		return fault(u.Path, ErrMissing,
+		return fault(field(u.Path), ErrMissing,
 			"nothing answered for %s, so the log file has no name and this node "+
 				"would start with no durable log at all. Set the variable, or "+
 				"write the path literally — an empty path means \"no file\" and "+
@@ -183,7 +183,7 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 		return nil, fmt.Errorf("%w: %w", ErrShape, err)
 	}
 	if empty(&doc) {
-		return nil, fault("", ErrMissing, "the company config is empty; it needs at least a name")
+		return nil, fault(nil, ErrMissing, "the company config is empty; it needs at least a name")
 	}
 	if err := requireMapping(&doc); err != nil {
 		return nil, err
@@ -283,7 +283,7 @@ func requireMapping(doc *yaml.Node) error {
 		root = root.Content[0]
 	}
 	if root.Kind != yaml.MappingNode {
-		return fault("", ErrShape, "the config file must be a YAML mapping of settings")
+		return fault(nil, ErrShape, "the config file must be a YAML mapping of settings")
 	}
 	return nil
 }
@@ -410,14 +410,14 @@ func decodeError(err error, retired map[string]string) error {
 			// quickstart told them to write: they need the line that
 			// replaced it, not a spelling check.
 			if replacement, gone := retired[retiredKey(m[3], m[2])]; gone {
-				out.add("line "+m[1], ErrUnknownField, "%s", replacement)
+				out.add(Path{"line " + m[1]}, ErrUnknownField, "%s", replacement)
 				continue
 			}
-			out.add("line "+m[1], ErrUnknownField,
+			out.add(Path{"line " + m[1]}, ErrUnknownField,
 				"%q is not a setting: check the spelling, or the block it belongs under", m[2])
 			continue
 		}
-		out.add("", ErrShape, "%s", strings.TrimSpace(line))
+		out.add(nil, ErrShape, "%s", strings.TrimSpace(line))
 	}
 	return out.err()
 }

@@ -261,7 +261,7 @@ func (c *Company) validateHumanSeatApps() error {
 func (c *Company) validateSetupStepNames() error {
 	var p problems
 	if c.Providers.Sandbox != nil {
-		p.wrap(uniqueSetupStepNames(at(at("providers", "sandbox"), "setup"), c.Providers.Sandbox.Setup))
+		p.wrap(uniqueSetupStepNames(at(at(field("providers"), "sandbox"), "setup"), c.Providers.Sandbox.Setup))
 	}
 	for role, path := range c.EachRole() {
 		if role.Sandbox != nil {
@@ -273,7 +273,7 @@ func (c *Company) validateSetupStepNames() error {
 
 // uniqueSetupStepNames reports each name more than one step in this list
 // carries, once per name, naming every step that carries it.
-func uniqueSetupStepNames(path string, steps []SandboxSetupStep) error {
+func uniqueSetupStepNames(path Path, steps []SandboxSetupStep) error {
 	var p problems
 	positions := map[string][]int{}
 	var order []string
@@ -294,7 +294,7 @@ func uniqueSetupStepNames(path string, steps []SandboxSetupStep) error {
 		}
 		places := make([]string, len(found))
 		for i, position := range found {
-			places[i] = idx(path, position)
+			places[i] = idx(path, position).String()
 		}
 		p.add(path, ErrConflict,
 			"duplicate setup step name %q: %d steps carry it (%s). A step's "+
@@ -342,7 +342,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 
 	if strings.TrimSpace(c.Name) == "" {
-		p.add("name", ErrMissing, "the company needs a name: it is half of every seat's derived id")
+		p.add(field("name"), ErrMissing, "the company needs a name: it is half of every seat's derived id")
 	}
 
 	// A SEAT MAY NOT BE CALLED WHAT "NOBODY" IS CALLED.
@@ -391,17 +391,17 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	if fallback != "" && fallback != DatadogIgnore && !routed {
 		switch {
 		case !org.ValidHandle(fallback):
-			p.add("integrations.datadog.route_to", ErrUnknownValue,
+			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not a seat handle: a handle is lowercase letters, "+
 					"digits and hyphens starting with a letter or digit, so "+
 					"this names no seat and every untagged alert is verified, "+
 					"counted and delivered to nobody", fallback)
 		case agents == 0:
-			p.add("integrations.datadog.route_to", ErrUnknownValue,
+			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q names no seat: this company declares no agent seat at all, "+
 					"so there is nobody an untagged alert can wake", fallback)
 		default:
-			p.add("integrations.datadog.route_to", ErrUnknownValue,
+			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not an agent seat in this company. An alert naming no "+
 					"owner wakes this handle, and one that resolves to nothing "+
 					"— or to a human seat, which is dropped as a self-action — "+
@@ -412,7 +412,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 
 	for key := range c.SkillVariables {
 		if !skillVariableKey.MatchString(key) {
-			p.add(at("skill_variables", key), ErrUnknownValue,
+			p.add(entry(field("skill_variables"), key), ErrUnknownValue,
 				"keys must be substitution identifiers matching "+
 					"[A-Za-z_][A-Za-z0-9_]*: a key like %q would never be "+
 					"substituted into a skill's ${name} reference", key)
@@ -420,29 +420,29 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 
 	if c.TokenBudget < 0 {
-		p.add("token_budget", ErrOutOfRange, "must not be negative, got %d", c.TokenBudget)
+		p.add(field("token_budget"), ErrOutOfRange, "must not be negative, got %d", c.TokenBudget)
 	}
 	if c.NotificationRateLimit < 0 {
-		p.add("notification_rate_limit", ErrOutOfRange,
+		p.add(field("notification_rate_limit"), ErrOutOfRange,
 			"must not be negative, got %d", c.NotificationRateLimit)
 	}
 	if w := c.NotificationCoalesceWindowSeconds; w < 0 || w > coalesceWindowMax {
-		p.add("notification_coalesce_window_seconds", ErrOutOfRange,
+		p.add(field("notification_coalesce_window_seconds"), ErrOutOfRange,
 			"must be 0..%v seconds, got %v: the window is spent out of the "+
 				"broker's ack-timeout budget, which also has to fit a whole turn",
 			coalesceWindowMax, w)
 	}
 	if b := c.NotificationCoalesceMaxBatch; b < 1 || b > coalesceMaxBatchMax {
-		p.add("notification_coalesce_max_batch", ErrOutOfRange,
+		p.add(field("notification_coalesce_max_batch"), ErrOutOfRange,
 			"must be between 1 and %d, got %d", coalesceMaxBatchMax,
 			c.NotificationCoalesceMaxBatch)
 	}
 
-	p.wrap(c.Providers.validate("providers"))
-	p.wrap(c.TurnEngine.validate("turn_engine"))
-	p.wrap(c.Learning.validate("learning"))
-	p.wrap(c.Scheduling.validate("scheduling"))
-	p.wrap(c.Integrations.validate("integrations"))
+	p.wrap(c.Providers.validate(field("providers")))
+	p.wrap(c.TurnEngine.validate(field("turn_engine")))
+	p.wrap(c.Learning.validate(field("learning")))
+	p.wrap(c.Scheduling.validate(field("scheduling")))
+	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -450,7 +450,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 
 	seen := make(map[string]struct{}, len(c.MCPServers))
 	for i := range c.MCPServers {
-		path := idx("mcp_servers", i)
+		path := idx(field("mcp_servers"), i)
 		p.wrap(c.MCPServers[i].validate(path))
 		name := c.MCPServers[i].Name
 		if name == "" {
@@ -478,10 +478,10 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	}
 
 	for i := range c.Roles {
-		p.wrap(c.Roles[i].validate(idx("roles", i)))
+		p.wrap(c.Roles[i].validate(idx(field("roles"), i)))
 	}
 	for i := range c.Units {
-		p.wrap(c.Units[i].validate(idx("units", i)))
+		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -506,7 +506,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 func (c *Company) validateKnowledgeBackend() error {
 	var p problems
 	if len(c.Knowledge.ConfluenceSpaces) > 0 && c.Integrations.Confluence == nil {
-		p.add("knowledge.confluence_spaces", ErrConflict,
+		p.add(field("knowledge.confluence_spaces"), ErrConflict,
 			"a Confluence read scope needs integrations.confluence")
 	}
 	return p.err()
@@ -565,7 +565,7 @@ func (c *Company) validateProviderKeys() error {
 		// is still a typo, still in the file, and still what the operator
 		// will edit next.
 		for _, field := range []struct {
-			path string
+			path Path
 			keys ProviderKeys
 		}{
 			{at(path, "llm"), role.LLM.Default},
@@ -688,15 +688,15 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 // answered nil for every seat in a unit — so run_sandbox refused each of them
 // with "this seat's sandbox is not enabled" on a seat whose block said
 // otherwise. One walker, so the two can never disagree about which seats exist.
-func (c *Company) EachRole() iter.Seq2[*Role, string] {
-	return func(yield func(*Role, string) bool) {
+func (c *Company) EachRole() iter.Seq2[*Role, Path] {
+	return func(yield func(*Role, Path) bool) {
 		for i := range c.Roles {
-			if !yield(&c.Roles[i], idx("roles", i)) {
+			if !yield(&c.Roles[i], idx(field("roles"), i)) {
 				return
 			}
 		}
-		var walk func(units []Unit, path string) bool
-		walk = func(units []Unit, path string) bool {
+		var walk func(units []Unit, path Path) bool
+		walk = func(units []Unit, path Path) bool {
 			for i := range units {
 				unit := &units[i]
 				here := idx(path, i)
@@ -711,7 +711,7 @@ func (c *Company) EachRole() iter.Seq2[*Role, string] {
 			}
 			return true
 		}
-		walk(c.Units, "units")
+		walk(c.Units, field("units"))
 	}
 }
 
@@ -751,7 +751,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 			continue
 		}
 		if _, seen := reached[gate.RunIn]; !seen {
-			reached[gate.RunIn] = at(at(path, "sandbox"), "run_in")
+			reached[gate.RunIn] = at(path, "sandbox.run_in").String()
 		}
 	}
 	// AN AGENT-MODE EXECUTOR IS A RUN TOO, placed by its entry's own
@@ -766,7 +766,7 @@ func (c *Company) SandboxPlacements() map[Placement]string {
 			continue
 		}
 		if _, seen := reached[run]; !seen {
-			reached[run] = at(agentModeEntryPath(key), "run_in")
+			reached[run] = at(agentModeEntryPath(key), "run_in").String()
 		}
 	}
 	return reached
@@ -801,8 +801,8 @@ func (c *Company) agentModeExecutorKeys() []string {
 
 // agentModeEntryPath is where an agent-mode entry's placement is written, for
 // the messages that point at it.
-func agentModeEntryPath(key string) string {
-	return at(at(at("providers", "llm"), key), "cli")
+func agentModeEntryPath(name string) Path {
+	return at(entry(field("providers.llm"), name), "cli")
 }
 
 // ExecutorProvider is the providers.llm entry a seat's EXECUTOR actually runs
@@ -985,7 +985,7 @@ func (c *Company) validateSandboxPlacement() error {
 		// that resolves a default reaches that default, precisely so a seat
 		// added later has somewhere to go. So the remedy is the default —
 		// or a seat, which is the other thing that would reach a cell.
-		p.add(at("providers.sandbox", "default_run_in"), ErrMissing,
+		p.add(at(field("providers.sandbox"), "default_run_in"), ErrMissing,
 			"this catalogue configures more than one place to run code (%s) and "+
 				"nothing names one, so no backend is built and no seat can ever "+
 				"run code here. Name the default, give a seat `run_in`, or remove "+
@@ -998,7 +998,7 @@ func (c *Company) validateSandboxPlacement() error {
 		// refuse a perfectly good direct-only company; unchecked, a seat's
 		// first coding run fails at container create, minutes into a turn.
 		if named, wanted := reached[PlacementContainer]; wanted && strings.TrimSpace(local.Image) == "" {
-			p.add("providers.sandbox.local.image", ErrMissing,
+			p.add(field("providers.sandbox.local.image"), ErrMissing,
 				"%s runs in a container, so the local backend needs an image "+
 					"with the coding-agent CLI installed", named)
 		}
@@ -1007,7 +1007,7 @@ func (c *Company) validateSandboxPlacement() error {
 				if strings.TrimSpace(unread.value) == "" {
 					continue
 				}
-				p.add(at("providers.sandbox.local", unread.field), ErrConflict,
+				p.add(at(field("providers.sandbox.local"), unread.field), ErrConflict,
 					"only a container box reads this, and no seat runs in one. "+
 						"Give a seat `run_in: container`, or remove the field")
 			}

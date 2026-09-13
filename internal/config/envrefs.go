@@ -51,9 +51,9 @@ type Reference struct {
 // so [ReferencedNames] is what those callers want.
 func References(payload any) []Reference {
 	var out []Reference
-	walkStrings(reflect.ValueOf(payload), "", func(path, s string) {
+	walkStrings(reflect.ValueOf(payload), nil, func(path Path, s string) {
 		for _, name := range envref.Names(s) {
-			out = append(out, Reference{Path: path, Name: name})
+			out = append(out, Reference{Path: path.String(), Name: name})
 		}
 	})
 	slices.SortFunc(out, func(a, b Reference) int {
@@ -70,7 +70,7 @@ func References(payload any) []Reference {
 // alike — the three shapes a payload actually arrives in.
 func ReferencedNames(payload any) []string {
 	seen := map[string]struct{}{}
-	walkStrings(reflect.ValueOf(payload), "", func(_, s string) {
+	walkStrings(reflect.ValueOf(payload), nil, func(_ Path, s string) {
 		for _, name := range envref.Names(s) {
 			seen[name] = struct{}{}
 		}
@@ -90,7 +90,7 @@ func ReferencedNames(payload any) []string {
 // Unexported fields are skipped: reflection cannot read them, and nothing
 // in a config payload hides a reference behind one — the one type with
 // unexported state (org.Toggle) holds no strings at all.
-func walkStrings(v reflect.Value, path string, visit func(path, s string)) {
+func walkStrings(v reflect.Value, path Path, visit func(path Path, s string)) {
 	if !v.IsValid() {
 		return
 	}
@@ -113,9 +113,9 @@ func walkStrings(v reflect.Value, path string, visit func(path, s string)) {
 			// that did would make the fingerprint blind to it. A key is
 			// reported at the entry's OWN path rather than the map's,
 			// because that is where the operator finds the text.
-			entry := at(path, iter.Key().String())
-			walkStrings(iter.Key(), entry, visit)
-			walkStrings(iter.Value(), entry, visit)
+			member := entry(path, iter.Key().String())
+			walkStrings(iter.Key(), member, visit)
+			walkStrings(iter.Value(), member, visit)
 		}
 	case reflect.Struct:
 		// A yaml.Node's own Value carries the scalar text; its Content

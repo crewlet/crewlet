@@ -169,7 +169,7 @@ func (i *Integrations) WebhookBase(resolve func(string) (string, bool)) string {
 	return strings.TrimRight(base, "/")
 }
 
-func (i *Integrations) validate(path string) error {
+func (i *Integrations) validate(path Path) error {
 	var p problems
 
 	// A URL that is not one is refused HERE rather than discovered by a
@@ -340,7 +340,7 @@ func (j *Jira) ShareableBaseURL() string {
 // moved from Data Center to Cloud and left the old url behind would keep
 // looking correct while every read went to the new place and every link to
 // the old one.
-func (j *Jira) validate(path string, discovers bool) error {
+func (j *Jira) validate(path Path, discovers bool) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), j.URL)
 	noSpaces(&probs, at(path, "cloud_id"), j.CloudID)
@@ -517,7 +517,7 @@ func DefaultSkillsSpaceFor(c *Confluence) string {
 // ambiguity silently would let a company that moved from Data Center to
 // Cloud keep looking correct while every read went to one place and every
 // link to the other.
-func (c *Confluence) validate(path string, discovers bool) error {
+func (c *Confluence) validate(path Path, discovers bool) error {
 	var probs problems
 	noSpaces(&probs, at(path, "url"), c.URL)
 	noSpaces(&probs, at(path, "cloud_id"), c.CloudID)
@@ -585,7 +585,7 @@ func (c *Confluence) validate(path string, discovers bool) error {
 // built, so the length of what it resolves to is not knowable here. The
 // webhook edge makes the same check on the resolved value, which is what
 // stops a reference being the way around this.
-func sharedToken(p *problems, path, value string) {
+func sharedToken(p *problems, path Path, value string) {
 	token := strings.TrimSpace(value)
 	if token == "" || envref.Has(token) {
 		return
@@ -627,7 +627,7 @@ var WorkingStatuses = []WorkingStatus{StatusAlways, StatusAddressed}
 // not others, and the operator concludes the feature is flaky rather than
 // that they typed it wrong. Empty is valid — it is how a block takes the
 // default.
-func (w WorkingStatus) validate(path string) error {
+func (w WorkingStatus) validate(path Path) error {
 	if w == "" || slices.Contains(WorkingStatuses, w) {
 		return nil
 	}
@@ -658,7 +658,7 @@ type Slack struct {
 // [Slack.Status] and silently became the default. StatusPhrases is
 // deliberately not validated: its values are free text an operator writes to
 // complete the sentence "<seat> is …", so there is no set to check against.
-func (s *Slack) validate(path string) error {
+func (s *Slack) validate(path Path) error {
 	var p problems
 	p.wrap(s.TypingStatus.validate(at(path, "typing_status")))
 	return p.err()
@@ -772,7 +772,7 @@ type MattermostProvisioning struct {
 	DisplayNameSuffix string `yaml:"display_name_suffix,omitempty" json:"display_name_suffix,omitempty" desc:"Suffix on each bot display name, e.g. \" (AI)\"."`
 }
 
-func (m *Mattermost) validate(path string) error {
+func (m *Mattermost) validate(path Path) error {
 	var p problems
 	p.wrap(m.TypingStatus.validate(at(path, "typing_status")))
 	if !m.Enabled {
@@ -827,7 +827,7 @@ func IsAtlassianCloud(raw string) bool {
 // vendor has no record of. Caught here rather than at the vendor because the
 // failure there is a 401 or a DNS miss that names neither the field nor the
 // character, and the config is the one place that can say both.
-func noSpaces(p *problems, path, value string) {
+func noSpaces(p *problems, path Path, value string) {
 	if trimmed := strings.TrimSpace(value); strings.ContainsAny(trimmed, " \t\r\n") {
 		p.add(path, ErrUnknownValue,
 			"%q contains a space, and this field is a single token: an "+
@@ -1237,7 +1237,7 @@ func (p *GitLabProvisioning) ModeOrDefault() GitLabMode {
 	return p.Mode.Or()
 }
 
-func (g *GitHub) validate(path string) error {
+func (g *GitHub) validate(path Path) error {
 	var p problems
 	if g.Enabled {
 		// A URL IS OPTIONAL AND ITS SHAPE IS NOT. An Enterprise Server
@@ -1290,7 +1290,7 @@ func (g *GitHub) validate(path string) error {
 	return p.err()
 }
 
-func (g *GitLab) validate(path string) error {
+func (g *GitLab) validate(path Path) error {
 	var p problems
 	if g.Enabled {
 		if strings.TrimSpace(g.URL) == "" {
@@ -1345,7 +1345,7 @@ func (g *GitLab) validate(path string) error {
 	}
 	for _, handle := range sortedKeys(pv.AccessLevels) {
 		if !slices.Contains(GitLabAccessLevels, pv.AccessLevels[handle]) {
-			p.add(at(at(pp, "access_levels"), handle), ErrUnknownValue, "%q (want %s)",
+			p.add(entry(at(pp, "access_levels"), handle), ErrUnknownValue, "%q (want %s)",
 				pv.AccessLevels[handle], names(GitLabAccessLevels))
 		}
 	}
@@ -1606,7 +1606,7 @@ func (d *Datadog) HandleTagOrDefault() string {
 	return "crewlet"
 }
 
-func (d *Datadog) validate(path string) error {
+func (d *Datadog) validate(path Path) error {
 	var p problems
 
 	if !d.Enabled {

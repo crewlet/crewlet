@@ -47,7 +47,7 @@ func DefaultLearning() Learning {
 // On reports whether the subsystem runs, applying the true default.
 func (l *Learning) On() bool { return l.Enabled.Or(true) }
 
-func (l *Learning) validate(path string) error {
+func (l *Learning) validate(path Path) error {
 	var p problems
 	p.wrap(l.Episodic.validate(at(path, "episodic")))
 	p.wrap(l.Reflect.validate(at(path, "reflect")))
@@ -73,7 +73,7 @@ type Episodic struct {
 	RetrievalLimit int `yaml:"retrieval_limit,omitempty" json:"retrieval_limit,omitempty" js:"min=1;max=20" desc:"Episode-query hits returned (1..20)."`
 }
 
-func (e *Episodic) validate(path string) error {
+func (e *Episodic) validate(path Path) error {
 	var p problems
 	if e.RetrievalLimit < 1 || e.RetrievalLimit > maxRetrievalLimit {
 		p.add(at(path, "retrieval_limit"), ErrOutOfRange,
@@ -114,7 +114,7 @@ func (r *Reflect) Decides() bool { return r.PersistDecider.Or(true) }
 // default.
 func (r *Reflect) Summarizes() bool { return r.SummarizeEpisodes.Or(true) }
 
-func (r *Reflect) validate(path string) error {
+func (r *Reflect) validate(path Path) error {
 	var p problems
 	p.wrap(nonNegative(path, "budget_tokens", r.BudgetTokens))
 	p.wrap(nonNegative(path, "summarize_max_tokens", r.SummarizeMaxTokens))
@@ -132,7 +132,7 @@ type Counterparty struct {
 // Observes reports whether profiling runs, applying the true default.
 func (c *Counterparty) Observes() bool { return c.Enabled.Or(true) }
 
-func (c *Counterparty) validate(path string) error {
+func (c *Counterparty) validate(path Path) error {
 	return nonNegative(path, "budget_tokens", c.BudgetTokens)
 }
 
@@ -195,7 +195,7 @@ func (s *SkillSynthesis) Drafts() bool { return s.Enabled.Or(true) }
 // default — it is opt-in.
 func (s *SkillSynthesis) Clusters() bool { return s.SchedulerEnabled.Or(false) }
 
-func (s *SkillSynthesis) validate(path string) error {
+func (s *SkillSynthesis) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "min_tool_calls", s.MinToolCalls))
 	p.wrap(nonNegative(path, "budget_tokens", s.BudgetTokens))
@@ -237,7 +237,7 @@ func DefaultSkillRefinement() SkillRefinement {
 // Refines reports whether refinement runs, applying the true default.
 func (s *SkillRefinement) Refines() bool { return s.Enabled.Or(true) }
 
-func (s *SkillRefinement) validate(path string) error {
+func (s *SkillRefinement) validate(path Path) error {
 	var p problems
 	p.wrap(nonNegative(path, "budget_tokens", s.BudgetTokens))
 	p.wrap(positive(path, "max_body_chars", s.MaxBodyChars))
@@ -260,7 +260,7 @@ type SkillPromotion struct {
 // Promotes reports whether promotion runs, applying the true default.
 func (s *SkillPromotion) Promotes() bool { return s.Enabled.Or(true) }
 
-func (s *SkillPromotion) validate(path string) error {
+func (s *SkillPromotion) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "min_sibling_count", s.MinSiblingCount))
 	p.wrap(fraction(path, "jaccard_threshold", s.JaccardThreshold))
@@ -281,7 +281,7 @@ type SkillCurator struct {
 // Curates reports whether the curator runs, applying the true default.
 func (s *SkillCurator) Curates() bool { return s.Enabled.Or(true) }
 
-func (s *SkillCurator) validate(path string) error {
+func (s *SkillCurator) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "interval_hours", s.IntervalHours))
 	p.wrap(positive(path, "stale_after_days", s.StaleAfterDays))
@@ -307,7 +307,7 @@ type PersonalMemory struct {
 	MaxRefreshesPerTurn int `yaml:"max_refreshes_per_turn,omitempty" json:"max_refreshes_per_turn,omitempty" js:"min=0" desc:"Distinct memory refreshes one turn may make."`
 }
 
-func (m *PersonalMemory) validate(path string) error {
+func (m *PersonalMemory) validate(path Path) error {
 	return positive(path, "max_refreshes_per_turn", m.MaxRefreshesPerTurn)
 }
 
@@ -397,7 +397,7 @@ func DefaultEpisodeLifecycle() EpisodeLifecycle {
 	}
 }
 
-func (e *EpisodeLifecycle) validate(path string) error {
+func (e *EpisodeLifecycle) validate(path Path) error {
 	var p problems
 	p.wrap(positive(path, "max_raw_episodes_per_agent", e.MaxRawEpisodesPerAgent))
 	p.wrap(positive(path, "write_check_every_n", e.WriteCheckEveryN))
@@ -432,21 +432,21 @@ func (e *EpisodeLifecycle) validate(path string) error {
 // consistent across forty fields — an operator reading two of these errors
 // should not have to work out whether they mean different things.
 
-func positive(path, field string, value int) error {
+func positive(path Path, field string, value int) error {
 	if value < 1 {
 		return fault(at(path, field), ErrOutOfRange, "must be at least 1, got %d", value)
 	}
 	return nil
 }
 
-func nonNegative(path, field string, value int) error {
+func nonNegative(path Path, field string, value int) error {
 	if value < 0 {
 		return fault(at(path, field), ErrOutOfRange, "must not be negative, got %d", value)
 	}
 	return nil
 }
 
-func fraction(path, field string, value float64) error {
+func fraction(path Path, field string, value float64) error {
 	if value <= 0 || value > 1 {
 		return fault(at(path, field), ErrOutOfRange,
 			"must be a similarity in (0, 1], got %v", value)

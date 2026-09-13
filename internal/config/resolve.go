@@ -214,6 +214,10 @@ type Unresolved struct {
 // Map expands a map of values — the shape MCP credentials, sandbox env and
 // setup-step env all take — reporting each key whose references went
 // unresolved.
+//
+// path is a RENDERED path, because its callers build it for a log line and
+// nothing reads its segments. It is carried as one opaque segment, so the key
+// is appended by the same renderer every validation path uses.
 func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []Unresolved) {
 	if len(in) == 0 {
 		return nil, nil
@@ -228,7 +232,7 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 		v, names := r.Expand(in[k])
 		out[k] = v
 		if len(names) > 0 {
-			missing = append(missing, Unresolved{Path: at(path, k), Names: names})
+			missing = append(missing, Unresolved{Path: entry(Path{path}, k).String(), Names: names})
 		}
 	}
 	return out, missing
@@ -245,14 +249,14 @@ func (r *Resolver) Map(path string, in map[string]string) (map[string]string, []
 // resolved secrets.
 func (r *Resolver) Document(node *yaml.Node) []Unresolved {
 	var missing []Unresolved
-	r.resolveNode(node, "", &missing)
+	r.resolveNode(node, nil, &missing)
 	return missing
 }
 
 // resolveNode walks the document, rewriting scalars. Only string scalars
 // are touched: substituting into a number or a boolean could only ever
 // corrupt it, and a quoted reference is still a string scalar.
-func (r *Resolver) resolveNode(node *yaml.Node, path string, missing *[]Unresolved) {
+func (r *Resolver) resolveNode(node *yaml.Node, path Path, missing *[]Unresolved) {
 	if node == nil {
 		return
 	}
@@ -268,7 +272,7 @@ func (r *Resolver) resolveNode(node *yaml.Node, path string, missing *[]Unresolv
 			// schema, and a schema that changes with the environment is
 			// not one — this is also why the ${VAR} grammar deliberately
 			// does not match shell parameter expansions.
-			r.resolveNode(value, at(path, key.Value), missing)
+			r.resolveNode(value, entry(path, key.Value), missing)
 		}
 	case yaml.SequenceNode:
 		for i, child := range node.Content {
@@ -289,7 +293,7 @@ func (r *Resolver) resolveNode(node *yaml.Node, path string, missing *[]Unresolv
 		node.Tag = "!!str"
 		node.Style = yaml.DoubleQuotedStyle
 		if len(names) > 0 {
-			*missing = append(*missing, Unresolved{Path: path, Names: names})
+			*missing = append(*missing, Unresolved{Path: path.String(), Names: names})
 		}
 	}
 }

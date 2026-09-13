@@ -514,7 +514,7 @@ func faultsOf(err error) []validationError {
 	out := make([]validationError, 0, len(faults))
 	for _, f := range faults {
 		out = append(out, validationError{
-			Path: f.Path, Type: f.KindName(), Message: f.Detail,
+			Path: f.Path.String(), Type: f.KindName(), Message: f.Detail,
 		})
 	}
 	return out

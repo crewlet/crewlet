@@ -236,7 +236,7 @@ type E2BSandbox struct {
 	Template string `yaml:"template,omitempty" json:"template,omitempty" desc:"Box template. This is where vCPU/RAM/disk are set: at template build time."`
 }
 
-func (e *E2BSandbox) validate(path string) error {
+func (e *E2BSandbox) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(e.APIKey) == "" {
 		// REQUIRED, and checked here rather than at construction so a
@@ -352,7 +352,7 @@ func (s *SandboxProvider) RunIn() Placement {
 	return ""
 }
 
-func (s *SandboxProvider) validate(path string) error {
+func (s *SandboxProvider) validate(path Path) error {
 	var p problems
 	switch {
 	case !s.Enabled():
@@ -525,7 +525,7 @@ func (l *LocalSandbox) containerOnly() []struct{ field, value string } {
 	}
 }
 
-func (l *LocalSandbox) validate(path string) error {
+func (l *LocalSandbox) validate(path Path) error {
 	var p problems
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
 		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
@@ -608,7 +608,7 @@ func (s *SandboxSetupStep) Timeout() float64 {
 	return s.TimeoutSeconds
 }
 
-func (s *SandboxSetupStep) validate(path string) error {
+func (s *SandboxSetupStep) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(s.Name) == "" {
 		p.add(at(path, "name"), ErrMissing,
@@ -642,11 +642,13 @@ func (s *SandboxSetupStep) validate(path string) error {
 // would double-resolve a secret whose real value contains a literal
 // ${...}. Brief and Name are never resolved — agent-facing text and an
 // identifier.
+//
+// path is rendered, like [Resolver.Map]'s: it only ever names a log line.
 func (s *SandboxSetupStep) Resolve(path string, r *Resolver) (SandboxSetupStep, []Unresolved) {
 	out := *s
 	var missing []Unresolved
 	if len(s.Files) > 0 {
-		files, m := r.Map(at(path, "files"), s.Files)
+		files, m := r.Map(at(Path{path}, "files").String(), s.Files)
 		out.Files = files
 		missing = append(missing, m...)
 	}
@@ -656,7 +658,7 @@ func (s *SandboxSetupStep) Resolve(path string, r *Resolver) (SandboxSetupStep, 
 			expanded, names := r.Expand(cmd)
 			out.Commands[i] = expanded
 			if len(names) > 0 {
-				missing = append(missing, Unresolved{Path: idx(at(path, "commands"), i), Names: names})
+				missing = append(missing, Unresolved{Path: idx(at(Path{path}, "commands"), i).String(), Names: names})
 			}
 		}
 	}

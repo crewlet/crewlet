@@ -808,7 +808,10 @@ func unitTokens(c *Company) map[string]string {
 // assertUnresolved fails unless exactly these paths still hold the mask.
 func assertUnresolved(t *testing.T, c *Company, want ...string) {
 	t.Helper()
-	got := c.UnresolvedMasks()
+	var got []string
+	for _, path := range c.UnresolvedMasks() {
+		got = append(got, path.String())
+	}
 	slices.Sort(got)
 	slices.Sort(want)
 	if !slices.Equal(got, want) {

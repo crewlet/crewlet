@@ -399,16 +399,16 @@ func mask(value string, secret bool) string {
 // not. The literal "__redacted__" would be handed to a provider as an API key
 // and fail at the first call, hours later, with an authentication error that
 // names nothing about where it came from.
-func (c *Company) UnresolvedMasks() []string {
+func (c *Company) UnresolvedMasks() []Path {
 	if c == nil {
 		return nil
 	}
-	var found []string
-	findMasks(reflect.ValueOf(*c), "", false, &found)
+	var found []Path
+	findMasks(reflect.ValueOf(*c), nil, false, &found)
 	return found
 }
 
-func findMasks(v reflect.Value, path string, secret bool, found *[]string) {
+func findMasks(v reflect.Value, path Path, secret bool, found *[]Path) {
 	switch v.Kind() {
 	case reflect.String:
 		if secret && v.String() == Redacted {
@@ -432,8 +432,8 @@ func findMasks(v reflect.Value, path string, secret bool, found *[]string) {
 			findMasks(v.Index(i), idx(path, i), secret, found)
 		}
 	case reflect.Map:
-		for _, key := range v.MapKeys() {
-			findMasks(v.MapIndex(key), at(path, key.String()), secret, found)
+		for _, mapKey := range v.MapKeys() {
+			findMasks(v.MapIndex(mapKey), entry(path, mapKey.String()), secret, found)
 		}
 	}
 }

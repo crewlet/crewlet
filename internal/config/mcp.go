@@ -160,7 +160,7 @@ func (m *MCPServer) RequestTimeout() time.Duration {
 	return time.Duration(m.RequestTimeoutSeconds * float64(time.Second))
 }
 
-func (m *MCPServer) validate(path string) error {
+func (m *MCPServer) validate(path Path) error {
 	var p problems
 	if strings.TrimSpace(m.Name) == "" {
 		p.add(at(path, "name"), ErrMissing,
