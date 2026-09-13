@@ -393,6 +393,18 @@ export function rollUp(
       outline: false,
     };
   }
+  // PAUSED IS A CLAIM ABOUT SOMEBODY'S INTENT, so it is read off a block that
+  // says so and nothing else. That is a property of the rows rather than of
+  // this rule: a row is emitted for a surface whose block is present, and
+  // `enabled` is that block's own switch, or true where the surface has none
+  // (internal/api/queries/company.go).
+  //
+  // Two rows used to reach here without anybody intending anything. Slack and
+  // GitHub were reported on per-seat secrets AS WELL as on the company block,
+  // and took `enabled` from the block alone — so an absent block and a paused
+  // one were the same row. A disconnect produces the first one every time: the
+  // block goes, the seats keep their sealed credentials, and the card an
+  // operator had just disconnected settled on Paused and stayed there.
   if (present.every((p) => p.row.enabled === false)) {
     return { tag: "Paused", tone: "neutral", outline: true };
   }

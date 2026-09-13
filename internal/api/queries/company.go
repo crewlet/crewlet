@@ -293,27 +293,38 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		out = append(out, row)
 	}
 
-	// Slack is reported when EITHER half is present, because they turn on
-	// different things and an operator needs to see the half they forgot.
-	// The org block is the TRANSPORT marker; the per-seat apps are what
-	// the inbound route verifies with. A company with seat apps and no
-	// block answers webhooks and sends nothing; one with the block and no
-	// apps refuses every delivery.
-	if seats := seatSecrets(company, "slack"); in.Slack != nil || seats > 0 {
-		add("slack", in.Slack != nil, boolPtr(seats > 0), nil)
+	// Slack's org block is the TRANSPORT MARKER, so it is what says this
+	// surface exists at all; the per-seat apps are what the inbound route
+	// verifies with, and the row reports whether any seat holds one.
+	//
+	// A company with seat apps and NO block is not a half-configured Slack,
+	// which is how this read until a disconnect produced one: the engine
+	// retires the transport when the block goes (`slack_retired`), so every
+	// delivery is verified at the route and then routes to no seat. Reported
+	// as a row it was a surface with nothing enabled — which the dashboard
+	// draws as Paused, a word for a state an operator chose, over the residue
+	// of a disconnect that had removed the block and left the seats.
+	if in.Slack != nil {
+		add("slack", true, boolPtr(seatSecrets(company, "slack") > 0), nil)
 	}
 	if in.Mattermost != nil {
 		add("mattermost", true, nil, map[string]any{"url": in.Mattermost.URL})
 	}
-	// GitHub, on the same terms as Slack and for the same reason: a
-	// per-agent app is an app of its own, with its own signing secret, and
-	// a company can hold nothing but those. Reported on the org block
-	// alone, such a company had no GitHub row at all while five agents
-	// were receiving deliveries.
-	if seats := seatSecrets(company, "github"); in.GitHub != nil || seats > 0 {
-		org := in.GitHub != nil
-		add("github", org && in.GitHub.Enabled,
-			boolPtr(seats > 0 || (org && in.GitHub.WebhookSecret != "")), nil)
+	// GitHub, on the same terms as Slack and for the same reason: the org
+	// block is what turns the surface on, and a company whose agents each
+	// have their own app still needs one — [Engine.reconcileGitHub] retires
+	// the parser on `cfg == nil || !cfg.Enabled`, so without it the seats'
+	// apps deliver to a route that verifies them and routes them nowhere.
+	//
+	// The clause this was widened for — a company holding nothing but
+	// per-agent apps, which had no GitHub row at all while its agents were
+	// receiving deliveries — is answered by [seatSecrets] instead, which
+	// counts a seat app only where the org block enables the surface it
+	// arrives on. Widened here as well, the row outlived a disconnect that
+	// removed every installation, and the card sat on Paused.
+	if in.GitHub != nil {
+		add("github", in.GitHub.Enabled,
+			boolPtr(seatSecrets(company, "github") > 0 || in.GitHub.WebhookSecret != ""), nil)
 	}
 	if in.GitLab != nil {
 		add("gitlab", in.GitLab.Enabled, boolPtr(in.GitLab.SigningSecret != ""),
@@ -606,24 +617,45 @@ func seatsFor(company *config.Company, kind string) []string {
 }
 
 // seatSecrets counts the per-seat apps of one kind that carry a verification
-// credential.
+// credential AND can do anything with it.
 //
 // Counted as well as listed by [seatsFor]: the COUNT is what says whether the
 // route can verify anything at all, since an app with no signing secret
 // cannot, and an app without one is exactly the half-finished state an
 // operator needs to see.
+//
+// # A sealed value is not a surface
+//
+// Each arm below adds the thing that makes the secret MEAN something, and
+// both were learned the same way — from a disconnect that removed the
+// meaningful half and left the secret, so the row outlived the integration
+// and the card sat on a state nobody had chosen.
+//
+// A count this reports is therefore a claim that deliveries reach a seat, not
+// that a `${VAR}` is written down somewhere. What is left over after a
+// half-finished teardown is reported by the SETUP screen's seat roster, which
+// is where an operator acts on a seat, and — with what only a person can
+// finish — by the disconnect itself.
 func seatSecrets(company *config.Company, kind string) int {
 	n := 0
 	for r := range company.EachRole() {
 		var secret string
 		switch kind {
 		case "slack":
-			if slack := r.Integrations.Slack; slack != nil {
+			// AND THE TRANSPORT MARKER. Declaring `integrations.slack` at
+			// all is what turns Slack on; without it the engine retires
+			// the transport (`slack_retired`) and unregisters the parser,
+			// so a delivery to a seat's app is verified at the route and
+			// then turned into work for nobody.
+			//
+			// Counted without it, a disconnect that dropped the block and
+			// left the seats kept the surface alive on two sealed values.
+			if slack := r.Integrations.Slack; slack != nil && company.Integrations.Slack != nil {
 				secret = slack.SigningSecret
 			}
 		case "github":
-			// AND AN INSTALLATION, which is what makes the secret mean
-			// anything.
+			// AN INSTALLATION, and the organization block that enables
+			// the surface the delivery arrives on.
 			//
 			// A seat app that is not installed on the organization sees no
 			// repository, mints no token and receives no delivery — so
@@ -633,10 +665,17 @@ func seatSecrets(company *config.Company, kind string) int {
 			// the org block went, every installation was removed at
 			// GitHub, and the row stayed alive on two sealed values,
 			// rendering the card as Connecting with a `routes nowhere`
-			// badge permanently. The clause this counter exists for — a
-			// company whose agents have their own apps and no org block —
-			// is unaffected, because such a company installed them.
-			if app := r.Integrations.GitHub; app != nil && app.InstallationID != 0 {
+			// badge permanently.
+			//
+			// The block is the other half of the same fact and was
+			// missing: [Engine.reconcileGitHub] retires the parser on
+			// `cfg == nil || !cfg.Enabled`, so an installed app whose
+			// company has no enabled block delivers to a route that
+			// verifies it and routes it nowhere — which a disconnect with
+			// the installations left in place produces exactly.
+			org := company.Integrations.GitHub
+			if app := r.Integrations.GitHub; app != nil && app.InstallationID != 0 &&
+				org != nil && org.Enabled {
 				secret = app.WebhookSecret
 			}
 		}

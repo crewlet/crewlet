@@ -1600,23 +1600,27 @@ func TestMattermostStillReportsWhetherItRoutes(t *testing.T) {
 	t.Fatal("mattermost has no row")
 }
 
-// A GITHUB ROW OUTLIVES THE ORG BLOCK ONLY WHILE AN AGENT'S APP IS INSTALLED.
+// A ROW FOLLOWS THE BLOCK THAT MAKES A DELIVERY REACH A SEAT.
 //
-// The row is reported on the org block OR on the agents' own apps, because a
-// company can hold nothing but those and a GitHub row keyed on the block
-// alone left five agents receiving deliveries with no row at all. What makes
-// an agent's app count is the INSTALLATION: one that is not installed sees no
-// repository, mints no token and receives nothing, so counting its signing
-// secret reports a surface that is being delivered to over an app that
-// reaches nowhere.
+// The GitHub row used to be reported on the org block OR on the agents' own
+// apps, so that a company holding nothing but per-agent apps had a row.
+// Neither half of that reading survives contact with what the engine does: an
+// agent's app needs an INSTALLATION to see a repository at all, and the
+// PARSER that turns a delivery into work for a seat is registered only where
+// `integrations.github` is present and enabled — at boot
+// ([Engine.startNotifications]) and on every apply
+// ([Engine.reconcileGitHub]), both on the same condition. Without the block a
+// seat app's delivery is verified at the webhook route and then dropped.
 //
-// Measured on a live disconnect, which is where it bites: the org block went,
-// every installation was removed at GitHub, and the row stayed alive on two
-// sealed per-seat values — rendering the card as Connecting with a `routes
-// nowhere` badge, permanently, because nothing else would ever look again.
-func TestAGitHubRowNeedsAnInstallationRatherThanALeftoverSecret(t *testing.T) {
+// So a company with installed apps and no block is not a surface with no row;
+// it is a surface that is off, and a row for it is a row with nothing
+// enabled — which the dashboard draws as Paused, its word for a state an
+// operator chose. That is exactly what a disconnect leaves behind, which is
+// where this was measured: the block went, the sealed per-seat values stayed,
+// and the card sat on a state nobody had asked for.
+func TestARowNeedsTheBlockThatRoutesItRatherThanALeftoverSecret(t *testing.T) {
 	t.Parallel()
-	rowFor := func(t *testing.T, cfg *config.Company) map[string]any {
+	rowFor := func(t *testing.T, cfg *config.Company, kind string) map[string]any {
 		t.Helper()
 		body := asMap(t, answer(t, queries.Sources{
 			Company: func() *config.Company { return cfg },
@@ -1624,48 +1628,142 @@ func TestAGitHubRowNeedsAnInstallationRatherThanALeftoverSecret(t *testing.T) {
 		rows, _ := body["integrations"].([]any)
 		for _, row := range rows {
 			entry, _ := row.(map[string]any)
-			if entry["key"] == "github" {
+			if entry["key"] == kind {
 				return entry
 			}
 		}
 		return nil
 	}
-
-	// A COMPANY WITH NO ORG BLOCK AND ONE INSTALLED APP still gets a row:
-	// that is the clause this counter exists for.
-	installed := company(t)
-	installed.Integrations.GitHub = nil
-	for role := range installed.EachRole() {
-		if role.Seat().IsAgent() {
-			role.Integrations.GitHub = &config.RoleGitHub{
-				AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
-				PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+	// firstAgent is where a per-seat app is hung, so each case below reads
+	// as the one fact it is about.
+	firstAgent := func(t *testing.T, cfg *config.Company) *config.Role {
+		t.Helper()
+		for role := range cfg.EachRole() {
+			if role.Seat().IsAgent() {
+				return role
 			}
-			break
 		}
-	}
-	if rowFor(t, installed) == nil {
-		t.Error("a company whose agent has its own installed app got no github " +
-			"row, so a surface receiving deliveries is invisible")
+		t.Fatal("the fixture has no agent seat")
+		return nil
 	}
 
-	// AND THE SAME COMPANY AFTER A DISCONNECT gets none. The app record and
-	// both sealed values survive — GitHub has no API to delete an app — and
-	// the installation does not.
-	disconnected := company(t)
-	disconnected.Integrations.GitHub = nil
-	for role := range disconnected.EachRole() {
-		if role.Seat().IsAgent() {
-			role.Integrations.GitHub = &config.RoleGitHub{
-				AppID: 7, AppSlug: "acme-ceo",
-				PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
-			}
-			break
+	t.Run("github keeps its row while the block enables it", func(t *testing.T) {
+		t.Parallel()
+		// THE CLAUSE THE SEAT COUNTER EXISTS FOR: the org block carries no
+		// webhook secret of its own, so the row's claim to a credential
+		// comes from the agent's app alone.
+		cfg := company(t)
+		cfg.Integrations.GitHub = &config.GitHub{Enabled: true}
+		firstAgent(t, cfg).Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+			PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+		}
+		row := rowFor(t, cfg, "github")
+		if row == nil {
+			t.Fatal("no github row: an installed agent app on an enabled " +
+				"surface is receiving deliveries and is invisible")
+		}
+		if got := row["secret_present"]; got != true {
+			t.Errorf("github secret_present = %v, want true: the agent's own "+
+				"app carries the only signing secret", got)
+		}
+	})
+
+	t.Run("an uninstalled app claims no credential", func(t *testing.T) {
+		t.Parallel()
+		// The app record and both sealed values survive a disconnect —
+		// GitHub has no API to delete an app — and the installation does
+		// not. Counted, the row claimed a surface receiving events over an
+		// app that reaches nothing.
+		cfg := company(t)
+		cfg.Integrations.GitHub = &config.GitHub{Enabled: true}
+		firstAgent(t, cfg).Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo",
+			PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+		}
+		if got := rowFor(t, cfg, "github")["secret_present"]; got != false {
+			t.Errorf("github secret_present = %v, want false: the app is not "+
+				"installed, so it sees no repository and receives nothing", got)
+		}
+	})
+
+	t.Run("github loses its row when the block goes", func(t *testing.T) {
+		t.Parallel()
+		cfg := company(t)
+		cfg.Integrations.GitHub = nil
+		firstAgent(t, cfg).Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+			PrivateKey: "${CEO_PEM}", WebhookSecret: "${CEO_HOOK}",
+		}
+		if row := rowFor(t, cfg, "github"); row != nil {
+			t.Errorf("github row = %v with no org block: no parser is "+
+				"registered, so every verified delivery is dropped and the "+
+				"card renders the residue as Paused", row)
+		}
+	})
+
+	t.Run("slack loses its row when the block goes", func(t *testing.T) {
+		t.Parallel()
+		// THE SAME SHAPE, and the one an operator hit. Slack's org block is
+		// the transport marker: dropping it retires the transport and
+		// unregisters the parser, so the seats' apps deliver to nobody.
+		cfg := company(t)
+		cfg.Integrations.Slack = nil
+		firstAgent(t, cfg).Integrations.Slack = &config.RoleSlack{
+			BotToken: "${SLACK_BOT_TOKEN_CEO}", SigningSecret: "${SLACK_SIGNING_SECRET_CEO}",
+		}
+		if row := rowFor(t, cfg, "slack"); row != nil {
+			t.Errorf("slack row = %v after a disconnect dropped the block "+
+				"and left the seats: the card renders it as Paused, which is "+
+				"a word for a state somebody chose", row)
+		}
+	})
+}
+
+// ENABLED: FALSE MEANS AN OPERATOR SWITCHED IT OFF, on every surface.
+//
+// The dashboard draws a tool whose every row reports `enabled: false` as
+// PAUSED, which is a claim about somebody's intent. Two rows could reach that
+// state without anybody intending anything, because they were reported on
+// per-seat secrets as well as on the company block and then took `enabled`
+// from the block alone — so an absent block and a paused one were the same
+// row. A disconnect produces the first one every time.
+//
+// Asserted over EVERY surface rather than over the two that had the defect:
+// what makes it safe to read `enabled: false` as an intent is that no arm
+// anywhere can emit it for any other reason, and the next surface added is
+// the one that would.
+func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
+	t.Parallel()
+	// EVERY BLOCK THIS BUILD CAN REPORT, each with whatever makes it
+	// complete, and every seat carrying every per-seat app — which is the
+	// shape a disconnect strands.
+	cfg := company(t)
+	cfg.Integrations.Slack = nil
+	cfg.Integrations.GitHub = nil
+	cfg.Integrations.GitLab = nil
+	cfg.Integrations.Datadog = nil
+	for role := range cfg.EachRole() {
+		if !role.Seat().IsAgent() {
+			continue
+		}
+		role.Integrations.Slack = &config.RoleSlack{
+			BotToken: "${BOT}", SigningSecret: "${SIG}",
+		}
+		role.Integrations.GitHub = &config.RoleGitHub{
+			AppID: 7, AppSlug: "acme-ceo", InstallationID: 9,
+			PrivateKey: "${PEM}", WebhookSecret: "${HOOK}",
 		}
 	}
-	if row := rowFor(t, disconnected); row != nil {
-		t.Errorf("github row = %v after a disconnect removed every "+
-			"installation: the card renders as Connecting for ever over an "+
-			"app that reaches nothing", row)
+	body := asMap(t, answer(t, queries.Sources{
+		Company: func() *config.Company { return cfg },
+	}, "integrations", nil))
+	rows, _ := body["integrations"].([]any)
+	for _, row := range rows {
+		entry, _ := row.(map[string]any)
+		if entry["enabled"] == false {
+			t.Errorf("%v reports enabled: false with no block to say so, so "+
+				"the dashboard draws residue as Paused", entry["key"])
+		}
 	}
 }

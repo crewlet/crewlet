@@ -1732,6 +1732,32 @@ secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
 
+**A row exists for a surface the company's document turns on, and for no
+other.** That sounds like a restatement of "the block is present", and for six
+of the eight it is. Slack and GitHub are the two where a seat carries its own
+app — its own credential, its own inbound path — and both used to be reported
+on those per-seat values *as well as* on the company block, so that a company
+holding nothing but per-agent apps still had a row.
+
+Neither half of that survives contact with what the engine does. The **parser**
+that turns a verified delivery into work for a seat is registered only where
+the company block is present and enabled: drop `integrations.slack` and the
+transport is retired (`slack_retired`); drop or disable `integrations.github`
+and the same happens (`github_retired`). A seat app without it delivers to a
+route that verifies the signature and then has nowhere to send it. So a
+company in that state is not a surface missing a row — it is a surface that is
+**off**, and a row for it is a row with `enabled: false`, which the dashboard
+draws as *Paused*.
+
+That matters because `enabled: false` is the one field on this row that claims
+somebody's **intent**. A disconnect produced the other reading every time: the
+block went, the seats kept their sealed credentials, and the card an operator
+had just disconnected settled on *Paused* — a word for a state nobody had
+chosen — and stayed there. `enabled: false` now means a block that says
+`enabled: false`, on every surface, and a company whose block is gone gets no
+row and a Connect button. What each seat is still holding is on the [setup
+screen's seat roster](#per-seat-setup), which is where a seat is acted on.
+
 `seats` lists the agents carrying their **own** identity on that surface: a
 Slack app, a Mattermost bot, a per-seat project or space, wherever they sit in
 the hierarchy. A seat in a unit is a seat: the list walks the whole tree, not
