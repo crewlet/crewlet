@@ -601,12 +601,12 @@ from that map — a guard test fails if the two drift.
 | `learning` | `compaction_completed`, `compaction_requested`, `counterparty_profile_updated`, `episode_written`, `persist_decider_completed`, `prefetch_summary`, `reflection_completed`, `skill_archived`, `skill_promoted`, `skill_refined`, `skill_revived`, `skill_staled`, `skill_synthesized`, `skill_used`, `turn_completed` |
 | `lifecycle` | `config_revision_activated`, `config_revision_applied`, `org_started`, `org_stopped` |
 | `notification` | `external_notification`, `notification_skipped`, `notifications_coalesced`, `turn_trigger_skipped` |
-| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `budget_exhausted`, `budget_reported`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
+| `system` | `agent_phase_completed`, `agent_phase_started`, `agent_turn_completed`, `budget_exhausted`, `llm_unavailable`, `phase.tool_skill_blocked`, `prompt.size`, `provider_fallback`, `skill_telemetry_write_failed`, `subagent_batched`, `turn.guard_breach` |
 | `task` | `sandbox_clarification_requested`, `sandbox_run_completed`, `sandbox_run_failed`, `sandbox_run_started`, `scheduled_task_fired`, `task_assigned` |
 | `webhook` | *No event type.* The [webhook receiver](../reference/api-endpoints.md) writes the delivery's row itself, under its own id with the provider's exact bytes as the payload |
 
 **The map is also the admission list.** A type that is not in it is not written
-and does not reach the activity feed — so the three exclusions below are
+and does not reach the activity feed — so the exclusions below are
 deliberate and each one says why, and a *new* type that nobody placed fails a
 test rather than vanishing quietly.
 
@@ -618,6 +618,7 @@ test rather than vanishing quietly.
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
+| `budget_reported` | A **rollup** of live meters on a 15-second tick, so a durable row per tick is about two million a year to answer a question the live projection answers for free. What the audit log holds instead is the per-turn spend the rollup is a sum *of* — `agent_turn_completed` rows — so "what did we spend last month" is answerable and "what were the meters reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events
 

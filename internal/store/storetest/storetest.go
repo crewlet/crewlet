@@ -967,16 +967,23 @@ func testBackupUnderWrites(t *testing.T, db *store.DB) {
 	}
 }
 
-// testRecordUntracked: a type absent from the category map is not stored. Two
-// types are deliberately absent; every other absence is a bug, which is why
-// the drop is a documented rule rather than a silent default.
+// testRecordUntracked: a type absent from the category map is not stored. The
+// two checked here are deliberately absent and are the two whose ABSENCE this
+// store's own volume depends on — each fires on a tick rather than on a
+// gesture. Every other absence is a bug, which is why the drop is a documented
+// rule rather than a silent default; internal/events carries the full list
+// with each one's reason.
 func testRecordUntracked(t *testing.T, db *store.DB) {
 	log := db.Events()
 	if _, tracked := store.Category("agent_turn_progress"); tracked {
 		t.Fatal("agent_turn_progress must stay out of the store: it is a live-only signal")
 	}
 	if _, tracked := store.Category("budget_reported"); tracked {
-		t.Fatal("budget_reported must stay out of the store: it describes a dead process's meters")
+		t.Fatal("budget_reported must stay out of the store: it is a ROLLUP " +
+			"of live meters on a 15-second tick, so a durable row per tick " +
+			"is about two million a year to answer what the live projection " +
+			"answers for free — and the audit log already holds the per-turn " +
+			"spend it is a sum of")
 	}
 	if cat, tracked := store.Category("task_assigned"); !tracked || cat != "task" {
 		t.Fatalf("agent_phase_started -> %q,%v", cat, tracked)

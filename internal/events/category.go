@@ -80,7 +80,6 @@ var categories = map[string]string{
 
 	// System: the engine talking about itself.
 	"budget_exhausted":             "system",
-	"budget_reported":              "system",
 	"llm_unavailable":              "system",
 	"agent_turn_completed":         "system",
 	"agent_phase_started":          "system",
@@ -140,6 +139,13 @@ var excluded = map[string]string{
 		"kept out below",
 	"a2a_message": "the ANSWER is already a row (a2a_message_sent). This " +
 		"event is the wake it puts on the requester's inbox; see a2a_request",
+	"budget_reported": "a ROLLUP of live meters on a 15-second tick, so a " +
+		"durable row per tick is about two million a year to answer a " +
+		"question the live projection answers for free. What the audit log " +
+		"holds instead is the per-turn spend the rollup is a sum OF — " +
+		"agent_turn_completed rows, which internal/tokens aggregates — so " +
+		"\"what did we spend last month\" is answerable and \"what were the " +
+		"meters reading at 14:03:15\" is not a question anybody asks",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +
@@ -149,15 +155,16 @@ var excluded = map[string]string{
 
 // liveOnly is the subset of [excluded] that still drives the live projection.
 //
-// A subset rather than the same set: agent_turn_progress and the two seat
-// lifecycle events move a seat's live row without joining the activity feed,
-// while raw_webhook reaches the projector not at all, because it is published
+// A subset rather than the same set: agent_turn_progress, the two seat
+// lifecycle events and the budget rollup move a live row without joining the
+// activity feed, while raw_webhook reaches the projector not at all, because it is published
 // onto a seat's inbox rather than onto crewlet.events.*, and the receiver
 // ingests its own envelope for it.
 var liveOnly = map[string]bool{
 	"agent_turn_progress": true,
 	"agent_spawned":       true,
 	"agent_terminated":    true,
+	"budget_reported":     true,
 }
 
 // Category names an event type's dashboard category and reports whether the
