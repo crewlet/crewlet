@@ -159,7 +159,7 @@ function GoalPanel({
       title={goal.name}
       icon="target"
       actions={
-        <span className="row gap-sm">
+        <span className="row gap-2">
           {goal.group && <Badge outline>{goal.group}</Badge>}
           {/* NO BADGE FOR AN UNSET HEALTH, and that is not an omission: a
               fresh goal nobody has judged is not "on track", and rendering
@@ -169,7 +169,7 @@ function GoalPanel({
         </span>
       }
     >
-      <div className="row gap-sm wrap" style={{ marginBottom: "var(--sp-3)" }}>
+      <div className="row gap-2 wrap" style={{ marginBottom: "var(--sp-3)" }}>
         {goal.owners.map((handle) => (
           <Chip key={handle} onClick={() => onOwner(handle)} title={`Only ${handle}'s goals`}>
             {handle}

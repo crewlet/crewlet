@@ -209,7 +209,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               cell: (n) => (
                 <button
                   type="button"
-                  className="btn subtle sm"
+                  className="btn ghost sm"
                   onClick={() => setGate({ node: n.node_id, evict: !n.evicted })}
                 >
                   {n.evicted ? "Readmit…" : "Evict…"}
@@ -519,7 +519,7 @@ export function Terms({
           </span>
         </div>
       )}
-      <table className="sub">
+      <table className="table sub">
         <tbody>
           {terms.map((t) => (
             <tr key={t.name}>

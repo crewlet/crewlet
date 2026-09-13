@@ -85,6 +85,20 @@
   gap: var(--space-2);
 }
 
+/* One remark in a thread — a work item's and a page's alike, which is why it
+   is a class rather than either screen's own rule. The block is what separates
+   two comments: without one, an author line and the body above it read as one
+   paragraph, and a thread is a wall. Quiet ground rather than a border, since
+   it sits INSIDE a panel that already has one. */
+.comment {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+
 /* A count beside a section title. Neutral by design: a coloured count is a
    claim about severity that a number alone cannot support. */
 .count-chip {
@@ -467,6 +481,22 @@ a.brand:hover {
 .table tbody tr.selected td {
   background: var(--accent-soft);
 }
+/* A TABLE NESTED INSIDE a block that already titled it — the retention
+   screen's per-domain terms. It carries no header row, so `.table`'s full
+   treatment (header rule, generous cell padding) frames rows nobody is
+   comparing against a heading. Quieter and tighter; still a table. */
+.table.sub {
+  font-size: var(--fs-2xs);
+}
+.table.sub td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 0;
+}
+.table.sub td:first-child {
+  padding-left: 0;
+  white-space: nowrap;
+}
+
 .table .num {
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -891,15 +921,23 @@ a.brand:hover {
 }
 
 /* A proportional bar broken into segments — spend by phase, tools by origin.
-   Always beside its own legend; a stacked bar with no legend is decoration. */
-.stack {
+   Always beside its own legend; a stacked bar with no legend is decoration.
+
+   NAMED FOR ITS COMPONENT rather than `.stack`, which is what it was called.
+   `stack` is the most generic layout word CSS has, and this is a 6px flex ROW
+   with `overflow: hidden` — so the work item screen, the page screen and their
+   two comment lists all reached for it as a vertical section container and
+   rendered their entire body, panels and all, inside a six-pixel strip. The
+   vertical container those four wanted is `.col`; nothing else here may claim
+   a bare layout noun. */
+.stackbar {
   display: flex;
   height: 6px;
   border-radius: var(--r-full);
   overflow: hidden;
   background: var(--surface-inset);
 }
-.stack > span {
+.stackbar > span {
   height: 100%;
   min-width: 2px;
 }
@@ -1271,6 +1309,28 @@ kbd {
   pointer-events: auto;
   animation: rise var(--dur) var(--ease-out);
 }
+/* The dismiss affordance, and deliberately not a `.btn`: a toast is already a
+   toned surface, and a button with its own ground and border sitting on one
+   reads as a second control rather than as the toast's own X. It inherits the
+   toast's colour so the critical and positive tones need no variant each. */
+.toast-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+  margin: calc(var(--space-1) * -1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.toast-close:hover {
+  opacity: 1;
+  background: var(--surface-hover);
+}
+
 .toast.critical {
   border-color: var(--critical);
   color: var(--critical-ink);

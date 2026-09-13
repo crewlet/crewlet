@@ -183,7 +183,7 @@ export function Pages() {
                       onboarding
                     </Badge>
                   ) : (
-                    <span className="dim">page</span>
+                    <span className="muted">page</span>
                   ),
               },
               {
@@ -214,7 +214,7 @@ export function Pages() {
                   r.author ? (
                     <SeatChip name={seatName(r.author)} handle={r.author} />
                   ) : (
-                    <span className="dim">—</span>
+                    <span className="muted">—</span>
                   ),
               },
               {
@@ -292,12 +292,12 @@ export function PageView({ id }: { id: string }) {
 
       <QueryState error={error} loading={loading}>
         {page && (
-          <div className="stack">
+          <>
             <Panel>
               {page.body ? (
                 <div className="prose">{page.body}</div>
               ) : (
-                <span className="dim">This page has no body.</span>
+                <span className="muted">This page has no body.</span>
               )}
             </Panel>
 
@@ -325,22 +325,22 @@ export function PageView({ id }: { id: string }) {
 
             <Panel title={`Comments (${data.comments?.length ?? 0})`}>
               {data.comments?.length ? (
-                <div className="stack">
+                <div className="col gap-3">
                   {data.comments.map((c) => (
                     <div key={c.id} className="comment">
                       <div className="row" style={{ gap: "var(--space-2)" }}>
                         <SeatChip name={seatName(c.author)} handle={c.author} />
-                        <span className="dim" title={fmtDateTime(c.created_at)}>
+                        <span className="muted" title={fmtDateTime(c.created_at)}>
                           {relTime(c.created_at, now)}
                         </span>
-                        {c.edited_at && <span className="dim">(edited)</span>}
+                        {c.edited_at && <span className="muted">(edited)</span>}
                       </div>
                       <div className="prose">{c.body}</div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <span className="dim">Nobody has commented.</span>
+                <span className="muted">Nobody has commented.</span>
               )}
             </Panel>
 
@@ -352,9 +352,9 @@ export function PageView({ id }: { id: string }) {
                       <Icon name="file" size="sm" />
                       <span className="mono">v{rev.version}</span>
                       <span>{rev.author ? seatName(rev.author) : "the engine"}</span>
-                      {rev.message && <span className="dim truncate">{rev.message}</span>}
+                      {rev.message && <span className="muted truncate">{rev.message}</span>}
                       <span className="spacer" />
-                      <span className="dim" title={fmtDateTime(rev.created_at)}>
+                      <span className="muted" title={fmtDateTime(rev.created_at)}>
                         {relTime(rev.created_at, now)}
                       </span>
                     </li>
@@ -364,13 +364,13 @@ export function PageView({ id }: { id: string }) {
                 // The METADATA ONLY note matters: a reader who expected to
                 // click a version and read it should be told why they cannot
                 // rather than left looking for the link.
-                <span className="dim">
+                <span className="muted">
                   Only this version exists. Past versions are kept as metadata here; reading one
                   back is a coordination read the engine does on demand.
                 </span>
               )}
             </Panel>
-          </div>
+          </>
         )}
       </QueryState>
     </>

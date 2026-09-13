@@ -363,7 +363,7 @@ export function Work() {
                 padding="tight"
               >
                 {group.rows.map((item) => (
-                  <div key={item.id} className="row gap-sm">
+                  <div key={item.id} className="row gap-2">
                     <a className="mono" href={href(["work", item.key])}>
                       {item.key}
                     </a>
@@ -455,7 +455,7 @@ export function Work() {
                     r.priority && r.priority !== "normal" ? (
                       <Badge tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{r.priority}</Badge>
                     ) : (
-                      <span className="dim">—</span>
+                      <span className="muted">—</span>
                     ),
                 },
                 {
@@ -470,7 +470,7 @@ export function Work() {
                       // NOBODY IS A STATE, and the one worth seeing: an
                       // unassigned item routes to the project's lead, and a
                       // project with no lead routes to nobody at all.
-                      <span className="dim">Unassigned</span>
+                      <span className="muted">Unassigned</span>
                     ),
                 },
                 {
@@ -596,7 +596,7 @@ export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; 
   return (
     <Panel title="Recent activity" count={records.length} padding="tight">
       {records.map((record) => (
-        <div key={record.id} className="row gap-sm">
+        <div key={record.id} className="row gap-2">
           <span className="muted">{relTime(record.at, now)}</span>
           <Badge tone="neutral">{record.kind}</Badge>
           {record.subject_key && (
@@ -680,13 +680,13 @@ export function WorkItem({ id }: { id: string }) {
 
       <QueryState error={error} loading={loading}>
         {item && (
-          <div className="stack">
+          <>
             <Coverage answer={data} />
             <Panel title="Description">
               {item.body ? (
                 <div className="prose">{item.body}</div>
               ) : (
-                <span className="dim">No description was written.</span>
+                <span className="muted">No description was written.</span>
               )}
             </Panel>
 
@@ -713,7 +713,7 @@ export function WorkItem({ id }: { id: string }) {
                   className="row wrap"
                   style={{ gap: "var(--space-2)", marginTop: "var(--space-3)" }}
                 >
-                  <span className="dim">Watching:</span>
+                  <span className="muted">Watching:</span>
                   {item.watchers.map((w) => (
                     <SeatChip key={w} name={seatName(w)} handle={w} />
                   ))}
@@ -737,7 +737,7 @@ export function WorkItem({ id }: { id: string }) {
                       <span className="truncate">{link.title}</span>
                       {/* The DERIVED half is the one nobody authored — an
                           editor has to change the other end. */}
-                      {link.derived && <span className="dim">(the other end authored this)</span>}
+                      {link.derived && <span className="muted">(the other end authored this)</span>}
                     </li>
                   ))}
                 </ul>
@@ -746,15 +746,15 @@ export function WorkItem({ id }: { id: string }) {
 
             <Panel title={`Thread (${data.comments?.length ?? 0})`}>
               {data.comments?.length ? (
-                <div className="stack">
+                <div className="col gap-3">
                   {data.comments.map((c) => (
                     <div key={c.id} className="comment">
                       <div className="row" style={{ gap: "var(--space-2)" }}>
                         <SeatChip name={seatName(c.author)} handle={c.author} />
-                        <span className="dim" title={fmtDateTime(c.created_at)}>
+                        <span className="muted" title={fmtDateTime(c.created_at)}>
                           {relTime(c.created_at, now)}
                         </span>
-                        {c.updated_at && <span className="dim">(edited)</span>}
+                        {c.updated_at && <span className="muted">(edited)</span>}
                         {c.resolved && <Badge tone="positive">Resolved</Badge>}
                       </div>
                       <div className="prose">{c.body}</div>
@@ -762,7 +762,7 @@ export function WorkItem({ id }: { id: string }) {
                   ))}
                 </div>
               ) : (
-                <span className="dim">Nobody has commented.</span>
+                <span className="muted">Nobody has commented.</span>
               )}
             </Panel>
 
@@ -773,14 +773,14 @@ export function WorkItem({ id }: { id: string }) {
                     <li key={change.id} className="row" style={{ gap: "var(--space-2)" }}>
                       <Icon name="activity" size="sm" />
                       <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
-                      <span className="dim">{change.kind.replace(/_/g, " ")}</span>
+                      <span className="muted">{change.kind.replace(/_/g, " ")}</span>
                       {/* The snapshot records what changed as VALUES, not as
                           from/to pairs — the applier writes the state the
                           change produced, and the previous value survives in
                           the entry before it. */}
                       {change.fields &&
                         Object.keys(change.fields).map((field) => (
-                          <span key={field} className="dim">
+                          <span key={field} className="muted">
                             {field}
                           </span>
                         ))}
@@ -791,19 +791,19 @@ export function WorkItem({ id }: { id: string }) {
                           announced something; whether it reached anybody is
                           resolved against the live roster at wake time and is
                           not what this says. */}
-                      {change.quiet && <span className="dim">(quiet)</span>}
+                      {change.quiet && <span className="muted">(quiet)</span>}
                       <span className="spacer" />
-                      <span className="dim" title={fmtDateTime(change.at)}>
+                      <span className="muted" title={fmtDateTime(change.at)}>
                         {relTime(change.at, now)}
                       </span>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <span className="dim">Nothing has moved this item yet.</span>
+                <span className="muted">Nothing has moved this item yet.</span>
               )}
             </Panel>
-          </div>
+          </>
         )}
       </QueryState>
     </>

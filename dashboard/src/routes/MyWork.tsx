@@ -146,7 +146,7 @@ export function TaskBlock({
   return (
     <Panel title={title} subtitle={hint} count={rows.length}>
       {rows.map((row) => (
-        <div key={row.id} className="row gap-sm">
+        <div key={row.id} className="row gap-2">
           <a className="mono" href={href(["work", row.key])}>
             {row.key}
           </a>
@@ -170,8 +170,8 @@ export function Asks({ rows, now }: { rows: WorkAskRow[]; now: number }) {
   return (
     <Panel title="Asked of you" count={rows.length} icon="alert">
       {rows.map((ask) => (
-        <div key={ask.comment} className="stack-xs">
-          <div className="row gap-sm">
+        <div key={ask.comment} className="col gap-1">
+          <div className="row gap-2">
             <a className="mono" href={href(["work", ask.key])}>
               {ask.key}
             </a>
@@ -195,7 +195,7 @@ export function Checklist({ rows }: { rows: WorkChecklistRow[] }) {
   return (
     <Panel title="Checklist items" count={rows.length} subtitle="On other people's tasks.">
       {rows.map((item) => (
-        <div key={`${item.task}:${item.item}`} className="row gap-sm">
+        <div key={`${item.task}:${item.item}`} className="row gap-2">
           <a className="mono" href={href(["work", item.task_key])}>
             {item.task_key}
           </a>
