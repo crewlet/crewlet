@@ -1367,8 +1367,12 @@ export type ConfigProblemKind =
 export interface ConfigProblem {
   /** The authored path in the validated document; "" for a document-level parse failure. */
   path: string;
-  /** Strings for keys, numbers for indexes. */
-  segments: (string | number)[];
+  /**
+   * Strings for keys, numbers for indexes. `null` for a document-level parse
+   * failure, whose path is "": Go marshals the nil slice that has no segments
+   * as `null`, as it does every list in [Derived].
+   */
+  segments: (string | number)[] | null;
   kind: ConfigProblemKind;
   /** The full line, exactly as it appears in the refusal's `detail`. */
   message: string;
@@ -1388,7 +1392,8 @@ export interface ConfigWarning {
   kind: "dangling_reference" | "admission" | (string & {});
   ref: "lead" | "unit" | "manages" | "gitlab_access_level" | "" | (string & {});
   path: string;
-  segments: (string | number)[];
+  /** As on [ConfigProblem]: `null` when the warning names no place in the document. */
+  segments: (string | number)[] | null;
   seat: string;
   unit: string;
   /** Display text: who or what holds the reference. */
