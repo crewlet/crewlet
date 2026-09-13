@@ -77,6 +77,20 @@ const WENT_WRONG = new Set([
   "skill_telemetry_write_failed",
 ]);
 
+/**
+ * The three records `publishFailure` writes for a turn the engine STOPPED.
+ *
+ * A subset of WENT_WRONG, and the distinction is the whole of it: these are
+ * the rows that describe the same stop `agent_turn_completed.failed` already
+ * reports, so a reader counting problems must not count both. Everything else
+ * in WENT_WRONG — a recovered provider fallback, a refused tool skill, a
+ * failed sandbox run — is an INDEPENDENT problem that happens to share a turn
+ * with the stop. `sandbox_run_failed` is deliberately not here although it is
+ * a failure: `internal/engine/telemetry.go` does not publish it, so it never
+ * describes the turn's own stop.
+ */
+export const TURN_STOP = new Set(["turn.guard_breach", "budget_exhausted", "llm_unavailable"]);
+
 /** What the turn's prompt was assembled from, before the first phase ran. */
 const GIVEN = new Set(["prefetch_summary", "prompt.size"]);
 

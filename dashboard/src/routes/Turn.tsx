@@ -86,7 +86,7 @@ import {
   withStarts,
   type PhaseRecord,
 } from "~/lib/phases.ts";
-import { prefetchBlocks, tellStory, type PrefetchBlock } from "~/lib/turnstory.ts";
+import { prefetchBlocks, tellStory, TURN_STOP, type PrefetchBlock } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
 
@@ -117,7 +117,7 @@ function str(event: EventRecord | undefined, key: string): string {
  * disagree. Showing only the second made a turn that delivered nothing and a
  * turn that delivered look identical whenever the reviewer accepted both.
  */
-function outcomeOf(rec: TurnRecord): {
+export function outcomeOf(rec: TurnRecord): {
   word: string;
   tone: "positive" | "caution" | "critical" | undefined;
   sub: string;
@@ -125,15 +125,22 @@ function outcomeOf(rec: TurnRecord): {
   const failed = field(rec.summary, "failed") === true;
   const review = str(rec.learning, "review_outcome") || str(rec.summary, "decision");
   const executor = str(rec.learning, "outcome");
-  if (!review && !executor) return { word: "—", tone: undefined, sub: "" };
-  const kind = str(rec.summary, "error_kind");
+  // THE FLAG IS AN ANSWER, so it is read BEFORE an absence of words is taken
+  // for an absence of record. A turn the engine stopped before any phase
+  // decided anything carries `failed: true` and no word at all — `decision`
+  // and `review_outcome` are both the zero `phase.Decision` — and this used
+  // to fall through the em-dash return three lines below, which the caller
+  // then captioned "no turn record", printed directly above the panel
+  // rendering that very record.
   if (failed || review === "failed") {
+    const kind = str(rec.summary, "error_kind");
     return {
       word: "failed",
       tone: "critical",
       sub: kind ? `the engine stopped it: ${kind}` : "the turn will not retry",
     };
   }
+  if (!review && !executor) return { word: "—", tone: undefined, sub: "" };
   const label: Record<string, string> = {
     delivered: "delivered the work",
     no_action: "nothing to do — ended silently",
@@ -146,6 +153,68 @@ function outcomeOf(rec: TurnRecord): {
     sub:
       label[executor] ?? (executor ? `the executor said ${executor}` : "the reviewer's decision"),
   };
+}
+
+/**
+ * How many problems this turn had, counted as the page can show them.
+ *
+ * ONE STOP IS ONE PROBLEM, however many records the engine wrote about it.
+ * `agent_turn_completed.failed` and the dedicated record behind it — a guard
+ * breach, an exhausted chain, an unavailable provider — are published in the
+ * same breath about the SAME stop (`internal/engine/telemetry.go` closes a
+ * failed turn with `publishEvent` and then `publishFailure`), so adding the
+ * flag to the rows counted that one event twice: the header badge said
+ * "2 problems" over a panel holding one row, and the reader went looking for
+ * a second that is nowhere on the page.
+ *
+ * The flag is deduped against THAT RECORD, never against the row count. A
+ * turn the reviewer decided against carries the flag with no dedicated record
+ * behind it — `publishFailure` writes nothing when no guard fired and no
+ * error was returned — and it can carry an unrelated `provider_fallback` in
+ * the same breath. Against the count, the flag would have been swallowed by
+ * that fallback and a genuinely failed turn reported as one problem rather
+ * than two; against the count and with no rows at all, `clean` would have
+ * gone on to claim "nothing went wrong" about it.
+ */
+export function problemCount(wentWrong: readonly EventRecord[], failed: boolean): number {
+  const stopped = wentWrong.some((e) => TURN_STOP.has(e.type));
+  return wentWrong.length + (failed && !stopped ? 1 : 0);
+}
+
+/**
+ * The window this page can see the turn through.
+ *
+ * THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
+ * Read off `events` only, a turn whose phases all arrived on the stream
+ * reported a duration of "—" beside a phase list several minutes long.
+ *
+ * The start is a minimum over EVERY phase, never over `phases[0]`. That list
+ * is ordered by when each phase LANDED, so its first element is the earliest
+ * FINISHER — and a worker a delegate spawned lands inside the window of the
+ * execute round that spawned it. On the one case the span exists for, a turn
+ * deep-linked while it runs (no query answer to supply the other term), that
+ * made the window open at the first worker's start and "Took" under-report
+ * the whole stretch before the fan-out.
+ *
+ * A zero is dropped rather than taken as a minimum: `tsKey` answers 0 for a
+ * timestamp it cannot parse, and 0 is the epoch — one unreadable instant
+ * would report a turn that has been running since 1970.
+ */
+export function turnSpan(
+  events: readonly { timestamp: string }[],
+  phases: readonly { at: string; startedAt: string }[],
+): { from: number; to: number } {
+  const live = (instants: number[]) => instants.filter((t) => t > 0);
+  // EVERY instant on both sides, never the first and last of either. Indexing
+  // would make the caller's sort order a precondition this function cannot
+  // state or check, and it is the precondition the phase list already broke.
+  const stamps = events.map((e) => tsKey(e.timestamp));
+  const starts = live([...stamps, ...phases.map((p) => tsKey(p.startedAt))]);
+  const ends = live([...stamps, ...phases.map((p) => tsKey(p.at))]);
+  // Both or neither: a start with no end would render a duration measured
+  // against nothing, which is worse than the em dash the caller falls back to.
+  if (!starts.length || !ends.length) return { from: 0, to: 0 };
+  return { from: Math.min(...starts), to: Math.max(...ends) };
 }
 
 /**
@@ -430,27 +499,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const role = phases[0]?.role ?? (rec.summary?.actor || "");
   const trigger = phases.find((p) => p.trigger)?.trigger ?? null;
   const outcome = outcomeOf(rec);
-  const trouble = story.wentWrong.length + (field(rec.summary, "failed") === true ? 1 : 0);
+  const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
   // Only claimable on a FINISHED turn with a record to claim it from. A
   // running turn has not been asked about since it started, and a turn whose
   // events fell out of the store's window has nothing to say either way —
   // "nothing went wrong" and "nothing was read" must not render alike.
   const clean = trouble === 0 && !running && Boolean(rec.summary || rec.learning);
 
-  // THE SPAN OVER EVERYTHING THE PAGE HOLDS, not over the query's answer alone.
-  // Read off `events` only, a turn whose phases all arrived on the stream
-  // reported a duration of "—" beside a phase list several minutes long.
-  const first = phases[0];
-  const last = phases[phases.length - 1];
-  const from = Math.min(
-    ...[
-      events.length ? tsKey(events[0]!.timestamp) : Infinity,
-      first ? tsKey(first.startedAt) : Infinity,
-    ],
-  );
-  const to = Math.max(
-    ...[events.length ? tsKey(events[events.length - 1]!.timestamp) : 0, last ? tsKey(last.at) : 0],
-  );
+  const { from, to } = turnSpan(events, phases);
   // THE ENGINE'S OWN WALL CLOCK, off the record that actually carries it.
   // `agent_turn_completed` has no `duration_ms` — that field is on
   // `turn_completed`, published in the same breath — so reading it off the
