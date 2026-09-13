@@ -144,6 +144,7 @@ export function Spend() {
           actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
         >
           <Meter
+            fullMeans="spent"
             used={org.used}
             max={org.max}
             // A NOUN, not the legend beside it: "94% of the meter used" is
@@ -362,6 +363,7 @@ export function Spend() {
                   cell: (s) =>
                     s.max_tokens ? (
                       <Meter
+                        fullMeans="spent"
                         used={s.durable_used}
                         max={s.max_tokens}
                         // The column heading names it for a sighted reader;

@@ -779,6 +779,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 subtitle="process-lifetime, not the 7-day window"
               >
                 <Meter
+                  fullMeans="spent"
                   used={agent.budget.used}
                   max={agent.budget.max}
                   ariaLabel={`${agent.role}'s token budget`}

@@ -386,6 +386,7 @@ export function SprintPanel({
           max={committed}
           label="Delivered"
           right={`${f.done} of ${committed} ${measure}`}
+          fullMeans="achieved"
         />
       )}
       <StatRow cols={5}>
@@ -432,6 +433,7 @@ export function SprintPanel({
                       used={a.total}
                       max={a.capacity}
                       right={`${a.total} / ${a.capacity}`}
+                      fullMeans="spent"
                       {...(a.over_capacity ? { tone: "critical" as const } : {})}
                     />
                   </span>
