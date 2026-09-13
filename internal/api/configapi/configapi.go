@@ -125,28 +125,33 @@ func (s *Service) Routes(mux *http.ServeMux) {
 			"hint", "this process has no store, so /config is not served here")
 		return
 	}
-	mux.HandleFunc("GET /config", s.getActive)
-	mux.HandleFunc("PUT /config", s.put)
+	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
+	// written without the Cache-Control below: not a route added later, not
+	// an error path, not the 404 or 405 this mux answers for a path or a
+	// method it does not serve.
+	routes := http.NewServeMux()
+	routes.HandleFunc("GET /config", s.getActive)
+	routes.HandleFunc("PUT /config", s.put)
 	// WHAT THIS RESOURCE TAKES, asked rather than guessed. RFC 5789 §3.1:
 	// a patch format is negotiated, not assumed, and Accept-Patch is where
 	// a server says which ones it speaks.
-	mux.HandleFunc("OPTIONS /config", s.optionsDocument)
+	routes.HandleFunc("OPTIONS /config", s.optionsDocument)
 	// THE NARROWER WRITE. See merge.go for why one patch route covers
 	// every section rather than one route per section.
-	mux.HandleFunc("PATCH /config", s.patch)
+	routes.HandleFunc("PATCH /config", s.patch)
 	// RE-PUBLISH THE ACTIVE DOCUMENT UNCHANGED, which is the gesture a
 	// rotated SECRET needs and the one thing no other route on this
 	// surface performs: the pointer in the config is already correct, so
 	// there is no patch to make, and with no activation there is no apply
 	// and no refreshed secret snapshot. See [Service.Reload].
-	mux.HandleFunc("POST /config/reload", s.reload)
+	routes.HandleFunc("POST /config/reload", s.reload)
 	// WHICH FIELDS NAME A ${VAR}, which is what an operator needs before
 	// they remove a credential. See [Service.References].
-	mux.HandleFunc("GET /config/references", s.references)
-	mux.HandleFunc("GET /config/revisions", s.listRevisions)
-	mux.HandleFunc("GET /config/revisions/{id}", s.getRevision)
-	mux.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
-	mux.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
+	routes.HandleFunc("GET /config/references", s.references)
+	routes.HandleFunc("GET /config/revisions", s.listRevisions)
+	routes.HandleFunc("GET /config/revisions/{id}", s.getRevision)
+	routes.HandleFunc("GET /config/revisions/{id}/diff", s.diff)
+	routes.HandleFunc("POST /config/revisions/{id}/revert", s.revert)
 	// THE ENTITY ROUTES, one per addressable collection rather than a
 	// single {kind} wildcard: a wildcard would also match
 	// /config/revisions/{id}, and a route that answers for a path it was
@@ -159,9 +164,33 @@ func (s *Service) Routes(mux *http.ServeMux) {
 		// space, answering a {kind, id, entity} envelope that PUT does
 		// not accept. GET here answers the entity itself, so `GET | PUT`
 		// round-trips with nothing in between.
-		mux.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
-		mux.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
+		routes.HandleFunc("GET /config/"+kind+"/{id}", s.getEntity(kind))
+		routes.HandleFunc("PUT /config/"+kind+"/{id}", s.putEntity(kind))
 	}
+	surface := noStore(routes)
+	mux.Handle("/config", surface)
+	mux.Handle("/config/", surface)
+}
+
+// noStore marks every response it wraps as never to be stored.
+//
+// EVERY ONE, reads, refusals and 304s alike. A /config body is the whole company
+// document: its org chart, its contact identities, the ${VAR} name behind every
+// credential and the shape of the rest. Answered with an ETag and no
+// Cache-Control, a browser keeps it in its HTTP disk cache, where it outlives
+// the tab, the session and the operator token that was needed to read it. An
+// error body is included because it can quote the document back (a validation
+// failure names the field and the value it refused).
+//
+// no-store rather than private or no-cache: private still permits the browser's
+// own cache, and no-cache only forces revalidation of what is stored.
+// Conditional reads keep working, because a client that wants a 304 sends
+// If-None-Match itself; nothing here depends on a cache holding the body.
+func noStore(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // --- reads -----------------------------------------------------------------
