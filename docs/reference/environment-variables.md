@@ -76,16 +76,21 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
-| `JIRA_URL` | Your Jira instance URL | e.g., `https://company.atlassian.net` |
-| `JIRA_API_TOKEN` | Jira API token (admin/service account) | Atlassian account > API tokens |
-| `JIRA_EMAIL` | Admin email for Cloud Basic Auth | Your Atlassian account email |
-| `JIRA_WEBHOOK_SECRET` | Secret for HMAC verification | Set when creating the Jira webhook |
+| `JIRA_URL` | Your Jira instance URL (`integrations.jira.url`, and the `JIRA_URL` the shared `atlassian` MCP server reads) | e.g., `https://company.atlassian.net` |
+| `JIRA_ADMIN_TOKEN` | Admin or service-account API token (`integrations.jira.token`) | Atlassian account > API tokens |
+| `JIRA_ADMIN_EMAIL` | That account's email, for Cloud Basic Auth (`integrations.jira.email`) | Your Atlassian account email |
+| `JIRA_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.jira.webhook_secret`); Cloud relays through the Forge app instead | Set when creating the Jira webhook |
+| `JIRA_SITE_URL` | The human-clickable site base, as the `jira_base_url` [skill variable](../concepts/tool-skills.md#skill-variables) | e.g., `https://company.atlassian.net` |
 
-### Per-Agent Jira Tokens
+### Per-agent Atlassian credentials
+
+Each seat's own Atlassian account covers Jira and Confluence alike, on the shared `atlassian` MCP server's `mcp_env` entry.
 
 | Variable | Description |
 |----------|-------------|
-| `<ROLE>_JIRA_TOKEN` | Per-agent Jira API token (e.g., `CTO_JIRA_TOKEN`) |
+| `ATLASSIAN_EMAIL_<SEAT>` | The seat's Atlassian account email (`mcp_env.atlassian.JIRA_USERNAME` and `CONFLUENCE_USERNAME`, e.g. `ATLASSIAN_EMAIL_CTO`) |
+| `ATLASSIAN_TOKEN_<SEAT>` | That account's API token (`mcp_env.atlassian.JIRA_API_TOKEN` and `CONFLUENCE_API_TOKEN`, e.g. `ATLASSIAN_TOKEN_CTO`). The knowledge search runs as the seat when it holds one |
+| `ATLASSIAN_FOUNDER_ACCOUNT_ID` | A human seat's Atlassian account id (`contact.atlassian_account_id`) |
 
 ---
 
@@ -94,13 +99,15 @@ Replace `<ROLE>` with the role name in uppercase (e.g., `SLACK_BOT_TOKEN_ENGINEE
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `CONFLUENCE_URL` | Your Confluence instance URL (`integrations.confluence.url`) | e.g., `https://company.atlassian.net/wiki` |
-| `CONFLUENCE_API_TOKEN` | Admin/service API token (`integrations.confluence.token`) | Atlassian account > API tokens |
-| `CONFLUENCE_EMAIL` | Admin email for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
+| `CONFLUENCE_ADMIN_TOKEN` | Admin or service-account API token (`integrations.confluence.token`), what the tool-skill sync and skill promotion run on | Atlassian account > API tokens |
+| `CONFLUENCE_ADMIN_EMAIL` | That account's email, for Cloud Basic Auth (`integrations.confluence.email`) | Your Atlassian account email |
+| `CONFLUENCE_SITE_URL` | The human-clickable wiki base, as the `confluence_base_url` [skill variable](../concepts/tool-skills.md#skill-variables) | e.g., `https://company.atlassian.net/wiki` |
 | `CONFLUENCE_WEBHOOK_SECRET` | HMAC secret for Data Center webhooks (`integrations.confluence.webhook_secret`) | Set when creating the webhook |
 | `CONFLUENCE_WEBHOOK_TOKEN` | Shared token every **Cloud** hook carries in its URL (`integrations.confluence.webhook_token`), compared constant-time by `/webhooks/confluence/{event}`. Confluence Cloud signs nothing, so this is the whole authentication: treat it as a signing key. | Minted by `crewlet confluence provision`; `-recreate-webhooks` rotates it |
 
 Per-agent Confluence credentials go through `role.mcp_env` on the `atlassian`
-MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), like Jira.
+MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), the
+`ATLASSIAN_EMAIL_<SEAT>` and `ATLASSIAN_TOKEN_<SEAT>` pair above.
 
 ---
 
@@ -166,13 +173,6 @@ Conventions used by the [Datadog integration](../integrations/datadog.md).
 
 `integrations.datadog.route_to`, `webhook_name` and `handle_tag` are **not** secrets and belong in the company document as plain values, not as `${VAR}` references — nothing resolves them, so a reference written there is used as the literal text it is. `integrations.public_base_url` is not a secret either, but it *is* resolved: a whole `${VAR}` there is read through this node's chain wherever an address is built from it, which is how one document serves a staging deployment and a production one. A reference nothing can read yields no address at all — no webhook registered, no app manifest — rather than one containing `${VAR}`. `route_to` is required when the block is enabled: it names the seat an alert wakes when no monitor tag names an owner, and without it those alerts are verified, counted and delivered to nobody. See [Routing](../integrations/datadog.md#routing-is-by-ownership-not-by-mention).
 
----
-
-## Email
-
-| Variable | Description |
-|----------|-------------|
-| `GMAIL_APP_PASSWORD` | Gmail app password (if using Gmail) |
 
 ---
 
@@ -228,7 +228,7 @@ Four more `stream:` fields carry no `${VAR}` convention because they are paths o
 
 The keyring lives in Tier A (`crewlet.yaml`) and is the sole root of trust — the DB holds only the encrypted document, never the key, and the key is required for **every** config read. Without a keyring, Crewlet keeps the default `${VAR}`-reference behaviour and every env var on this page is resolved from the environment at construction time. See [Configuration § Secrets](../concepts/configuration.md#secrets).
 
-A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `<ROLE>_JIRA_TOKEN`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, …) two different ways:
+A keyring lets you retire the per-secret env vars on this page (`LLM_API_KEY`, `ATLASSIAN_TOKEN_<SEAT>`, `SLACK_BOT_TOKEN_<ROLE>`, `*_WEBHOOK_SECRET`, and the rest) two different ways:
 
 - **[Secret store](../concepts/secret-store.md)** *(recommended)* — keep the `${VAR}` references in the config and store the values in the encrypted store (`crewlet secrets set`, or `-secret-store` on a provisioning CLI). The engine consults it **ahead of** the process environment, so a name it answers no longer needs to be exported at all. Rotation is a write of one record, and it reaches every node.
 - **Literal values in the encrypted config** — set them via `PUT /config` or import a `company.yaml` with literals. Simpler, but every rotation writes a new immutable revision that archives the superseded secret, and one credential referenced from two places (a Slack bot token is both `role.integrations.slack.bot_token` and `role.mcp_env.slack.SLACK_MCP_XOXB_TOKEN`) becomes two literals that must change together.
