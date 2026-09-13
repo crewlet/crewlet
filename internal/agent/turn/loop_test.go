@@ -709,7 +709,7 @@ func TestTheDelegationCapEndsTheTurnBeforeAnyPhaseRuns(t *testing.T) {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
 	if res.Breach == nil || res.Breach.Kind != turn.BreachDepth {
-		t.Errorf("breach = %+v, want depth", res.Breach)
+		t.Errorf("breach = %+v, want depth_cap", res.Breach)
 	}
 	if f.workRounds != 0 {
 		t.Error("a phase ran past the depth cap")
