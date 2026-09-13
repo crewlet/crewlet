@@ -12,7 +12,8 @@ This page documents the **Tier B** fields below.  For Tier A see [Configuration 
 > themselves. Point your editor at it for autocomplete and typo
 > squiggles, or hand it to an AI assistant — see
 > [Authoring with an AI assistant](ai-authoring.md). Check your file with
-> `crewlet validate <file>` (add `-json` for machine-readable errors);
+> `crewlet validate <file>` (add `-json` for located, classified problems
+> and warnings, see [the validation loop](ai-authoring.md#the-validation-loop));
 > it reads no environment, so it works before any secret is exported.
 >
 > **Unknown keys are rejected.** Every config model forbids extra

@@ -170,7 +170,7 @@ func (f *Fault) Unwrap() error { return f.Kind }
 // errors.As would answer for a wrap too, and a wrap adds text of its own
 // ("company config x.yaml: ..."): taken for the fault inside it, one line of
 // a refusal would render as another. A walk that needs the fault behind a
-// wrap sees through the wrap first, deliberately, as [Faults] does.
+// wrap sees through the wrap first, deliberately, as [Problems] does.
 func leafFault(err error) (*Fault, bool) {
 	f, ok := err.(*Fault) //nolint:errorlint // Deliberate: see the paragraph above.
 	return f, ok
