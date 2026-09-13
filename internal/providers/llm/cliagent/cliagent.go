@@ -575,7 +575,17 @@ func (p *Provider) completion(
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
 func classifyMarkers(p Profile, text, stderr string) (markerHit, bool) {
+	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
+	// ONE — see [MarkerScope]. Searching the model's own words is what
+	// makes a spent Claude Code plan recognisable at all, and it is also
+	// how a seat asked "what is our quota?" answers in prose that benches
+	// its own credential. A profile whose CLI reports on stderr and
+	// nowhere else opts out, and then no sentence the model writes can
+	// classify anything.
 	haystacks := []string{text, stderr}
+	if p.markerScope() == MarkerScopeStderr {
+		haystacks = []string{stderr}
+	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
 			idx := strings.Index(hay, marker.Sentinel)

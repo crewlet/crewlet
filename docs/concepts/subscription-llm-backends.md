@@ -348,6 +348,15 @@ strength of reading `--help`. A profile declares one or the other; naming
 both is refused at load, because which copy a CLI honours when handed the
 same prompt twice is the vendor's business.
 
+**That exclusivity runs one level down as well.** A single
+`system_prompt_args` naming *both* `{file}` and `{system}` is refused for a
+sharper reason than ambiguity: the renderer writes the private file and
+substitutes the text into argv on the same pass, so
+`["--agent-file", "{file}", "--system-prompt", "{system}"]` produced a `0600`
+file *and* put every byte of the seat's identity in `/proc/<pid>/cmdline`.
+Overrides are where a hand-written argv actually appears, so that is where
+the check matters.
+
 **Prefer the file wherever both exist.** `{system}` puts the seat's system
 prompt — the org chart, the policies, that seat's own memory — into argv,
 where `/proc/<pid>/cmdline` makes it readable by every account on the
@@ -755,9 +764,15 @@ the file "even when the run fails", so its absence means the run did not get
 that far and failing a completion the model answered over a count would throw
 away work you paid for. A report whose keys this profile cannot read is
 **drift**, not a zero-token turn, and falls back the same way rather than
-charging zero. And all four counts come from the file or none do: a partial
-overlay would pair one source's input count with another's output count, and
-the sum is what a budget is charged.
+charging zero. And both prompt counts come from the file or neither does: a
+partial overlay would pair one source's input count with another's output
+count, and the sum is what a budget is charged. (The two cache figures are
+not part of that test — a provider that caches nothing reports neither, and
+zero is the true answer there.) For the same reason a profile setting
+`usage_file_args` must declare **both** `usage.input` and `usage.output`:
+declaring one means every call quietly falls back to an estimate while
+`crewlet llm doctor` reports the vendor's own figures, which is precisely
+what that line exists to settle.
 
 **Not every vendor's richer channel is worth taking.** `pi` has one —
 `--mode json` streams every session event and carries real counts — and this
@@ -1030,6 +1045,33 @@ cli:
 
 Take the sentinel from what your CLI actually prints, not from what it used
 to print.
+
+**And say where it prints it, because the model's own words are a haystack.**
+Sentinels are matched against the extracted **answer** as well as stderr, and
+they have to be: Claude Code reports a spent plan on a *zero* exit with the
+vendor's sentence standing where the answer should be, so a marker confined to
+stderr would never fire and the fallback chain would never carry the seat onto
+a metered key. The cost is that a seat *asked* about rate limits can answer in
+prose — "our quota resets hourly" — that trips a generic sentinel and benches
+a perfectly good credential. This page's own history has that bug: a bare
+`429` sentinel was dropped for exactly it.
+
+So a CLI whose failures reach stderr and nowhere else declares that, and then
+nothing the model writes classifies anything:
+
+```yaml
+marker_scope: stderr        # or answer-and-stderr (the default)
+```
+
+Three profiles narrow it, each on a measurement rather than an assumption:
+`kimi-code` puts its classification on stderr with the answer stream carrying
+only `role: meta` lines, `pi` leaves stdout **empty** and writes
+`<status>: <the provider's JSON>` to stderr, and `hermes` writes
+`hermes -z: agent failed: …` there while `-z` guarantees stdout is the reply
+and nothing else. Narrow it only where the vendor's behaviour makes the
+answer an impossible place for the report — a profile that narrows it
+wrongly stops recognising spent plans, which is silent until somebody hits
+their cap.
 
 **And check where it prints it.** A sentinel can only match what the CLI
 puts on stdout or stderr, and one vendor puts the failure *nowhere a

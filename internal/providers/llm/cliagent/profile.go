@@ -146,6 +146,45 @@ type LimitMarker struct {
 	ResetUnit string `yaml:"reset_unit,omitempty"`
 }
 
+// MarkerScope says WHERE a CLI's failure prose can appear, and therefore
+// where [LimitMarker] and [AuthMarker] sentinels may be matched.
+//
+// The default searches the model's ANSWER as well as stderr, and it has to:
+// Claude Code reports a spent plan on a ZERO exit with the vendor's sentence
+// about the plan standing where the answer should be, so a marker that
+// searched stderr alone would never fire and the fallback chain would never
+// carry the seat onto a metered key.
+//
+// It is also a false-positive surface, and a real one rather than a
+// theoretical one: the haystack is the model's own words, so a seat ASKED
+// about rate limits — "what is our quota?" — can answer in prose that trips a
+// generic sentinel, and a KindRateLimit benches a perfectly good credential.
+// This file already lost a "429" sentinel to exactly that.
+//
+// So a CLI that reports its failures on STDERR and nowhere else says so, and
+// its markers stop being matched against anything the model said. That is not
+// a guess per profile: kimi-code writes `provider.rate_limit: …` to stderr
+// with the answer stream empty, pi writes `<status>: <the provider's JSON>`
+// to stderr with stdout empty, and hermes writes `hermes -z: agent failed: …`
+// there — all three measured. A profile only narrows this when the vendor's
+// own behaviour makes the answer an impossible place for the report.
+type MarkerScope string
+
+const (
+	// MarkerScopeAnswerAndStderr searches the model's answer and stderr.
+	// The default, and what a CLI that reports a spent plan AS its answer
+	// requires.
+	MarkerScopeAnswerAndStderr MarkerScope = "answer-and-stderr"
+	// MarkerScopeStderr searches stderr only, for a CLI whose failures
+	// never reach the answer.
+	MarkerScopeStderr MarkerScope = "stderr"
+)
+
+// Valid reports whether s is a scope this package knows.
+func (s MarkerScope) Valid() bool {
+	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr
+}
+
 // LocalTools says what a profile does about the CLI's OWN tools — its shell,
 // its file editor, its browser.
 //
@@ -522,6 +561,11 @@ type Profile struct {
 	// AuthMarkers recognise an expired login.
 	AuthMarkers []AuthMarker `yaml:"auth_markers,omitempty"`
 
+	// MarkerScope is where the two marker sets above may be matched —
+	// see [MarkerScope]. Empty searches the answer and stderr, which is
+	// what a CLI reporting a spent plan as its answer needs.
+	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
+
 	// HostCredentialPaths are where this CLI keeps its login in a human's
 	// own home directory, for `crewlet llm login --from-host` to adopt.
 	// Paths are relative to that home.
@@ -563,6 +607,14 @@ func IsCredentialName(name string) bool {
 	return false
 }
 
+// markerScope is the scope with its default applied.
+func (p *Profile) markerScope() MarkerScope {
+	if p.MarkerScope == "" {
+		return MarkerScopeAnswerAndStderr
+	}
+	return p.MarkerScope
+}
+
 // hasSystemChannel reports whether this profile carries the system prompt on
 // a channel of its own rather than leaving it in the transcript.
 func (p *Profile) hasSystemChannel() bool {
@@ -576,8 +628,13 @@ func (p *Profile) writesSystemPromptFile() bool {
 	if p.SystemPromptEnv != "" {
 		return true
 	}
-	return slices.ContainsFunc(p.SystemPromptArgs, func(arg string) bool {
-		return strings.Contains(arg, "{file}")
+	return hasPlaceholder(p.SystemPromptArgs, "{file}")
+}
+
+// hasPlaceholder reports whether any entry of an argv template carries one.
+func hasPlaceholder(template []string, placeholder string) bool {
+	return slices.ContainsFunc(template, func(arg string) bool {
+		return strings.Contains(arg, placeholder)
 	})
 }
 
@@ -638,9 +695,7 @@ func (p *Profile) validate(name string) error {
 		add("prompt_args is set but prompt_mode is %q — the flag introduces a prompt "+
 			"on argv and there is none to introduce", p.mode())
 	}
-	if p.mode() == PromptFile && !slices.ContainsFunc(p.PromptArgs, func(arg string) bool {
-		return strings.Contains(arg, "{file}")
-	}) {
+	if p.mode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
 		// Refused rather than defaulted to a bare append: a file-mode
 		// profile whose argv never carries the path runs the CLI with no
 		// prompt, which a vendor answers by opening an interactive
@@ -670,6 +725,21 @@ func (p *Profile) validate(name string) error {
 		add("system_prompt_args and system_prompt_env are both set — a CLI takes " +
 			"its system prompt on ONE channel; drop whichever this build does not use")
 	}
+	// AND ONE PLACEHOLDER OR THE OTHER WITHIN system_prompt_args, which is
+	// the same rule one level down and was the hole: the renderer writes the
+	// private file for `{file}` and then substitutes `{system}` into argv on
+	// the SAME pass, so `["--agent-file", "{file}", "--system-prompt",
+	// "{system}"]` wrote the seat's identity to a 0600 file and ALSO put
+	// every byte of it in /proc/<pid>/cmdline, where any account on the
+	// machine reads it. The shipped profiles are held to this by a test;
+	// nothing held an operator's cli.overrides to it, and overrides are
+	// exactly where a hand-written argv appears.
+	if hasPlaceholder(p.SystemPromptArgs, "{file}") && hasPlaceholder(p.SystemPromptArgs, "{system}") {
+		add("system_prompt_args names both {file} and {system} — the first writes the " +
+			"seat's system prompt to a private file and the second puts the same text " +
+			"on argv, where /proc/<pid>/cmdline exposes it to every account on the " +
+			"machine; keep the {file} form and drop {system}")
+	}
 	if p.SystemPromptFile != nil {
 		if !p.writesSystemPromptFile() {
 			// A template with no file to write is not a harmless
@@ -696,20 +766,27 @@ func (p *Profile) validate(name string) error {
 		}
 	}
 	if len(p.UsageFileArgs) > 0 {
-		if !slices.ContainsFunc(p.UsageFileArgs, func(arg string) bool {
-			return strings.Contains(arg, "{usage_file}")
-		}) {
+		if !hasPlaceholder(p.UsageFileArgs, "{usage_file}") {
 			add("usage_file_args carries no {usage_file} placeholder — there is " +
 				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
 		}
-		if len(p.Usage.Input) == 0 && len(p.Usage.Output) == 0 &&
-			len(p.Usage.CacheRead) == 0 && len(p.Usage.CacheWrite) == 0 {
-			// The file would be written and then read by nothing, and
-			// the counts estimated anyway — which looks exactly like a
-			// profile that reports real usage.
-			add("usage_file_args is set but usage declares no paths — the report " +
-				"would be written and never read")
+		// BOTH PROMPT COUNTS, because [extracted.applyUsageFile] accepts a
+		// report only when both resolve — a partial overlay would pair one
+		// source's input with another's output, and the sum is what a
+		// budget is charged. A profile declaring one of them (or only the
+		// cache paths) therefore estimates on EVERY call while
+		// [Profile.ReadsUsage] and `crewlet llm doctor` report it as using
+		// the vendor's own figures, which is the one thing that report
+		// exists to settle.
+		if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
+			add("usage_file_args is set but usage.input and usage.output are not both " +
+				"declared — the report is only read when both counts resolve, so every " +
+				"call would fall back to an estimate while the doctor reports otherwise")
 		}
+	}
+	if p.MarkerScope != "" && !p.MarkerScope.Valid() {
+		add("marker_scope %q (want %s or %s)",
+			p.MarkerScope, MarkerScopeAnswerAndStderr, MarkerScopeStderr)
 	}
 	for i, m := range p.LimitMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {

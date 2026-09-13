@@ -163,7 +163,11 @@ func TestAUsageFileWithNothingToSubstituteOrNothingToReadIsRefused(t *testing.T)
 				"usage_file_args": []any{"--usage-file", "{usage_file}"},
 				"usage":           map[string]any{},
 			},
-			want: "usage declares no paths",
+			// The stricter rule this now falls under — both prompt
+			// counts or none — is covered case by case in
+			// markerscope_internal_test.go; declaring none at all is
+			// still the plainest way to write a report nothing reads.
+			want: "usage.input and usage.output",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

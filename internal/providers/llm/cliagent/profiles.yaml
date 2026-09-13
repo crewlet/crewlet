@@ -967,6 +967,13 @@ kimi-code:
   # that does not go through the provider classifier. Each is quoted without
   # its leading "You've reached your", because a sentinel is matched verbatim
   # and a vendor rendering a curly apostrophe would silently never match.
+  # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: on every
+  # failure the answer stream carried only `role: meta` lines and the
+  # classification landed on stderr. So the markers below are matched against
+  # stderr ALONE, and nothing the model writes can bench this seat's
+  # credential — see [MarkerScope]. It is also what keeps the plan-window
+  # phrases safe to keep beside the structural sentinel.
+  marker_scope: stderr
   limit_markers:
     - sentinel: "provider.rate_limit"
     - sentinel: "5-hour usage limit"
@@ -1123,11 +1130,22 @@ hermes:
   # THESE SENTINELS ARE GENERIC, and unusually so for this file, because this
   # CLI publishes no verbatim exhausted-plan wording: it rotates its OWN
   # credential pool and falls through to its OWN fallback providers first, so
-  # what reaches this backend is whatever the last provider in that chain said
-  # in its own words. The generic phrases are the same bet the copilot and
-  # cursor-agent profiles make. `hermes auth` is the auth marker because it is
-  # the CLI's own remedy sentence — a command name rather than a phrase a
-  # model writes by accident.
+  # what reaches this backend is whatever the last provider in that chain
+  # said, in its own words. `hermes -z: agent failed:` is the CLI's own
+  # prefix on all of it (hermes_cli/oneshot.py) but says nothing about WHICH
+  # failure it was, so it cannot separate a spent plan from a dead login.
+  #
+  # WHAT MAKES THEM SAFE IS THE SCOPE, not the wording. `-z` writes the final
+  # response text to stdout and nothing else BY CONTRACT, and every failure
+  # goes to stderr — so these are matched against stderr alone and a seat that
+  # was ASKED about rate limits cannot answer its way into a credential
+  # cooldown. See [MarkerScope]. Without that, "quota" in a model's prose
+  # would bench this seat's login, which is the bug this file already fixed
+  # once by dropping a bare "429".
+  #
+  # `hermes auth` is the auth marker because it is the CLI's own remedy
+  # sentence — a command name rather than a phrase a model writes by accident.
+  marker_scope: stderr
   limit_markers:
     - sentinel: "rate limit"
     - sentinel: "usage limit"
@@ -1297,6 +1315,14 @@ pi:
   # ordinary prose. Pi's subscription providers are Claude Pro/Max, ChatGPT
   # and GitHub Copilot, so both vendors' vocabularies are listed; if yours
   # differs, override cli.overrides.limit_markers.
+  #
+  # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: a failed
+  # call left stdout EMPTY and wrote `<status>: <the provider's error JSON>`
+  # to stderr. Matching stderr alone is what stops a model that mentions an
+  # error code in prose from benching the seat's credential — and here the
+  # exposure would be total, since on a `text` profile the whole of stdout IS
+  # the answer. See [MarkerScope].
+  marker_scope: stderr
   limit_markers:
     - sentinel: "Usage limit reached"
     - sentinel: '"type":"rate_limit_error"'
