@@ -19,7 +19,7 @@ import (
 // untouched, because a stored revision is read again on the next apply and
 // a normalisation that mutated it would compound.
 func (c *Company) Organization() (*org.Organization, error) {
-	o := c.organization()
+	o, _ := c.organization()
 	if err := o.Validate(); err != nil {
 		return nil, err
 	}
@@ -28,8 +28,10 @@ func (c *Company) Organization() (*org.Organization, error) {
 
 // organization builds and normalises without validating, so [Company.Validate]
 // can report the org's failures alongside its own rather than stopping at
-// the first.
-func (c *Company) organization() *org.Organization {
+// the first. It also returns where each seat and unit of the result was
+// authored (see [identityIndex]), recorded before normalization moves any.
+func (c *Company) organization() (*org.Organization, *identityIndex) {
+	index := newIdentityIndex()
 	o := &org.Organization{
 		Name:             c.Name,
 		Mission:          c.Mission,
@@ -39,13 +41,17 @@ func (c *Company) organization() *org.Organization {
 		ConfluenceSpaces: append([]string(nil), c.Knowledge.ConfluenceSpaces...),
 	}
 	for i := range c.Roles {
-		o.Roles = append(o.Roles, c.Roles[i].Seat())
+		seat := c.Roles[i].Seat()
+		index.addSeat(seat, &c.Roles[i], idx(field("roles"), i))
+		o.Roles = append(o.Roles, seat)
 	}
 	for i := range c.Units {
-		o.Units = append(o.Units, c.Units[i].Unit())
+		unit := c.Units[i].Unit()
+		index.addUnit(unit, &c.Units[i], idx(field("units"), i))
+		o.Units = append(o.Units, unit)
 	}
 	o.Normalize()
-	return o
+	return o, index
 }
 
 // DanglingRefs reports every reference this revision resolves to nothing:
@@ -68,7 +74,7 @@ func (c *Company) organization() *org.Organization {
 // the handles of the same normalized organization, so both halves agree on
 // which seats exist.
 func (c *Company) DanglingRefs() []org.DanglingRef {
-	o := c.organization()
+	o, _ := c.organization()
 	return append(o.DanglingRefs(), c.danglingAccessLevels(o)...)
 }
 

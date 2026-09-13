@@ -178,8 +178,8 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // handles, unrunnable schedules and human-seat rule violations surface, and
 // a config that parses into a company nobody can run has not been validated.
 func (c *Company) Validate() error {
-	o := c.organization()
-	return errors.Join(c.validateRunnable(o), c.validateAdmission(o))
+	o, index := c.organization()
+	return index.locate(errors.Join(c.validateRunnable(o), c.validateAdmission(o)))
 }
 
 // ValidateRunnable reports only the RUNNABLE rules: everything a running
@@ -195,7 +195,8 @@ func (c *Company) Validate() error {
 // [Company.ValidateAdmission] as warnings instead, and the next write that
 // keeps them is refused.
 func (c *Company) ValidateRunnable() error {
-	return c.validateRunnable(c.organization())
+	o, index := c.organization()
+	return index.locate(c.validateRunnable(o))
 }
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
@@ -204,7 +205,8 @@ func (c *Company) ValidateRunnable() error {
 // [org.Organization.ValidateAdmission]), duplicate sandbox setup step names
 // within one list, and a GitHub App on a human seat.
 func (c *Company) ValidateAdmission() error {
-	return c.validateAdmission(c.organization())
+	o, index := c.organization()
+	return index.locate(c.validateAdmission(o))
 }
 
 // validateAdmission is [Company.ValidateAdmission] over an organization the

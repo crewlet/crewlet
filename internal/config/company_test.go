@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 )
 
@@ -245,7 +246,7 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			"a seat with no name",
 			"name: Acme\nroles:\n  - goal: ship\n",
-			"roles[0].name", ErrMissing,
+			"roles[0].name", org.ErrMissingName,
 		},
 		// The hosted code host's own rules, which run now that it is
 		// served.
@@ -345,7 +346,7 @@ func TestCompanyValidatorRejections(t *testing.T) {
 		{
 			"a unit with no name",
 			"name: Acme\nunits:\n  - lead: CEO\n",
-			"units[0].name", ErrMissing,
+			"units[0].name", org.ErrMissingName,
 		},
 	}
 

@@ -10,7 +10,7 @@ subcommand below is served by it.
 | Command | Description |
 |---------|-------------|
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
-| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for machine-readable errors); with no positional it checks both tiers via `-config` and `-company` |
+| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
@@ -379,22 +379,21 @@ the first non-flag token, so a command that took the file and kept going would
 silently validate the defaults instead and print a success line about files it
 never opened.
 
-Validation is **deep** — it builds the `Organization`, so unknown unit
-leads, bad cron expressions, invalid timezones, human seats missing a
-contact identity, and a knowledge scope with no backend behind it all fail here rather
-than at run time. It reads **no environment**: Tier B keeps `${VAR}`
-references verbatim, so a config validates fully before any secret
-exists.
+Validation is **deep**: it builds the `Organization`, so duplicate seat and
+unit names, bad cron expressions, invalid timezones, human seats missing a
+contact identity, and a knowledge scope with no backend behind it all fail here
+rather than at run time. It reads **no environment**: Tier B keeps `${VAR}`
+references verbatim, so a config validates fully before any secret exists.
 
 | Flag | Description |
 |------|-------------|
-| `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename — the two tiers share no top-level key, so `name`/`agents`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
+| `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename. The two tiers share no top-level key, so `name`/`roles`/`units`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
 | `-json` | Emit a machine-readable result on stdout instead of prose. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
-"errors": [{"path", "type", "message"}], "summary": {...}}` — one record per
-offending field, with its exact path, so an editor, CI job, or [AI authoring
+"problems": [...], "warnings": [...], "summary": {...}}`. Each problem is
+located and classified, so an editor, CI job, or [AI authoring
 loop](../getting-started/ai-authoring.md) can fix everything in one pass:
 
 ```json
@@ -402,17 +401,37 @@ loop](../getting-started/ai-authoring.md) can fix everything in one pass:
   "valid": false,
   "tier": "company",
   "file": "company.yaml",
-  "errors": [
-    { "path": "agents.roles[0].llm", "type": "unknown_value",
-      "message": "no provider named \"nonexistent\" is configured" }
-  ]
+  "problems": [
+    { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
+      "kind": "unknown_value", "seat": "cto",
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" }
+  ],
+  "warnings": []
 }
 ```
 
-`type` is one of `missing`, `out_of_range`, `conflict`, `shape`,
-`unknown_field`, `unknown_value`, or `invalid` for anything this build does
-not classify — a closed set with a fallback, because a consumer branching on
-it must never receive an empty string and read it as a field somebody forgot.
+| Problem field | Meaning |
+|---|---|
+| `path` | The authored path. Empty only for a failure that belongs to no place in the document, such as a file that is not YAML. |
+| `segments` | The same path as an array of keys (strings) and list indexes (numbers). A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is empty. |
+| `kind` | `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`, `unknown_value`, or `invalid` for anything this build does not classify: a closed set with a fallback, because a consumer branching on it must never receive an empty string and read it as a field somebody forgot. |
+| `message` | The full line, exactly as the prose output prints it. |
+| `seat` / `unit` | The handle of the seat, or the name of the unit, it is about. Omitted when neither. |
+| `line` | The line in the file, for a failure the parser found (an unknown key, a value of the wrong shape). Omitted otherwise. |
+
+A rule that several seats or units break together, such as two seats sharing a
+name, is one message and one problem beside each of them, so `problems` can
+hold more entries than the prose output has lines. The prose output prints
+that message once, led by every path it applies to.
+
+Each warning is a reference that resolves to nothing (a unit `lead`, a root
+seat's `unit`, a `manages` entry, a GitLab access level): `{"kind":
+"dangling_reference", "ref": "lead" | "unit" | "manages" |
+"gitlab_access_level", "path", "segments", "seat", "unit", "from", "to",
+"message"}`. The engine runs a company with one, so a warning never fails
+validation; prose output prints each on its own `warning:` line. Warnings are
+reported for any company document that parses, valid or not. Both lists are
+always arrays.
 
 Exit code is `0` when valid and `1` otherwise, **in both output modes**: a
 `-json` run that printed `{"valid": false}` and exited zero would pass every

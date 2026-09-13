@@ -10,7 +10,7 @@ Three things make this work, and you can use any of them on their own:
 | Piece | What it gives you |
 |---|---|
 | **`crewlet schema`** | JSON Schema generated from the models — the authoritative field list, for your editor, your CI, or an agent |
-| **`crewlet validate -json`** | Machine-readable errors with exact field paths, so a fix loop converges |
+| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, so a fix loop converges |
 | **The `company-architect` skill** | An interview script, the invariants, and the write → validate → fix loop |
 
 ---
@@ -201,25 +201,70 @@ crewlet validate company.yaml -json
   "valid": false,
   "tier": "company",
   "file": "company.yaml",
-  "errors": [
-    { "path": "agents.roles[0].backstroy", "type": "unknown_field",
-      "message": "\"backstroy\" is not a setting — check the spelling, or the block it belongs under" },
-    { "path": "agents.roles[2].llm", "type": "unknown_value",
-      "message": "no provider named \"nonexistent\" is configured" }
+  "problems": [
+    { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
+      "kind": "unknown_value", "seat": "cto",
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
+    { "path": "units[0].roles[0].name", "segments": ["units", 0, "roles", 0, "name"],
+      "kind": "conflict", "seat": "software-engineer",
+      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A unit's lead and every manages entry name exactly one seat, and resolve to the first seat of that name, so give each of these seats its own name" },
+    { "path": "units[0].roles[1].name", "segments": ["units", 0, "roles", 1, "name"],
+      "kind": "conflict", "seat": "software-engineer-2",
+      "message": "duplicate seat name \"Software Engineer\": 2 seats carry it (handle \"software-engineer\" in unit \"Engineering\"; handle \"software-engineer-2\" in unit \"Engineering\"). A unit's lead and every manages entry name exactly one seat, and resolve to the first seat of that name, so give each of these seats its own name" }
+  ],
+  "warnings": [
+    { "kind": "dangling_reference", "ref": "lead",
+      "path": "units[0].lead", "segments": ["units", 0, "lead"],
+      "seat": "", "unit": "Engineering", "from": "Engineering", "to": "Tech Lead",
+      "message": "unit \"Engineering\" names lead \"Tech Lead\", which is no seat, so the unit and every descendant inheriting its lead run with no lead. Correct the lead or add a seat with that name" }
   ]
 }
 ```
 
-Every offending field, with its exact path, all at once — so an
-assistant fixes them in one pass instead of re-guessing.
+Every offending field, with its exact path, all at once, so an assistant
+fixes them in one pass instead of re-guessing. A rule broken inside a seat or
+a unit names that seat's handle or that unit as well, and a seat is located
+where it was written even when its `unit:` reference moves it into a unit.
 
-`type` is one of `missing`, `out_of_range`, `conflict`, `shape`,
-`unknown_field`, `unknown_value`, or `invalid` for anything this build does
-not classify. It is a closed set with a fallback deliberately: a loop
-branching on it must never receive an empty string and read it as a field
-somebody forgot to populate.
+A document the parser refuses (an unknown key, a value of the wrong shape)
+reports every such key at once, at the key as it sits in the file and with the
+line it is on. The rules above run once it parses:
 
-Exit code is `0` when valid and `1` otherwise, **in both output modes** — so
+```json
+{ "path": "roles[0].backstroy", "segments": ["roles", 0, "backstroy"],
+  "kind": "unknown_field", "line": 6,
+  "message": "roles[0].backstroy: unknown field: \"backstroy\" is not a setting: check the spelling, or the block it belongs under (line 6)" }
+```
+
+Each problem carries:
+
+| Field | What it is |
+|---|---|
+| `path` | Where it is, as the document spells it. Empty only for a failure that belongs to no place in the document, such as a file that is not YAML at all. |
+| `segments` | The same place taken apart: strings for keys, numbers for list indexes. A map key can contain a dot (a provider called `claude-3.5`), so read these rather than splitting `path`. `null` when `path` is empty. |
+| `kind` | One of `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`, `unknown_value`, or `invalid` for anything this build does not classify. |
+| `message` | The whole line, exactly as the prose output prints it. |
+| `seat`, `unit` | The handle of the seat, or the name of the unit, the problem is about. Omitted when it is about neither. |
+| `line` | The line in the file, for a problem the parser found. Omitted otherwise. |
+
+`kind` is a closed set with a fallback deliberately: a loop branching on it
+must never receive an empty string and read it as a field somebody forgot to
+populate. Two seats sharing a name are one message and **one problem per
+seat**, each at the name that seat wrote, so `problems` can hold more entries
+than the prose output has lines (which leads such a message with every path
+it applies to).
+
+`warnings` are references that resolve to nothing: a unit `lead`, a root
+seat's `unit`, a `manages` entry, or a GitLab access level naming no seat.
+The engine runs a company with one (live configuration assembles an
+organization in pieces), so a warning never fails validation, but one that
+survives a finished document is a misspelling nothing else will report.
+`kind` is `dangling_reference`, `ref` says which kind of reference, `from`
+and `to` are what holds it and what it names, and `path`, `segments`,
+`seat` and `unit` locate it as they do a problem. Both lists are always
+arrays, empty rather than absent.
+
+Exit code is `0` when valid and `1` otherwise, **in both output modes**, so
 `crewlet validate company.yaml -json || exit 1` actually gates. Nothing is
 echoed on stderr in `-json` mode: the payload already carries every problem,
 and a second copy is what makes the loop's log unreadable.
@@ -230,15 +275,16 @@ and a second copy is what makes the loop's log unreadable.
 so a complete config validates *before any secret exists*. You can draft
 and check an entire company offline.
 
-Validation is deep: it builds the `Organization`, so unknown unit leads,
-bad cron expressions, invalid timezones, human seats with no contact
+Validation is deep: it builds the `Organization`, so duplicate seat and unit
+names, bad cron expressions, invalid timezones, human seats with no contact
 identity, and a knowledge scope with no backend behind it all fail here
-rather than at run time.
+rather than at run time, and a unit lead naming no seat is reported as a
+warning.
 
 `-tier auto` (the default) picks the tier from the document's **keys**, not
-its filename — the one thing this has to get right is the case where the file
+its filename: the one thing this has to get right is the case where the file
 was named something else. The two tiers share no top-level key:
-`name` / `agents` / `providers` / `integrations` mean Tier B,
+`name` / `roles` / `units` / `providers` / `integrations` mean Tier B,
 `node` / `stream` / `store` / `coordination` / `api` mean Tier A.
 
 A document carrying neither, or an equal count of both, is **refused naming

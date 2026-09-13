@@ -54,6 +54,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -115,12 +116,12 @@ func fault(path Path, kind error, detail string, args ...any) error {
 //
 // # Why a type rather than a formatted string
 //
-// Because two consumers need the parts back. `crewlet validate -json` emits
-// {path, type, message} so an authoring loop can jump to the field, and the
-// API's write surface reports the same three to a caller that never sees a
-// terminal. Both were re-deriving them by splitting the rendered message on
-// colons, which a detail containing a colon breaks — and details routinely
-// contain one, because they name settings.
+// Because two consumers need the parts back. `crewlet validate -json` and
+// the API's write surface both report a [Problem] per failure, with its path,
+// its kind and its message, so an authoring loop can jump to the field. Both
+// used to re-derive them by splitting the rendered message on colons, which a
+// detail containing a colon breaks, and details routinely contain one,
+// because they name settings.
 //
 // It renders EXACTLY as the formatted string did, because that text is what
 // an operator reads at a prompt and reflowing it would churn every test that
@@ -164,48 +165,6 @@ func (f *Fault) Error() string {
 // Unwrap exposes the sentinel, so errors.Is(err, ErrMissing) keeps working.
 func (f *Fault) Unwrap() error { return f.Kind }
 
-// Faults flattens a validation error into its parts, in the order they were
-// reported.
-//
-// A JOIN is split into its parts, and nothing else is: an error built with
-// several %w verbs renders as one line and is one failure (see
-// [joinedParts]). A wrap that only adds context around failures that are
-// faults, such as the file name `crewlet validate` puts in front of a
-// company's problems, is seen through, because stopping at it reported the
-// first of a file's problems and dropped the rest.
-//
-// An error that is NOT a fault (a file that could not be read) comes back as
-// one Fault with an empty path and [ErrShape], because a caller rendering
-// machine-readable output needs every failure in one shape or it has to grow
-// a second branch for the ones that arrive differently.
-func Faults(err error) []Fault {
-	var out []Fault
-	var walk func(error)
-	walk = func(e error) {
-		if e == nil {
-			return
-		}
-		if f, ok := leafFault(e); ok {
-			out = append(out, *f)
-			return
-		}
-		if parts, ok := joinedParts(e); ok {
-			for _, part := range parts {
-				walk(part)
-			}
-			return
-		}
-		var inner *Fault
-		if wrapped := errors.Unwrap(e); wrapped != nil && errors.As(wrapped, &inner) {
-			walk(wrapped)
-			return
-		}
-		out = append(out, Fault{Kind: ErrShape, Detail: e.Error()})
-	}
-	walk(err)
-	return out
-}
-
 // leafFault reports whether err IS a fault, not merely wraps one.
 //
 // errors.As would answer for a wrap too, and a wrap adds text of its own
@@ -215,36 +174,6 @@ func Faults(err error) []Fault {
 func leafFault(err error) (*Fault, bool) {
 	f, ok := err.(*Fault) //nolint:errorlint // Deliberate: see the paragraph above.
 	return f, ok
-}
-
-// KindName is the machine-readable name of a fault's kind.
-//
-// A CLOSED SET with a fallback, because the name travels in JSON that a fix
-// loop branches on: a kind this build does not know renders as "invalid"
-// rather than as an empty string, which would look like a field the consumer
-// forgot to read.
-func (f Fault) KindName() string {
-	for _, k := range faultKinds {
-		if errors.Is(f.Kind, k.sentinel) {
-			return k.name
-		}
-	}
-	return "invalid"
-}
-
-// faultKinds is every sentinel a fault carries, with its machine-readable
-// name: the one table [Fault.KindName] renders from and the parser's faults
-// are read back through (see position.go), so the two cannot disagree.
-var faultKinds = []struct {
-	name     string
-	sentinel error
-}{
-	{"missing", ErrMissing},
-	{"out_of_range", ErrOutOfRange},
-	{"conflict", ErrConflict},
-	{"shape", ErrShape},
-	{"unknown_field", ErrUnknownField},
-	{"unknown_value", ErrUnknownValue},
 }
 
 // Path is a place in an authored document, held as its SEGMENTS: a string
@@ -283,6 +212,37 @@ func (p Path) String() string {
 		}
 	}
 	return b.String()
+}
+
+// UnmarshalJSON reads a path back from its wire form, an array of strings and
+// integers, into the segment types every helper here writes: a string, or an
+// int. Decoded into a plain []any, an index would arrive as a float64, which
+// [Path.String] does not render and a comparison with a built path never
+// matches. Anything else in the array is refused, since no path holds one.
+func (p *Path) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("a path is an array of keys and indexes: %w", err)
+	}
+	if raw == nil {
+		*p = nil
+		return nil
+	}
+	out := make(Path, len(raw))
+	for i, element := range raw {
+		var name string
+		if err := json.Unmarshal(element, &name); err == nil {
+			out[i] = name
+			continue
+		}
+		var index int
+		if err := json.Unmarshal(element, &index); err != nil {
+			return fmt.Errorf("path segment %d is %s: want a key or a list index", i, element)
+		}
+		out[i] = index
+	}
+	*p = out
+	return nil
 }
 
 // extend returns parent with segments appended, in a new backing array.

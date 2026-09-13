@@ -296,7 +296,7 @@ func carryFaults(err error) error {
 			f = &Fault{Kind: ErrShape, Detail: leaf.Error()}
 		}
 		lines = append(lines, fmt.Sprintf("%s line=%d column=%d key=%t kind=%s: %s",
-			carriedMarker, f.pos.line, f.pos.column, f.pos.key, f.KindName(), f.Detail))
+			carriedMarker, f.pos.line, f.pos.column, f.pos.key, kindName(f.Kind), f.Detail))
 	}
 	return &yaml.TypeError{Errors: lines}
 }
@@ -317,9 +317,12 @@ func parseCarried(line string) (*Fault, bool) {
 	lineNo, _ := strconv.Atoi(m[1])
 	column, _ := strconv.Atoi(m[2])
 	f := &Fault{Kind: ErrShape, Detail: m[5], pos: position{line: lineNo, column: column, key: m[3] == "true"}}
-	for _, k := range faultKinds {
+	// The first sentinel of that name is this package's own, which is the
+	// one a parser fault carries.
+	for _, k := range problemKinds {
 		if k.name == m[4] {
 			f.Kind = k.sentinel
+			break
 		}
 	}
 	return f, true

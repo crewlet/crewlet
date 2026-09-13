@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -101,4 +102,30 @@ func flatten(err error) []error {
 		out = append(out, flatten(inner)...)
 	}
 	return out
+}
+
+// A PATH SURVIVES THE WIRE. A Go client decoding a problem would otherwise
+// receive its indexes as float64, which neither renders nor compares equal to
+// the path the engine built.
+func TestAPathRoundTripsThroughJSON(t *testing.T) {
+	t.Parallel()
+	want := Path{"units", 2, "roles", 0, "mcp_env", "jira.cloud"}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Path
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", raw, err)
+	}
+	if !reflect.DeepEqual(got, want) || got.String() != want.String() {
+		t.Errorf("round trip = %#v (%s), want %#v", got, got, want)
+	}
+	var none Path
+	if err := json.Unmarshal([]byte("null"), &none); err != nil || none != nil {
+		t.Errorf("null decoded to %#v, %v; want a nil path", none, err)
+	}
+	if err := json.Unmarshal([]byte(`["roles", 1.5]`), &none); err == nil {
+		t.Error("a fractional index was accepted")
+	}
 }

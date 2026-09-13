@@ -20,8 +20,8 @@ type found struct {
 
 func faultsOf(err error) []found {
 	var out []found
-	for _, f := range config.Faults(err) {
-		out = append(out, found{path: f.Path.String(), line: f.Line, kind: f.KindName()})
+	for _, p := range config.Problems(err) {
+		out = append(out, found{path: p.Path, line: p.Line, kind: p.Kind})
 	}
 	return out
 }
@@ -125,18 +125,14 @@ func TestANestedFailureDoesNotHideTheOthers(t *testing.T) {
 func TestADocumentThatDoesNotParseIsOneProblem(t *testing.T) {
 	t.Parallel()
 	_, err := config.ParseCompanyDocument([]byte("name: Acme\nmission: x\nvision 2\npolicies: []\n"))
-	faults := config.Faults(err)
-	if len(faults) != 1 {
-		t.Fatalf("%d faults, want 1: %+v", len(faults), faults)
-	}
-	if f := faults[0]; len(f.Path) != 0 || f.Line != 3 || !errors.Is(f.Kind, config.ErrShape) {
-		t.Errorf("fault = %+v, want a wrong shape with no path on line 3", f)
+	if got, want := faultsOf(err), []found{{"", 3, "shape"}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("problems = %+v, want %+v\nerror: %v", got, want, err)
 	}
 
 	// The rule is about how an error renders, not about where it came from:
 	// one line is one failure, however many errors it wraps.
-	if got := config.Faults(fmt.Errorf("%w: %w", config.ErrShape, errors.New("x"))); len(got) != 1 {
-		t.Errorf("a two-%%w error flattened into %d faults", len(got))
+	if got := config.Problems(fmt.Errorf("%w: %w", config.ErrShape, errors.New("x"))); len(got) != 1 {
+		t.Errorf("a two-%%w error flattened into %d problems", len(got))
 	}
 }
 

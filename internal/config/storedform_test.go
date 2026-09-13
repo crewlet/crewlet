@@ -351,7 +351,7 @@ roles:
 	if admission == nil {
 		t.Fatal("ValidateAdmission() accepted two steps called \"registry\" in one list")
 	}
-	faults := config.Faults(admission)
+	faults := config.Problems(admission)
 	if len(faults) != 1 {
 		t.Fatalf("%d admission faults, want exactly one for the one duplicated name in "+
 			"one list (the seat's own list reuses the name legitimately): %v", len(faults), admission)

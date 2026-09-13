@@ -484,6 +484,13 @@ type DanglingRef struct {
 	From string
 	// To is the name that resolved to nothing.
 	To string
+	// Seat and Unit are the entity carrying the reference, when it is one:
+	// the seat for a unit reference or a manages entry, the unit for a lead.
+	// From names it for a reader, and a name does not say which entity when
+	// two share it, so a caller placing the reference in a document locates
+	// it by these instead, as it does a validation error (see [SeatError]).
+	Seat *Role
+	Unit *Unit
 }
 
 // Message renders the reference for an operator: what names what, what the
@@ -547,12 +554,12 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 	var out []DanglingRef
 	for _, r := range o.Roles {
 		if _, found := units[r.UnitRef]; r.UnitRef != "" && !found {
-			out = append(out, DanglingRef{Kind: RefUnit, From: r.Name, To: r.UnitRef})
+			out = append(out, DanglingRef{Kind: RefUnit, From: r.Name, To: r.UnitRef, Seat: r})
 		}
 	}
 	for u := range o.AllUnits() {
 		if _, found := seats[u.DeclaredLead]; u.DeclaredLead != "" && !found {
-			out = append(out, DanglingRef{Kind: RefLead, From: u.Name, To: u.DeclaredLead})
+			out = append(out, DanglingRef{Kind: RefLead, From: u.Name, To: u.DeclaredLead, Unit: u})
 		}
 	}
 	for r := range o.AllRoles() {
@@ -560,7 +567,7 @@ func (o *Organization) DanglingRefs() []DanglingRef {
 			_, isSeat := seats[entry]
 			_, isUnit := units[entry]
 			if !isSeat && !isUnit {
-				out = append(out, DanglingRef{Kind: RefManages, From: r.Name, To: entry})
+				out = append(out, DanglingRef{Kind: RefManages, From: r.Name, To: entry, Seat: r})
 			}
 		}
 	}

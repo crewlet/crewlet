@@ -113,7 +113,9 @@ func TestUnresolvedLeadIsKeptAndReported(t *testing.T) {
 	if err := o.Validate(); err != nil {
 		t.Errorf("Validate() = %v, want nil for a half-wired org", err)
 	}
-	want := []DanglingRef{{Kind: RefLead, From: "Engineering", To: "Ghost"}}
+	// The unit carrying the reference is the entity itself, which is what
+	// a caller placing it in a document locates it by.
+	want := []DanglingRef{{Kind: RefLead, From: "Engineering", To: "Ghost", Unit: o.Unit("Engineering")}}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
 	}
@@ -149,8 +151,8 @@ func TestNestedUnitsReportAnInheritedDanglingLeadOnce(t *testing.T) {
 		}
 	}
 	want := []DanglingRef{
-		{Kind: RefLead, From: "Engineering", To: "Ghost"},
-		{Kind: RefLead, From: "Security", To: "Ghost"},
+		{Kind: RefLead, From: "Engineering", To: "Ghost", Unit: o.Unit("Engineering")},
+		{Kind: RefLead, From: "Security", To: "Ghost", Unit: o.Unit("Security")},
 	}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
@@ -219,8 +221,8 @@ func TestADanglingManagesEntryIsReported(t *testing.T) {
 		},
 	})
 	want := []DanglingRef{
-		{Kind: RefManages, From: "CEO", To: "Ghost"},
-		{Kind: RefManages, From: "Sarah Chen", To: "Nobody"},
+		{Kind: RefManages, From: "CEO", To: "Ghost", Seat: o.Role("CEO")},
+		{Kind: RefManages, From: "Sarah Chen", To: "Nobody", Seat: o.Role("Sarah Chen")},
 	}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
@@ -747,7 +749,7 @@ func TestUnresolvedUnitRefKeepsTheSeatAtRoot(t *testing.T) {
 	if got := roleNames(o.Roles); !slices.Equal(got, []string{"Dev"}) {
 		t.Errorf("root seats = %v, want the seat kept", got)
 	}
-	want := []DanglingRef{{Kind: RefUnit, From: "Dev", To: "Nowhere"}}
+	want := []DanglingRef{{Kind: RefUnit, From: "Dev", To: "Nowhere", Seat: o.Role("Dev")}}
 	if got := o.DanglingRefs(); !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
 	}

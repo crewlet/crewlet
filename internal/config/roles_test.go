@@ -335,7 +335,13 @@ units:
 		{Kind: org.RefManages, From: "Founder", To: "Ghost"},
 		{Kind: org.RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "former-engineer"},
 	}
-	if got := cfg.DanglingRefs(); !slices.Equal(got, want) {
+	// Compared by what they name: the seat pointer belongs to an
+	// organization this test never sees, since each call builds its own.
+	got := cfg.DanglingRefs()
+	for i := range got {
+		got[i].Seat, got[i].Unit = nil, nil
+	}
+	if !slices.Equal(got, want) {
 		t.Errorf("DanglingRefs() = %v, want %v", got, want)
 	}
 

@@ -270,24 +270,6 @@ func addConfigFlags(fs *flag.FlagSet) configFlags {
 	}
 }
 
-// load reads both tiers, reporting EVERY problem it can rather than the first.
-//
-// Both, not just the first to fail: an operator fixing a broker URL only to be
-// told about their org chart on the next boot has been made to pay twice for
-// one edit. It is the same rule each tier's own validator follows internally.
-func (c configFlags) load() (*config.Bootstrap, *config.Company, error) {
-	// Environment-only resolution for Tier A, which is not a default but a
-	// rule: Tier A carries the store's address and the keys that open it,
-	// so a resolver reaching the secret store would have Tier A reading
-	// from the store it is describing.
-	boot, bootErr := config.LoadBootstrap(*c.bootstrap, config.EnvOnly())
-	company, companyErr := config.LoadCompany(*c.company)
-	if err := errors.Join(nameTheNeighbour(*c.bootstrap, bootErr), companyErr); err != nil {
-		return nil, nil, err
-	}
-	return boot, company, nil
-}
-
 // companyName is what the boot line calls the company, including when there
 // is not one yet.
 func companyName(c *config.Company) string {
@@ -492,32 +474,23 @@ func detectTier(raw []byte) (Tier, error) {
 //
 // THE SHAPE IS THE JSON, so the two output modes cannot drift: the text
 // renderer reads this struct too, rather than being a second pass over the
-// same data that eventually disagrees with it.
+// same data that eventually disagrees with it. Problems and warnings are the
+// config package's own [config.Problem] and [config.Warning], the shape the
+// configuration API reports too, so a loop written against one reads the
+// other.
 type validation struct {
-	Valid   bool              `json:"valid"`
-	Tier    Tier              `json:"tier"`
-	File    string            `json:"file,omitempty"`
-	Errors  []validationError `json:"errors"`
-	Summary map[string]any    `json:"summary,omitempty"`
+	Valid    bool             `json:"valid"`
+	Tier     Tier             `json:"tier"`
+	File     string           `json:"file,omitempty"`
+	Problems []config.Problem `json:"problems"`
+	Warnings []config.Warning `json:"warnings"`
+	Summary  map[string]any   `json:"summary,omitempty"`
 }
 
-// validationError is one problem, with the parts an authoring loop needs to
-// jump to the field and decide what to do.
-type validationError struct {
-	Path    string `json:"path"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
-
-func faultsOf(err error) []validationError {
-	faults := config.Faults(err)
-	out := make([]validationError, 0, len(faults))
-	for _, f := range faults {
-		out = append(out, validationError{
-			Path: f.Path.String(), Type: f.KindName(), Message: f.Detail,
-		})
-	}
-	return out
+// newValidation is a run with nothing found yet. Both lists are empty rather
+// than null, so a consumer iterates them without a nil check.
+func newValidation(tier Tier, file string) validation {
+	return validation{Tier: tier, File: file, Problems: []config.Problem{}, Warnings: []config.Warning{}}
 }
 
 // validateConfigs is `crewlet validate`.
@@ -541,7 +514,7 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	tier := fs.String("tier", string(TierAuto),
 		"which document a positional file is: auto, company or bootstrap")
 	asJSON := fs.Bool("json", false,
-		"emit {valid, tier, errors:[{path,type,message}], summary} instead of prose")
+		"emit {valid, tier, file, problems, warnings, summary} instead of prose")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -576,16 +549,16 @@ func tierNames() string {
 
 // validateOne checks the single document an operator named.
 func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
-	res := validation{File: file, Tier: tier, Errors: []validationError{}}
+	res := newValidation(tier, file)
 	raw, err := os.ReadFile(file)
 	if err != nil {
-		res.Errors = faultsOf(err)
+		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
 	if tier == TierAuto {
 		detected, detErr := detectTier(raw)
 		if detErr != nil {
-			res.Errors = faultsOf(detErr)
+			res.Problems = config.Problems(detErr)
 			return report(stdout, res, asJSON)
 		}
 		res.Tier = detected
@@ -596,9 +569,9 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		// default but a rule: it carries the store's address and the keys
 		// that open it, so a resolver reaching the secret store would have
 		// Tier A reading from the store it is describing.
-		boot, bootErr := config.LoadBootstrap(file, config.EnvOnly())
+		boot, bootErr := config.ParseBootstrap(raw, config.EnvOnly())
 		if bootErr != nil {
-			res.Errors = faultsOf(bootErr)
+			res.Problems = config.Problems(bootErr)
 			return report(stdout, res, asJSON)
 		}
 		res.Valid = true
@@ -609,26 +582,51 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 		return report(stdout, res, asJSON)
 	}
 
-	company, companyErr := config.LoadCompany(file)
+	company, warnings, companyErr := checkCompany(raw)
+	res.Warnings = warnings
 	if companyErr != nil {
-		res.Errors = faultsOf(companyErr)
-		return report(stdout, res, asJSON)
-	}
-	// Building the epoch is the rest of the check, and it reaches nothing:
-	// no broker, no store, no provider is dialled. It is what catches the
-	// problems a schema cannot — a seat whose llm names no configured
-	// provider, a role reporting to a unit that does not exist.
-	epoch, epochErr := engine.NewCompany(company)
-	if epochErr != nil {
-		res.Errors = faultsOf(epochErr)
+		res.Problems = config.Problems(companyErr)
 		return report(stdout, res, asJSON)
 	}
 	res.Valid = true
 	res.Summary = map[string]any{
-		"company": company.Name, "seats": len(epoch.Seats()),
-		"llm_providers": len(epoch.Models.Keys()),
+		"company": company.Name, "seats": len(company.epoch.Seats()),
+		"llm_providers": len(company.epoch.Models.Keys()),
 	}
 	return report(stdout, res, asJSON)
+}
+
+// checkedCompany is a company document that passed every check, with the
+// epoch built from it.
+type checkedCompany struct {
+	*config.Company
+	epoch *engine.Company
+}
+
+// checkCompany holds a Tier B document to every rule a submitted document is
+// held to, and then builds its epoch.
+//
+// Building the epoch is the rest of the check, and it reaches nothing: no
+// broker, no store, no provider is dialled. It is what catches the problems a
+// schema cannot, such as a seat whose llm names no configured provider.
+//
+// The warnings are the references the document resolves to nothing, reported
+// whenever it PARSED, valid or not: a misspelled lead is worth seeing in the
+// same pass as the problems, since fixing the problems will not fix it.
+func checkCompany(raw []byte) (*checkedCompany, []config.Warning, error) {
+	company, err := config.ParseCompanyDocument(raw)
+	if err != nil {
+		return nil, []config.Warning{}, err
+	}
+	warnings := company.ReferenceWarnings()
+	if err = company.Validate(); err != nil {
+		return nil, warnings, err
+	}
+	epoch, err := engine.NewCompany(company)
+	if err != nil {
+		return nil, warnings, err
+	}
+	return &checkedCompany{Company: company, epoch: epoch}, warnings, nil
 }
 
 // validateBoth is the two-flag form: check a Tier A and a Tier B together.
@@ -637,21 +635,24 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 // told about their org chart on the next boot has been made to pay twice for
 // one edit. It is the same rule each tier's own validator follows internally.
 func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
-	res := validation{Tier: TierAuto, Errors: []validationError{}}
-	boot, company, err := cfg.load()
-	if err != nil {
-		res.Errors = faultsOf(err)
-		return report(stdout, res, asJSON)
+	res := newValidation(TierAuto, "")
+	// Environment-only resolution for Tier A: see validateOne.
+	boot, bootErr := config.LoadBootstrap(*cfg.bootstrap, config.EnvOnly())
+	bootErr = nameTheNeighbour(*cfg.bootstrap, bootErr)
+
+	var company *checkedCompany
+	raw, companyErr := os.ReadFile(*cfg.company)
+	if companyErr == nil {
+		company, res.Warnings, companyErr = checkCompany(raw)
 	}
-	epoch, err := engine.NewCompany(company)
-	if err != nil {
-		res.Errors = faultsOf(err)
+	if err := errors.Join(bootErr, companyErr); err != nil {
+		res.Problems = config.Problems(err)
 		return report(stdout, res, asJSON)
 	}
 	res.Valid = true
 	res.Summary = map[string]any{
-		"company": company.Name, "seats": len(epoch.Seats()),
-		"llm_providers": len(epoch.Models.Keys()),
+		"company": company.Name, "seats": len(company.epoch.Seats()),
+		"llm_providers": len(company.epoch.Models.Keys()),
 		"stream":        boot.Stream.Type, "coordination": boot.Coordination.Type,
 	}
 	return report(stdout, res, asJSON)
@@ -663,6 +664,11 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 // CI step as often as it is a model, and `crewlet validate x.yaml -json ||
 // exit 1` has to be able to fail — a mode that printed {"valid": false} and
 // exited 0 would pass every gate built on it.
+//
+// A WARNING NEVER FAILS IT: the engine runs a document whose reference
+// resolves to nothing, and a gate that refused one would refuse a company
+// being assembled in pieces. In prose, warnings are printed before the
+// outcome, so a reader sees them whichever way it went.
 func report(stdout io.Writer, res validation, asJSON bool) error {
 	if asJSON {
 		raw, err := json.MarshalIndent(res, "", "  ")
@@ -678,19 +684,49 @@ func report(stdout io.Writer, res validation, asJSON bool) error {
 		// unreadable.
 		return errSilent
 	}
+	for _, w := range res.Warnings {
+		fmt.Fprintln(stdout, "warning: "+prose(w.Path, w.Message))
+	}
 	if !res.Valid {
-		var b strings.Builder
-		for _, e := range res.Errors {
-			if e.Path != "" {
-				b.WriteString("\n  " + e.Path + ": " + e.Message)
-				continue
-			}
-			b.WriteString("\n  " + e.Message)
-		}
-		return errors.New(strings.TrimPrefix(b.String(), "\n  "))
+		return errors.New(strings.Join(problemLines(res.Problems), "\n  "))
 	}
 	fmt.Fprintln(stdout, summaryLine(res))
 	return nil
+}
+
+// problemLines is the problems as the lines an operator reads: one per
+// message, led by every path it was placed at. A duplicate is one message and
+// a problem beside each entity sharing the name, and printing that message
+// once per entity would repeat a paragraph to say where the second one is.
+func problemLines(problems []config.Problem) []string {
+	var order []string
+	paths := map[string][]string{}
+	for _, p := range problems {
+		if _, seen := paths[p.Message]; !seen {
+			order = append(order, p.Message)
+		}
+		if p.Path != "" {
+			paths[p.Message] = append(paths[p.Message], p.Path)
+		} else if paths[p.Message] == nil {
+			paths[p.Message] = []string{}
+		}
+	}
+	lines := make([]string, len(order))
+	for i, message := range order {
+		lines[i] = prose(strings.Join(paths[message], ", "), message)
+	}
+	return lines
+}
+
+// prose is a message as a line an operator reads, led by where it is when the
+// message does not already open with that. A rule the org model reports about
+// several seats names them in words, and the paths are what the operator can
+// search their file for.
+func prose(where, message string) string {
+	if where == "" || strings.HasPrefix(message, where+": ") {
+		return message
+	}
+	return where + ": " + message
 }
 
 // summaryLine is the one prose line a successful validation prints.

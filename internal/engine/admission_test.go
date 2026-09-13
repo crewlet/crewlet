@@ -138,7 +138,7 @@ func TestAnEngineBootsOnAStoredCompanyThatBreaksAnAdmissionRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if config.Faults(company.ValidateAdmission()) == nil {
+	if config.Problems(company.ValidateAdmission()) == nil {
 		t.Fatal("the fixture breaks no admission rule, so this proves nothing")
 	}
 	e := newEngine(t, engine.Options{Company: company})

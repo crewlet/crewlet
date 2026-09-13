@@ -501,9 +501,6 @@ func (m *RoleMattermost) validate(path Path) error {
 
 func (r *Role) validate(path Path) error {
 	var p problems
-	if strings.TrimSpace(r.Name) == "" {
-		p.add(at(path, "name"), ErrMissing, "every seat needs a name")
-	}
 	if g := r.Integrations.GitHub; g != nil {
 		p.wrap(g.validate(at(path, "integrations.github")))
 	}
@@ -516,10 +513,12 @@ func (r *Role) validate(path Path) error {
 	if r.Sandbox != nil {
 		p.wrap(r.Sandbox.validate(at(path, "sandbox")))
 	}
-	// The seat's own rules — kind, handle shape, human-versus-agent
-	// fields, schedule shape — belong to the org model and are checked
-	// there, on the transformed seat, so there is one definition of what a
-	// seat may be rather than two that drift.
+	// The seat's own rules (a name, its kind, its handle's shape, the
+	// human-versus-agent fields, its schedules' shape) belong to the org
+	// model and are checked there, on the transformed seat, so there is one
+	// definition of what a seat may be rather than two that drift. The name
+	// was checked here as well once, and every nameless seat was reported
+	// twice.
 	return p.err()
 }
 
@@ -699,11 +698,10 @@ func (u UnitIntegrations) IsZero() bool {
 	return u.Jira == nil && u.Confluence == nil
 }
 
+// validate walks the unit's seats and children. A unit's own rules (its
+// name, its schedules) are the org model's, like a seat's.
 func (u *Unit) validate(path Path) error {
 	var p problems
-	if strings.TrimSpace(u.Name) == "" {
-		p.add(at(path, "name"), ErrMissing, "every unit needs a name")
-	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}

@@ -48,9 +48,17 @@ Use the best rung available to you:
 crewlet validate company.yaml --json
 ```
 
-Returns `{"valid": …, "tier": …, "errors": [{"path", "message", "type"}], "summary": {…}}`
-— every offending field with its exact path, all at once. Fix every
-`path` and re-run.
+Returns `{"valid": …, "tier": …, "problems": [{"path", "segments", "kind", "message", "seat", "unit", "line"}], "warnings": [{"kind", "ref", "path", "segments", "seat", "unit", "from", "to", "message"}], "summary": {…}}`:
+every offending field with its exact path, all at once. Fix every problem's
+`path` and re-run. `segments` is the same path as keys and indexes (read it
+rather than splitting `path`, since a map key can contain a dot), `kind` is
+one of `missing`, `out_of_range`, `conflict`, `shape`, `unknown_field`,
+`unknown_value` or `invalid`, and `seat`, `unit` and `line` are present when
+the problem is about a seat, a unit, or a line the parser pointed at. Two
+seats sharing a name are one problem beside each seat. A **warning** never
+fails validation, but it is a reference that resolves to nothing (a `lead`,
+a `unit:`, a `manages` entry, a GitLab access level): fix every one before you
+report the company finished, since nothing else will ever point at it.
 
 **2. No `crewlet`, but you can run code** (catches nearly everything):
 validate the parsed YAML against the fetched schema with any JSON Schema

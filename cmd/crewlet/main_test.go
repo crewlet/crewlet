@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -691,59 +693,135 @@ func TestValidateRefusesAnUnknownTier(t *testing.T) {
 	}
 }
 
-// THE -json PAYLOAD CARRIES A PATH PER PROBLEM, which is the whole reason an
-// authoring loop uses it: prose it would have to parse converges on whatever
-// the prose happened to say.
-func TestTheJSONOutputCarriesAPathPerProblem(t *testing.T) {
-	t.Parallel()
-	bad := writeYAML(t, "company.yaml",
-		strings.Replace(companyYAML, "llm: primary\n", "llm: nonexistent\n", 1))
+// validateJSON runs `crewlet validate <file> -json` and decodes the payload
+// into the config package's own problem and warning types, which is the
+// contract: a loop written against the API reads the CLI's output unchanged.
+func validateJSON(t *testing.T, body string) (payload struct {
+	Valid    bool             `json:"valid"`
+	Problems []config.Problem `json:"problems"`
+	Warnings []config.Warning `json:"warnings"`
+}, raw string, stderr string) {
+	t.Helper()
+	path := writeYAML(t, "company.yaml", body)
 	var out, errOut bytes.Buffer
-	err := run([]string{"validate", bad, "-json"}, &out, &errOut)
-	if err == nil {
-		t.Fatal("a broken document reported success")
-	}
-	var got struct {
-		Valid  bool `json:"valid"`
-		Errors []struct {
-			Path    string `json:"path"`
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+	runErr := run([]string{"validate", path, "-json"}, &out, &errOut)
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
 		t.Fatalf("the -json output is not JSON: %v\n%s", err, out.String())
 	}
+	if (runErr == nil) != payload.Valid {
+		t.Errorf("exit disposition %v disagrees with valid=%v", runErr, payload.Valid)
+	}
+	// BOTH LISTS ARE ALWAYS ARRAYS, so a consumer iterates them without a
+	// nil check.
+	var shape map[string]any
+	if err := json.Unmarshal(out.Bytes(), &shape); err != nil {
+		t.Fatal(err)
+	}
+	for _, list := range []string{"problems", "warnings"} {
+		if _, isArray := shape[list].([]any); !isArray {
+			t.Errorf("%s is %v, want an array: %s", list, shape[list], out.String())
+		}
+	}
+	return payload, out.String(), errOut.String()
+}
+
+// THE -json PAYLOAD CARRIES A LOCATED, CLASSIFIED PROBLEM PER FAILURE, which is
+// the whole reason an authoring loop uses it: prose it would have to parse
+// converges on whatever the prose happened to say.
+func TestTheJSONOutputCarriesAPathPerProblem(t *testing.T) {
+	t.Parallel()
+	got, _, stderr := validateJSON(t,
+		strings.Replace(companyYAML, "llm: primary\n", "llm: nonexistent\n", 1))
 	if got.Valid {
 		t.Errorf("valid = true on a broken document")
 	}
-	if len(got.Errors) == 0 {
-		t.Fatalf("no errors reported: %s", out.String())
+	want := config.Problem{
+		Path: "roles[0].llm", Segments: config.Path{"roles", 0, "llm"},
+		Kind: "unknown_value", Seat: "ceo",
 	}
-	var found, pathed bool
-	for _, e := range got.Errors {
-		if e.Message == "" || e.Type == "" {
-			t.Errorf("an error carries no message or type: %+v", e)
-		}
-		if e.Path != "" {
-			pathed = true
-		}
-		if strings.Contains(e.Message, "nonexistent") {
-			found = true
-		}
+	if len(got.Problems) != 1 {
+		t.Fatalf("problems = %+v, want exactly one", got.Problems)
 	}
-	if !found {
-		t.Errorf("the provider problem is not in the payload: %s", out.String())
+	p := got.Problems[0]
+	if p.Path != want.Path || !reflect.DeepEqual(p.Segments, want.Segments) ||
+		p.Kind != want.Kind || p.Seat != want.Seat {
+		t.Errorf("problem = %+v, want %+v", p, want)
 	}
-	// THE PATH IS THE POINT. A loop that gets only a message has to parse
-	// prose to find the field, which is exactly what -json exists to avoid.
-	if !pathed {
-		t.Errorf("no error carries a path: %s", out.String())
+	// THE MESSAGE IS THE WHOLE LINE, path and all, exactly as the refusal's
+	// text carries it.
+	if !strings.HasPrefix(p.Message, "roles[0].llm: ") || !strings.Contains(p.Message, "nonexistent") {
+		t.Errorf("message = %q, want the full rendered line", p.Message)
 	}
 	// AND NOTHING IS ECHOED ON STDERR: a second copy of what the payload
 	// already carries is what makes a machine consumer's log unreadable.
-	if strings.Contains(errOut.String(), "nonexistent") {
-		t.Errorf("the problem was printed twice: %s", errOut.String())
+	if strings.Contains(stderr, "nonexistent") {
+		t.Errorf("the problem was printed twice: %s", stderr)
+	}
+}
+
+// A RULE THE ORG MODEL CHECKS IS LOCATED TOO, by the seat it is about rather
+// than by its name: two seats of one name are one line of text and one
+// problem beside each seat, at the name each one wrote.
+func TestTheJSONOutputLocatesAnOrgRuleAtEachSeat(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1)
+	got, raw, _ := validateJSON(t, doc)
+	var paths []string
+	for _, p := range got.Problems {
+		if strings.Contains(p.Message, "duplicate seat name") {
+			paths = append(paths, p.Path+"@"+p.Seat)
+			if p.Kind != "conflict" {
+				t.Errorf("kind = %q, want conflict", p.Kind)
+			}
+		}
+	}
+	if want := []string{"roles[0].name@ceo", "roles[1].name@cto"}; !slices.Equal(paths, want) {
+		t.Errorf("duplicate problems at %v, want %v\n%s", paths, want, raw)
+	}
+}
+
+// THE PROSE SAYS EACH THING ONCE, AND WHERE. A rule the org model reports
+// names its seat in words, so the path leads the line; two seats sharing a
+// name are one message, printed once and led by both paths rather than
+// repeated for the second seat. A warning is printed too, and fails nothing.
+func TestTheProseOutputLeadsEachMessageWithItsPaths(t *testing.T) {
+	t.Parallel()
+	doc := strings.Replace(companyYAML, "  - name: CTO\n", "  - name: CEO\n", 1) +
+		"units:\n  - name: Platform\n    lead: Ghost\n"
+	path := writeYAML(t, "company.yaml", doc)
+	var out, errOut bytes.Buffer
+	err := run([]string{"validate", path}, &out, &errOut)
+	if err == nil {
+		t.Fatalf("a document with a duplicate seat name validated: %s", out.String())
+	}
+	if n := strings.Count(err.Error(), "duplicate seat name"); n != 1 {
+		t.Errorf("the duplicate is printed %d times, want once:\n%v", n, err)
+	}
+	if !strings.Contains(err.Error(), "roles[0].name, roles[1].name: duplicate seat name") {
+		t.Errorf("the duplicate is not led by both paths:\n%v", err)
+	}
+	if !strings.Contains(out.String(), "warning: units[0].lead: ") {
+		t.Errorf("the dangling lead is not printed as a warning: %q", out.String())
+	}
+}
+
+// A REFERENCE THAT RESOLVES TO NOTHING IS A WARNING, located where it was
+// written, and it fails nothing: the engine runs a company assembled in
+// pieces, and a gate refusing one would refuse every intermediate state.
+func TestTheJSONOutputCarriesWarnings(t *testing.T) {
+	t.Parallel()
+	doc := companyYAML + "units:\n  - name: Platform\n    lead: Ghost\n"
+	got, raw, _ := validateJSON(t, doc)
+	if !got.Valid {
+		t.Fatalf("a dangling lead failed validation: %s", raw)
+	}
+	if len(got.Warnings) != 1 {
+		t.Fatalf("warnings = %+v, want one", got.Warnings)
+	}
+	w := got.Warnings[0]
+	if w.Kind != config.WarningDanglingReference || w.Ref != "lead" || w.Path != "units[0].lead" ||
+		w.Unit != "Platform" || w.From != "Platform" || w.To != "Ghost" || w.Message == "" {
+		t.Errorf("warning = %+v", w)
 	}
 }
 
