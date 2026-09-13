@@ -10,10 +10,10 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { SprintPanel } from "./Sprints.tsx";
+import { Burndown, SprintPanel } from "./Sprints.tsx";
 import { describeChange } from "~/lib/work.ts";
 import { ProjectHead } from "./Work.tsx";
-import type { WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
+import type { WorkBurndown, WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -296,4 +296,69 @@ test("a change with nothing to show falls back to its kind", () => {
       notified: false,
     }),
   ).toBe("comment resolved");
+});
+
+// ---------------------------------------------------------------------------
+// The burndown
+// ---------------------------------------------------------------------------
+
+const burndown = (over: Partial<WorkBurndown> = {}): WorkBurndown => ({
+  project: "ENG",
+  sprint: 4,
+  name: "Kickoff",
+  measure: "points",
+  start_at: "2031-04-01T00:00:00Z",
+  end_at: "2031-04-15T00:00:00Z",
+  points: [
+    { at: "2031-04-01T00:00:00Z", scope: 20, remaining: 20, delivered: 0 },
+    { at: "2031-04-02T00:00:00Z", scope: 20, remaining: 17, delivered: 3 },
+  ],
+  ideal: 20,
+  tasks: 10,
+  unestimated: 0,
+  complete: true,
+  ...over,
+});
+
+// A SPRINT WITH NO LIVED DAY KEEPS ITS PANEL AND SAYS WHY. Its series is one
+// point, and a chart of one point invites a conclusion from nothing — but
+// drawing NOTHING is the other mistake: a burndown simply absent from an
+// active sprint's report reads as a chart that failed to load, which is what
+// every empty state in this product is written to avoid.
+test("a sprint with no lived day says so rather than vanishing", () => {
+  const { container } = render(
+    <Burndown
+      data={burndown({
+        points: [{ at: "2031-04-01T00:00:00Z", scope: 20, remaining: 20, delivered: 0 }],
+      })}
+      sprint={sprint()}
+    />,
+  );
+  expect(screen.getByText("Nothing to draw yet")).toBeTruthy();
+  // And it names the day the first point arrives with, so the reader knows
+  // this is a schedule rather than a fault.
+  expect(container.textContent).toContain("2031");
+  // And no series is drawn from one point — the panel's own icon is the
+  // only vector in it.
+  expect(screen.queryByText("Remaining")).toBeNull();
+  expect(screen.queryByText("Ideal")).toBeNull();
+  expect(container.querySelector("svg[role='img']")).toBeNull();
+});
+
+// A LIVED SPRINT DRAWS ALL THREE SERIES, and the ideal is a REFERENCE rather
+// than a fourth measurement: dashed, so nobody reads it as a line that
+// happened to be straight.
+test("a running sprint draws remaining, scope and a dashed ideal", () => {
+  render(<Burndown data={burndown()} sprint={sprint()} />);
+  for (const name of ["Remaining", "Scope", "Ideal"]) {
+    expect(screen.getAllByText(name).length).toBeGreaterThan(0);
+  }
+});
+
+// UNESTIMATED WORK IS NAMED ABOVE THE CHART, never folded in: a series over a
+// sprint half of whose tasks carry no value is a series about half a sprint,
+// and a reader who cannot see that quotes the number.
+test("a partly unestimated sprint says what its chart leaves out", () => {
+  render(<Burndown data={burndown({ unestimated: 4, tasks: 10 })} sprint={sprint()} />);
+  expect(screen.getByText(/4 of 10 tasks carry no points/)).toBeTruthy();
 });

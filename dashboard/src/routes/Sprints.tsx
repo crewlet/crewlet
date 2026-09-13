@@ -235,8 +235,10 @@ export function Velocity({ sprints, measure }: { sprints: WorkSprintRow[]; measu
  * ideal is a dashed REFERENCE, drawn so it cannot be mistaken for a series
  * that happened to be linear.
  *
- * A FUTURE SPRINT DRAWS NOTHING and says why: its series is one point, and a
- * chart of one point is a chart that invites a conclusion from nothing.
+ * A SPRINT WITH NO LIVED DAY DRAWS NO CURVE AND SAYS WHY: its series is one
+ * point, and a chart of one point invites a conclusion from nothing. It keeps
+ * its PANEL, because a burndown simply absent from an active sprint's report
+ * reads as a chart that failed to load.
  */
 export function Burndown({
   data,
@@ -248,8 +250,25 @@ export function Burndown({
   sprint: WorkSprintRow;
 }) {
   if (loading && !data) return null;
-  if (!data || data.points.length < 2) return null;
+  if (!data) return null;
   const measure = measureLabel(data.measure);
+  // A SPRINT WITH NO LIVED DAY SAYS SO rather than vanishing. The series
+  // stops at the reader's own instant, so one point means the clock is at or
+  // before the sprint's start — and a chart of one point invites a
+  // conclusion from nothing. Drawing NOTHING was the other mistake: a
+  // burndown panel that is simply absent from an active sprint's report
+  // reads as a chart that failed to load, which is what every empty state in
+  // this product is written to avoid.
+  if (data.points.length < 2) {
+    return (
+      <Panel title={`Sprint ${data.sprint} burndown`} icon="activity" subtitle={sprint.name}>
+        <Empty
+          title="Nothing to draw yet"
+          hint={`This sprint's window opens on ${fmtDate(data.start_at)}. A burndown needs a day that has been lived through, so the first point arrives with it.`}
+        />
+      </Panel>
+    );
+  }
   const from = tsKey(data.start_at);
   const to = tsKey(data.end_at);
   const last = data.points[data.points.length - 1];
