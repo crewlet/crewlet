@@ -80,6 +80,7 @@ var categories = map[string]string{
 
 	// System: the engine talking about itself.
 	"budget_exhausted":             "system",
+	"budget_reported":              "system",
 	"llm_unavailable":              "system",
 	"agent_turn_completed":         "system",
 	"agent_phase_started":          "system",
