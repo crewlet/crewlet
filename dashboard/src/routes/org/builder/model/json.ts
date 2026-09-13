@@ -17,6 +17,15 @@
  * Every edit returns a new object and shares every branch it did not touch, so
  * a draft replayed from its base keeps the base's untouched subtrees by
  * reference and an undo costs a replay rather than a deep copy per step.
+ *
+ * A KEY IS DATA, EVEN `__proto__`. `JSON.parse` gives a key of that name an
+ * own property like any other, and a kept log is read back from storage every
+ * script on the origin can write. Assigning such a key (`out[key] = value`)
+ * sets the object's PROTOTYPE instead: the key vanishes from what is sent,
+ * while every read of the object (`data.kind`) quietly answers from the value
+ * it smuggled in, so the builder would show and review a seat the save does
+ * not describe. So values are defined as own properties and read only from
+ * own properties, never through the prototype chain.
  */
 
 /** A JSON value as `JSON.parse` produces it. */
@@ -45,7 +54,7 @@ export function jsonEqual(a: unknown, b: unknown): boolean {
   if (isRecord(a)) {
     if (!isRecord(b)) return false;
     const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    for (const key of keys) if (!jsonEqual(a[key], b[key])) return false;
+    for (const key of keys) if (!jsonEqual(ownValue(a, key), ownValue(b, key))) return false;
     return true;
   }
   return false;
@@ -63,11 +72,26 @@ export function cloneJson<T>(value: T): T {
   if (isRecord(value)) {
     const out: JsonRecord = {};
     for (const [key, v] of Object.entries(value)) {
-      if (v !== undefined) out[key] = cloneJson(v);
+      if (v !== undefined) defineOwn(out, key, cloneJson(v));
     }
     return out as T;
   }
   return value;
+}
+
+/** Sets `key` as an own, enumerable property, whatever its name (see the module doc). */
+function defineOwn(record: JsonRecord, key: string, value: unknown): void {
+  Object.defineProperty(record, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
+/** A record's own value at `key`, never one inherited through its prototype. */
+function ownValue(record: JsonRecord, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
 /** The value at a key path inside nested objects, or `undefined` when any step is absent. */
@@ -75,7 +99,7 @@ export function getPath(value: unknown, path: readonly string[]): unknown {
   let at: unknown = value;
   for (const key of path) {
     if (!isRecord(at)) return undefined;
-    at = at[key];
+    at = ownValue(at, key);
   }
   return at;
 }
@@ -95,14 +119,14 @@ export function setPath(record: JsonRecord, path: readonly string[], value: unkn
   const [head, ...rest] = path as [string, ...string[]];
   if (rest.length === 0) {
     if (value === undefined) {
-      if (!(head in record)) return record;
+      if (!Object.hasOwn(record, head)) return record;
       const out = { ...record };
       delete out[head];
       return out;
     }
     return { ...record, [head]: value };
   }
-  const child = record[head];
+  const child = ownValue(record, head);
   if (!isRecord(child)) {
     if (value === undefined) return record;
     return { ...record, [head]: setPath({}, rest, value) };

@@ -12,7 +12,7 @@
 import { describe, expect, test } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { REDACTED } from "~/lib/format.ts";
-import { cloneJson, jsonEqual, setPath } from "./json.ts";
+import { cloneJson, getPath, jsonEqual, setPath } from "./json.ts";
 import {
   COMPANY_KEY,
   handleOfKey,
@@ -106,6 +106,25 @@ describe("json", () => {
     const copy = cloneJson(source);
     expect(copy).toEqual({ a: { b: [1, { d: 2 }] } });
     expect(copy.a).not.toBe(source.a);
+  });
+
+  test("a key named __proto__ stays a key: it never becomes a prototype nobody sees in the document", () => {
+    // What storage hands back: `JSON.parse` makes the key an own property.
+    const role = JSON.parse('{"name":"Ops","__proto__":{"kind":"human"}}') as Record<
+      string,
+      unknown
+    >;
+    const copy = cloneJson(role);
+    expect(Object.getPrototypeOf(copy)).toBe(Object.prototype);
+    expect(copy.kind).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(copy))).toEqual(role);
+    expect(Object.keys(copy)).toEqual(["name", "__proto__"]);
+
+    // Reading and editing go through own properties only.
+    expect(getPath({ name: "Ops" }, ["__proto__"])).toBeUndefined();
+    expect(getPath(copy, ["__proto__", "kind"])).toBe("human");
+    expect(jsonEqual({}, JSON.parse('{"__proto__":{}}'))).toBe(false);
+    expect(setPath({ name: "Ops" }, ["__proto__", "x"], undefined)).toEqual({ name: "Ops" });
   });
 });
 
