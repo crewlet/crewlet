@@ -438,6 +438,10 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 		"vector_index", db.caps.VectorIndex,
 		"full_text_search", db.caps.FullTextSearch,
 		"without_rowid", db.caps.WithoutRowid,
+		// EMPTY IS THE HEALTHY READING. A name here is a capability the
+		// database engine has and this engine's connections cannot reach,
+		// which is a decision waiting to be taken rather than a fault.
+		"gated", db.caps.Gated,
 		"max_variables", db.caps.MaxVariables,
 		"page_cache_kib", db.caps.PageCacheKiB,
 		"pinned_writers", db.pins.declared,

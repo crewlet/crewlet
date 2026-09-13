@@ -51,7 +51,11 @@ export function MyWork() {
     [org],
   );
   const whose = handle || handles[0] || "";
+  // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board and the sprint
+  // report take. `whose` is empty until the chart has loaded, and the engine
+  // refuses this question without a handle.
   const state = useQuery("work_my_work", whose ? { handle: whose } : undefined, {
+    enabled: whose !== "",
     pollMs: 30_000,
   });
   const mine = state.data;

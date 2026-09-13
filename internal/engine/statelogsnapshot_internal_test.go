@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -221,5 +222,175 @@ func writeTestSnapshot(t *testing.T, dir string, m statelog.Manifest) {
 	}
 	if err := os.WriteFile(base+".json", body, 0o600); err != nil {
 		t.Fatalf("write the manifest: %v", err)
+	}
+}
+
+// WHAT A SKIPPED TICK SAYS, which is the whole of [reportForSkip].
+//
+// The loop retries a skip every thirty seconds for as long as it holds, so
+// "report it" and "report it every time" are not the same instruction — and
+// the second one is what the default topology got. `sole_node` is the steady
+// state of a ONE-NODE company, which is the supported shape rather than a
+// degraded fleet, so warned per tick it is a line every thirty seconds for the
+// life of a healthy deployment.
+func TestASkippedTickSaysSomethingOnlyWhenTheReasonChanges(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		reason   statelog.SkipReason
+		reported statelog.SkipReason
+		holds    bool
+		event    string
+		warn     bool
+	}{
+		{
+			// The restart path, and the reason `holds` is an argument
+			// rather than a branch at the call site.
+			name:   "a node holding a current artefact says nothing",
+			reason: statelog.SkipRecent,
+			holds:  true,
+		},
+		{
+			name:   "whatever it skipped for",
+			reason: statelog.SkipSoleNode,
+			holds:  true,
+		},
+		{
+			name:   "a solo node states its posture, at info",
+			reason: statelog.SkipSoleNode,
+			event:  "statelog_snapshot_sole_node",
+		},
+		{
+			name:     "and says it once, however long it holds",
+			reason:   statelog.SkipSoleNode,
+			reported: statelog.SkipSoleNode,
+		},
+		{
+			// A fleet WITH peers holding no donor is the condition the
+			// warning was written for, and it keeps it.
+			name:   "a node that cannot catch up warns",
+			reason: statelog.SkipUnhydrated,
+			event:  "statelog_no_snapshot_yet",
+			warn:   true,
+		},
+		{
+			name:     "and is not repeated either",
+			reason:   statelog.SkipUnhydrated,
+			reported: statelog.SkipUnhydrated,
+		},
+		{
+			// The reason MOVING is news in both directions: a fleet that
+			// gained a peer now has a real precondition to report, and
+			// one that lost its last peer is no longer in trouble.
+			name:     "a changed reason is reported again",
+			reason:   statelog.SkipDeferred,
+			reported: statelog.SkipSoleNode,
+			event:    "statelog_no_snapshot_yet",
+			warn:     true,
+		},
+		{
+			name:     "including back to sole_node",
+			reason:   statelog.SkipSoleNode,
+			reported: statelog.SkipLagging,
+			event:    "statelog_snapshot_sole_node",
+		},
+		{
+			// A hard failure stamps SkipFailed, so the next skip after
+			// one is news whatever it is.
+			name:     "and after a failure, whatever comes next",
+			reason:   statelog.SkipSoleNode,
+			reported: statelog.SkipFailed,
+			event:    "statelog_snapshot_sole_node",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			say := reportForSkip(tc.reason, tc.reported, tc.holds)
+			if say.Event != tc.event {
+				t.Errorf("event = %q, want %q", say.Event, tc.event)
+			}
+			if say.Warn != tc.warn {
+				t.Errorf("warn = %v, want %v — the level is the difference "+
+					"between a fleet with no donor and a company that needs "+
+					"none", say.Warn, tc.warn)
+			}
+			if tc.event != "" && say.Detail == "" {
+				t.Error("no detail: an operator reading this line has only " +
+					"the event name to go on")
+			}
+		})
+	}
+}
+
+// The sole-node line must not repeat the claim the warning makes, because on a
+// node with no peers it is false: nothing about being alone clears "as its
+// peers publish their positions".
+func TestTheSoleNodeLineDoesNotPromiseThatPeersWillFixIt(t *testing.T) {
+	t.Parallel()
+	say := reportForSkip(statelog.SkipSoleNode, "", false)
+	if strings.Contains(say.Detail, "peers publish") {
+		t.Errorf("sole-node detail claims peers will clear it: %q", say.Detail)
+	}
+	// It has to say what DOES cover a single node, or the reader is left
+	// believing their company has no recovery path at all.
+	if !strings.Contains(say.Detail, "backup") {
+		t.Errorf("sole-node detail does not name the artefact that covers a "+
+			"single node: %q", say.Detail)
+	}
+}
+
+// A RESTART IS NOT A NODE THAT HAS NEVER SNAPSHOTTED.
+//
+// The loud branch asks whether this node HOLDS an artefact, and it has to,
+// because the obvious spelling — a flag set when this process took one — is
+// the same question only until the first restart. A node that snapshotted
+// yesterday and was restarted skips for `recent`: its artefact is inside the
+// operator's interval, its register row advertises it, and a peer can adopt
+// from it. A process-scoped flag is false at that moment, so every restart
+// warned that the node had never taken a snapshot while simultaneously
+// publishing the one it holds.
+//
+// `Have` is read from the DIRECTORY, so it survives a restart the way the
+// artefact does.
+func TestARestartDoesNotClaimTheNodeHasNeverSnapshotted(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestSnapshot(t, dir, statelog.Manifest{
+		TakenAt: time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC),
+		Domains: map[string]statelog.DomainPosition{"tracker": {Seq: 120, Generation: 3}},
+	})
+
+	// Exactly the first tick after a restart: nothing taken in THIS
+	// process, and the gate declines because what is on disk is current.
+	held := heldAfter(statelog.Manifest{},
+		&statelog.ErrSkipped{Reason: statelog.SkipRecent}, dir)
+	if !held.Have {
+		t.Fatal("the artefact on disk was not seen, so the loop cannot tell " +
+			"this restart from a node that has never snapshotted")
+	}
+	// `Have` is the predicate the loop branches on, so a true here is a
+	// tick that says nothing rather than one that warns.
+	if say := reportForSkip(statelog.SkipRecent, "", held.Have); say.Event != "" {
+		t.Errorf("a `recent` skip on a node holding a current artefact "+
+			"reports %q — the one reading here that is simply false", say.Event)
+	}
+}
+
+// AND A NODE THAT HOLDS NOTHING STILL SAYS SO.
+//
+// The other direction of the same predicate: `Have` false is the state the
+// fleet cannot recover from, and it is the one the branch is for.
+func TestANodeHoldingNothingIsStillReported(t *testing.T) {
+	t.Parallel()
+	held := heldAfter(statelog.Manifest{},
+		&statelog.ErrSkipped{Reason: statelog.SkipUnhydrated}, t.TempDir())
+	if held.Have {
+		t.Fatal("an empty directory reported an artefact")
+	}
+	say := reportForSkip(statelog.SkipUnhydrated, "", held.Have)
+	if !say.Warn || say.Event != "statelog_no_snapshot_yet" {
+		t.Errorf("report = %+v, want the warning: a fleet with peers and no "+
+			"donor is exactly what it is for", say)
 	}
 }

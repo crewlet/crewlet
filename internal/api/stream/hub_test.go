@@ -279,7 +279,9 @@ func TestAnErrorCarriesACodeNotProse(t *testing.T) {
 	t.Parallel()
 	// The client switches on the value. Prose there would make every
 	// message a new case nobody handles.
-	for _, code := range []string{"unknown_query", "unauthorized", "query_failed"} {
+	for _, code := range []string{
+		"unknown_query", "unauthorized", "bad_params", "query_failed",
+	} {
 		raw, err := stream.Encode(stream.Envelope{
 			Kind: stream.KindError, ID: 1, What: "config", Error: code,
 		})

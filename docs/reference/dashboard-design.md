@@ -756,8 +756,10 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" on a node with no event log are the same empty list
   and completely different problems. `QueryState` renders the engine's own code
-  — `no_event_store`, `unauthorized`, `unknown_query`, `timeout` — as a
-  sentence saying which.
+  — `no_event_store`, `unauthorized`, `unknown_query`, `bad_params`,
+  `timeout` — as a sentence saying which. `bad_params` is the one that names
+  the SCREEN as the fault: the engine understood the question and refused it,
+  so retrying sends the same bad request again.
 - **Zero** vs **unknown.** The integrations answer's counts are three-valued,
   and a node not serving ingress reports `unknown`, not `0`. The budgets answer
   says `durable: false` when the counter could not be READ.
@@ -819,6 +821,16 @@ rendered idle from the first phase to the last.
   first query as the page boots, so rejecting when not-yet-connected made every
   deep link render "could not load" and stay there. Queries are pure reads, so
   one in flight when the socket drops is re-sent on reconnect.
+- **A question whose parameter is not chosen yet is SKIPPED, not sent.** Absent
+  params are an empty params object on the wire, not a skipped question, so
+  `useQuery("work_project", project ? { key: project } : undefined)` reads like
+  a guard and is not one: the engine refuses a question missing a parameter it
+  has no default for, and the screen shows an error for something nobody asked.
+  The engine classifies it as `bad_params` and logs it as `stream_query_refused`
+  at DEBUG — the caller's fault, not the node's, so it is not a warning and not
+  in an operator's log at all unless they went looking. The guard that works is
+  `enabled`, and a test scans for the shape that admits an empty parameter
+  without one.
 - **A refused credential is diagnosed over HTTP.** A handshake the engine
   answers 401 never reaches the page as `close(1008)` — a connection that never
   opened has no frames, so the browser reports 1006, the same code it gives for

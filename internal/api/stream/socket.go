@@ -37,6 +37,23 @@ const (
 	// and "the query failed" is a retry.
 	CodeNotFound = "not_found"
 
+	// CodeBadParams is a question this node understood and REFUSED: a
+	// parameter missing, malformed, or outside the set the field accepts.
+	//
+	// DISTINCT FROM query_failed because the fault is the caller's, and
+	// the two are acted on in opposite directions — a query_failed is
+	// retried, a bad_params never succeeds however many times it is sent.
+	// Collapsed into query_failed it was a client bug rendered to a person
+	// as an engine fault, retried on every poll, and logged as a WARNING
+	// by the node being asked wrong.
+	//
+	// The reason still does not travel — this envelope carries codes and
+	// not prose, for the reason stated above — so the refusal's own
+	// message, which names the field and the values it would have
+	// accepted, is logged at DEBUG instead: available to whoever is
+	// debugging the screen, absent from the operator's log when nobody is.
+	CodeBadParams = "bad_params"
+
 	// CodeUnavailable is a question this node cannot answer YET or at all
 	// — a projection still catching up, a surface not wired in this
 	// process.
@@ -55,6 +72,7 @@ var (
 	ErrUnknownQuery = errors.New("stream: unknown query")
 	ErrUnauthorized = errors.New("stream: query requires an operator")
 	ErrNotFound     = errors.New("stream: no such record")
+	ErrBadParams    = errors.New("stream: query refused")
 	ErrUnavailable  = errors.New("stream: not available on this node yet")
 )
 
@@ -297,6 +315,14 @@ func runQuery(ctx context.Context, guard *auth.Guard, client *Client, query Quer
 		client.send(queryError(req, CodeUnauthorized))
 	case errors.Is(err, ErrNotFound):
 		client.send(queryError(req, CodeNotFound))
+	case errors.Is(err, ErrBadParams):
+		// DEBUG, NOT WARN: it is not this node's failure, and a poll
+		// behind a bad request writes a line per tick for as long as the
+		// screen is open. The message is worth keeping — it names the
+		// field the caller got wrong, which is the whole of the fix —
+		// but only to somebody who turned debug on to look for it.
+		log.DebugContext(ctx, "stream_query_refused", "what", req.What, "error", err)
+		client.send(queryError(req, CodeBadParams))
 	case errors.Is(err, ErrUnavailable):
 		client.send(queryError(req, CodeUnavailable))
 	default:
