@@ -723,6 +723,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		for rows.Next() {
 			var doc Document
 			var version int64
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := rows.Scan(&doc.ID, &doc.Container, &version,
 				&doc.Title, &doc.Body); err != nil {
 				return err
@@ -730,6 +731,7 @@ func (c TaskCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			doc.Version = uint64(version)
 			stale = append(stale, doc)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Err(); err != nil {
 			return err
 		}

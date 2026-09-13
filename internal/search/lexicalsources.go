@@ -51,6 +51,16 @@ import (
 // a source that opened its own would be a second read at a second instant, and
 // the walk's whole correctness argument is that a batch is compared against
 // one snapshot of the other side.
+
+// LexicalSource is one corpus the lexical index walks, stated as the four
+// questions the walk asks and nothing else.
+//
+// A source owns its own rows and its own predicates — which of them a reader may
+// see, what a version is, what the body is — and owns no part of the walk: the
+// cursors, the batching, the estate boundary and the posting writes all stay in
+// [Indexer], so adding a corpus is four queries rather than a second indexer.
+// [PageSource] and [TaskSource] are the two this build ships, and
+// [DefaultLexicalSources] is what a node indexes.
 type LexicalSource interface {
 	// Source is the value written into `kb_docs.source`, and it is what
 	// makes one index table serve corpora whose ids can collide.

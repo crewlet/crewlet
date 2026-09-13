@@ -155,6 +155,7 @@ func Eval(ctx context.Context, tx *sql.Tx, opts EvalOptions) (EvalReport, error)
 	rep.WorstQuery = 1
 
 	for _, query := range queries {
+		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		want, err := exactTop(ctx, tx, query, rep.Model, rep.Dim, rep.Limit)
 		if err != nil {
 			return EvalReport{}, err

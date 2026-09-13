@@ -53,7 +53,13 @@ import (
 type Method string
 
 const (
-	MethodLexical  Method = "lexical"
+	// MethodLexical is BM25 over this node's own inverted list — the
+	// ranker that answers on the words a query actually used.
+	MethodLexical Method = "lexical"
+
+	// MethodSemantic is the two-stage vector scan — the ranker that
+	// answers on meaning, and the one a company without an embeddings
+	// provider never runs.
 	MethodSemantic Method = "semantic"
 )
 
@@ -272,6 +278,11 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 		go func() {
 			deadline, done := context.WithTimeout(ctx, budget)
 			defer done()
+			// THIS ERR MUST BE THE GOROUTINE'S OWN. Assigning the
+			// outer one would race the local scan below, which
+			// writes it while this is in flight; the reply travels
+			// down the channel instead, which is the handoff.
+			//nolint:govet // shadow: deliberate; see the paragraph above.
 			out, err := f.Peers.Scatter(deadline, q, peers)
 			replies <- scattered{out, err}
 		}()
@@ -319,6 +330,8 @@ func (f *FanOut) plan(ctx context.Context) ([]Assigned, error) {
 		// fleet's membership is a coordination read, and a company must
 		// still be able to search what this node holds when
 		// coordination is slow.
+		//nolint:nilerr // Solo IS the answer here: this node holds the whole
+		// corpus, so an unreadable roster costs parallelism and nothing else.
 		return solo, nil
 	}
 	nodes = slices.Compact(slices.Sorted(slices.Values(nodes)))

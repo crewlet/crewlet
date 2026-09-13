@@ -8,8 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
-// SearchQuery is one lexical search over the index.
-type SearchQuery struct {
+// LexicalQuery is one BM25 search over this node's own inverted list.
+//
+// NAMED FOR ITS RANKER, like [SemanticQuery] beside it: a hybrid answer is two
+// rankings fused, so "the query" is never one thing here and a type that
+// claimed the bare word would have to be read twice to know which half it is.
+type LexicalQuery struct {
 	// Text is plain language. Never a query grammar: see [textindex] for
 	// why this package deliberately offers none.
 	Text string
@@ -34,8 +38,13 @@ type SearchQuery struct {
 	Shards Assignment
 }
 
-// SearchHit is one ranked document.
-type SearchHit struct {
+// LexicalHit is one document [Indexer.Search] ranked, and the BM25 score it
+// ranked it on.
+//
+// THE SCORE IS COMPARABLE ACROSS PARTICIPANTS, which is what the fan-out merges
+// its slices on: every node holds the whole corpus, so the statistics behind
+// this number are global however few buckets the scan read — see [FanOut].
+type LexicalHit struct {
 	Source    string
 	ID        string
 	Container string
@@ -47,7 +56,7 @@ type SearchHit struct {
 // FusedHit is one document from a FUSED answer, in the order the fusion put it
 // in and with no score.
 //
-// SEPARATE FROM [SearchHit] BY ONE FIELD, deliberately — see [Indexer.Hydrate].
+// SEPARATE FROM [LexicalHit] BY ONE FIELD, deliberately — see [Indexer.Hydrate].
 // Carrying the field and leaving it zero is what this pair of types exists to
 // make impossible.
 type FusedHit struct {
@@ -79,7 +88,7 @@ const defaultSearchLimit = 10
 // knowledge adapter above it is what turns a failure into the empty block a
 // turn tolerates. Collapsing them here would make a broken index look exactly
 // like a company that has written nothing down.
-func (x *Indexer) Search(ctx context.Context, q SearchQuery) ([]SearchHit, error) {
+func (x *Indexer) Search(ctx context.Context, q LexicalQuery) ([]LexicalHit, error) {
 	terms := textindex.Terms(q.Text)
 	if len(terms) == 0 {
 		return nil, nil
@@ -136,7 +145,7 @@ func (x *Indexer) corpus(ctx context.Context) (textindex.Corpus, error) {
 // within a scope would make the same word rare in a small space and common in
 // a large one, so a hit's rank would depend on which container it happened to
 // be in rather than on how well it matched.
-func (x *Indexer) postings(ctx context.Context, term string, q SearchQuery) ([]textindex.Posting, int, error) {
+func (x *Indexer) postings(ctx context.Context, term string, q LexicalQuery) ([]textindex.Posting, int, error) {
 	var total int
 	if err := x.db.SQL().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM kb_postings WHERE term = ?`, term).Scan(&total); err != nil {
@@ -201,7 +210,7 @@ func (x *Indexer) postings(ctx context.Context, term string, q SearchQuery) ([]t
 // The ordering is done in Go over the score map rather than in SQL, because
 // the scores exist only here: pushing them into a temporary table to sort
 // them would cost a write transaction per query on a single-writer store.
-func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, terms []string, limit int) ([]SearchHit, error) {
+func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, terms []string, limit int) ([]LexicalHit, error) {
 	top := topN(scores, limit)
 	if len(top) == 0 {
 		return nil, nil
@@ -217,10 +226,10 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
 	defer rows.Close()
-	byID := map[string]SearchHit{}
+	byID := map[string]LexicalHit{}
 	for rows.Next() {
 		var id, excerpt string
-		var hit SearchHit
+		var hit LexicalHit
 		if err := rows.Scan(&id, &hit.Source, &hit.ID, &hit.Container,
 			&hit.Title, &excerpt); err != nil {
 			return nil, fmt.Errorf("search: scan index hit: %w", err)
@@ -232,7 +241,7 @@ func (x *Indexer) hydrateHits(ctx context.Context, scores map[string]float64, te
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("search: read index hits: %w", err)
 	}
-	out := make([]SearchHit, 0, len(top))
+	out := make([]LexicalHit, 0, len(top))
 	for _, id := range top {
 		// A hit whose row vanished between the posting scan and this read
 		// is SKIPPED rather than rendered blank: the indexer removed it,
@@ -318,14 +327,14 @@ func binds(n int) string {
 //
 // # IT RETURNS [FusedHit], WHICH HAS NO SCORE, AND THAT IS THE POINT
 //
-// A [SearchHit] carries the BM25 number one ranker gave one document, which is
+// A [LexicalHit] carries the BM25 number one ranker gave one document, which is
 // comparable within that ranker and is what the fan-out merges its own slices
 // on. What comes back HERE has been through reciprocal rank fusion across two
 // rankers and across disjoint slices, so the only thing left is an ORDER — the
 // fused number is a sum of reciprocal placements and means nothing beside a
 // BM25 score.
 //
-// It used to return [SearchHit] and set no score at all, so every hit the two
+// It used to return [LexicalHit] and set no score at all, so every hit the two
 // ranked readers in this tree render carried a confident `Score: 0`. A zero
 // that is not a value is exactly the shape a type has to refuse rather than
 // document, so this one does: a caller cannot read a score that does not

@@ -368,8 +368,15 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		if len(out) > 0 {
 			return out, nil
 		}
-		if ctx.Err() != nil {
-			return nil, nil
+		if err := ctx.Err(); err != nil {
+			// A CANCELLED LAP ESTABLISHED NOTHING, so it is reported
+			// as the failure it is rather than as an empty pass. The
+			// two honest exits from this loop are "it wrapped" and
+			// "it found work"; answering (nil, nil) for a third makes
+			// a stop look identical to a source with nothing stale in
+			// it, which is precisely the licence [Indexer.Sweep] hands
+			// its caller to stop asking.
+			return nil, err
 		}
 	}
 }
@@ -645,6 +652,7 @@ func (x *Indexer) Sweep(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	for _, id := range orphans {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := x.Remove(ctx, source, id); err != nil {
 			return false, err
 		}

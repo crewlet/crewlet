@@ -37,7 +37,7 @@ func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 	}
 	indexAll(t, x)
 
-	whole, err := x.Search(t.Context(), search.SearchQuery{
+	whole, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 500,
 	})
 	if err != nil {
@@ -51,7 +51,7 @@ func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 
 	// HALF THE RANGE, and the answer is exactly the documents in it.
 	half := search.SearchShards / 2
-	part, err := x.Search(t.Context(), search.SearchQuery{
+	part, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 500,
 		Shards: search.Assignment{From: 0, To: half},
 	})
@@ -78,7 +78,7 @@ func TestASearchScansOnlyItsAssignedBuckets(t *testing.T) {
 
 	// AND THE TWO HALVES PARTITION THE WHOLE, which is what makes a
 	// fan-out lossless: a document in neither half is one no node returns.
-	rest, err := x.Search(t.Context(), search.SearchQuery{
+	rest, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 500,
 		Shards: search.Assignment{From: half, To: search.SearchShards},
 	})
@@ -174,13 +174,13 @@ func TestOneReplicaScansEverythingExactlyAsToday(t *testing.T) {
 	}
 	indexAll(t, x)
 
-	unassigned, err := x.Search(t.Context(), search.SearchQuery{
+	unassigned, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 100,
 	})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	whole, err := x.Search(t.Context(), search.SearchQuery{
+	whole, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 100,
 		Shards: search.Assignment{From: 0, To: search.SearchShards},
 	})
@@ -439,7 +439,7 @@ func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 
 	score := func(a search.Assignment) float64 {
 		t.Helper()
-		hits, err := x.Search(t.Context(), search.SearchQuery{
+		hits, err := x.Search(t.Context(), search.LexicalQuery{
 			Text: "migration retention", Limit: 500, Shards: a,
 		})
 		if err != nil {

@@ -369,16 +369,6 @@ func probeMeanCosine(weights []float32, meanWeight float32) float64 {
 	return total / float64(pairs)
 }
 
-func normalise(v []float32) {
-	n := norm(v)
-	if n == 0 {
-		return
-	}
-	for i := range v {
-		v[i] /= n
-	}
-}
-
 func norm(v []float32) float32 {
 	total := float64(0)
 	for _, x := range v {

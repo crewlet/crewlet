@@ -72,7 +72,7 @@ func (a Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record, _ s
 
 // embed writes the vector and its sign code.
 func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at statelog.Position) (int, error) {
-	version := int64(at.Packed())
+	version := at.Packed()
 	container := vec.Container
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO kb_vectors
@@ -146,7 +146,7 @@ func (a Applier) embed(ctx context.Context, tx *sql.Tx, vec VectorRecord, at sta
 func (a Applier) forget(ctx context.Context, tx *sql.Tx, subject Subject, at statelog.Position) (int, error) {
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM kb_vectors WHERE source = ? AND source_id = ? AND version < ?`,
-		string(subject.Source), subject.ID, int64(at.Packed()))
+		string(subject.Source), subject.ID, at.Packed())
 	if err != nil {
 		return 0, fmt.Errorf("search: forget the vector for %s at %s: %w",
 			subject, at, err)

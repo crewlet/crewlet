@@ -63,6 +63,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 		for rows.Next() {
 			var doc Document
 			var edit int64
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := rows.Scan(&doc.ID, &doc.Container, &edit,
 				&doc.Title, &doc.Body); err != nil {
 				return err
@@ -70,6 +71,7 @@ func (c PageCorpus) Stale(ctx context.Context, model string, dim, limit int) ([]
 			doc.Version = uint64(edit)
 			stale = append(stale, doc)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Err(); err != nil {
 			return err
 		}

@@ -29,7 +29,7 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 	}
 	out := Slice{Shards: shards}
 
-	hits, err := n.Index.Search(ctx, SearchQuery{
+	hits, err := n.Index.Search(ctx, LexicalQuery{
 		Text:       q.Text,
 		Containers: q.Containers,
 		Sources:    q.Sources,
@@ -79,6 +79,10 @@ func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (S
 		// slow — but never silent, because what was lost is exactly the
 		// class the semantic half exists for.
 		out.SemanticSkipped = true
+		//nolint:nilerr // The FLAG is the report, and it is the contract this
+		// method's doc states: the semantic half is best effort, so its failure
+		// degrades the slice — [Answer.SemanticSkipped], the `semantic=skipped`
+		// metric — rather than failing a search the lexical half just answered.
 		return out, nil
 	}
 	for _, hit := range vectors {

@@ -124,7 +124,7 @@ func TestAnEmbedRecordWithoutItsPredicateIsRefused(t *testing.T) {
 	if _, err := base().Encode(); err != nil {
 		t.Fatalf("the control record is refused: %v", err)
 	}
-	for name, break_ := range map[string]func(*search.VectorRecord){
+	for name, mutate := range map[string]func(*search.VectorRecord){
 		"no vector": func(r *search.VectorRecord) { r.Embedding = nil },
 		"no model":  func(r *search.VectorRecord) { r.Model = "" },
 		"no width":  func(r *search.VectorRecord) { r.Dim = 0 },
@@ -134,7 +134,7 @@ func TestAnEmbedRecordWithoutItsPredicateIsRefused(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := base()
-			break_(&rec)
+			mutate(&rec)
 			if _, err := rec.Encode(); err == nil {
 				t.Fatal("encoded")
 			}

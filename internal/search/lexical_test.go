@@ -69,7 +69,7 @@ func indexAll(t testing.TB, x *search.Indexer) {
 	t.Fatal("the indexer never settled")
 }
 
-func titles(hits []search.SearchHit) []string {
+func titles(hits []search.LexicalHit) []string {
 	out := make([]string, len(hits))
 	for i, h := range hits {
 		out[i] = h.Title
@@ -93,7 +93,7 @@ func TestTheShortAnswerBeatsTheLongRunbook(t *testing.T) {
 			"Rollback is mentioned once here.", 1)
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "rollback"})
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "rollback"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestATitleMatchOutranksABodyMention(t *testing.T) {
 		"We talked about incident response and then about incident response again.", 1)
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "incident response"})
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "incident response"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -142,16 +142,16 @@ func TestAnEditRemovesTheTermsItRemoved(t *testing.T) {
 
 	page(t, db, "p.edited", "ENG", "Deploy Notes", "we use kubernetes for this", 1)
 	indexAll(t, x)
-	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "kubernetes"}); len(hits) != 1 {
+	if hits, _ := x.Search(t.Context(), search.LexicalQuery{Text: "kubernetes"}); len(hits) != 1 {
 		t.Fatalf("the term never indexed: %v", hits)
 	}
 
 	page(t, db, "p.edited", "ENG", "Deploy Notes", "we use nomad for this", 2)
 	indexAll(t, x)
-	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "kubernetes"}); len(hits) != 0 {
+	if hits, _ := x.Search(t.Context(), search.LexicalQuery{Text: "kubernetes"}); len(hits) != 0 {
 		t.Errorf("the removed word still matches: %v", titles(hits))
 	}
-	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "nomad"}); len(hits) != 1 {
+	if hits, _ := x.Search(t.Context(), search.LexicalQuery{Text: "nomad"}); len(hits) != 1 {
 		t.Errorf("the new word does not match: %v", titles(hits))
 	}
 }
@@ -180,7 +180,7 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 	}
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "migration plan"})
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "migration plan"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestOnlyPublishedPagesAreIndexed(t *testing.T) {
 	// test that removed the row itself would pass with no orphan pass at
 	// all.
 	indexAll(t, x)
-	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "migration plan"}); len(hits) != 0 {
+	if hits, _ := x.Search(t.Context(), search.LexicalQuery{Text: "migration plan"}); len(hits) != 0 {
 		t.Errorf("an unpublished page is still findable: %v", titles(hits))
 	}
 }
@@ -293,7 +293,7 @@ func TestALapOverAQuietCorpusReadsNoBodies(t *testing.T) {
 	// sorts: the cursor wrapped, so there is no id it is already past.
 	page(t, db, "p.zzz", "ENG", "Late", "a distinctive marmalade phrase", 1)
 	indexAll(t, x)
-	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "marmalade"})
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "marmalade"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -322,6 +322,46 @@ func (c *countingSource) Fetch(ctx context.Context, tx *sql.Tx,
 	return c.LexicalSource.Fetch(ctx, tx, ids)
 }
 
+// A LAP THAT WAS STOPPED IS NOT A LAP THAT FOUND NOTHING.
+//
+// [search.Indexer.Sweep]'s `false` is the caller's licence to stop asking — it
+// says a whole lap over every source came back with no work — and the two
+// honest ways out of the walk are "it wrapped" and "it found documents". A
+// cancelled context is neither, so answering it as an empty lap tells a driver
+// like [indexAll] that the index has caught up with a corpus it never finished
+// reading, and tells [search.Indexer.Run] to go to sleep.
+func TestACancelledLapIsNotAnEmptyLap(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	page(t, db, "p.one", "ENG", "Rollback", "roll back a deploy by release", 1)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	// Cancelled from INSIDE the walk, after the scan has committed this
+	// node to a batch: an already-dead context would be refused by the
+	// first statement and would never reach the walk's own check.
+	x := search.NewIndexerOver(db, []search.LexicalSource{
+		&stoppingSource{LexicalSource: search.PageSource{}, stop: cancel},
+	})
+	worked, err := x.Sweep(ctx)
+	if err == nil {
+		t.Fatalf("a lap stopped part way answered worked=%v and no error, which "+
+			"is exactly what a source with nothing stale in it answers", worked)
+	}
+}
+
+// stoppingSource cancels the walk's context while the walk is inside it, and
+// answers no documents — the shape that reaches the check at the bottom of the
+// lap rather than failing a statement on the way there.
+type stoppingSource struct {
+	search.LexicalSource
+	stop context.CancelFunc
+}
+
+func (s *stoppingSource) Fetch(context.Context, *sql.Tx, []string) ([]search.Doc, error) {
+	s.stop()
+	return nil, nil
+}
+
 // THE INDEXER RUNS ITSELF, and reaching ready through Run is the path a node
 // actually takes.
 func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
@@ -337,7 +377,7 @@ func TestTheIndexerCatchesUpOnItsOwn(t *testing.T) {
 	go x.Run(ctx)
 
 	waitFor(t, x.Ready, "the indexer never caught up on its own")
-	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "vocabulary", Limit: 5})
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "vocabulary", Limit: 5})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -363,14 +403,14 @@ func TestAScopeNarrowsResultsWithoutChangingTheRanking(t *testing.T) {
 	}
 	indexAll(t, x)
 
-	all, err := x.Search(t.Context(), search.SearchQuery{Text: "deploy pipeline"})
+	all, err := x.Search(t.Context(), search.LexicalQuery{Text: "deploy pipeline"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
 	if len(all) != 2 {
 		t.Fatalf("unscoped search returned %v", titles(all))
 	}
-	scoped, err := x.Search(t.Context(), search.SearchQuery{
+	scoped, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "deploy pipeline", Containers: []string{"ENG"}})
 	if err != nil {
 		t.Fatalf("scoped search: %v", err)
@@ -403,12 +443,12 @@ func TestTheSameQueryRanksTheSameWay(t *testing.T) {
 	}
 	indexAll(t, x)
 
-	first, err := x.Search(t.Context(), search.SearchQuery{Text: "identical", Limit: 5})
+	first, err := x.Search(t.Context(), search.LexicalQuery{Text: "identical", Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 5 {
-		again, err := x.Search(t.Context(), search.SearchQuery{Text: "identical", Limit: 5})
+		again, err := x.Search(t.Context(), search.LexicalQuery{Text: "identical", Limit: 5})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,7 +471,7 @@ func TestAnEmptyQueryMatchesNothing(t *testing.T) {
 	indexAll(t, x)
 
 	for _, text := range []string{"", "   ", "- , !", "a"} {
-		hits, err := x.Search(t.Context(), search.SearchQuery{Text: text})
+		hits, err := x.Search(t.Context(), search.LexicalQuery{Text: text})
 		if err != nil {
 			t.Errorf("query %q errored: %v", text, err)
 		}
@@ -441,7 +481,7 @@ func TestAnEmptyQueryMatchesNothing(t *testing.T) {
 	}
 }
 
-func ids(hits []search.SearchHit) []string {
+func ids(hits []search.LexicalHit) []string {
 	out := make([]string, len(hits))
 	for i, h := range hits {
 		out[i] = h.ID
@@ -520,7 +560,7 @@ func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 	// THE CONTROL, on a healthy store and the same handle. Without it, an
 	// assertion that a failed read answers nothing also passes for a store
 	// that never found anything.
-	healthy, err := x.Search(t.Context(), search.SearchQuery{
+	healthy, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 50,
 	})
 	if err != nil {
@@ -532,7 +572,7 @@ func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 	}
 
 	fault.Arm()
-	broken, err := x.Search(t.Context(), search.SearchQuery{
+	broken, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 50,
 	})
 	if err == nil {
@@ -573,7 +613,7 @@ func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 	// AND THE SAME HANDLE RECOVERS, so the failure was the fault rather
 	// than a database this test broke.
 	fault.Disarm()
-	again, err := x.Search(t.Context(), search.SearchQuery{
+	again, err := x.Search(t.Context(), search.LexicalQuery{
 		Text: "migration plan", Limit: 50,
 	})
 	if err != nil {
@@ -625,7 +665,7 @@ func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
 		"pager rotation, escalation, and who to call at night", 1)
 	indexAll(t, x)
 
-	hits, err := x.Search(t.Context(), search.SearchQuery{Text: "backoff gateway"})
+	hits, err := x.Search(t.Context(), search.LexicalQuery{Text: "backoff gateway"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
@@ -646,7 +686,7 @@ func TestAWorkItemIsFoundByItsOwnWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	indexAll(t, x)
-	if hits, _ := x.Search(t.Context(), search.SearchQuery{Text: "backoff gateway"}); len(hits) != 0 {
+	if hits, _ := x.Search(t.Context(), search.LexicalQuery{Text: "backoff gateway"}); len(hits) != 0 {
 		t.Errorf("a removed item is still findable: %v", titles(hits))
 	}
 }
@@ -712,7 +752,7 @@ func (unreachableSource) Live(context.Context, *sql.Tx, []string) (map[string]bo
 func (unreachableSource) Count(context.Context, *sql.Tx) (int, error) { return 0, nil }
 
 // TestAFusedHitCarriesNoScore is a type-level claim, and it is the point of
-// [search.FusedHit] existing at all. Hydrate returned [search.SearchHit] and
+// [search.FusedHit] existing at all. Hydrate returned [search.LexicalHit] and
 // never set its Score, so every hit the two ranked readers in this tree render
 // carried a confident zero — and a zero that is not a value is exactly what a
 // type must refuse rather than document.
@@ -731,7 +771,7 @@ func TestAFusedHitCarriesNoScore(t *testing.T) {
 	// AND THE RANKED ONE STILL DOES, or the split would have moved the
 	// problem rather than fixed it: a per-ranker BM25 score is exactly
 	// what the fan-out merges its own slices on.
-	if _, held := reflect.TypeFor[search.SearchHit]().FieldByName("Score"); !held {
+	if _, held := reflect.TypeFor[search.LexicalHit]().FieldByName("Score"); !held {
 		t.Fatal("a ranked hit lost its Score, which is what a slice merge " +
 			"orders on")
 	}
