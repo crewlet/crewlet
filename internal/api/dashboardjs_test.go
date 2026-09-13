@@ -39,6 +39,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -214,6 +215,75 @@ func TestTheShellLoadsFromTheBinary(t *testing.T) {
 	if fonts < 4 {
 		t.Errorf("only %d font faces reached from the stylesheet, want 4", fonts)
 	}
+}
+
+// TestTheShellFitsTheDashboardPolicy checks the committed shell and its
+// stylesheets use nothing the dashboard's Content-Security-Policy refuses.
+//
+// The policy allows scripts, styles, fonts and images from this origin only,
+// and no inline script, inline style or event-handler attribute. A browser
+// enforces that with nothing on screen but a console violation, so a build that
+// started inlining a theme bootstrap script, a critical-CSS block or a font
+// from a CDN would serve a blank or unstyled page while every other test here
+// passed. This reads what the binary serves and fails on the first of those.
+func TestTheShellFitsTheDashboardPolicy(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+
+	res := fetch(t, a, "/dashboard", nil)
+	if got := res.Header.Get("Content-Security-Policy"); got != pagepolicy.Dashboard {
+		t.Errorf("the shell is served under %q, want the dashboard policy", got)
+	}
+	shell := mustFetch(t, a, "/dashboard", "text/html")
+
+	styles, scripts := pagepolicy.InlineBlocks(shell)
+	if len(styles) > 0 {
+		t.Errorf("the shell has %d inline <style> blocks, which style-src 'self' refuses; "+
+			"keep styles in the bundled stylesheet", len(styles))
+	}
+	for _, body := range scripts {
+		if strings.TrimSpace(body) != "" {
+			t.Errorf("the shell has an inline script, which script-src 'self' refuses; "+
+				"move it into the bundle:\n%s", body)
+		}
+	}
+	if m := inlineAttribute.Find(shell); m != nil {
+		t.Errorf("the shell carries %q, an inline style or event handler the policy refuses", m)
+	}
+	for _, m := range shellReference.FindAllSubmatch(shell, -1) {
+		if url := string(m[1]); !sameOrigin(url) {
+			t.Errorf("the shell loads %s from another origin, which the policy refuses", url)
+		}
+	}
+
+	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
+		if !strings.HasSuffix(string(m[1]), ".css") {
+			continue
+		}
+		sheet := mustFetch(t, a, string(m[1]), "text/css")
+		for _, u := range cssURL.FindAllSubmatch(sheet, -1) {
+			url := strings.Trim(string(u[1]), `"' `)
+			if !sameOrigin(url) && !strings.HasPrefix(url, "data:") {
+				t.Errorf("%s loads %s from another origin, which font-src and img-src refuse",
+					m[1], url)
+			}
+		}
+	}
+}
+
+var (
+	// inlineAttribute matches a style attribute or an on* event handler.
+	inlineAttribute = regexp.MustCompile(`(?i)\s(style|on[a-z]+)\s*=`)
+	// shellReference matches every src and href the shell names.
+	shellReference = regexp.MustCompile(`(?i)\s(?:src|href)\s*=\s*["']([^"']+)["']`)
+	// cssURL matches a url() in a stylesheet.
+	cssURL = regexp.MustCompile(`url\(([^)]*)\)`)
+)
+
+// sameOrigin reports whether a URL resolves against the page's own origin:
+// a path, never a scheme or a protocol-relative host.
+func sameOrigin(url string) bool {
+	return strings.HasPrefix(url, "/") && !strings.HasPrefix(url, "//")
 }
 
 // TestTheNoticesAreServedAsText checks a running engine answers its notices,
