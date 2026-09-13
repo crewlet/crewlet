@@ -684,11 +684,15 @@ func (p *Profile) validate(name string) error {
 			add("system_prompt_file.template has no {system} placeholder — every " +
 				"call would hand the CLI the same fixed file and no seat's identity")
 		}
-		if name := p.SystemPromptFile.Name; name != "" && !isBareFileName(name) {
+		// `fileName` rather than `name`, which is this function's own
+		// parameter: the PROFILE's name. Two different names in one
+		// validator whose every message is about the profile is worth a
+		// second word.
+		if fileName := p.SystemPromptFile.Name; fileName != "" && !isBareFileName(fileName) {
 			// The path is joined onto the per-call working directory,
 			// and this field is operator-overridable.
 			add("system_prompt_file.name %q must be a plain file name, with no "+
-				"directory separator", name)
+				"directory separator", fileName)
 		}
 	}
 	if len(p.UsageFileArgs) > 0 {
