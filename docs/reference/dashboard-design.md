@@ -891,6 +891,14 @@ rendered idle from the first phase to the last.
   prop. That is what lets the library move into a shared design system without
   an edit, and `ui/boundary.test.ts` fails the build on the first import that
   would weld a screen's data model into it.
+- **One stack decides which surface a key belongs to.** Dialogs, drawers,
+  menus and listbox popups register on the stack in `ui/useModal.ts`, in the
+  order they opened. Only the topmost handles Escape or a press outside, so a
+  prompt over the node editor closes on its own Escape and leaves the editor
+  open, and an open menu closes before the dialog it sits in. A modal traps
+  Tab, moves focus in when it opens (honouring a field's `autoFocus`) and
+  returns it to whatever opened it. A control that consumes Escape itself,
+  such as a completion list, keeps the key.
 
 ---
 
