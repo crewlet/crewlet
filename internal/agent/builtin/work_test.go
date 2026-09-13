@@ -1368,3 +1368,147 @@ func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
 			trk.wants.Comment, strings.Contains(got.Output, whole))
 	}
 }
+
+// WHEN A TASK IS DUE, HOW BIG IT IS AND WHICH SPRINT IT IS IN.
+//
+// All five columns have existed since migration 0002, the query grammar
+// filters on every one and sorts on three, a row's `overdue` flag is derived
+// from the due date, and every sprint figure is a sum over the sizing pair.
+// NOTHING COULD SET ANY OF THEM: the only producer of a sprint patch in the
+// tree was the rollover, which moves work already in a sprint — so a sprint
+// could never come to hold anything, an estimate could never exist, and both
+// the overdue predicate and the whole sprint report were dead surface that
+// looked like an empty company.
+func TestACreateSetsWhenAndHowBigAndWhichSprint(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "ship the planner", "project": "ENG",
+		"due": "2031-04-16", "start": "2031-04-01",
+		"estimate_minutes": 240, "points": 8, "sprint": 4,
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	if len(trk.created) != 1 {
+		t.Fatalf("created %d tasks, want 1", len(trk.created))
+	}
+	task := trk.created[0]
+	if task.DueAt == nil || task.DueAt.Format("2006-01-02") != "2031-04-16" {
+		t.Errorf("due is %v, want 2031-04-16", task.DueAt)
+	}
+	// A TOKEN THAT NAMED A DAY SETS THE ALL-DAY FLAG, so a renderer shows
+	// "16 April" rather than "16 April, 00:00" for a date nobody timed.
+	if !task.DueAllDay {
+		t.Error("a date with no time on it did not set the all-day flag")
+	}
+	if task.StartAt == nil || task.StartAt.Format("2006-01-02") != "2031-04-01" {
+		t.Errorf("start is %v, want 2031-04-01", task.StartAt)
+	}
+	if task.EstimateMinutes != 240 || task.Points != 8 {
+		t.Errorf("sizing is %d minutes / %v points, want 240 and 8",
+			task.EstimateMinutes, task.Points)
+	}
+	if task.Sprint == nil || *task.Sprint != 4 {
+		t.Errorf("sprint is %v, want 4 — nothing else in the tree can put a "+
+			"task into one", task.Sprint)
+	}
+}
+
+// THE SAME GRAMMAR THE FILTER READS. A model that can ask for everything due
+// this week can say "due this week" about one task, and a second spelling here
+// would be the copy that stops matching.
+func TestADueDateTakesTheRelativeWordsTheFilterTakes(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "soon", "project": "ENG", "due": "+3d",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	if trk.created[0].DueAt == nil {
+		t.Fatal("`+3d` resolved to no due date at all")
+	}
+	// AND A TOKEN NOTHING CAN READ IS REFUSED BY NAME rather than dropped:
+	// a write that succeeds while silently setting no date is the one a
+	// model reads as having set one.
+	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "whenever", "project": "ENG", "due": "next tuesday-ish",
+	})
+	if !bad.Failed {
+		t.Error("an unreadable due date was accepted, so the task was filed " +
+			"with no date and the answer said it worked")
+	}
+}
+
+// AN UPDATE MOVES THEM, AND `null` TAKES ONE BACK OFF. "Leave the due date
+// alone" and "this has no due date any more" are different edits, and a tool
+// that could only say the first makes a date impossible to remove.
+func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "due": "2031-05-02", "points": 13, "sprint": 7,
+	}); got.Failed {
+		t.Fatalf("update failed: %s", got.Output)
+	}
+	patch := trk.patched[len(trk.patched)-1]
+	if patch.DueAt == nil || patch.DueAt.Format("2006-01-02") != "2031-05-02" {
+		t.Errorf("the patch's due date is %v, want 2031-05-02", patch.DueAt)
+	}
+	if patch.Points == nil || *patch.Points != 13 {
+		t.Errorf("the patch's points are %v, want 13", patch.Points)
+	}
+	if patch.Sprint == nil || *patch.Sprint != 7 {
+		t.Errorf("the patch's sprint is %v, want 7", patch.Sprint)
+	}
+	// A SPRINT MOVE IS ITS OWN KIND, because that is what the change is TO
+	// everybody downstream: the team is told their commitment moved, where
+	// `fields` would tell them a column changed.
+	if kind := trk.kinds[len(trk.kinds)-1]; kind != tracker.ChangeSprint {
+		t.Errorf("a sprint move was filed as %q, want %q", kind, tracker.ChangeSprint)
+	}
+
+	if got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "due": nil, "sprint": nil,
+	}); got.Failed {
+		t.Fatalf("clearing failed: %s", got.Output)
+	}
+	cleared := trk.patched[len(trk.patched)-1]
+	// A CLEAR IS A VALUE, not an absent field: nil on a patch means "not
+	// named". The applier reads the zero instant and the zero sprint as
+	// empty, exactly as the rollover already spells a clear.
+	if cleared.DueAt == nil || !cleared.DueAt.IsZero() {
+		t.Errorf("a cleared due date is %v, want the zero instant the applier "+
+			"reads as empty", cleared.DueAt)
+	}
+	if cleared.Sprint == nil || *cleared.Sprint != 0 {
+		t.Errorf("a cleared sprint is %v, want 0", cleared.Sprint)
+	}
+}
+
+// A SIZE IS NOT NEGATIVE AND A SPRINT IS NUMBERED FROM ONE, and both are
+// refused naming the rule rather than stored — a negative estimate would be
+// subtracted from its own sprint's total.
+func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	for _, args := range []map[string]any{
+		{"title": "x", "project": "ENG", "points": -3},
+		{"title": "x", "project": "ENG", "estimate_minutes": -60},
+		{"title": "x", "project": "ENG", "sprint": 0},
+	} {
+		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); !got.Failed {
+			t.Errorf("create(%v) was accepted, want a refusal naming the rule", args)
+		}
+	}
+}

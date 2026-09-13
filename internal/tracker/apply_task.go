@@ -447,6 +447,14 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 // which is what tells "set this to empty" from "leave it alone". Every
 // collection is a pointer to a slice for the same reason: an absent tag list
 // means the write did not touch tags, and an empty one means it cleared them.
+// clearableInstant is a patched date, with the zero value read as a clear.
+func clearableInstant(at *time.Time) *time.Time {
+	if at == nil || at.IsZero() {
+		return nil
+	}
+	return at
+}
+
 func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.Title, patch.Title)
 	setString(&task.Body, patch.Body)
@@ -486,11 +494,17 @@ func applyPatch(task Task, patch TaskPatch) Task {
 			task.Sprint = &sprint
 		}
 	}
+	// A ZERO INSTANT IS HOW A PATCH SPELLS "CLEAR IT", exactly as a zero
+	// sprint number does above and for the same reason: an absent field
+	// means "leave it alone", so a clear has to be a VALUE. Stored
+	// verbatim, a zero would be a due date in January of year one — which
+	// every overdue predicate in the tracker reads as the most overdue
+	// task the company has ever had.
 	if patch.StartAt != nil {
-		task.StartAt = patch.StartAt
+		task.StartAt = clearableInstant(patch.StartAt)
 	}
 	if patch.DueAt != nil {
-		task.DueAt = patch.DueAt
+		task.DueAt = clearableInstant(patch.DueAt)
 	}
 	if patch.DueAllDay != nil {
 		task.DueAllDay = *patch.DueAllDay
