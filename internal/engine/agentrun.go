@@ -239,13 +239,13 @@ func maxTurnsFor(gate *config.RoleSandbox) *int {
 // the ACTIVE span so the run's own spans nest under the phase that started
 // them rather than appearing as unrelated work minutes later.
 func (l *agentLauncher) runTurnRef(ctx context.Context) sandbox.TurnRef {
-	agentID := ""
-	if id, ok := l.engine.Company().Org.AgentIDFor(l.seat); ok {
-		agentID = id.String()
-	}
 	runTrace := tracing.TraceOf(ctx)
 	return sandbox.TurnRef{
-		TurnID: l.turn.ID, AgentHandle: l.turn.Handle(), AgentID: agentID,
+		// The id is derived from the turn's PINNED organization, like every
+		// other fact about the seat here. The engine's current company is
+		// the next epoch once an apply lands mid-turn, and a renamed company
+		// derives a different id for the same seat.
+		TurnID: l.turn.ID, AgentHandle: l.turn.Handle(), AgentID: l.turn.AgentID(),
 		Role:            l.seat.Name,
 		ConversationKey: l.turn.ConversationKey,
 		Reply:           l.turn.Reply,

@@ -273,7 +273,12 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		return fmt.Errorf("%w: run %s has no suspended conversation",
 			sandbox.ErrResumeUnavailable, req.Run.TurnID)
 	}
-	seat := r.engine.Company().Org.AgentSeatByHandle(req.Run.AgentHandle)
+	// ONE EPOCH for the seat and the organization it belongs to. Read twice,
+	// a reload landing between the reads paired a seat from one revision with
+	// an organization from the next, and every walk that finds a seat by its
+	// identity (its unit, its onboarding chain) found nothing.
+	company := r.engine.Company()
+	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
 		// The seat is gone from this epoch — decommissioned, or this node
 		// is on a revision that never had it. Either way the resume belongs
@@ -285,7 +290,7 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		Run:   req.Run,
 		State: state,
 		Turn: &turnctx.Turn{
-			ID: req.Run.TurnID, Seat: seat, Org: r.engine.Company().Org,
+			ID: req.Run.TurnID, Seat: seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
 		},
 		Answer:        req.Answer,
