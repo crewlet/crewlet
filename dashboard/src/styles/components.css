@@ -643,6 +643,85 @@ a.brand:hover {
   color: var(--text);
 }
 
+/* A searchable multi-select (`ui/MultiPicker.tsx`): `.multi-picker`, never
+   `.picker`, which is the native select's wrapper. Chosen values are chips
+   above the search box; the list below reuses the completion list's frame. */
+.multi-picker-values {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.multi-picker-value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  font-size: var(--fs-2xs);
+  color: var(--text);
+}
+.multi-picker-value > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.multi-picker-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--row-h-sm);
+  height: 100%;
+  border-radius: var(--r-full);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.multi-picker-remove:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+/* The completion list draws names of sealed entries in the code face; a
+   picker's options are seats and units, which wear the page's face. */
+.multi-picker-list .input-suggest {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+}
+.multi-picker-tick {
+  display: inline-flex;
+  flex: none;
+  width: var(--space-3);
+  color: var(--accent-ink);
+}
+.multi-picker-hint {
+  margin-left: auto;
+  padding-left: var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.multi-picker-group {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.multi-picker-empty {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
 .input.is-reference {
   font-family: var(--font-mono);
   font-variant-ligatures: none;
