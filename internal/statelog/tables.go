@@ -216,7 +216,7 @@ const OpsPurgeBatch = 2000
 // BATCHED, AND EACH BATCH ITS OWN TRANSACTION. One transaction over the whole
 // backlog would hold the writer the applier is queued behind for the length of
 // it, which on a first tick after a long absence is the whole month.
-func (t tables) purgeOps(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
+func (t tables) purgeOps(ctx context.Context, db Estate, cutoff time.Time) (int64, error) {
 	if t.ops == "" {
 		return 0, nil
 	}

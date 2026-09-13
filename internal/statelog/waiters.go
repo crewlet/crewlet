@@ -3,8 +3,20 @@ package statelog
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"sync"
 )
+
+// ErrWaitAbandoned reports a wait the applier ended without reaching the
+// position: the loop stopped, or it is being restarted over a replaced file.
+//
+// AN ERROR RATHER THAN A RELEASE. The alternative — closing the waiter's own
+// channel, which is what a satisfied wait looks like — sent every caller off
+// to read rows that had not reached its position and to report the answer at
+// the level it had asked for. Every caller of a wait already maps an error to
+// the honest refusal: `behind` on a read, `behind` on a write's session wait.
+var ErrWaitAbandoned = errors.New("statelog: the applier stopped while this " +
+	"caller was waiting on it")
 
 // waiters is the set of callers blocked on this node's applier reaching a
 // position, ordered BY POSITION so a commit wakes exactly the ones it
@@ -47,6 +59,12 @@ type waiter struct {
 	// context, which is what makes a wait cancellable without a goroutine.
 	done chan struct{}
 
+	// abandoned is closed by an applier that ends without reaching
+	// target, and it is a SECOND channel because the two mean opposite
+	// things to the caller: done is an answer and this is the absence of
+	// one.
+	abandoned chan struct{}
+
 	// seq breaks ties in arrival order, so two waiters on one position are
 	// woken in the order they arrived. Not load-bearing for correctness;
 	// it makes the heap a total order, which makes the tests
@@ -64,13 +82,16 @@ type waiter struct {
 // whose context expires would otherwise stay in the heap until the applier
 // reached a position nobody is waiting for any more, holding a channel and a
 // position in the minimum that delays nothing but is reported as a waiter.
-func (w *waiters) wait(target Position) (<-chan struct{}, func()) {
+func (w *waiters) wait(target Position) (done, abandoned <-chan struct{}, cancel func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	item := &waiter{target: target, done: make(chan struct{}), seq: w.next}
+	item := &waiter{
+		target: target, done: make(chan struct{}),
+		abandoned: make(chan struct{}), seq: w.next,
+	}
 	w.next++
 	heap.Push(&w.items, item)
-	return item.done, func() { w.drop(item) }
+	return item.done, item.abandoned, func() { w.drop(item) }
 }
 
 // drop removes a waiter that gave up, if the applier has not already released
@@ -104,16 +125,17 @@ func (w *waiters) release(checkpoint Position) {
 	}
 }
 
-// releaseAll wakes everybody, for a shutting-down applier. A waiter left
-// blocked on a stopped applier waits out its whole budget for a position
-// nothing will ever reach.
-func (w *waiters) releaseAll() {
+// abandonAll tells everybody the applier is not going to reach them, for a
+// loop that is ending. A waiter left blocked on a stopped applier waits out
+// its whole budget for a position nothing will ever reach; one released as
+// though satisfied reads rows below its position. Each is told instead.
+func (w *waiters) abandonAll() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for w.items.Len() > 0 {
 		top := heap.Pop(&w.items).(*waiter)
 		top.index = -1
-		close(top.done)
+		close(top.abandoned)
 	}
 }
 
@@ -177,7 +199,7 @@ func (w *waiters) awaitPosition(ctx context.Context, target Position, reached fu
 	if reached().Packed() >= target.Packed() {
 		return nil
 	}
-	done, cancel := w.wait(target)
+	done, abandoned, cancel := w.wait(target)
 	defer cancel()
 	// RE-CHECK AFTER REGISTERING. A commit landing between the check above
 	// and the registration would otherwise never wake this waiter: it
@@ -189,6 +211,8 @@ func (w *waiters) awaitPosition(ctx context.Context, target Position, reached fu
 	select {
 	case <-done:
 		return nil
+	case <-abandoned:
+		return ErrWaitAbandoned
 	case <-ctx.Done():
 		return ctx.Err()
 	}

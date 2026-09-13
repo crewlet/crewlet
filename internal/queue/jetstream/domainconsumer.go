@@ -35,9 +35,15 @@ import (
 // redelivery state — which is why a lost ack costs a redelivery and never a
 // hole.
 type DomainConsumer struct {
-	cons   jetstream.Consumer
+	q      *Queue
 	stream string
 	name   string
+
+	// cons is the broker-side consumer, under a mutex because [Reset]
+	// replaces it while the applier that holds this handle is between
+	// runs — the handle stays, the consumer under it moves.
+	mu   sync.Mutex
+	cons jetstream.Consumer
 }
 
 // domainConsumerMaxAckPending is how many records the broker may hand this
@@ -135,7 +141,60 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
 			name, stream, err)
 	}
-	return &DomainConsumer{cons: cons, stream: stream, name: name}, nil
+	return &DomainConsumer{q: q, cons: cons, stream: stream, name: name}, nil
+}
+
+// Reset moves this node's reader to resume from `after`, by deleting the
+// broker-side consumer and creating it again there.
+//
+// # Why a delete rather than an update
+//
+// The broker treats a consumer's start sequence as immutable, so the only way
+// to move one is to make a new one. What needs moving it is an ADOPTION: a
+// node that fell below the trim floor installs a peer's snapshot, and its
+// checkpoint jumps to the artefact's position — thousands or millions of
+// records past where its consumer stopped. Left where it was, the consumer
+// would deliver every record in between for the applier to drop one at a
+// time, under an in-flight ceiling, for as long as that took.
+//
+// The applier resumes from the checkpoint whatever the consumer says, so a
+// reset that fails leaves correctness alone and costs only those
+// redeliveries; it is reported so the operator knows which.
+func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
+	config := jetstream.ConsumerConfig{
+		Durable:       c.name,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       domainConsumerAckWait,
+		MaxAckPending: domainConsumerMaxAckPending,
+		MaxDeliver:    -1,
+	}
+	if after > 0 {
+		config.DeliverPolicy = jetstream.DeliverByStartSequencePolicy
+		config.OptStartSeq = after + 1
+	} else {
+		config.DeliverPolicy = jetstream.DeliverAllPolicy
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.q.js.DeleteConsumer(ctx, c.stream, c.name); err != nil &&
+		!errors.Is(err, jetstream.ErrConsumerNotFound) {
+		return fmt.Errorf("jetstream: reset the domain consumer %s on %s: %w",
+			c.name, c.stream, err)
+	}
+	cons, err := c.q.js.CreateConsumer(ctx, c.stream, config)
+	if err != nil {
+		return fmt.Errorf("jetstream: recreate the domain consumer %s on %s at "+
+			"%d: %w", c.name, c.stream, after, err)
+	}
+	c.cons = cons
+	return nil
+}
+
+// consumer is the current broker-side consumer.
+func (c *DomainConsumer) consumer() jetstream.Consumer {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cons
 }
 
 // alignDomainConsumer updates an existing consumer's updatable bounds to this
@@ -209,10 +268,11 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	opts := []jetstream.FetchOpt{jetstream.FetchMaxWait(wait)}
 	var batch jetstream.MessageBatch
 	var err error
+	cons := c.consumer()
 	if maxBytes > 0 {
-		batch, err = c.cons.FetchBytes(maxBytes, opts...)
+		batch, err = cons.FetchBytes(maxBytes, opts...)
 	} else {
-		batch, err = c.cons.Fetch(maxMessages, opts...)
+		batch, err = cons.Fetch(maxMessages, opts...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)
@@ -273,7 +333,7 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 // not delivered, which is what tells a partially filled batch whether waiting
 // would buy anything.
 func (c *DomainConsumer) Pending(ctx context.Context) (uint64, error) {
-	info, err := c.cons.Info(ctx)
+	info, err := c.consumer().Info(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("jetstream: read %s: %w", c.name, err)
 	}

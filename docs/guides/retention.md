@@ -208,9 +208,14 @@ because a fleet whose snapshot loop is skipping has no next rotation to name.
 When a node reports `below_floor`:
 
 1. **`crewlet retention snapshots`** — does any peer hold one, and how old?
-2. If one does, the node fetches it on its own at boot. It takes a **hold** on
-   every domain's log first, which pins the trim for the duration of the
-   transfer — so a join cannot race the trim that made it necessary.
+2. If one does, the node fetches it on its own — at boot, or the moment its
+   own heartbeat finds it below the floor while running: it pauses its
+   appliers, adopts, moves its consumers to the artefact's position and
+   resumes, with no restart. It takes a **hold** on every domain's log first,
+   which pins the trim for the duration of the transfer — so a join cannot
+   race the trim that made it necessary. A running node that finds no donor
+   stays as it is, refusing, and asks again on an interval that doubles up to
+   five minutes.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —

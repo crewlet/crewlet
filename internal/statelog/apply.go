@@ -75,6 +75,29 @@ type Fetcher interface {
 // different build.
 var ErrStopped = errors.New("statelog: the applier stopped")
 
+// Estate is the replicated database as the applier needs it, RESOLVED PER
+// CALL rather than held.
+//
+// DECLARED HERE because the applier is the caller, and the shape is the
+// point: an adoption replaces the replicated file underneath a running node —
+// closed, renamed over, reopened — and every subsystem that captured the file's
+// handle at boot would go on answering from a database that is no longer at
+// that name. So nothing in this package holds one. What it holds is something
+// that reaches the CURRENT estate on every read and every pin, and answers
+// [store.ErrNoEstate] in the window where there is none.
+type Estate interface {
+	// Read runs fn in a read transaction on the current estate.
+	Read(ctx context.Context, fn func(*sql.Tx) error) error
+
+	// Tx runs fn in a write transaction on the current estate.
+	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+
+	// Writer pins one connection on the current estate for the life of
+	// an apply loop, and the loop releases it before the estate can be
+	// replaced.
+	Writer(ctx context.Context) (*store.Writer, error)
+}
+
 // RunnerDeps is everything an applier needs that it does not own.
 type RunnerDeps struct {
 	Domain  Domain
@@ -84,8 +107,10 @@ type RunnerDeps struct {
 	// DB is the REPLICATED estate — the file this domain's rows, its
 	// operation ledger, its deferred records, its anchors and its
 	// checkpoint all live in, because contract 2 puts them in one
-	// transaction and a transaction is one file.
-	DB *store.DB
+	// transaction and a transaction is one file. Resolved per call, for
+	// the reason [Estate] gives: the file can be replaced under a running
+	// node.
+	DB Estate
 
 	// Generation is the estate's generation, read once per loop
 	// generation because only an operator's reanchor moves it.
@@ -135,7 +160,7 @@ type Runner struct {
 	domain  Domain
 	applier Applier
 	fetch   Fetcher
-	db      *store.DB
+	db      Estate
 	tables  tables
 	spec    StreamSpec
 	metrics *metrics.Recorder
@@ -403,7 +428,22 @@ func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 }
 
 // Run drives the loop until the context ends or the applier stops.
+//
+// # It may be run AGAIN after it returns
+//
+// A node that falls below the trim floor while running adopts a peer's
+// snapshot: its apply loops are ended, the replicated file is replaced, and
+// the loops are started again over what arrived. Every subsystem that holds
+// this runner keeps holding it, so it is the same Runner that runs again —
+// from the checkpoint the new file keeps, with whatever it retained
+// reprocessed, and with a stop or a fault from the previous run re-evaluated
+// rather than remembered: they were verdicts about rows this node no longer
+// has.
 func (r *Runner) Run(ctx context.Context) error {
+	r.mu.Lock()
+	r.stopped, r.fault, r.faultSince = nil, nil, time.Time{}
+	r.mu.Unlock()
+
 	// A PINNED CONNECTION for the loop's life. The pool is small and every
 	// reader on this node draws from it — and the readers are usually
 	// waiting on state this writer is about to commit, so under load they
@@ -415,9 +455,11 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	defer func() {
 		_ = w.Close()
-		// A WAITER LEFT ON A STOPPED APPLIER waits out its whole budget
-		// for a position nothing will ever reach.
-		r.waiters.releaseAll()
+		// A WAITER LEFT ON A STOPPED APPLIER would wait out its whole
+		// budget for a position nothing will ever reach — and one merely
+		// RELEASED would read as satisfied and go on to read rows that
+		// never reached its position. It is told, instead.
+		r.waiters.abandonAll()
 	}()
 
 	if err := r.loadCursor(ctx); err != nil {

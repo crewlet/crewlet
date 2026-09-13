@@ -1641,3 +1641,56 @@ func TestARecreatedStreamStopsTheApplier(t *testing.T) {
 		t.Fatalf("the checkpoint moved to %d on a stopped applier", got)
 	}
 }
+
+// A RUNNER RUNS AGAIN FROM THE CHECKPOINT IT NOW HOLDS.
+//
+// An adoption on a running node ends every apply loop, replaces the file, and
+// starts the loops again — the same runners, because every subsystem holds
+// them. So Run has to be re-enterable: it resumes from whatever checkpoint the
+// file keeps, and a stop from the previous run is a verdict about rows this
+// node no longer has rather than something to remember.
+func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("the first run: %v", err)
+	}
+
+	// A caller left waiting across the gap is told, not released.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	waited := make(chan error, 1)
+	go func() {
+		waited <- h.runner.WaitCommitted(ctx, statelog.Position{Stream: probeStream, Generation: 1, Seq: 3})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && h.runner.Waiting() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	runCtx, stopRun := context.WithCancel(t.Context())
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(runCtx) }()
+	time.Sleep(50 * time.Millisecond)
+	stopRun()
+	<-errs
+	select {
+	case err := <-waited:
+		if !errors.Is(err, statelog.ErrWaitAbandoned) {
+			t.Fatalf("the waiter across the gap got %v, want %v", err, statelog.ErrWaitAbandoned)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter was not told the loop ended")
+	}
+
+	// THE SECOND RUN continues from 2.
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1))
+	if err := h.run(3); err != nil {
+		t.Fatalf("the second run: %v", err)
+	}
+	seen := h.applier.seen()
+	if len(seen) != 3 || seen[2].Seq != 3 {
+		t.Fatalf("the applier saw %v across two runs, want 1, 2, 3 once each", seen)
+	}
+}

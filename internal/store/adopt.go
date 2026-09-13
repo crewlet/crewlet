@@ -203,8 +203,12 @@ func checkpointAndClose(ctx context.Context, path string) error {
 // from the state this node adopted its way out of.
 //
 // So the outer handle is stable and its PEER is what changes. A caller that
-// took [DB.Replicated] before the swap holds the old one, which is why this is
-// only ever called at boot, before an applier, a projector or a seat exists.
+// took [DB.Replicated] before the swap holds the old one — which is why
+// nothing long-lived may take it: the state log's framework resolves the peer
+// through the node handle on every call, and the engine ends every applier,
+// whose pinned connections are the only long-held claims on the file, before
+// it calls this. That is what makes an adoption possible on a RUNNING node
+// rather than only at boot.
 //
 // # Why the close is separate from the rename
 //

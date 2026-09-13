@@ -76,7 +76,7 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	// AND THE FIRST PULL WAS BOUNDED BY THE CEILING rather than by the
 	// client's own million: the broker handed over at most one
 	// transaction's worth of records before an acknowledgement.
-	info, err := cons.cons.Info(t.Context())
+	info, err := cons.consumer().Info(t.Context())
 	if err != nil {
 		t.Fatalf("consumer info: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestAnExistingDomainConsumerHasItsCeilingRealigned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	info, err := cons.cons.Info(t.Context())
+	info, err := cons.consumer().Info(t.Context())
 	if err != nil {
 		t.Fatalf("info: %v", err)
 	}
@@ -138,4 +138,55 @@ func TestAnExistingDomainConsumerHasItsCeilingRealigned(t *testing.T) {
 			"is the checkpoint's to decide and the broker's to keep",
 			info.Config.OptStartSeq)
 	}
+}
+
+// A DOMAIN CONSUMER IS RESET IN PLACE, and the handle the applier holds keeps
+// working.
+//
+// An adoption moves a node's checkpoint to the artefact's position, and the
+// broker will not move a consumer's start sequence — so the consumer is
+// deleted and remade at the new position under the same handle. Left where it
+// was, it would deliver every record between the old position and the new one
+// for the applier to drop.
+func TestADomainConsumerIsResetToANewPosition(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_RESET_LOG", "crewlet.reset.log")
+	for i := range 10 {
+		if _, _, err := log.Append(t.Context(), "crewlet.reset.log.task.x", "", nil, []byte{byte(i)}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_RESET_LOG", "node-reset", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	first := fetchAll(t, cons, 3)
+	if len(first) != 3 || first[2].Seq != 3 {
+		t.Fatalf("the first pull delivered %d record(s) ending at %d, want 1..3",
+			len(first), first[len(first)-1].Seq)
+	}
+	if err := cons.Reset(t.Context(), 8); err != nil {
+		t.Fatalf("Reset: %v", err)
+	}
+	after := fetchAll(t, cons, 2)
+	if len(after) != 2 || after[0].Seq != 9 || after[1].Seq != 10 {
+		t.Fatalf("after a reset to 8 the consumer delivered %v, want 9 and 10 — "+
+			"a consumer left at its old position delivers every record in "+
+			"between for the applier to drop", seqsOf(after))
+	}
+	pending, err := cons.Pending(t.Context())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if pending != 0 {
+		t.Fatalf("%d record(s) pending after the reset drained, want 0", pending)
+	}
+}
+
+func seqsOf(msgs []statelog.Message) []uint64 {
+	out := make([]uint64, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Seq)
+	}
+	return out
 }
