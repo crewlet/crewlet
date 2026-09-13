@@ -464,3 +464,29 @@ func TestTheLauncherGuardsTheExecutorsOwnLogin(t *testing.T) {
 		t.Fatalf("an agent-mode run on an API-key executor was refused: %v", err)
 	}
 }
+
+// A RUN RECORDS THE AGENT ID OF THE TURN THAT LAUNCHED IT. The id is derived
+// from the company's name and the seat's handle, so an apply that renames the
+// company mid-turn changes it; the run's durable row must carry the id of the
+// organization the turn is pinned to, which is the id every other event of
+// that turn carries, not the one the engine's current company would derive.
+func TestARunRecordsTheAgentIDOfItsPinnedTurn(t *testing.T) {
+	t.Parallel()
+	pinned, seat := modeCompany(t, "claude-code", true, config.PlacementDirect)
+	e := &Engine{}
+	e.epoch.current.Store(&Company{
+		Config: pinned.Config, Models: pinned.Models,
+		Org: &org.Organization{Name: "Acme Renamed", Roles: []*org.Role{seat}},
+	})
+	launcher := &agentLauncher{
+		engine: e, turn: &turnctx.Turn{ID: "t1", Seat: seat, Org: pinned.Org}, seat: seat,
+		codingAgent: "claude-code", placement: sandbox.Direct,
+	}
+	want, ok := org.DeriveAgentID("Acme", seat.Handle())
+	if !ok {
+		t.Fatal("the fixture derives no agent id")
+	}
+	if got := launcher.runTurnRef(t.Context()).AgentID; got != want.String() {
+		t.Errorf("the run records agent id %q, want %q: the id of the turn's own organization", got, want)
+	}
+}
