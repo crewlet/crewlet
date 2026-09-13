@@ -128,7 +128,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// person at a terminal wants.
 		detach, err := attachLogFile(config.LogFileSettings{
 			Open: logging.FileOptions{Path: os.Getenv("CREWLET_LOG_FILE")},
-		}, true)
+		}, true, os.Stderr)
 		if err != nil {
 			return err
 		}
@@ -802,7 +802,7 @@ func runEngine(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	detachLogFile, err := attachLogFile(logFileSet, logToStderr)
+	detachLogFile, err := attachLogFile(logFileSet, logToStderr, os.Stderr)
 	if err != nil {
 		return err
 	}
@@ -1728,14 +1728,23 @@ func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
 // Order, not taste: switching stderr off first and then failing to open the
 // file would leave the process with no destination during the very failure
 // it has to report.
-func attachLogFile(settings config.LogFileSettings, stderr bool) (func(), error) {
+// # report is where the two notices that cannot go through the logger go
+//
+// The sink's own write failures and the handover below. It is os.Stderr in
+// both production call sites; it is a parameter for the same reason
+// [logging.OpenFile] takes one — a notice nothing can observe is a notice
+// nothing can check, and both of these exist precisely for the moments the
+// logger is not doing its job. Note what is NOT happening here: this writer
+// is never installed as the process-wide sink, which is the move
+// [logging.Configure] exists to prevent.
+func attachLogFile(settings config.LogFileSettings, stderr bool, report io.Writer) (func(), error) {
 	if settings.Open.Path == "" {
 		// Nothing to attach, and nothing to silence — logFileSettings has
 		// already refused the one document where that combination could
 		// leave this node writing nowhere.
 		return func() {}, nil
 	}
-	f, err := logging.OpenFile(settings.Open, os.Stderr)
+	f, err := logging.OpenFile(settings.Open, report)
 	if err != nil {
 		return nil, err
 	}
@@ -1744,16 +1753,22 @@ func attachLogFile(settings config.LogFileSettings, stderr bool) (func(), error)
 	logging.SetFile(sink)
 	// THE FIRST LINE IN THE FILE SAYS WHICH FILE IT IS. A log an operator
 	// has to find by guessing at a relative path is one they read the
-	// wrong copy of.
-	//
-	// EMITTED BEFORE THE CONSOLE IS SWITCHED OFF, so it is the last thing
-	// stderr says rather than the first thing it misses. A node started
-	// with `logging.stderr: false` otherwise leaves a terminal completely
-	// silent with nothing anywhere naming the file it went to — which is
-	// the same silence this whole feature is written against. The file is
-	// already attached, so this one line reaches both.
+	// wrong copy of. It is ordinary telemetry, so it goes through the
+	// logger and obeys the level like everything else.
 	logging.Get("cli").Info("log_file_opened", "path", f.Path(), "stderr", stderr)
 	if !stderr {
+		// AND THE HANDOVER GOES STRAIGHT TO STDERR, not through the
+		// logger, for the same reason the sink's own failure report
+		// does: a logger cannot be trusted to announce that the logger
+		// is about to stop writing here. The line above is emitted at
+		// info, so on a `logging.level: warn` node it is filtered — and
+		// an operator who ran `crewlet run` and got a terminal that
+		// printed NOTHING AT ALL has no way to discover their log is in
+		// a file. That silence is the exact failure this whole feature
+		// is written against, and it was reachable through its own fix.
+		fmt.Fprintf(report,
+			"crewlet: logging to %s from here; stderr carries no further log "+
+				"lines (logging.stderr is false)\n", f.Path())
 		logging.SetConsole(false)
 	}
 	return func() {
@@ -1763,7 +1778,7 @@ func attachLogFile(settings config.LogFileSettings, stderr bool) (func(), error)
 		logging.SetConsole(true)
 		logging.SetFile(logging.FileSink{})
 		if closeErr := f.Close(); closeErr != nil {
-			fmt.Fprintf(os.Stderr, "crewlet: closing log file %s: %v\n",
+			fmt.Fprintf(report, "crewlet: closing log file %s: %v\n",
 				f.Path(), closeErr)
 		}
 	}, nil

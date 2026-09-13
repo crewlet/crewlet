@@ -818,9 +818,13 @@ field keeps all three while a shell redirect throws them away:
 | The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler |
 | "log file *X*: no space left on device" | A sink cannot report its own failure through itself |
 
-The `log_file_opened` line naming the path is also written to stderr before
-the switch takes effect, so a terminal that is about to go quiet says where
-the log went rather than simply stopping.
+**A terminal that is about to go quiet says so.** Before the switch takes
+effect the engine writes one plain line to stderr naming the file it is
+handing over to — not through the logger, and so not subject to
+`logging.level`. That matters: the structured `log_file_opened` record is
+ordinary telemetry at `info`, so on a `logging.level: warn` node it is
+filtered, and without the plain line `crewlet run` would print *nothing at
+all* with no way to discover the log was in a file.
 
 **A node with neither destination is refused**, by name: `logging.stderr:
 false` with no `logging.file.path` fails validation and fails the boot, and

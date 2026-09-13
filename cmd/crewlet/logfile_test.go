@@ -105,7 +105,7 @@ func TestAttachingTheLogFileAddsASinkAndDetachesIt(t *testing.T) {
 	detach, err := attachLogFile(config.LogFileSettings{
 		Open: logging.FileOptions{Path: path},
 		Sink: logging.FileSink{Format: logging.FormatJSON},
-	}, true)
+	}, true, &console)
 	if err != nil {
 		t.Fatalf("attachLogFile: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestAnUnopenableLogFileFailsTheCommand(t *testing.T) {
 	}
 	_, err := attachLogFile(config.LogFileSettings{
 		Open: logging.FileOptions{Path: filepath.Join(blocker, "crewlet.log")},
-	}, true)
+	}, true, io.Discard)
 	if err == nil {
 		t.Fatal("an unopenable path was accepted")
 	}
@@ -172,7 +172,7 @@ func TestAnUnopenableLogFileFailsTheCommand(t *testing.T) {
 // NO PATH IS NOT A FAILURE, and its teardown is still safe to call — every
 // run that configures no file takes this path.
 func TestNoLogFileAttachesNothing(t *testing.T) {
-	detach, err := attachLogFile(config.LogFileSettings{}, true)
+	detach, err := attachLogFile(config.LogFileSettings{}, true, io.Discard)
 	if err != nil {
 		t.Fatalf("an absent log file was treated as a mistake: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestAttachingWithStderrOffSilencesAndRestoresTheConsole(t *testing.T) {
 	detach, err := attachLogFile(config.LogFileSettings{
 		Open: logging.FileOptions{Path: path},
 		Sink: logging.FileSink{Format: logging.FormatText},
-	}, false)
+	}, false, &console)
 	if err != nil {
 		t.Fatalf("attachLogFile: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestAttachingWithStderrOffSilencesAndRestoresTheConsole(t *testing.T) {
 	// The one line stderr DOES keep on this path: where the log went.
 	// Without it an operator who switched stderr off sees a terminal that
 	// says nothing at all and no way to find out why.
-	if !strings.Contains(console.String(), "log_file_opened") {
+	if !strings.Contains(console.String(), path) {
 		t.Errorf("stderr was silenced without saying where the log went: %q",
 			console.String())
 	}
@@ -370,5 +370,70 @@ func TestAttachingWithStderrOffSilencesAndRestoresTheConsole(t *testing.T) {
 	if strings.Contains(console.String(), "console_kept_open") {
 		t.Errorf("the teardown detached the file before restoring the console, "+
 			"so a clean shutdown warned about logging nowhere: %q", console.String())
+	}
+}
+
+// AND THE HANDOVER SURVIVES A QUIET LEVEL, which is the case that made it a
+// bug rather than a nicety.
+//
+// The `log_file_opened` record is ordinary telemetry at info, so on a
+// `logging.level: warn` node — an entirely normal production setting — it is
+// filtered. Paired with `logging.stderr: false` that left `crewlet run`
+// printing NOTHING AT ALL on a terminal, with no way for the operator to
+// discover their log was in a file. The handover therefore goes straight to
+// stderr rather than through the logger, exactly as the sink's own failure
+// report does: a logger cannot announce that the logger is going quiet.
+//
+// Not parallel: it reconfigures the process-wide logger. See [TestMain].
+func TestTheHandoverReachesStderrAtEveryLevel(t *testing.T) {
+	for _, level := range []slog.Level{slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		t.Run(level.String(), func(t *testing.T) {
+			var console bytes.Buffer
+			logging.Configure(level, logging.FormatText, &console)
+			t.Cleanup(func() {
+				logging.SetConsole(true)
+				logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+			})
+
+			path := filepath.Join(t.TempDir(), "crewlet.log")
+			detach, err := attachLogFile(config.LogFileSettings{
+				Open: logging.FileOptions{Path: path},
+				Sink: logging.FileSink{Format: logging.FormatText},
+			}, false, &console)
+			if err != nil {
+				t.Fatalf("attachLogFile: %v", err)
+			}
+			t.Cleanup(detach)
+
+			if !strings.Contains(console.String(), path) {
+				t.Errorf("at %v the terminal went silent without naming the log "+
+					"file: %q", level, console.String())
+			}
+		})
+	}
+}
+
+// AND IT IS NOT PRINTED WHEN STDERR STAYS ON, or every ordinary run with a
+// log file would carry a line about a handover that never happened.
+func TestNoHandoverNoticeWhenStderrStaysOn(t *testing.T) {
+	var console bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() {
+		logging.Configure(slog.LevelError+1, logging.FormatText, io.Discard)
+	})
+
+	path := filepath.Join(t.TempDir(), "crewlet.log")
+	detach, err := attachLogFile(config.LogFileSettings{
+		Open: logging.FileOptions{Path: path},
+		Sink: logging.FileSink{Format: logging.FormatText},
+	}, true, &console)
+	if err != nil {
+		t.Fatalf("attachLogFile: %v", err)
+	}
+	t.Cleanup(detach)
+
+	if strings.Contains(console.String(), "carries no further log lines") {
+		t.Errorf("a run that kept stderr was told it was losing it: %q",
+			console.String())
 	}
 }
