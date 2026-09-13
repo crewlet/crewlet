@@ -90,6 +90,11 @@ type Job struct {
 
 	// Run does the work for the tick, reporting rows touched.
 	//
+	// A job that did part of its work and then failed reports BOTH: the rows
+	// it touched and the error. A job that walks records one at a time (the
+	// mailbox retirement) can retire three seats and fail on a fourth, and
+	// the three are as real as a clean tick's.
+	//
 	// It takes BOTH times because the two kinds of job need different
 	// ones: a range delete needs the cutoff, while closing an abandoned
 	// channel needs the cutoff to select it AND now to stamp it closed.
@@ -270,7 +275,9 @@ func (w *Worker) loop(ctx context.Context) {
 // letting the first failure skip the rest means one unreachable store stops
 // the housekeeping for all of them — the failure mode this package exists to
 // fix, arrived at from the other direction. The errors are joined and
-// returned together.
+// returned together, and a job that failed part-way still has the rows it did
+// touch counted: dropping them made a tick that retired a mailbox and then hit
+// one unreadable record report that it had retired nothing.
 //
 // Returns a nil map and no error when this node does not hold the duty:
 // "somebody else swept" and "nothing needed sweeping" are different facts,
@@ -287,7 +294,6 @@ func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 		n, err := j.Run(ctx, now, now.Add(-j.Horizon))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", j.Name, err))
-			continue
 		}
 		if n > 0 {
 			swept[j.Name] = n
