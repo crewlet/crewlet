@@ -358,8 +358,8 @@ func render(w io.Writer, toolchain component, modules []component) error {
 		"notice files, unmodified, including those kept beside the packages the\n"+
 		"binary links from it. Crewlet itself is licensed under the MIT License\n"+
 		"in LICENSE. The dashboard the binary embeds lists its own bundled\n"+
-		"dependencies and fonts in dashboard/THIRD_PARTY_NOTICES.txt beside this\n"+
-		"file, and a running engine serves the same file at\n"+
+		"dependencies, fonts and icons in dashboard/THIRD_PARTY_NOTICES.txt beside\n"+
+		"this file, and a running engine serves the same file at\n"+
 		"/static/dashboard/THIRD_PARTY_NOTICES.txt.\n")
 	for _, c := range append([]component{toolchain}, modules...) {
 		notices, err := noticesOf(c)

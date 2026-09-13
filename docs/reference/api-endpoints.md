@@ -1374,7 +1374,8 @@ COMMITTED, so `go build ./...` needs no Node.
 `/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
 license text of every npm package the bundle contains, written by Vite's
 `build.license`, followed by the SIL Open Font License of the embedded Inter
-and JetBrains Mono faces. The release archives and the container image carry
+and JetBrains Mono faces and the MIT license of Feather Icons, whose paths the
+dashboard's icon set adapts. The release archives and the container image carry
 the same file, beside the notices for the Go modules the binary links.
 
 A second build target, `/static/dashboard/protocol.js`, is the wire

@@ -19,18 +19,34 @@ import { fileURLToPath } from "node:url";
 //
 // Two halves, one file. Vite's own `build.license` writes every npm package the
 // bundle contains, each with its license text, sorted by package, so the output
-// is as reproducible as the bundle the CI diff checks.
-// The fonts are not bundled (they are copied from public/ untouched), so the
-// license step never sees them, and `fontNotice` appends their SIL Open Font
-// License from the same OFL.txt that travels in fonts/.
+// is as reproducible as the bundle the CI diff checks. It only sees what comes
+// out of node_modules, so `sourceNotices` appends the rest: the fonts, which are
+// copied from public/ untouched, and the icon paths adapted from Feather Icons,
+// which live in our own source and lose their attribution comment to the
+// minifier.
 //
 // A `.txt` name rather than Vite's default `.vite/license.md`: the engine serves
 // this tree, and a notice under a dot directory with a Markdown type is one
 // nobody finds and a browser downloads rather than shows.
 const NOTICES = "THIRD_PARTY_NOTICES.txt";
-const FONT_LICENSE = fileURLToPath(new URL("./public/fonts/OFL.txt", import.meta.url));
 
-// fontNotice appends the font license to the notices the license step emitted.
+// SOURCE_NOTICES is the third-party material in the bundle that is not an npm
+// package, in the order it is appended. Each license file sits beside what it
+// covers, so the notice moves with the material it belongs to.
+const SOURCE_NOTICES: readonly { heading: string; lead: string; file: string }[] = [
+  {
+    heading: "Fonts: Inter and JetBrains Mono (OFL-1.1)",
+    lead: "The dashboard serves these font files from /static/dashboard/fonts/.",
+    file: fileURLToPath(new URL("./public/fonts/OFL.txt", import.meta.url)),
+  },
+  {
+    heading: "Icons: Feather Icons (MIT)",
+    lead: "The dashboard's icon set is drawn from paths adapted from Feather Icons.",
+    file: fileURLToPath(new URL("./src/ui/Icon.LICENSE.txt", import.meta.url)),
+  },
+];
+
+// sourceNotices appends SOURCE_NOTICES to the notices the license step emitted.
 //
 // `order: "post"` is what makes the asset visible here at all: Vite registers
 // its license step among its own post-build plugins, which run after every user
@@ -38,9 +54,9 @@ const FONT_LICENSE = fileURLToPath(new URL("./public/fonts/OFL.txt", import.meta
 // exists. Ordered handlers run after every unordered one, whatever the plugin
 // order. The second build (vite.protocol.config.ts) writes only protocol.js and
 // leaves this file as the first build wrote it.
-function fontNotice(): Plugin {
+function sourceNotices(): Plugin {
   return {
-    name: "crewlet:font-notice",
+    name: "crewlet:source-notices",
     apply: "build",
     generateBundle: {
       order: "post",
@@ -49,22 +65,21 @@ function fontNotice(): Plugin {
         if (notices?.type !== "asset") {
           this.error(
             `${NOTICES} was not emitted, so build.license no longer writes it and the ` +
-              "font notice has nothing to join. Restore build.license.fileName.",
+              "notices for the fonts and icons have nothing to join. Restore build.license.fileName.",
           );
         }
-        const fonts = readFileSync(FONT_LICENSE, "utf-8").trim();
-        notices.source =
-          `${String(notices.source).trimEnd()}\n\n` +
-          "## Fonts: Inter and JetBrains Mono (OFL-1.1)\n\n" +
-          "The dashboard serves these font files from /static/dashboard/fonts/.\n\n" +
-          `${fonts}\n`;
+        let text = String(notices.source).trimEnd();
+        for (const { heading, lead, file } of SOURCE_NOTICES) {
+          text += `\n\n## ${heading}\n\n${lead}\n\n${readFileSync(file, "utf-8").trim()}`;
+        }
+        notices.source = `${text}\n`;
       },
     },
   };
 }
 
 export default defineConfig({
-  plugins: [react(), fontNotice()],
+  plugins: [react(), sourceNotices()],
   // The engine serves this tree from /static/dashboard/ and answers the shell
   // at both `/` and `/dashboard`. A relative base would resolve the shell's
   // own asset URLs against whichever of those the reader arrived at; an

@@ -102,12 +102,13 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		}
 	}
 
-	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React
-	// and the fonts, both under licenses that require their text alongside,
-	// and the release archives and image copy this file from here. Written by
-	// the build (vite.config.ts), so a build that lost `build.license` or the
-	// font step leaves a tree that serves perfectly and owes notices it no
-	// longer carries.
+	// THE NOTICES TRAVEL WITH WHAT THEY COVER. The bundle redistributes React,
+	// the fonts and icon paths adapted from Feather Icons, all under licenses
+	// that require their text alongside, and the release archives and image
+	// copy this file from here. Written by the build (vite.config.ts), so a
+	// build that lost `build.license` or the step appending the fonts and
+	// icons leaves a tree that serves perfectly and owes notices it no longer
+	// carries.
 	notices, err := os.ReadFile(filepath.Join(servedTree, "THIRD_PARTY_NOTICES.txt"))
 	if err != nil {
 		t.Errorf("no THIRD_PARTY_NOTICES.txt in the built tree; `npm run build` in "+
@@ -116,9 +117,10 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	for _, want := range []string{
 		"## react - ",               // a bundled package, from build.license
 		"## react-dom - ",           // and its renderer
-		"SIL OPEN FONT LICENSE",     // the font license, appended by fontNotice
+		"SIL OPEN FONT LICENSE",     // the font license, appended by sourceNotices
 		"The Inter Project Authors", // naming both faces
 		"The JetBrains Mono Project Authors",
+		"Copyright (c) 2013-2023 Cole Bemis", // the icons' MIT notice, appended too
 	} {
 		if err == nil && !bytes.Contains(notices, []byte(want)) {
 			t.Errorf("THIRD_PARTY_NOTICES.txt does not carry %q", want)

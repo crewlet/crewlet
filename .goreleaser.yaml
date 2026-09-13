@@ -128,10 +128,10 @@ archives:
     # it; linux and darwin both want a tarball.
     formats: [tar.gz]
     # Both notices files, beside LICENSE: the Go modules and toolchain the
-    # binary links at the archive root, and the dashboard's bundled packages
-    # and fonts under dashboard/. The second is the file the binary also
-    # serves; it is taken from the committed bundle, which CI keeps equal to
-    # what the dashboard source builds.
+    # binary links at the archive root, and the dashboard's bundled packages,
+    # fonts and icon paths under dashboard/. The second is the file the binary
+    # also serves; it is taken from the committed bundle, which CI keeps equal
+    # to what the dashboard source builds.
     files:
       - LICENSE
       - README.md
