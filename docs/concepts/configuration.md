@@ -439,16 +439,17 @@ token when the engine refuses it — including a banner that says *refused*
 rather than *disconnected*, since a rejected credential is not an outage that
 resolves itself.
 
-The API states which posture it took at startup, on `api_anonymous_read_enabled`
-— at `WARNING` when `api.host` is not loopback, at `INFO` when it is. A laptop
-and an internet-facing bind are not the same decision, and a warning that fires
-identically for both is one nobody reads by the third deployment.
+The API states which posture it took at startup: `api_listening` carries
+`anonymous_read` and the token count, and an open read posture on an `api.host`
+that is not loopback adds an `api_anonymous_read_on_a_reachable_bind` warning.
+A laptop and an internet-facing bind are not the same decision, and a warning
+that fires identically for both is one nobody reads by the third deployment.
 
 **The guard is mounted whether or not `api.auth` is configured.** It applies one
-rule — `requires_token` — and what Tier A supplies is the *posture*, not the
+rule (`auth.Guard.Requires`), and what Tier A supplies is the *posture*, not the
 existence of a check. An API built with no Tier A at all therefore has no token
-that can match, which means reads serve and every write plus the whole `/config`
-surface answers `401`. That is the only safe reading of "an app was built
+that can match, which means reads serve and every write plus the whole `/config`,
+`/secrets` and `/setup` surfaces answer `401`. That is the only safe reading of "an app was built
 without being told who may write to it", and it removes the possibility of a
 process that serves `/config` writes with nothing in front of them.
 
@@ -460,8 +461,8 @@ means or must be reachable to obtain one:
 | `/health`, `/ready` | Probes. An orchestrator has no token, and a liveness check that 401s is a liveness check that fails. A single trailing slash is tolerated (`/health/`), because the guard runs before routing — so the router's redirect to the canonical path only happens if the request gets past the guard first, and a slash must never be the difference between healthy and evicted |
 | `/webhooks/*` | Each verifies its provider's HMAC before doing anything — a stronger check than a shared bearer token. Includes the Slack OAuth landing page, which a browser reaches mid-install |
 | | **A route whose secret is unset has nothing to verify with, so it fails closed**: `503` + `Retry-After`, never an accepted delivery. The sender retries and the delivery flows once the secret is configured — a deployment that has not set one is stalled, not damaged, and nothing unsigned is ever recorded, published, or shown on the dashboard |
-| `/otlp/*` | The signed per-run token in the path *is* the credential |
-| `/`, `/dashboard`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch |
+| `/otlp/*`, `/mcp/*` | The signed per-run token in the path *is* the credential. Both are reached from inside a sandbox, where the API's own token must never go |
+| `/`, `/dashboard`, `/favicon.ico`, `/static/*` | The page that prompts for a token cannot itself require one. It ships no data: every byte it renders comes from an authenticated fetch |
 
 `/ws/stream` follows the same rule as every other read. When reads are closed it
 needs a credential like anything else — and browsers can't set headers on a
@@ -472,7 +473,7 @@ in proxy access logs.
 | Setting | Effect |
 |---------|--------|
 | `api.auth.tokens` | The accepted bearer tokens. Needed for writes and `/config`, whatever the read posture is |
-| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config` serve without a token; writes and the whole `/config` surface still require one |
+| `api.auth.allow_anonymous_read: true` *(default)* | `GET`/`HEAD` outside `/config`, `/secrets` and `/setup` serve without a token; writes and those three surfaces still require one |
 | `api.auth.allow_anonymous_read: false` | Every route needs a token, `/ws/stream` included. The lockdown posture for a deployment that terminates traffic somewhere reachable |
 | `api.auth.disabled: true` | Local development only. Everything serves unauthenticated **including writes**, attribution becomes `"anonymous"`, loud `WARNING` at startup |
 
@@ -492,9 +493,9 @@ needs no entry; list any other browser origin explicitly in
 `api.auth.allowed_origins`. The previous `*` default let any site a logged-in
 operator happened to visit read every endpoint.
 
-The auth middleware uses `hmac.compare_digest` for constant-time comparison.
-Failed attempts log at WARNING (never the candidate token value); successes log
-at DEBUG with `operator_id` + `route`.
+The auth middleware compares tokens in constant time (`crypto/subtle`).
+Failed attempts log `api_auth_failed` at WARNING (never the candidate token
+value); successes log `api_auth_ok` at DEBUG with `operator_id` and `route`.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 
@@ -526,7 +527,7 @@ secrets:
 The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
-- **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`load_config`) into the plaintext structure before use — the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
+- **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 
@@ -590,6 +591,6 @@ The untyped maps (`mcp_servers[].env` and `.headers`, `cli.env`, a sandbox step'
 
 ## One company per engine
 
-An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no `tenant_id` column and no row-level scoping — the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
+An engine runs exactly one company. It opens one store file, that file holds one `company_config` table, and that table has **at most one** `is_active=TRUE` row (zero in the unconfigured boot state; otherwise one). There is no tenant column and no row-level scoping: the revision you activate is simply the company the engine runs. The same rule governs the [secret store](secret-store.md): one company per coordination estate, so a variable name alone is the key.
 
 To run a second company, run a second engine with its own database.
