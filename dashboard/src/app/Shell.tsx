@@ -6,7 +6,15 @@
  * scrollers has three positions and no way to name them.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { NAV, activeNavKey, titleFor } from "./nav.ts";
 import { href, useRoute } from "./router.tsx";
 import {
@@ -20,6 +28,7 @@ import { TokenDialog } from "./TokenDialog.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
 import { Badge, Button, Segmented, cx } from "~/ui/primitives.tsx";
+import { focusables, useModal } from "~/ui/useModal.ts";
 import {
   useAgents,
   useClient,
@@ -51,6 +60,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const [enginePanel, setEnginePanel] = useState(false);
   const [tokenOpen, setTokenOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const sidebar = useRef<HTMLElement>(null);
+  const drawerToggle = useRef<HTMLSpanElement>(null);
 
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
 
@@ -119,8 +130,20 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="app">
-      {drawer && <div className="drawer-veil" onClick={() => setDrawer(false)} />}
-      <aside className="sidebar" data-open={drawer}>
+      {drawer && (
+        <SectionsDrawer sidebar={sidebar} toggle={drawerToggle} onClose={() => setDrawer(false)} />
+      )}
+      <aside
+        className="sidebar"
+        ref={sidebar}
+        data-open={drawer}
+        // A DIALOG ONLY WHILE OPEN. Wide, the rail is the page's own
+        // navigation beside the screen; narrow and open, it is a modal over
+        // it, and a screen reader should hear that the page behind is inert.
+        role={drawer ? "dialog" : undefined}
+        aria-modal={drawer || undefined}
+        aria-label={drawer ? "Sections" : undefined}
+      >
         <a className="brand" href={href([])}>
           <img src="/static/crewlet-icon.svg" alt="" />
           <span className="col" style={{ gap: 0 }}>
@@ -226,7 +249,7 @@ export function Shell({ children }: { children: ReactNode }) {
               width, and clicking it wide put an unstyled veil into the
               shell's own grid, which took the sidebar's column and pushed
               the whole app into the next row. */}
-          <span className="drawer-toggle">
+          <span className="drawer-toggle" ref={drawerToggle}>
             <Button
               icon="menu"
               variant="ghost"
@@ -322,6 +345,62 @@ export function Shell({ children }: { children: ReactNode }) {
       )}
     </div>
   );
+}
+
+/**
+ * The narrow layout's sections drawer, on the layer stack.
+ *
+ * The rail itself is always mounted, because above the breakpoint it is the
+ * page's navigation. What this adds while it is open is what every other
+ * modal has: its veil, Escape, the Tab trap, focus moved in and handed back
+ * to the toggle. It used to be a veil with a click handler and nothing else,
+ * so Escape did nothing, Tab walked out behind the veil, and a dialog raised
+ * over it (the engine panel opened from its own pill) shared no stack with it.
+ */
+function SectionsDrawer({
+  sidebar,
+  toggle,
+  onClose,
+}: {
+  sidebar: RefObject<HTMLElement | null>;
+  /** The toggle's wrapper, which the stylesheet shows only in the narrow layout. */
+  toggle: RefObject<HTMLElement | null>;
+  onClose: () => void;
+}) {
+  const modal = useModal({
+    onClose,
+    // The row for the screen the reader is on, which is where the rail's
+    // own highlight already points, else the first control.
+    initialFocus: () => {
+      const rail = sidebar.current;
+      if (!rail) return null;
+      return (
+        rail.querySelector<HTMLElement>("[aria-current='page']") ?? focusables(rail)[0] ?? null
+      );
+    },
+  });
+  const { panelRef } = modal;
+  // The panel is the rail the shell already renders, handed to the stack
+  // before its focus effect reads it.
+  useLayoutEffect(() => {
+    panelRef(sidebar.current);
+    return () => panelRef(null);
+  }, [panelRef, sidebar]);
+  // THE DRAWER ENDS WITH THE NARROW LAYOUT. A tablet turned to landscape
+  // crosses the breakpoint with the drawer open, and the rail becomes the
+  // page's column again under a veil that traps Tab in it. The toggle's own
+  // display is the test, so the width stays a rule of the stylesheet alone.
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    function onResize(): void {
+      const el = toggle.current;
+      if (el && getComputedStyle(el).display === "none") close.current();
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [toggle]);
+  return <div className="drawer-veil" ref={modal.veilRef} role="presentation" />;
 }
 
 /** The standard screen header: a title, a sentence saying what it answers. */

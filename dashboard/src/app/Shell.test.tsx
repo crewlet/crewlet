@@ -252,3 +252,92 @@ test("the engine panel closes on its veil and opens on itself when there is noth
   expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
   expect(document.activeElement).toBe(pill);
 });
+
+test("the sections drawer is a modal on the stack: focus goes in, Tab stays, Escape and a route change close it", async () => {
+  mount(<p>screen</p>);
+  const toggle = screen.getByRole("button", { name: "Sections" });
+  toggle.focus();
+  fireEvent.click(toggle);
+
+  // Only while it is open is the rail a dialog; beside a wide layout it is
+  // the page's own navigation and must not announce itself as modal.
+  const drawer = screen.getByRole("dialog", { name: "Sections" });
+  expect(drawer.tagName).toBe("ASIDE");
+  // It opens on the row for the screen the reader is on.
+  const overview = within(drawer).getByRole("link", { name: /Overview/ });
+  expect(overview.getAttribute("aria-current")).toBe("page");
+  expect(document.activeElement).toBe(overview);
+
+  // Shift+Tab from the first control wraps inside rather than leaving for
+  // the page behind the veil.
+  within(drawer)
+    .getByRole("link", { name: /Crewlet/ })
+    .focus();
+  press("Tab", { shiftKey: true });
+  expect(drawer.contains(document.activeElement)).toBe(true);
+
+  press("Escape");
+  expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
+  expect(document.activeElement).toBe(toggle);
+
+  // Navigating from the drawer closes it, and focus comes back to the toggle
+  // rather than staying on a link that has just slid out of view.
+  fireEvent.click(toggle);
+  const open = screen.getByRole("dialog", { name: "Sections" });
+  const link = within(open)
+    .getAllByRole("link")
+    .find((a) => a.getAttribute("href") !== "#/")!;
+  link.focus();
+  await act(async () => {
+    location.hash = link.getAttribute("href")!;
+    window.dispatchEvent(new HashChangeEvent("hashchange"));
+  });
+  expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
+  expect(document.activeElement).toBe(toggle);
+});
+
+test("the sections drawer closes on its veil, and a dialog raised over it closes first", () => {
+  mount(<p>screen</p>);
+  const toggle = screen.getByRole("button", { name: "Sections" });
+  toggle.focus();
+  fireEvent.click(toggle);
+  const drawer = screen.getByRole("dialog", { name: "Sections" });
+
+  // The engine panel opened from the rail sits above it.
+  const pill = within(drawer).getByRole("button", { name: /engine unreachable/ });
+  pill.focus();
+  fireEvent.click(pill);
+  press("Escape");
+  expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
+  expect(screen.getByRole("dialog", { name: "Sections" })).toBe(drawer);
+  expect(document.activeElement).toBe(pill);
+
+  const veil = document.querySelector(".drawer-veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
+  expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
+  expect(document.activeElement).toBe(toggle);
+});
+
+test("the sections drawer closes when the layout it belongs to ends", () => {
+  mount(<p>screen</p>);
+  fireEvent.click(screen.getByRole("button", { name: "Sections" }));
+  expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
+
+  // Still narrow: a resize that keeps the toggle on screen changes nothing.
+  act(() => void window.dispatchEvent(new Event("resize")));
+  expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
+
+  // Past the breakpoint the stylesheet hides the toggle, and the rail is the
+  // page's column again rather than a modal over it.
+  const wide = document.createElement("style");
+  wide.textContent = ".drawer-toggle { display: none; }";
+  document.head.append(wide);
+  try {
+    act(() => void window.dispatchEvent(new Event("resize")));
+    expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Sections" })).toBeDefined();
+  } finally {
+    wide.remove();
+  }
+});

@@ -405,11 +405,21 @@
     width: var(--sidebar-w);
     z-index: var(--z-drawer);
     transform: translateX(-100%);
-    transition: transform var(--dur-slow) var(--ease);
     box-shadow: var(--shadow-3);
+    /* HIDDEN, not only moved. A rail translated off screen keeps every link
+       and control in the tab order and the accessibility tree, so a keyboard
+       walked through a dozen stops nobody could see. Hiding waits for the
+       slide out to finish; showing (below) happens at once, so the drawer
+       can take focus the moment it opens. */
+    visibility: hidden;
+    transition:
+      transform var(--dur-slow) var(--ease),
+      visibility 0s linear var(--dur-slow);
   }
   .sidebar[data-open="true"] {
     transform: none;
+    visibility: visible;
+    transition: transform var(--dur-slow) var(--ease);
   }
   .drawer-toggle {
     display: inline-flex;

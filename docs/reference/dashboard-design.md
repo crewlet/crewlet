@@ -893,9 +893,12 @@ rendered idle from the first phase to the last.
   would weld a screen's data model into it.
 - **One stack decides which surface a key belongs to.** Dialogs, drawers,
   menus and listbox popups register on the stack in `ui/useModal.ts`, in the
-  order they opened, and so do the shell's own token dialog, search and
-  engine panel: no modal hand-rolls its veil or listens for Escape beside the
-  stack. Only the topmost handles Escape or a press outside, so a prompt over
+  order they opened, and so do the shell's own token dialog, search, engine
+  panel and the narrow layout's sections drawer: no modal hand-rolls its veil
+  or listens for Escape beside the stack. The sections drawer is the rail
+  itself, a dialog only while it is open; closed, the stylesheet hides it
+  rather than only sliding it away, so its links leave the tab order, and it
+  closes when a resize takes the layout past the breakpoint. Only the topmost handles Escape or a press outside, so a prompt over
   the node editor closes on its own Escape and leaves the editor open, a
   token dialog raised by a refused request over that editor does the same,
   and an open menu closes before the dialog it sits in. A modal traps Tab,
