@@ -141,7 +141,10 @@ nothing naming the row that went away. Deriving it from `GET /config` in the
 client would mean a second copy of the `${VAR}` grammar, and the engine has
 already paid for that twice: a looser pattern once displayed a literal secret
 unmasked, and another once minted a live credential into a variable nothing
-reads. The path is the operator's own spelling
+reads. It would also miss references the read masks: `GET /config` shows a
+credential only when it is one whole `${VAR}`, so `"Bearer ${TOKEN}"` arrives
+as `"__redacted__"`. The index is built from the unredacted document and
+answers names and paths only, never a value. The path is the operator's own spelling
 (`roles[0].integrations.slack.bot_token`), the same one a validation failure
 reports, and a name with several readers appears once per reader. It carries
 the document's own `ETag`, because the index changes exactly when the revision

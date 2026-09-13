@@ -67,6 +67,19 @@ func (s *Service) Document(ctx context.Context) (*config.Company, error) {
 // what an entity-tag needs: the document changes exactly when the active
 // revision does, so the revision id IS the validator.
 func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revision, error) {
+	company, revision, err := s.activeCompany(ctx)
+	if err != nil {
+		return nil, store.Revision{}, err
+	}
+	return company.Redact(), revision, nil
+}
+
+// activeCompany opens the active revision UNREDACTED.
+//
+// Never answered to a caller as it stands. It exists for the one read that
+// needs what redaction hides without publishing any of it: see
+// [Service.References].
+func (s *Service) activeCompany(ctx context.Context) (*config.Company, store.Revision, error) {
 	if s == nil {
 		return nil, store.Revision{}, fmt.Errorf("configapi: no store on this node")
 	}
@@ -81,7 +94,7 @@ func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revisi
 	if err != nil {
 		return nil, store.Revision{}, err
 	}
-	return company.Redact(), revision, nil
+	return company, revision, nil
 }
 
 // References is every ${VAR} the active document names, paired with the path
@@ -100,15 +113,18 @@ func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revisi
 // /secrets could not answer this without a second reader of the company
 // revision.
 //
-// Derived from the SAME redacted document GET /config serves, which changes
-// nothing here: redaction masks a literal credential and deliberately leaves
-// a reference alone, because a reference names a credential rather than being
-// one.
+// Derived from the UNREDACTED document, and it answers only names and paths,
+// never a value. The redacted one GET /config serves would hide exactly the
+// references this question is about: redaction shows a value only when it is
+// one whole ${VAR}, so a credential written as "Bearer ${TOKEN}" reads as a
+// mask there, and an index built from that mask would tell an operator that
+// nothing points at TOKEN just before they delete it.
+//
 // The revision travels with the answer because the index is derived from it
 // and changes exactly when it does, which is what the route's entity-tag
 // needs and what a caller comparing two answers has to key on.
 func (s *Service) References(ctx context.Context) ([]config.Reference, store.Revision, error) {
-	company, revision, err := s.documentOf(ctx)
+	company, revision, err := s.activeCompany(ctx)
 	if err != nil {
 		return nil, store.Revision{}, err
 	}

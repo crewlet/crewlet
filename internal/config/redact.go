@@ -3,6 +3,8 @@ package config
 import (
 	"reflect"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/envref"
 )
 
 // Redacted is what a masked credential reads as on every HTTP surface.
@@ -30,11 +32,12 @@ const secretTag = "secret"
 // place would leave the process holding a company whose credentials are all the
 // literal string "__redacted__" — an outage produced by looking at something.
 //
-// A ${VAR} REFERENCE IS NOT MASKED. It names a credential rather than being
-// one, it is what an operator edits, and hiding it would make the document
-// unreadable for the one purpose this surface exists to serve. The value it
-// points at never enters this document at all — references are resolved where
-// a provider is constructed, not at parse.
+// A WHOLE ${VAR} REFERENCE IS NOT MASKED. It names a credential rather than
+// being one, it is what an operator edits, and hiding it would make the
+// document unreadable for the one purpose this surface exists to serve. The
+// value it points at never enters this document at all, since references are
+// resolved where a provider is constructed, not at parse. A value that only
+// embeds a reference beside literal text is masked; see mask.
 func (c *Company) Redact() *Company {
 	if c == nil {
 		return nil
@@ -225,18 +228,30 @@ func restoreByIdentity(target, prior reflect.Value, secret bool) bool {
 }
 
 // mask hides a literal credential and leaves a reference alone.
+//
+// # Only a WHOLE reference is shown
+//
+// A value that is exactly one ${VAR} names a credential and carries none: the
+// engine resolves it where a provider is built, so nothing it points at is in
+// this document to leak, and it is the half an operator edits.
+//
+// Anything else is masked, including a value that merely CONTAINS a
+// reference. "Bearer sk-live-${SUFFIX}" and "sk-live-SECRET-${ROTATION}" are
+// legitimate (the resolver expands embedded references), and the literal
+// half of each is a credential. The previous rule showed any value containing
+// "${" and so published exactly that half; a malformed "${line#host=}" or an
+// unclosed "${" is not a reference at all by the resolver's own grammar. The
+// names an embedded reference carries are not lost to the operator:
+// [References] reads the unredacted document and lists every one with its
+// path, and a masked value is restored from the prior revision on a write.
 func mask(value string, secret bool) string {
-	switch {
-	case !secret || value == "":
+	if !secret || value == "" {
 		return value
-	case strings.Contains(value, "${"):
-		// A reference, not a credential. The engine resolves it where a
-		// provider is built, so the value it names is not in this
-		// document to leak — and it is the half an operator edits.
-		return value
-	default:
-		return Redacted
 	}
+	if _, whole := envref.Whole(value); whole {
+		return value
+	}
+	return Redacted
 }
 
 // UnresolvedMasks lists the credential fields still holding the redaction

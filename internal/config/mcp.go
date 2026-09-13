@@ -82,8 +82,13 @@ type MCPServer struct {
 	ToolPrefix string `yaml:"tool_prefix,omitempty" json:"tool_prefix,omitempty" desc:"Prefix applied to this server's tool names."`
 
 	// The http fields.
+	//
+	// Headers is tagged as a credential for the reason Env is: it is where
+	// an http server's authorization header lives, which is the same token
+	// a stdio server receives through its environment. An untagged map
+	// published that token verbatim on every config read.
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty" desc:"Endpoint of the remote server (http)."`
-	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
+	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
 
 	// ToolAnnotations corrects behavioural hints per TOOL, keyed by bare
 	// tool name.

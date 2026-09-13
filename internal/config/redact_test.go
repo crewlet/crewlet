@@ -30,6 +30,12 @@ providers:
     type: openai
     model: text-embedding-3-small
     api_key: sk-embeddings-literal
+  sandbox:
+    fake: true
+    setup:
+      - name: registry
+        files: {"/root/.npmrc": "//registry.example.com/:_authToken=setup-file-literal"}
+        env: {REGISTRY_TOKEN: setup-env-literal}
 integrations:
   mattermost:
     enabled: true
@@ -49,6 +55,11 @@ mcp_servers:
     command: notion-mcp
     env:
       NOTION_TOKEN: literal-notion-token
+  - name: tracker
+    transport: http
+    url: https://tracker.example.com/mcp
+    headers:
+      Authorization: "Bearer header-literal-token"
 roles:
   - name: CEO
     handle: ceo
@@ -83,7 +94,8 @@ func TestNoLiteralCredentialSurvivesRedaction(t *testing.T) {
 	for _, literal := range []string{
 		"sk-literal-key", "sk-embeddings-literal", "pl-literal-secret",
 		"gl-literal-pat", "literal-notion-token", "per-seat-literal",
-		"mm-literal-bot-token",
+		"mm-literal-bot-token", "header-literal-token", "setup-file-literal",
+		"setup-env-literal",
 	} {
 		if strings.Contains(string(blob), literal) {
 			t.Errorf("the redacted config still carries %q", literal)
@@ -184,6 +196,72 @@ func TestAMaskedConfigCanBeSentBack(t *testing.T) {
 	}
 	if got := edited.MCPServers[0].Env["NOTION_TOKEN"]; got != "literal-notion-token" {
 		t.Errorf("mcp server env = %q", got)
+	}
+	if got := edited.MCPServers[1].Headers["Authorization"]; got != "Bearer header-literal-token" {
+		t.Errorf("mcp server header = %q", got)
+	}
+	step := edited.Providers.Sandbox.Setup[0]
+	if got := step.Env["REGISTRY_TOKEN"]; got != "setup-env-literal" {
+		t.Errorf("setup step env = %q", got)
+	}
+	if got := step.Files["/root/.npmrc"]; !strings.Contains(got, "setup-file-literal") {
+		t.Errorf("setup step file = %q", got)
+	}
+}
+
+// ONLY A WHOLE REFERENCE IS SHOWN.
+//
+// A value that embeds a reference beside literal text is a credential with a
+// pointer in it, and the literal half is what leaks. The resolver expands an
+// embedded reference, so these values are legitimate configuration rather
+// than typos, which is exactly why they reach a read surface.
+func TestOnlyAWholeReferenceSurvivesRedaction(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, value string
+		shown       bool
+	}{
+		{"a whole reference", "${TRACKER_TOKEN}", true},
+		{"a whole reference with surrounding space", "  ${TRACKER_TOKEN} ", true},
+		{"a reference embedded after a literal", "sk-live-SECRET-${SUFFIX}", false},
+		{"a prefixed reference", "Bearer ${TRACKER_TOKEN}", false},
+		{"two references side by side", "${USER}:${PASSWORD}", false},
+		{"a shell expansion the resolver ignores", "secret-${line#host=}", false},
+		{"a numeric name the resolver never substitutes", "${1}", false},
+		{"an unclosed brace", "sk-${UNCLOSED", false},
+		{"a plain literal", "sk-literal", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mask(tc.value, true)
+			switch {
+			case tc.shown && got != tc.value:
+				t.Errorf("mask(%q) = %q, want the reference shown", tc.value, got)
+			case !tc.shown && got != Redacted:
+				t.Errorf("mask(%q) = %q, want the mask", tc.value, got)
+			}
+		})
+	}
+}
+
+// AN EMBEDDED REFERENCE STILL ROUND-TRIPS.
+//
+// Masking a value the operator can partly read is only safe if sending the
+// document back restores it: otherwise a GET-edit-PUT would replace the
+// header with the marker, and validation would refuse an edit that touched
+// something else entirely.
+func TestAnEmbeddedReferenceIsMaskedAndRestored(t *testing.T) {
+	t.Parallel()
+	original := credentialCompany(t)
+	original.MCPServers[1].Headers["Authorization"] = "Bearer ${TRACKER_TOKEN}"
+
+	edited := original.Redact()
+	if got := edited.MCPServers[1].Headers["Authorization"]; got != Redacted {
+		t.Fatalf("header on the read = %q, want the mask", got)
+	}
+	edited.RestoreRedacted(original)
+	if got := edited.MCPServers[1].Headers["Authorization"]; got != "Bearer ${TRACKER_TOKEN}" {
+		t.Errorf("header after the restore = %q, want the stored value", got)
 	}
 }
 
@@ -341,6 +419,20 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"ForgeAppID": true,
 	}
 
+	// THE TYPE RULE, beside the name rule. A map named Env, Headers or Files
+	// is where a process's credentials are handed to it, and its NAME says
+	// nothing credential-like: MCPServer.Headers (an authorization header)
+	// and SandboxSetupStep.Env and .Files (a registry token, an auth file)
+	// all passed the name rule untagged and were published verbatim. Every
+	// such map is tagged unless it is exempted here, by Type.Field, with the
+	// reason it holds no credential.
+	credentialMaps := map[string]bool{"Env": true, "Headers": true, "Files": true}
+	exemptMaps := map[string]string{
+		// None today. An entry is a decision somebody wrote down, e.g.
+		// "Thing.Env": "names of variables only; the values live elsewhere".
+	}
+	stringMap := reflect.TypeOf(map[string]string(nil))
+
 	var walk func(t reflect.Type, path string, seen map[reflect.Type]bool)
 	walk = func(rt reflect.Type, path string, seen map[reflect.Type]bool) {
 		for rt.Kind() == reflect.Pointer || rt.Kind() == reflect.Slice ||
@@ -358,6 +450,16 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			}
 			name := strings.ToLower(field.Name)
 			tagged := field.Tag.Get(secretTag) == "true"
+			if field.Type == stringMap && credentialMaps[field.Name] && !tagged {
+				if _, ok := exemptMaps[rt.Name()+"."+field.Name]; !ok {
+					t.Errorf("%s.%s is a map[string]string named %s and is not "+
+						"tagged secret:\"true\": a process's credentials are "+
+						"handed to it through exactly this shape, so the config "+
+						"read surface publishes them. Tag it, or exempt it with "+
+						"the reason it holds none",
+						path+rt.Name(), field.Name, field.Name)
+				}
+			}
 			for _, needle := range credential {
 				if strings.Contains(name, needle) && !tagged && !exempt[field.Name] {
 					t.Errorf("%s.%s looks like a credential and is not tagged "+

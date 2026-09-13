@@ -1422,6 +1422,47 @@ func TestReferencesNeverReportsALiteralCredential(t *testing.T) {
 	}
 }
 
+// AN EMBEDDED REFERENCE IS MASKED ON THE READ AND STILL INDEXED.
+//
+// A header written as "Bearer sk-live-${SUFFIX}" carries a literal half that
+// is a credential, so GET /config masks the whole value. The reference index
+// answers "what breaks if I remove SUFFIX", and building it from that mask
+// would report that nothing does. Both halves are asserted together because
+// either one alone is satisfied by a regression in the other direction.
+func TestAnEmbeddedReferenceIsMaskedOnTheReadAndStillIndexed(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t, nil)
+	s.seed(t, companyDoc+`
+mcp_servers:
+  - name: tracker
+    transport: http
+    url: https://tracker.example.com/mcp
+    headers:
+      Authorization: "Bearer sk-live-${SUFFIX}"
+`, nil)
+
+	read := s.do(t, http.MethodGet, "/config", "", nil)
+	if read.Code != http.StatusOK {
+		t.Fatalf("GET /config = %d: %s", read.Code, read.Body)
+	}
+	if body := read.Body.String(); strings.Contains(body, "sk-live") {
+		t.Errorf("the literal half of an embedded reference was served: %s", body)
+	}
+
+	res := s.do(t, http.MethodGet, "/config/references", "", nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("GET /config/references = %d: %s", res.Code, res.Body)
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, `"mcp_servers[0].headers.Authorization"`) ||
+		!strings.Contains(body, `"SUFFIX"`) {
+		t.Errorf("the embedded reference is missing from the index: %s", body)
+	}
+	if strings.Contains(body, "sk-live") {
+		t.Errorf("the reference index carried a value: %s", body)
+	}
+}
+
 // A node before its first import has no document to reference anything, and
 // reporting that as a failure would make a working new install look broken.
 func TestReferencesAnswersNotFoundBeforeAnythingIsActive(t *testing.T) {

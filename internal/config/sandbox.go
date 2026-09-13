@@ -545,7 +545,12 @@ type SandboxSetupStep struct {
 
 	// Files are written into the box (path -> content) before Commands
 	// run. ${VAR} references here are resolved when the step is loaded.
-	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run."`
+	//
+	// A CREDENTIAL FIELD, because provisioning is what these files are for:
+	// a registry's auth file, a git credential store, a cloud CLI's config.
+	// A file's content is shown on a config read only when it is exactly one
+	// ${VAR} reference, and masked otherwise.
+	Files map[string]string `secret:"true" yaml:"files,omitempty" json:"files,omitempty" desc:"Files written into the box before commands run."`
 
 	// Commands run in order after the files land. A non-zero exit fails
 	// the whole acquisition — the coding agent's brief promises this
@@ -558,7 +563,11 @@ type SandboxSetupStep struct {
 	// of the sandbox env at launch. Resolving it at load as well would
 	// double-resolve and silently mangle any secret whose real value
 	// contains a literal ${...}.
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty" desc:"Env merged into the run; resolved once at launch, not at load."`
+	//
+	// Tagged as a credential like its sibling role.sandbox.env: both are
+	// merged into the same run environment, which is where an external
+	// service token is declared.
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env merged into the run; resolved once at launch, not at load."`
 
 	// Brief is the paragraph handed to the coding agent: what this step
 	// made TRUE about its box. Never resolved — it is agent-facing text,
@@ -579,6 +588,17 @@ type SandboxSetupStep struct {
 // dependency install or a cold image pull, which is what these steps
 // actually do.
 const defaultSetupTimeoutSeconds = 300.0
+
+// IdentityKey is the step's name: the handle a failure message and a log line
+// already use for it, and now what its masked credentials are restored by.
+//
+// A step's env and files are credentials, so a list of steps is a collection
+// whose masks must follow the member rather than the slot. Reordering two
+// provisioning steps must never hand one step's registry token to the other.
+//
+// A VALUE receiver, because the redaction walker holds the prior document by
+// value and cannot take an address inside it.
+func (s SandboxSetupStep) IdentityKey() string { return s.Name }
 
 // Timeout is the per-command cap, applying the default.
 func (s *SandboxSetupStep) Timeout() float64 {
