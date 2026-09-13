@@ -30,7 +30,10 @@
  *   the trigger's viewport rectangle and kept inside the layer's bounds, so the
  *   zoom neither scales nor clips it. It follows the trigger through a pan
  *   (`VIEW_CHANGE_EVENT`) and closes when the trigger is panned out of view.
- *   Anywhere else it is positioned by the stylesheet under its trigger.
+ *   Focus moves in only once it has been placed: until then it is drawn
+ *   `visibility: hidden` so it never flashes at the layer's corner, and a
+ *   browser refuses focus to a hidden element. Anywhere else it is positioned
+ *   by the stylesheet under its trigger.
  * - IT CAN BE OPENED FROM OUTSIDE (`open`, `onOpenChange`), because a tree item
  *   that holds focus opens its card's menu from the keyboard while the
  *   trigger itself is out of the tab order (`triggerTabIndex={-1}`).
@@ -147,7 +150,7 @@ export function Menu({
   const entries = () =>
     menu.current ? [...menu.current.querySelectorAll<HTMLElement>("[role='menuitem']")] : [];
 
-  // ON OPEN: remember what held focus, then move it into the menu.
+  // ON OPEN: remember what held focus.
   useLayoutEffect(() => {
     if (!open) return;
     const active = document.activeElement;
@@ -156,10 +159,17 @@ export function Menu({
     if (!(active instanceof Node && menu.current?.contains(active))) {
       opener.current = active instanceof HTMLElement ? active : null;
     }
+  }, [open]);
+
+  // THEN MOVE IT IN, once the menu can take it: at once under its trigger, and
+  // in a layer only after it has been placed (see the module doc).
+  const placed = open && (!layer || place !== null);
+  useLayoutEffect(() => {
+    if (!placed) return;
     const all = entries();
     (startAt.current === "last" ? all[all.length - 1] : all[0])?.focus();
     startAt.current = "first";
-  }, [open]);
+  }, [placed]);
 
   // ---- position in a layer -------------------------------------------------
   const position = useCallback(() => {
@@ -268,7 +278,7 @@ export function Menu({
 
   const list = open ? (
     <div
-      className={cx("popover", "menu", !layer && align === "end" && "end", layer && "in-layer")}
+      className={cx("popover", "menu", !layer && align === "end" && "end")}
       id={menuID}
       role="menu"
       aria-label={label}

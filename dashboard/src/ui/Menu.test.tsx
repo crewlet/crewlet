@@ -194,9 +194,19 @@ test("given a layer, it renders there, placed from the trigger's rectangle, and 
     render(<Menu label="Actions for Software Engineer" items={entries()} layer={layer} />);
     let anchor = rect(150, 80, 24, 24);
     trigger().getBoundingClientRect = () => anchor;
+    // A browser refuses focus to an element under `visibility: hidden`, which
+    // jsdom does not model, so the menu's style is read at the moment focus
+    // arrives.
+    let visibilityOnFocus: string | null = null;
+    layer.addEventListener("focusin", (e) => {
+      visibilityOnFocus = (e.target as HTMLElement).closest<HTMLElement>("[role='menu']")!.style
+        .visibility;
+    });
     fireEvent.click(trigger());
     const menu = screen.getByRole("menu");
     expect(layer.contains(menu)).toBe(true);
+    expect(document.activeElement).toBe(item("Edit"));
+    expect(visibilityOnFocus).toBe("");
     // Below the trigger by the gap, lined up with its start, in layer coordinates.
     expect(menu.style.left).toBe("50px");
     expect(menu.style.top).toBe("58px");
