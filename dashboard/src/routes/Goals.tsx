@@ -169,7 +169,7 @@ function GoalPanel({
         </span>
       }
     >
-      <div className="row gap-2 wrap" style={{ marginBottom: "var(--sp-3)" }}>
+      <div className="row gap-2 wrap" style={{ marginBottom: "var(--space-3)" }}>
         {goal.owners.map((handle) => (
           <Chip key={handle} onClick={() => onOwner(handle)} title={`Only ${handle}'s goals`}>
             {handle}
