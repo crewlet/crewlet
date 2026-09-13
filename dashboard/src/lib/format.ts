@@ -326,14 +326,23 @@ export type ConfigValueKind = "empty" | "hidden" | "reference" | "literal";
  *
  * `hidden` is the mask: a literal is set and its value is not on the wire. A
  * `reference` is ONE whole `${NAME}`, the only form the engine sends unmasked
- * in a credential field. Anything else is a plain literal from a field that
- * is not a credential, such as a contact identity.
+ * in a credential field. Anything else is a `literal`.
+ *
+ * `secret` says the value comes from a CREDENTIAL field, and there a literal
+ * is `hidden` as well. The engine is meant never to send one, but its
+ * redaction once treated any value containing `${` as a reference, so
+ * `Bearer sk-live-${SUFFIX}` reached the wire with its literal half intact.
+ * What this page prints must not depend on every engine it talks to having
+ * got that right: a credential field shows a whole reference or nothing.
  */
-export function configValueKind(value: string | null | undefined): ConfigValueKind {
+export function configValueKind(
+  value: string | null | undefined,
+  { secret = false }: { secret?: boolean } = {},
+): ConfigValueKind {
   if (value == null || value === "") return "empty";
   if (value === REDACTED) return "hidden";
   // The grammar and the trim are `envref.Whole`'s, so what this calls a
   // reference is exactly what the engine resolves as one.
   if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
-  return "literal";
+  return secret ? "hidden" : "literal";
 }

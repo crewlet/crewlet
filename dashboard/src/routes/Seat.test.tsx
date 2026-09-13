@@ -11,10 +11,11 @@
  * it were a value.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { SeatScreen } from "./Seat.tsx";
 import { Router } from "~/app/router.tsx";
+import { fmtCount } from "~/lib/format.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/index.ts";
@@ -73,6 +74,7 @@ const companyDoc: CompanyDocument = {
       llm: { default: ["fast", "backup"], review: "big" },
       llm_auxiliary: "fast",
       token_budget: 250000,
+      schedules: [{ name: "weekly-review", cron: "0 9 * * 1", task: "Review the week" }],
     },
   ],
   units: [
@@ -83,7 +85,11 @@ const companyDoc: CompanyDocument = {
         {
           name: "Dev A",
           contact: {},
-          mcp_env: { tracker: { API_TOKEN: "__redacted__" } },
+          // AUTH_HEADER is what an engine whose redaction took any value
+          // containing `${` for a reference sent: its literal half intact.
+          mcp_env: {
+            tracker: { API_TOKEN: "__redacted__", AUTH_HEADER: "Bearer sk-live-${SUFFIX}" },
+          },
           integrations: {
             slack: {
               bot_token: "${DEV_A_SLACK_BOT_TOKEN}",
@@ -107,21 +113,29 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount(hash: string, answer: (what: string) => Promise<unknown>, org = projection) {
+function mountWithStore(
+  hash: string,
+  answer: (what: string) => Promise<unknown>,
+  org = projection,
+) {
   location.hash = hash;
   const store = new Store();
   store.applyOrg(org);
   const socket = new LiveSocket(store);
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = answer;
   const handle = hash.split("/")[2]!.split("?")[0]!;
-  return render(
+  const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
         <SeatScreen handle={handle} />
       </Router>
     </ClientContext.Provider>,
   );
+  return { store, view };
 }
+
+const mount = (hash: string, answer: (what: string) => Promise<unknown>, org = projection) =>
+  mountWithStore(hash, answer, org).view;
 
 const answering = (what: string) =>
   what === "config" ? Promise.resolve(companyDoc) : Promise.resolve({ llm_history: [], next: "" });
@@ -157,9 +171,11 @@ test("reporting lines come from the engine's derived hierarchy", async () => {
 test("a credential is never printed, and a reference is shown as the name it is", async () => {
   mount("#/seats/dev-a?tab=access", answering);
   expect(await screen.findByText("${DEV_A_SLACK_BOT_TOKEN}")).toBeDefined();
-  // The mask says only that something is set. It is never the value.
-  expect(screen.getAllByText("A literal value is set (hidden)").length).toBe(2);
+  // The mask says only that something is set. It is never the value, and a
+  // credential field that is not one whole reference is hidden the same way.
+  expect(screen.getAllByText("A literal value is set (hidden)").length).toBe(3);
   expect(document.body.textContent).not.toContain("__redacted__");
+  expect(document.body.textContent).not.toContain("sk-live");
   // What the home unit gives the seat is listed under the unit, not merged.
   expect(screen.getByText("${ENGINEERING_GITHUB_TOKEN}")).toBeDefined();
   expect(screen.getByText(/Set on its unit, Engineering/)).toBeDefined();
@@ -178,6 +194,31 @@ test("without a token the configured half is the guarded banner, and the rest st
 
   fireEvent.click(screen.getByRole("tab", { name: "Access" }));
   expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+});
+
+// A REFUSAL CLEARS WHAT THE TOKEN HAD READ. The query keeps its last good
+// answer through a failed ask, so a token cleared or refused mid-session left
+// the seat's email, budget and schedules on screen beside the banner saying
+// they need a token.
+test("a refused re-read takes the guarded settings off the page", async () => {
+  let refuse = false;
+  const { store } = mountWithStore("#/seats/ceo", (what) =>
+    what === "config" && refuse ? Promise.reject(new Error("unauthorized")) : answering(what),
+  );
+  expect(await screen.findByText("ceo@example.com")).toBeDefined();
+  expect(screen.getByText("weekly-review")).toBeDefined();
+  expect(screen.getByText(fmtCount(250000))).toBeDefined();
+
+  refuse = true;
+  // A reconnect asks every query again, as a token change does.
+  act(() => store.setConnected(true));
+  expect(await screen.findByText(/This answer is auth-gated/)).toBeDefined();
+  expect(screen.queryByText("ceo@example.com")).toBeNull();
+  expect(screen.queryByText("weekly-review")).toBeNull();
+
+  fireEvent.click(screen.getByRole("tab", { name: "Cost" }));
+  expect(screen.queryByText(fmtCount(250000))).toBeNull();
+  expect(screen.getByText("Unknown")).toBeDefined();
 });
 
 test("an engine that sends no derived hierarchy is reported, not guessed at", async () => {

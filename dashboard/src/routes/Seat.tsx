@@ -123,9 +123,14 @@ export function SeatScreen({ handle }: { handle: string }) {
   const config = useQuery("config", undefined, {
     enabled: !!seat && (tab === "overview" || tab === "cost" || tab === "access"),
   });
+  // NOTHING FROM THE DOCUMENT BESIDE A REFUSAL. useQuery keeps its last good
+  // answer through a failed ask, which suits a poll and is wrong for a guarded
+  // read: once a token is cleared or refused, the email, model, budget and
+  // schedules it had been allowed to read stayed on the overview and the cost
+  // tab, next to a banner saying the answer needs a token.
   const settings = useMemo<SeatSettings | null>(
-    () => (seat && config.data ? seatSettings(config.data, seat) : null),
-    [seat, config.data],
+    () => (seat && config.data && !config.error ? seatSettings(config.data, seat) : null),
+    [seat, config.data, config.error],
   );
 
   const phases = useMemo<PhaseRecord[]>(() => {
@@ -1030,11 +1035,14 @@ function SettingsState({
  * A value from the redacted document, in the form it may be shown.
  *
  * NEVER A CREDENTIAL: a literal in a credential field arrives as the mask and
- * says only that something is set, a whole `${VAR}` names an entry in the
- * secret store, and a plain literal is a field that is not a credential.
+ * says only that something is set, and a whole `${VAR}` names an entry in the
+ * secret store. `secret` marks a credential field, where anything that is not
+ * one whole reference is hidden here too, whatever the engine sent: see
+ * [configValueKind]. A plain literal is shown only in a field that is not a
+ * credential, such as a contact identity.
  */
-function ConfigValue({ value }: { value: string | undefined }) {
-  switch (configValueKind(value)) {
+function ConfigValue({ value, secret = false }: { value: string | undefined; secret?: boolean }) {
+  switch (configValueKind(value, { secret })) {
     case "hidden":
       return <span className="t-caption">A literal value is set (hidden)</span>;
     case "reference":
@@ -1117,22 +1125,22 @@ function SeatIntegrations({ role }: { role: ConfigRole }) {
         ),
       ],
       ["GitHub App", text(i.github.app_slug)],
-      ["GitHub App key", <ConfigValue key="gk" value={i.github.private_key} />],
-      ["GitHub webhook secret", <ConfigValue key="gw" value={i.github.webhook_secret} />],
+      ["GitHub App key", <ConfigValue key="gk" secret value={i.github.private_key} />],
+      ["GitHub webhook secret", <ConfigValue key="gw" secret value={i.github.webhook_secret} />],
     );
   }
   if (i.slack) {
     items.push(
       ["Slack channel", text(i.slack.channel)],
-      ["Slack bot token", <ConfigValue key="sb" value={i.slack.bot_token} />],
-      ["Slack signing secret", <ConfigValue key="ss" value={i.slack.signing_secret} />],
+      ["Slack bot token", <ConfigValue key="sb" secret value={i.slack.bot_token} />],
+      ["Slack signing secret", <ConfigValue key="ss" secret value={i.slack.signing_secret} />],
     );
   }
   if (i.mattermost) {
     items.push(
       ["Mattermost username", text(i.mattermost.username)],
       ["Mattermost channel", text(i.mattermost.channel)],
-      ["Mattermost bot token", <ConfigValue key="mb" value={i.mattermost.bot_token} />],
+      ["Mattermost bot token", <ConfigValue key="mb" secret value={i.mattermost.bot_token} />],
     );
   }
   if (i.jira) items.push(["Owns Jira project", text(i.jira.project)]);
@@ -1178,7 +1186,7 @@ function ToolCredentials({
               <code key={name} className="inline">
                 {name}
               </code>,
-              <ConfigValue key={`${name}-v`} value={value} />,
+              <ConfigValue key={`${name}-v`} secret value={value} />,
             ])}
           />
         </div>

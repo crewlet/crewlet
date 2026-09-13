@@ -244,6 +244,15 @@ describe("a value read from the redacted document", () => {
     expect(configValueKind("${TOKEN")).toBe("literal");
   });
 
+  // DEFENCE IN DEPTH. An engine whose redaction let a partial reference
+  // through would otherwise have its literal half printed on this page.
+  test("in a credential field, anything but one whole reference is hidden", () => {
+    expect(configValueKind("Bearer sk-live-${SUFFIX}", { secret: true })).toBe("hidden");
+    expect(configValueKind("plain-token", { secret: true })).toBe("hidden");
+    expect(configValueKind("${TOKEN}", { secret: true })).toBe("reference");
+    expect(configValueKind("", { secret: true })).toBe("empty");
+  });
+
   test("an unset field is empty, and an identity is a literal", () => {
     expect(configValueKind("")).toBe("empty");
     expect(configValueKind(undefined)).toBe("empty");

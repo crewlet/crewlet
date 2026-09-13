@@ -841,7 +841,11 @@ rendered idle from the first phase to the last.
 - **What a redacted document holds is shown as what it is.** A credential
   field arrives as one whole `${VAR}` reference, shown as the name it is, or
   as the engine's mask, shown as "A literal value is set (hidden)". The mask is
-  never printed as if it were a value.
+  never printed as if it were a value, and a credential field holding anything
+  else (a partial reference such as `Bearer sk-${SUFFIX}`) is hidden the same
+  way whatever the engine sent. The guarded half of a screen is drawn only
+  while the guarded read succeeds: a refused re-read takes it off the page
+  rather than leaving the last answer beside the banner.
 - **A screen that throws takes only itself down.** `app/App.tsx` wraps the
   routed screen in an error boundary, so a malformed field renders "This
   screen could not be drawn" with the error's message and a Try again button,
