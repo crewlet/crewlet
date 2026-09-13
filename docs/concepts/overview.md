@@ -225,7 +225,8 @@ internal/
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
-│                         #   auth/, httpjson/, mcpbridge/
+│                         #   auth/, httpjson/, mcpbridge/, and pagepolicy/:
+│                         #   the security headers every response carries
 ├── observe/              # The observability edge (store row + live push)
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields
