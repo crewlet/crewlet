@@ -39,6 +39,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 
 import { Problems } from "./Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "./secretref.ts";
+import { useListbox } from "./useListbox.ts";
 
 export type FieldKind = "text" | "secret" | "url" | "id" | "choice" | "handle" | "email";
 
@@ -160,14 +161,23 @@ export function Field({
   // in — a secret, an id, an email, a token — is a plain one.
   const box = useRef<HTMLInputElement>(null);
   const [typing, setTyping] = useState<Typing | null>(null);
-  const [at, setAt] = useState(0);
-  const listID = `${id}-secrets`;
   const offered = typing && secrets?.length ? rank(secrets, typing.query) : [];
   const open = offered.length > 0;
-  // CLAMPED RATHER THAN RESET, so a list that shrinks under somebody's
-  // finger leaves the highlight on a row that exists instead of jumping
-  // back to the top as they type.
-  const active = Math.min(at, offered.length - 1);
+  // The keys are the shared listbox's (`useListbox`): arrows wrap, the
+  // highlight is clamped rather than reset as the list narrows, Enter takes a
+  // name without submitting the form, and Escape closes the list and not the
+  // dialog around it.
+  const listbox = useListbox({
+    id,
+    open,
+    count: offered.length,
+    // TAB TAKES THE HIGHLIGHTED NAME rather than leaving the field, which is
+    // what it means in every other completion list.
+    tabCommits: true,
+    onCommit: (index) => choose(offered[index] ?? ""),
+    // Escape means "not this", and the field keeps what was typed.
+    onClose: () => setTyping(null),
+  });
 
   /** Re-reads what is under the caret after anything that can move it. */
   function reconsider(target: HTMLInputElement) {
@@ -190,7 +200,7 @@ export function Field({
     const caret = masked ? input.value.length : (input.selectionStart ?? input.value.length);
     const next = complete(input.value, caret, typing, name);
     setTyping(null);
-    setAt(0);
+    listbox.setActive(0);
     onChange(next.value);
     // AFTER REACT HAS WRITTEN THE VALUE, or the caret is placed in the old
     // string and lands wherever the new one happens to put it.
@@ -198,38 +208,6 @@ export function Field({
       input.setSelectionRange(next.caret, next.caret);
       input.focus();
     });
-  }
-
-  function navigate(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (!open) return;
-    switch (e.key) {
-      case "ArrowDown":
-        e.preventDefault();
-        setAt((was) => (was + 1) % offered.length);
-        return;
-      case "ArrowUp":
-        e.preventDefault();
-        setAt((was) => (was - 1 + offered.length) % offered.length);
-        return;
-      case "Enter":
-      case "Tab":
-        // TAB TAKES THE HIGHLIGHTED NAME rather than leaving the field,
-        // which is what it means in every other completion list. Enter is
-        // prevented too: this form submits on Enter, and choosing a name
-        // is not asking to save.
-        e.preventDefault();
-        choose(offered[active] ?? "");
-        return;
-      case "Escape":
-        // THE LIST CLOSES, AND THE DIALOG DOES NOT. Escape here means "not
-        // this", and the field keeps what was typed.
-        e.preventDefault();
-        e.stopPropagation();
-        setTyping(null);
-        return;
-      default:
-        return;
-    }
   }
 
   // What the box holds becomes the whole value again, with a scheme somebody
@@ -364,8 +342,8 @@ export function Field({
             aria-invalid={error ? true : undefined}
             role={open ? "combobox" : undefined}
             aria-expanded={open || undefined}
-            aria-controls={open ? listID : undefined}
-            aria-activedescendant={open ? `${listID}-${active}` : undefined}
+            aria-controls={open ? listbox.listId : undefined}
+            aria-activedescendant={open ? listbox.optionId(listbox.active) : undefined}
             onChange={(e) => {
               changed(e.target.value);
               reconsider(e.target);
@@ -375,29 +353,28 @@ export function Field({
             // edits the reference they already have.
             onKeyUp={(e) => reconsider(e.currentTarget)}
             onClick={(e) => reconsider(e.currentTarget)}
-            onKeyDown={navigate}
+            onKeyDown={listbox.onKeyDown}
             // CLOSED ON THE WAY OUT, and after the click that chose a name:
             // blur fires before the list's own mousedown, so the choice is
             // taken on mousedown below rather than on click.
             onBlur={() => setTyping(null)}
           />
           {open && (
-            <ul className="input-suggest-list" id={listID} role="listbox" aria-label="Secrets">
+            <ul
+              className="input-suggest-list"
+              id={listbox.listId}
+              role="listbox"
+              aria-label="Secrets"
+            >
               {offered.map((name, i) => (
                 <li
                   key={name}
-                  id={`${listID}-${i}`}
+                  id={listbox.optionId(i)}
                   role="option"
-                  aria-selected={i === active}
-                  className={i === active ? "input-suggest is-active" : "input-suggest"}
-                  // MOUSEDOWN, NOT CLICK. The field blurs on mousedown, and a
-                  // blur that closed the list would take the row out from
-                  // under the click that was choosing it.
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    choose(name);
-                  }}
-                  onMouseEnter={() => setAt(i)}
+                  aria-selected={i === listbox.active}
+                  className={i === listbox.active ? "input-suggest is-active" : "input-suggest"}
+                  // Taken on mousedown: see `useListbox`.
+                  {...listbox.optionHandlers(i)}
                 >
                   {name}
                 </li>
