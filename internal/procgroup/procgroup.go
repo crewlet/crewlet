@@ -8,10 +8,17 @@
 // on holding whatever it held.
 //
 // Putting the child in its own process group makes the whole tree addressable
-// as one negative pid. That is the entire content of this package, and it
-// lives here rather than beside either caller because two copies of a
-// platform-conditional signal helper is how one of them quietly stops
-// matching the other.
+// as one negative pid. That is most of this package, and it lives here rather
+// than beside any one caller because two copies of a platform-conditional
+// signal helper is how one of them quietly stops matching the other.
+//
+// The rest is the question a caller has to answer before it signals a pid it
+// did not just start: is that group still the one it recorded? Pids are
+// reused, so a pid read back from disk may lead a stranger's group, and the
+// answer ([Leader]) is the pid together with its leader's start time as the
+// kernel reports it. It is here for the same reason as the signals: the start
+// time is read differently on every platform, and a second reader is a second
+// definition of "the same process".
 package procgroup
 
 import (
@@ -50,8 +57,8 @@ func Continue(pid int) error { return signal(pid, sigCont) }
 
 // Exists reports whether the group led by pid has anything in it.
 //
-// A pid is not proof of identity — pids are reused — so a caller that needs
-// "and it is MINE" has to establish that separately. This answers only
+// A pid is not proof of identity, because pids are reused, so a caller that
+// needs "and it is MINE" asks [Leader.Current] instead. This answers only
 // whether something is there.
 func Exists(pid int) bool { return exists(pid) }
 
@@ -63,7 +70,20 @@ func Terminate(pid int) error { return signal(pid, sigTerm) }
 
 // Kill sends SIGKILL to the group led by pid.
 //
-// Callers must have evidence the group is not already reaped — signalling a
+// Callers must have evidence the group is not already reaped: signalling a
 // group whose leader has been waited on is the one way to reach a recycled
-// pid, and "the tree is definitely still there" is cheap to establish.
+// pid. A caller holding the process it started has that evidence already; one
+// holding a pid it read back has it only from [Leader.Current].
 func Kill(pid int) error { return signal(pid, sigKill) }
+
+// addressable reports whether kill(2) reads -pid as ONE process group.
+//
+// Two values do not, and both are refused rather than signalled. Zero and
+// below would address the caller's own group, which is every process in the
+// engine's session. One is the sharper case: kill(-1, sig) is the BROADCAST
+// form, delivered to every process the caller has permission to signal, so a
+// SIGKILL "to the group led by pid 1" takes down the engine, every coding job
+// and, on a workstation, the operator's whole login. No child this package
+// addresses can be pid 1: init holds it for the life of the pid namespace,
+// the engine's own included when it runs as a container's first process.
+func addressable(pid int) bool { return pid > 1 }
