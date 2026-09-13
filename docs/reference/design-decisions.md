@@ -95,7 +95,7 @@ Everything concurrent is a goroutine whose lifetime belongs to whoever started i
 
 ## Event Schema Versioning
 
-Every persisted event can carry versioning. Schema changes must be **additive only** — new fields with defaults, existing fields never removed. A consumer does not *ignore* what it does not recognise, it **preserves** it: an event type this build has no payload for still decodes into the envelope, keeps its unknown fields, and re-publishes them unchanged. That is the load-bearing half. Ignoring an unknown field is indistinguishable from dropping it, and during a rolling upgrade the older nodes are the ones holding the newer events — a node that dropped what it could not parse would silently strip the new fields off every event it forwarded, which turns each upgrade into an outage. Preserving instead means old and new nodes coexist on one stream with no migration and no ordering requirement between them.
+An event carries no schema version field, because evolution never needs one: changes to an event type are **additive only**, so new fields arrive with defaults and existing fields are never removed or repurposed. A consumer does not *ignore* what it does not recognise, it **preserves** it: an event type this build has no payload for still decodes into the envelope, keeps its unknown fields, and re-publishes them unchanged. That is the load-bearing half. Ignoring an unknown field is indistinguishable from dropping it, and during a rolling upgrade the older nodes are the ones holding the newer events, and a node that dropped what it could not parse would silently strip the new fields off every event it forwarded, which turns each upgrade into an outage. Preserving instead means old and new nodes coexist on one stream with no migration and no ordering requirement between them.
 
 ---
 
@@ -103,7 +103,7 @@ Every persisted event can carry versioning. Schema changes must be **additive on
 
 A running company takes a new configuration without a restart. **Which** revision is current is a fleet-wide fact; **applying** it is a per-node act.
 
-Within one process, applying a revision is shared-memory work: the engine swaps the `Organization` object, cancels removed agents' handlers and publishes `AgentTerminated`, spawns new ones onto their inbox subscriptions, and updates a modified `AgentDefinition` in place so the agent picks it up on its next turn. Every agent handler is a goroutine in that process, so the swap has nothing to propagate — but they run in genuine parallel, so what they share is guarded rather than assumed safe, and the race detector is what holds that.
+Within one process, applying a revision builds a new **epoch**: the `Organization`, the model registry, the tool registry and everything else derived from the document, built and validated together and then published as one value. Nothing already published is edited. A turn pins the epoch it started on and reads only that one until it ends, so a change reaches a seat at its next turn, and a revision that fails to build is refused before it is published, leaving the previous epoch serving. The node then converges on the new seat list: it creates a mailbox for each seat the revision adds, its placement sweep releases a seat whose role is gone, and a removed seat's mailbox is retired once the seat has been absent for a grace period (see [Seat Ownership: The removed seat](../concepts/seat-ownership.md#the-removed-seat)). Turns run in genuine parallel on goroutines, and publishing a whole new value instead of mutating a shared one is what keeps a mid-turn apply from being a data race (see [Organization Model: Hot Reload](../concepts/organization-model.md#hot-reload)).
 
 Across processes that is not enough, and the way it failed is worth naming: activation used to be delivered over a competing-consumer subscription, which means **exactly one replica applied a revision and every other node went on running the previous company indefinitely** — with no error anywhere, because from each node's point of view nothing had happened.
 
@@ -119,8 +119,8 @@ Each Role defines a unique individual agent — not a pool of interchangeable in
 
 - Agents have distinct personalities, backstories, and domain expertise
 - Task assignment is a **team lead reasoning decision**, not load-balancing
-- External identity (Slack bot, Jira assignee, email) maps to one entity
-- Simplifies the model: no `role.count`, no suffixed handles, no `AgentPool.get_available()`
+- An external identity (a Slack app, a Jira account, a GitHub App, a GitLab service account) maps to one entity
+- Simplifies the model: no replica count on a role, no suffixed handles, and no pool to pick an available instance from
 
 ---
 
@@ -128,7 +128,7 @@ Each Role defines a unique individual agent — not a pool of interchangeable in
 
 There are no algorithmic assignment strategies — no role-based, hierarchical, or claim-based auto-routing. Task assignment is a **team lead reasoning decision**: the lead agent assigns the work item in the external PM tool (Jira, GitLab issues, …) through that tool's own MCP tools.
 
-The team lead's executor system prompt includes a compact team roster (names + handles), plus a per-member detail block (backstory, goal, responsibilities, Jira identity, skills) rendered directly from the in-memory `Organization` model so the lead has full context when reasoning about an assignment.
+The team lead's executor system prompt includes a team roster: each direct report's name and handle with its background, goal and responsibilities (and, for a human report, its contact IDs and availability), rendered directly from the in-memory `Organization` model so the lead has the context it needs when reasoning about an assignment.
 
 ---
 
@@ -193,9 +193,10 @@ that list, and the two bullets below are why.
 ## One Knowledge Backend, Behind a Seam That Keeps It Swappable
 
 The knowledge base is **single-homed**: the engine wires exactly one
-`knowledge.Searcher`, and every consumer — the `## Relevant
-knowledge` prefetch, the first-turn onboarding hint, the cross-agent
-skill-promotion pass — reads through it. Two searchers would make an agent's
+backend. Both readers, the `## Relevant knowledge` prefetch and the
+`search_knowledge` builtin, search through the one `knowledge.Searcher`,
+and the cross-agent skill-promotion pass drafts into that same backend
+through `learning.PromotionWriter`. Two searchers would make an agent's
 answer to "what do we already know about this" depend on which one was asked,
 and neither would be wrong.
 
@@ -215,9 +216,9 @@ reads as a working narrowing and narrows nothing. See
 
 ## No Dedicated Escalation Mechanism
 
-There is no special escalation mechanism. When stuck, agents hand off to their manager with the same colleague-surface tools they use for any collaboration (Jira comment, Slack mention, A2A) — same as a human would. There is no dedicated handoff decision and no `fallback` chain: Review routes a blocked turn back through `self_iterate` so Plan adds the outreach step, and Execute makes the call. The hierarchy is informational + downward-delegation routing; it does not drive a special upward path at runtime.
+There is no special escalation mechanism. When stuck, agents hand off to their manager with the same colleague-surface tools they use for any collaboration (a Jira comment, a Slack mention, A2A), the same as a human would. There is no dedicated handoff decision and no engine-side fallback: the reviewer routes a blocked turn back through `self_iterate`, and the executor's next round makes the outreach. The hierarchy is informational and routes downward delegation; it does not drive a special upward path at runtime.
 
-Engine-detected failures (stall, max-iter exhaustion, depth cap, unhandled exception, LLM-provider chain exhausted) publish `turn.guard_breach` / `llm_unavailable` events and terminate the turn as `failed`. The dashboard derives an `afk` state from the latest failure event and surfaces a cause-specific quip for the founder. No active push notification is sent — visibility is logs + dashboard, by design.
+Engine-detected failures end the turn as `failed` and publish a failure event beside its `agent_turn_completed`: a fired turn guard (stall, max-iteration exhaustion, the delegation-depth cap, a scheduled turn's wall-clock cap) publishes `turn.guard_breach`, a spent token budget publishes `budget_exhausted`, and a provider chain whose every member failed retryably publishes `llm_unavailable`. The dashboard derives an `afk` state from those three events and surfaces a cause-specific quip for the founder. Any other broken phase is recorded only as the error on `agent_turn_completed`. No active push notification is sent: visibility is logs and the dashboard, by design.
 
 ---
 
@@ -295,10 +296,10 @@ so a rotated credential reads as a change from the mask to the mask.
 Two further properties of that surface are worth stating because they are
 easy to assume the other way round:
 
-- **`/config` is guarded in full, reads included.** It is one of exactly two
-  prefixes — `/secrets` is the other — that a read can never reach through
-  `allow_anonymous_read`, held in one list so a third surface cannot be added
-  to half of the rule. Reading it exposes the whole company document: the org
+- **`/config` is guarded in full, reads included.** It is one of the three
+  prefixes (with `/secrets` and `/setup`) that a read can never reach through
+  `allow_anonymous_read`, held in one list (`auth.GuardedPrefixes`) so a new
+  surface cannot be added to half of the rule. Reading it exposes the whole company document: the org
   chart, which integrations are wired, and the shape of every credential.
 - **A write does not apply anything.** `PUT /config` stores a revision and
   moves the activation pointer; it does not touch the running epoch, *not even
@@ -312,8 +313,10 @@ easy to assume the other way round:
 The engine once refused an `integrations.*` block it had no parser for, on the
 theory that a config naming a third-party app the build could not serve should
 fail loudly rather than be silently ignored. That mechanism is **gone**,
-because the premise stopped being true: all seven third-party apps — Mattermost,
-Slack, GitLab, GitHub, Jira, Confluence and Datadog — route end to end, so
+because the premise stopped being true: all seven third-party apps (Mattermost,
+Slack, GitLab, GitHub, Jira, Confluence and Datadog) route end to end, and the
+eighth block, `integrations.atlassian`, is the Atlassian organization whose
+reconcile creates service accounts and which has no inbound route to serve, so
 there is nothing left to refuse. The table it kept held four rows, and each was struck
 as that third-party app shipped its parser.
 
@@ -354,11 +357,11 @@ prompts to a tracing backend.
 
 ---
 
-## Provider Abstraction via Protocols
+## Provider Abstraction via Consumer-Defined Interfaces
 
 All external dependencies (LLM, embeddings, storage) are behind interfaces **defined by the package that calls them**, kept to what that caller needs. There is no `interfaces.go`, and a provider package exports a concrete type. No vendor SDK lock-in. This enables:
 
 - Different roles using different LLM providers/models
 - Configurable embedding providers for the agent-learning subsystem (e.g., OpenAI, or any compatible endpoint)
-- In-memory implementations for unit tests (not used in production code paths)
+- Fakes and in-memory twins for tests, certified by the same contract suites as the real backends where a contract has more than one implementation
 - Easy addition of new providers without touching core logic
