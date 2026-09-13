@@ -213,13 +213,27 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         }
         actions={
-          <Button
-            icon="activity"
-            size="sm"
-            onClick={() => nav.to(["activity"], { actor: seat.name })}
-          >
-            Its events
-          </Button>
+          <>
+            {/* Back into the chart with this seat revealed and ringed, which
+                is where "who is around this seat" is answered. A seat whose
+                handle this engine did not report cannot be named there. */}
+            {seat.handle && (
+              <Button
+                icon="sitemap"
+                size="sm"
+                onClick={() => nav.to(["org"], { seat: seat.handle })}
+              >
+                In the org chart
+              </Button>
+            )}
+            <Button
+              icon="activity"
+              size="sm"
+              onClick={() => nav.to(["activity"], { actor: seat.name })}
+            >
+              Its events
+            </Button>
+          </>
         }
       />
 
@@ -331,7 +345,16 @@ export function SeatScreen({ handle }: { handle: string }) {
                     "Unit",
                     seat.unitChain.length ? (
                       <span key="u" className="col" style={{ gap: 2 }}>
-                        <span>{seat.unitChain.map((u) => u.name).join(" › ")}</span>
+                        <span>
+                          {seat.unitChain.map((u, i) => (
+                            <span key={u.key}>
+                              {i > 0 && " › "}
+                              <a className="t-link" href={href(["org"], { unit: u.name })}>
+                                {u.name}
+                              </a>
+                            </span>
+                          ))}
+                        </span>
                         {seat.placedByRef && (
                           <span className="t-caption">
                             Placed by its <code className="inline">unit</code> reference

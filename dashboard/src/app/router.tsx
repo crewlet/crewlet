@@ -269,9 +269,96 @@ export function href(path: string[], query?: Record<string, string>): string {
 
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Revealing what a link points at
+// ---------------------------------------------------------------------------
+
+/**
+ * An entry the reader has just ARRIVED at, and whether a reveal may still
+ * move the page for it.
+ *
+ * `open` closes on the first reveal and on the first sign the reader is
+ * reading: a wheel, a touch, a pointer or a key on the scroller. The page
+ * moves only when the reader is not reading.
+ */
+interface Arrival {
+  hash: string;
+  open: boolean;
+}
+
+interface Arrivals {
+  current: { value: Arrival | null };
+  /** Reveal attempts to run the moment the router has settled an arrival. */
+  attempts: Set<() => void>;
+}
+
+const ArrivalContext = createContext<Arrivals | null>(null);
+
+/**
+ * Scroll an element into view when the reader arrives at a NEW entry.
+ *
+ * For a link that names a thing inside a screen (`#/org?unit=Backend`): the
+ * reader followed it to see that thing, and a long chart that opens at the
+ * top has put it somewhere they have to hunt for.
+ *
+ * THREE RULES, each of which the obvious implementation breaks:
+ *
+ *  - IT RUNS AFTER THE ROUTER'S SCROLL RESET. A screen's own effect runs
+ *    before this component's (React runs a child's passive effects first), so
+ *    a screen that scrolled on its own was scrolled straight back to the top
+ *    by the reset for a new entry.
+ *  - ONLY FOR SOMEWHERE NEW, never while a Back restore is pending. Back to a
+ *    chart the reader had scrolled means back to where they were, and a
+ *    reveal fighting the restore for its frames is a page that jumps twice.
+ *    A filter change replaces the entry and restores its position too, so it
+ *    never reveals: the reader is already looking at what they changed.
+ *  - IT SCROLLS `#screen-scroll` DIRECTLY. `scrollIntoView` scrolls every
+ *    scrollable ancestor it finds, including ones this layout does not own,
+ *    and jsdom does not implement it at all. The element's own
+ *    `scroll-margin-top` is honoured, so the stylesheet says how much room to
+ *    leave above it.
+ *
+ * The element may not exist yet on arrival (the org projection arrives on the
+ * socket after the route does), so an arrival stays open and the hook tries
+ * again on every render until it finds the element or the reader moves.
+ * `null` reveals nothing.
+ */
+export function useRevealOnArrival(elementId: string | null): void {
+  const arrivals = useContext(ArrivalContext);
+  const route = useContext(RouteContext);
+  const latest = useRef({ elementId, hash: route?.hash ?? "" });
+  latest.current = { elementId, hash: route?.hash ?? "" };
+
+  const attempt = useCallback(() => {
+    const arrival = arrivals?.current.value;
+    const { elementId: id, hash } = latest.current;
+    if (!id || !arrival || !arrival.open || arrival.hash !== hash) return;
+    const scroller = scrollTarget();
+    const target = document.getElementById(id);
+    if (!scroller || !target || !scroller.contains(target)) return;
+    arrival.open = false;
+    const margin = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+    const offset = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+    scroller.scrollTop += offset - margin;
+  }, [arrivals]);
+
+  useEffect(() => {
+    if (!arrivals) return;
+    arrivals.attempts.add(attempt);
+    return () => {
+      arrivals.attempts.delete(attempt);
+    };
+  }, [arrivals, attempt]);
+
+  // Every render, deliberately: the element appears when the data does, and
+  // the attempt is one lookup that does nothing once the arrival has closed.
+  useEffect(attempt);
+}
+
 export function Router({ children }: { children: ReactNode }) {
   const [route, setRoute] = useState<Route>(() => parseHash(location.hash));
   const pending = useRef<string | null>(null);
+  const arrivals = useMemo<Arrivals>(() => ({ current: { value: null }, attempts: new Set() }), []);
 
   useEffect(() => {
     const read = () => setRoute(parseHash(location.hash));
@@ -327,17 +414,30 @@ export function Router({ children }: { children: ReactNode }) {
   useEffect(() => {
     const key = stateKey();
     const el = scrollTarget();
+    arrivals.current.value = null;
     if (!el) return;
+    // Somewhere new starts at the top, and is the one case a link may then
+    // reveal what it points at. See [useRevealOnArrival].
+    const arrive = () => {
+      el.scrollTop = 0;
+      const arrival: Arrival = { hash: route.hash, open: true };
+      arrivals.current.value = arrival;
+      const reading = () => {
+        arrival.open = false;
+      };
+      const events = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+      for (const type of events) el.addEventListener(type, reading, { once: true, passive: true });
+      for (const attempt of arrivals.attempts) attempt();
+      return () => {
+        for (const type of events) el.removeEventListener(type, reading);
+      };
+    };
     if (!key) {
       stampKey();
-      el.scrollTop = 0;
-      return;
+      return arrive();
     }
     const want = positions.get(key);
-    if (want == null) {
-      el.scrollTop = 0;
-      return;
-    }
+    if (want == null) return arrive();
     pending.current = key;
     let tries = 0;
     const settle = () => {
@@ -355,11 +455,13 @@ export function Router({ children }: { children: ReactNode }) {
       el.removeEventListener("wheel", abandon);
       el.removeEventListener("touchstart", abandon);
     };
-  }, [route.hash]);
+  }, [route.hash, arrivals]);
 
   return (
     <RouteContext.Provider value={route}>
-      <NavContext.Provider value={nav}>{children}</NavContext.Provider>
+      <NavContext.Provider value={nav}>
+        <ArrivalContext.Provider value={arrivals}>{children}</ArrivalContext.Provider>
+      </NavContext.Provider>
     </RouteContext.Provider>
   );
 }

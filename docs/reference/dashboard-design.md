@@ -161,7 +161,7 @@ meets their company first and the engine last.
 |---|---|---|---|
 | — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
-| | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
+| | Org chart | `#/org?lens=chart\|directory\|charter&unit=&seat=` | the hierarchy, the directory, and the company's own mission, vision and policies, from the `org` projection and the hierarchy the engine derived. `unit` and `seat` select, and a link carrying one reveals it on arrival |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access. Identity and reporting lines from the `org` projection; email, model, token budget, schedules, contact identities, integrations and tool credential names from the `config` query *(operator-gated)* |
 | **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
@@ -212,6 +212,17 @@ clamped to the height that exists, so one attempt lands short — and abandoned
 the moment the reader touches the page.
 
 All three of these shipped wrong once, and none of them is visible in a URL.
+
+**A link that names something inside a screen reveals it on arrival.**
+`#/org?unit=Backend` scrolls the chart to that unit and rings it, through the
+router's `useRevealOnArrival(elementId)`. It runs after the router's own reset
+for a new entry (a screen scrolling in its own effect was scrolled straight
+back to the top), only for somewhere new and never while a Back restore is
+pending, and it scrolls `#screen-scroll` directly, honouring the element's
+`scroll-margin-top`, rather than calling `scrollIntoView`. An element that
+arrives with the data after the route is revealed when it appears, unless the
+reader has already started reading. The ring is static: nothing on a live
+screen animates for data.
 
 ### The attention queue
 
@@ -761,7 +772,8 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/app/                  shell, hash router, IA, command palette
   src/lib/                  store bindings, one clock, formatting, derivations
   src/ui/                   the component library and the chart kit
-  src/routes/               one file per screen
+  src/routes/               one file per screen; a multi-lens screen keeps its
+                            shell there and its lenses in routes/<screen>/
   src/styles/               tokens, base, components, shell, screens
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
 ```
