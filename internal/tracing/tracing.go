@@ -245,6 +245,11 @@ func (o Options) env(name string) string {
 // a malformed endpoint, because that is a value the operator typed that can
 // never work, and silently exporting nowhere is how a promise like this stops
 // being true without anyone noticing.
+//
+// WHEN IT DOES RETURN AN ERROR IT CHANGES NOTHING. Both providers are built
+// before either is installed, so a failure leaves the process tracing through
+// the provider it already had — this package's init guarantees there is a
+// working one — and leaves nothing running behind it. See the commit below.
 func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	// The propagator is installed whether or not anything exports: it is
 	// what makes an inbound `traceparent` join an existing trace, and what
@@ -252,6 +257,24 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
+
+	// The SDK reports its own failures through a global handler. Left
+	// unset it writes to the standard logger, which in this process is the
+	// one place a line bypasses the engine's own format.
+	//
+	// Installed HERE rather than with the providers, and deliberately NOT
+	// part of the commit below: it owns nothing and only decides where the
+	// SDK's own error lines go, so a Configure that fails half way is
+	// better off having installed it than not — the SDK reports some
+	// construction-time failures through it, including the ones raised
+	// while the providers this function goes on to abandon are being built.
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		// NOT WarnContext: this handler is installed GLOBALLY and outlives
+		// Configure, so capturing its ctx would pin a request-scoped value
+		// into a process-lifetime closure, which is the shape context
+		// threading exists to refuse.
+		log.Warn("otel_internal_error", "error", err)
+	}))
 
 	res, err := resourceFor(opts)
 	if err != nil {
@@ -276,23 +299,27 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 			sdktrace.WithExportTimeout(exportTimeout)))
 	}
 
+	// BUILT HERE, INSTALLED AT THE COMMIT BELOW, because everything between
+	// the two can still fail.
+	//
+	// A provider installed before the metrics half runs is one this
+	// function has already published to every span site in the process by
+	// the time it hands back an error — and the caller, holding no
+	// [Shutdown], has no way to flush or stop it. The batch processor's
+	// goroutine and the OTLP exporter's connection start at CONSTRUCTION
+	// rather than at installation, so that is a live exporter belonging to
+	// a boot that failed.
+	//
+	// Installing first and putting the previous provider back on the error
+	// path is the other repair, and it is worse: what it would restore is
+	// whatever the last Configure's [Shutdown] already terminated, and a
+	// terminated sdktrace.TracerProvider hands out NO-OP tracers — which
+	// pass the parent's span context straight through, which is exactly the
+	// bug this package's own init exists to keep out of the process (see
+	// there). Never installing leaves the working provider that is already
+	// there and leaves no window in which the global is something
+	// mid-teardown.
 	tp := sdktrace.NewTracerProvider(tpOpts...)
-	otel.SetTracerProvider(tp)
-
-	// The SDK reports its own failures through a global handler. Left
-	// unset it writes to the standard logger, which in this process is the
-	// one place a line bypasses the engine's own format.
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		// NOT WarnContext: this handler is installed GLOBALLY and outlives
-		// Configure, so capturing its ctx would pin a request-scoped value
-		// into a process-lifetime closure, which is the shape context
-		// threading exists to refuse.
-		log.Warn("otel_internal_error", "error", err)
-	}))
-
-	log.InfoContext(ctx, "tracing_configured",
-		"exporting", endpoint != "", "endpoint", endpoint,
-		"protocol", protocol(opts), "service", serviceName(opts))
 
 	// THE METER PROVIDER, on the same terms and for the same reason: it is
 	// installed whether or not anything exports, so nothing above this
@@ -305,27 +332,63 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 	rec := opts.Recorder
 	if rec == nil {
 		if rec, err = metrics.New(); err != nil {
-			return nil, err
+			return nil, abandon(ctx, tp, err)
 		}
 	}
-	flushMetrics, err := configureMeter(ctx, opts, rec)
+	mp, err := configureMeter(ctx, opts, rec)
 	if err != nil {
-		return nil, err
+		return nil, abandon(ctx, tp, err)
 	}
+
+	// THE COMMIT. Everything that can fail has succeeded, so the two
+	// globals change together and nothing below here may be fallible: a
+	// step added after this line would reopen exactly the window the
+	// build-then-install order closes.
+	otel.SetMeterProvider(mp)
+	otel.SetTracerProvider(tp)
+
+	// Logged AFTER the commit, so the line is a record of what is running
+	// rather than an announcement the next statement can still retract.
+	log.InfoContext(ctx, "tracing_configured",
+		"exporting", endpoint != "", "endpoint", endpoint,
+		"protocol", protocol(opts), "service", serviceName(opts))
 
 	return func(ctx context.Context) error {
 		// BOTH, and the traces error wins when both fail: it is the one
 		// with spans in flight, and a joined error here would be two
 		// telemetry failures where a caller wants one line.
-		metricsErr := flushMetrics(ctx)
-		if err := shutdown(ctx, tp); err != nil {
+		metricsErr := shutdownMeter(ctx, mp)
+		if err := shutdownTracer(ctx, tp); err != nil {
 			return err
 		}
 		return metricsErr
 	}, nil
 }
 
-// shutdown flushes and stops, bounded.
+// abandon releases a provider whose Configure did not finish, and hands the
+// cause back unchanged.
+//
+// Nothing is installed until [Configure] commits, so there is no global to put
+// back — but a built provider is already RUNNING: the batch processor's
+// goroutine and the exporter's connection start when the provider is
+// constructed, not when it is installed. Dropping the pointer on an error path
+// therefore leaves an exporter alive, on a timer, inside a process that holds
+// no handle to flush or stop it.
+//
+// The cause is returned alone. What an operator has to act on is the value
+// they typed; a flush that failed while stopping a provider which recorded
+// nothing and which nobody will ever read is not a second thing to fix, and
+// joining the two would put two telemetry errors in front of the one that
+// matters. It is logged rather than dropped, because a teardown that fails in
+// silence is how a leak stops being visible.
+func abandon(ctx context.Context, tp *sdktrace.TracerProvider, cause error) error {
+	if err := shutdownTracer(ctx, tp); err != nil {
+		log.WarnContext(ctx, "trace_provider_abandoned_unflushed", "error", err)
+	}
+	return cause
+}
+
+// shutdownTracer flushes and stops, bounded.
 //
 // The context it is GIVEN is normally already cancelled — the cancellation is
 // what woke the drain — so it takes its own deadline off a detached copy, the
@@ -333,7 +396,7 @@ func Configure(ctx context.Context, opts Options) (Shutdown, error) {
 // often the cancellation itself, and a cleanup that inherits a dead context
 // does nothing at all". Without this, the final flush would return instantly
 // and drop every span the drain itself produced.
-func shutdown(ctx context.Context, tp *sdktrace.TracerProvider) error {
+func shutdownTracer(ctx context.Context, tp *sdktrace.TracerProvider) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushGrace)
 	defer cancel()
 	if err := tp.Shutdown(ctx); err != nil {

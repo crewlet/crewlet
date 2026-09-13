@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -61,8 +60,7 @@ func metricsEndpoint(opts Options) string {
 // The endpoint decides, and `OTEL_METRICS_EXPORTER=none` overrides it — which
 // is the operator saying "traces yes, metrics no" in the spec's own words.
 func metricsEnabled(opts Options) bool {
-	switch strings.ToLower(strings.TrimSpace(opts.env(MetricsExporterVar))) {
-	case "none":
+	if strings.ToLower(strings.TrimSpace(opts.env(MetricsExporterVar))) == "none" {
 		return false
 	}
 	return metricsEndpoint(opts) != ""
@@ -84,7 +82,7 @@ func metricInterval(opts Options) time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-// configureMeter installs the MeterProvider and registers every instrument in
+// configureMeter builds the MeterProvider and registers every instrument in
 // the catalogue against the recorder.
 //
 // # Installed unconditionally, exactly as the TracerProvider is
@@ -96,9 +94,16 @@ func metricInterval(opts Options) time.Duration {
 // operator record reads the same recorder a collector would. A provider
 // installed only when an endpoint is set would make every measurement site a
 // place where two behaviours are possible.
+//
+// # Returned rather than installed
+//
+// The install itself belongs to [Configure], which puts both globals in place
+// together once the last thing that can fail has succeeded — see the commit
+// there. A half that installed itself would be a global written by a call that
+// can still return an error to a caller with no handle to undo it.
 func configureMeter(
 	ctx context.Context, opts Options, rec *metrics.Recorder,
-) (Shutdown, error) {
+) (*sdkmetric.MeterProvider, error) {
 	res, err := resourceFor(opts)
 	if err != nil {
 		return nil, err
@@ -129,9 +134,21 @@ func configureMeter(
 	)))
 
 	mp := sdkmetric.NewMeterProvider(providerOpts...)
-	otel.SetMeterProvider(mp)
 
+	//nolint:contextcheck // The chain reaches histogramFor's recording
+	// closure, which takes no context by design — see the paragraph there.
 	if err := registerInstruments(mp, rec); err != nil {
+		// The periodic reader's goroutine starts inside NewPeriodicReader,
+		// so a provider whose registration failed is ALREADY exporting on
+		// a timer, and this is the only frame that still holds it — the
+		// caller is about to get an error and nothing else. Same rule as
+		// [abandon] on the traces side, and the registration error is
+		// returned alone for the same reason: it names the instrument an
+		// operator's catalogue change broke, which a flush failure behind
+		// it would only bury.
+		if ferr := shutdownMeter(ctx, mp); ferr != nil {
+			log.WarnContext(ctx, "meter_provider_abandoned_unflushed", "error", ferr)
+		}
 		return nil, err
 	}
 
@@ -141,14 +158,20 @@ func configureMeter(
 		"interval", metricInterval(opts),
 		"instruments", len(metrics.Catalogue()))
 
-	return func(ctx context.Context) error {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushGrace)
-		defer cancel()
-		if err := mp.Shutdown(ctx); err != nil {
-			return fmt.Errorf("tracing: flush metrics: %w", err)
-		}
-		return nil
-	}, nil
+	return mp, nil
+}
+
+// shutdownMeter flushes and stops the meter half, bounded — the mirror of
+// [shutdownTracer], including its detached context, and for the reason written
+// down there: the context a drain is given is normally the cancelled one that
+// woke it, and a flush inheriting that exports nothing at all.
+func shutdownMeter(ctx context.Context, mp *sdkmetric.MeterProvider) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), flushGrace)
+	defer cancel()
+	if err := mp.Shutdown(ctx); err != nil {
+		return fmt.Errorf("flush metrics: %w", err)
+	}
+	return nil
 }
 
 // registerInstruments wires every catalogue entry to the recorder.
@@ -239,6 +262,14 @@ func histogramFor(meter otelmetric.Meter, inst metrics.Instrument) func(float64,
 		log.Warn("otel_histogram_unavailable", "instrument", inst.Name, "error", err)
 		return nil
 	}
+	// A RECORDING TAKES NO CONTEXT, and this is the frame where that
+	// becomes visible. The recorder's bridge hands an observation straight
+	// through from wherever the measurement was taken, which is often a
+	// deferred timing on a path whose request context is already done —
+	// and a histogram observation is arithmetic that has ALREADY happened,
+	// so threading a cancellable context here would let a finished request
+	// drop its own measurement on the way out. The directive sits at the
+	// registration call, which is where contextcheck reports the chain.
 	return func(v float64, attrs map[string]string) {
 		h.Record(context.Background(), v,
 			otelmetric.WithAttributeSet(attribute.NewSet(attrSet(attrs)...)))
