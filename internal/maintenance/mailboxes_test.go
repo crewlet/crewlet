@@ -785,6 +785,24 @@ func TestASweepResumesAnAbandonedRetirementOnceItIsStale(t *testing.T) {
 	}
 }
 
+// A seat can come back while a peer's retirement of its previous mailbox is
+// still deleting, started from a roster older than this sweep's. The peer
+// re-reads the roster when it finishes and restores what the seat needs; a
+// sweep that cleared the mark meanwhile would hand the record to a registering
+// node while the peer's deletes can still land on the inbox that node creates.
+func TestASweepLeavesAPeersFreshRetirementOfAReturningSeatAlone(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	marked := base.Add(grace)
+	h.markRetiring("swe", marked)
+	h.roster.set("ceo", "swe")
+
+	h.mustTick(marked.Add(time.Minute))
+	if rec, _ := h.record("swe"); !rec.Retiring() || !rec.RetiringSince.Equal(marked) {
+		t.Fatalf("a sweep interfered with a peer's retirement in flight: the record is %+v", rec)
+	}
+}
+
 // An abandoned retirement of a seat that has since come back may have deleted
 // its inbox before it died. The sweep that clears the record restores it.
 func TestAnAbandonedRetirementOfAReturningSeatRestoresItsInbox(t *testing.T) {
@@ -843,6 +861,42 @@ func TestARetirementThatLosesItsRecordRestoresTheInbox(t *testing.T) {
 	}
 	if rec, _ := h.record("swe"); !rec.Present() {
 		t.Fatalf("the returning seat's record is %+v, want it present", rec)
+	}
+}
+
+// A retirement whose record was re-marked by a peer finishing the same work must
+// restore nothing. The seat is still absent; an inbox created for it now outlives
+// the peer's delete of the record, and a subscription the registry no longer
+// names is exactly the leak the retirement exists to end.
+func TestARetirementThatLosesItsRecordToAPeerRetirementRestoresNothing(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+
+	release := make(chan struct{})
+	entered := h.queue.holdNextDelete(release)
+	done := make(chan int64, 1)
+	go func() {
+		n, err := h.tick(h.m, base.Add(grace+time.Minute))
+		if err != nil {
+			t.Errorf("tick: %v", err)
+		}
+		done <- n
+	}()
+	<-entered
+	// A peer's own mark over this retirement's.
+	rec, _ := h.record("swe")
+	rec.RetiringSince = rec.RetiringSince.Add(time.Second)
+	if _, ok, err := h.records.UpdateMailbox(t.Context(), rec); err != nil || !ok {
+		t.Fatalf("peer mark = (%v, %v)", ok, err)
+	}
+	close(release)
+
+	if n := <-done; n != 0 {
+		t.Fatalf("a retirement that lost its record reported %d retired", n)
+	}
+	if h.inboxExists("swe") {
+		t.Fatal("a retirement restored the inbox of a seat a peer is still retiring, which leaves a " +
+			"subscription nothing will remember once the peer deletes the record")
 	}
 }
 
