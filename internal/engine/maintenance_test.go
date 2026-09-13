@@ -57,6 +57,12 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"counterparty_profiles",
 		"events",
 		"scheduled_runs",
+		// The one job that deletes BROKER state rather than rows: a
+		// removed seat's mailbox, retired after its grace period. Named
+		// here because a mailbox nothing retires retains mail for a seat
+		// nobody runs for the life of the deployment, and the only symptom
+		// is a stream that never shrinks.
+		"seat_mailboxes",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("swept tables:\n got %v\nwant %v", got, want)
@@ -80,6 +86,7 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"chat_thread_follows":   maintenance.FollowRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
+		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
 	} {
 		if horizon <= maintenance.Interval {
 			t.Errorf("%s retention (%v) is not longer than the %v tick",

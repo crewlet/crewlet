@@ -272,6 +272,19 @@ type Engine struct {
 	maintenance  *maintenance.Worker
 	integrations *integration.Worker
 
+	// mailboxes registers each seat's mailbox with the fleet and retires
+	// the mailbox of a seat that has left the company. Built BEFORE the
+	// node, which registers through it, and swept by the maintenance duty.
+	// Nil on an engine with no fleet store, where nothing is registered
+	// and nothing retired.
+	mailboxes *maintenance.Mailboxes
+
+	// reconciler is the loop converging this engine on the activation
+	// pointer, recorded by [Engine.NewReconciler]. The mailbox sweep reads
+	// which activation this engine's epoch came from through it, because
+	// nothing else knows: an apply is handed a document, not an epoch.
+	reconciler atomic.Pointer[Reconciler]
+
 	// rewired remembers what the last seat-identity retry resolved on each
 	// surface, so the recovery is logged on the TRANSITION rather than on
 	// every pass of every surface for the life of the deployment. See
@@ -497,9 +510,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// a peer's presence row back through.
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = leaseTTL(opts.Bootstrap)
+	// BEFORE the node, which registers every seat's mailbox through it on
+	// its first walk.
+	if e.mailboxes, err = e.buildMailboxes(backends); err != nil {
+		return fail(fmt.Errorf("engine: seat mailboxes: %w", err))
+	}
 	n, err := node.New(node.Config{
-		Queue: backends.Queue,
-		Coord: backends.Coord,
+		Queue:     backends.Queue,
+		Coord:     backends.Coord,
+		Mailboxes: e.mailboxRegistry(),
 		// The node ID is STABLE across restarts; the owner is this
 		// INCARNATION. A restarted process that reused its owner id would
 		// be indistinguishable from the one that died, and would inherit

@@ -278,6 +278,8 @@ roles:
     handle: sr-eng        # Override auto-derived "senior-engineer"
 ```
 
+**Removing a seat, and adding one back.** Because identity is the handle, what a removed agent seat leaves behind is keyed by it too. Its **mailbox**, and the mail still addressed to it, is kept for 24 hours after the seat leaves the active revision and then retired, so a seat restored within a day finds its backlog and a seat added under the same handle later starts with an empty mailbox. Its **memory** (diary, episodes, counterparty profiles, onboarding markers) is kept, and because it is keyed by the handle or by the agent id derived from it, a seat added again under the same handle reattaches to it. Renaming a seat's handle is a removal of the old handle and an addition of the new one. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
+
 ### Names and handles are unique
 
 Three identities must each name exactly one thing in the whole company:

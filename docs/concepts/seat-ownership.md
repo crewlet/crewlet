@@ -259,13 +259,43 @@ It does, because the **durable subscription** is what retains messages, and the 
 
 - Every seat's subscription is created at boot, by **every node**, at the **earliest** message — and for every seat in the company rather than this node's share, because a mailbox is a fact about the company and the node that ends up serving a seat may not be this one. Creating one is a plain client call that attaches nothing (1.7 ms, idempotent), so it can neither take a share of a peer's live traffic the way creating one by *subscribing* would, nor cost anything when a peer got there first. A config apply that adds a role runs the same walk again.
 - Detach is non-destructive: the subscription and its cursor survive, so unacked messages return to whoever attaches next.
-- Deleting one is explicit (`delete_subscription`) and reserved for a decommissioned role, whose inbox must not accumulate undeliverable events forever.
+- Deleting one is explicit (`delete_subscription`) and reserved for a seat that has left the company, whose mailbox must not accumulate undeliverable events for ever. The maintenance duty does it, after a grace period: see [The removed seat](#the-removed-seat).
 
 > **Creation is a boot step because the alternative is a silent drop, not a slow one.**
 >
 > The agent and notification streams retain by **interest**: a message is kept while a durable consumer that has not acked it exists, and a message published to a subject no subscription covers is discarded at the publish. That is the queue contract's stated behaviour rather than a broker surprise, and it is the same rule that makes an unowned seat's mail safe — the subscription, not a consumer, is what holds it.
 >
-> So the window that loses mail is the one *before* a seat's subscription exists, which is why every node creates every seat's mailbox at boot and why the cost of doing so had to be a millisecond. Once it exists nothing reaps it: a durable consumer carries no inactivity threshold, so a seat can stay unowned for as long as a rebalance, a failed teardown or an operator takes.
+> So the window that loses mail is the one *before* a seat's subscription exists, which is why every node creates every seat's mailbox at boot and why the cost of doing so had to be a millisecond. While the seat is in the company nothing reaps it: a durable consumer carries no inactivity threshold, so a seat can stay unowned for as long as a rebalance, a failed teardown or an operator takes.
+
+## The removed seat
+
+A seat that leaves the company, because its role was deleted, renamed to a new handle or changed to a human seat, leaves its mailbox behind. Nothing consumes it again, and an interest-retained subscription keeps every event still addressed to the handle. Left alone, that mail is retained for the life of the deployment, and a seat later added under the same handle attaches to the old backlog and works it under a role definition that never wrote it.
+
+So the mailbox is **retired**: once the seat has been absent from the active revision for **24 hours**, the maintenance duty deletes its inbox and its sandbox control subscription, and the mail they hold with them.
+
+| What a removed seat had | What happens to it |
+|---|---|
+| Its mailbox (the inbox and the sandbox control subscription) | Kept, with its mail, for 24 hours after a sweep first sees the seat missing, then deleted |
+| Its memory (diary, episodes, counterparty profiles, onboarding markers) | Kept. Memory is keyed by the handle or by the agent id derived from the company name and the handle, so a seat added again under the same handle reattaches to it |
+| Its seat lease | Released by the node that held it, on that node's next placement sweep after it applies the revision (`seat_released_role_gone`) |
+
+**Why a grace period rather than deleting on the apply.** A delete is the one change here that cannot be undone, and seats are removed by mistake: an edit that is reverted, a builder operation that is undone, an import of an older file. Twenty-four hours is long enough for a seat restored within a working day to come back to the mail it was sent while it was gone, and short enough that mail for a seat nobody runs is not kept for more than a day. The clock starts when a sweep first observes the absence, so a retirement is never early: at worst it is one maintenance tick (15 minutes) late, and later still while no node that runs worker duties has applied the current revision.
+
+**How the fleet knows a mailbox exists.** A mailbox's name is derived from its handle, so nothing needs to remember it while the seat is in the company. The queue contract cannot list subscriptions, though, and a removed handle is gone from the org, so every node records each seat in the coordination store's `mailboxes` bucket **before** it creates the subscription. That record is the only thing that still knows a removed seat's mailbox is there. A registration that fails is logged as `seat_mailbox_unregistered` and the mailbox is created anyway, because a seat in the company losing mail is worse than a mailbox the next sweep registers.
+
+**The sweep, one tick at a time.** For each record:
+
+- The seat is in the active revision: an absence recorded earlier is cleared (`seat_mailbox_returned`), and a seat that returns and is removed again starts a new 24 hours.
+- The seat is missing and no absence is recorded: the sweep stamps one (`seat_mailbox_absent`, naming when the mailbox will be retired).
+- The absence is older than the grace period: the mailbox is retired (`seat_mailbox_retired`).
+
+A seat in the active revision with no record at all, a mailbox created by a node whose registration failed, is registered by the sweep so it can be retired if the seat is ever removed.
+
+**Unknown is never absent.** The roster is the agent seats of the revision the fleet's activation pointer names, read on a node that has **applied that revision**. A pointer that cannot be read, a node still converging on the current epoch, a registry or a seat lease that cannot be read: each makes the tick stamp nothing and retire nothing, and the error is logged as the reason. A node that is behind must not be able to judge a seat absent that the fleet has just added back.
+
+**A seat still held is kept.** The seat host releases a seat whose role is gone, so a live lease on a removed seat is a node still serving an older revision, still attached to the mailbox. The retirement waits until that lease is released, and says so as `seat_mailbox_retirement_held`.
+
+**Every write is a compare-and-set, and a retirement is marked before it deletes.** Two sweeps can overlap while the duty moves between nodes; they read the same record, and exactly one wins the mark that starts the retirement. A node that adds the seat back while the retirement is deleting its subscriptions finds the mark and waits for the retirement to finish before it creates the new inbox, so the delete cannot land on it; the new mailbox starts empty. If the retirement does not finish within twice its 30-second budget, the node takes the record over (`seat_mailbox_retirement_taken_over`), and the retiring sweep, finding its record changed, restores the inbox in case its delete landed after the node's create. A sweep that dies after marking leaves a mark a later sweep resumes once it is 15 minutes old (`seat_mailbox_retirement_resumed`), and a retirement that cannot delete a subscription is unmarked and retried on the next tick.
 
 ## The wedged node, and why it leaves
 
@@ -325,7 +355,7 @@ Each sits behind a `worker:{duty}` lease, **claimed per tick rather than held**,
 | `sandbox-waiter` | Polls live sandbox boxes, keeps them alive, reaps expired pauses | Each poll is a reconnect, so N nodes means N reconnects per box per tick — and N racing reapers |
 | `scheduler` | Evaluates every schedule and fires what is due | The fleet's fire claim already makes a dispatch at-most-once, so peers are not *wrong* — they lose the race on every fire, having walked the whole org to get there |
 | `skill-curator` | All three learning background passes: clustering skills out of episodes, the active → stale → archived lifecycle, and episode compaction | Clustering reads every agent's episodes and **writes** skills, so N nodes produce N sets of near-identical pages and N× the LLM spend; the curator publishes a lifecycle event per transition and races its own optimistic-concurrency guard. One lease for all three because they run on one loop — and the name stays the curator's, since renaming it would split a rolling upgrade across two coordination keys with a node on each believing it held *the* duty |
-| `maintenance` | Retention sweeps for every short-horizon table in the node's own database — `events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows` — plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. The channel record is the one *shared* thing swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one | Idempotent range deletes, so peers are harmless — just N times the write amplification and vacuum churn |
+| `maintenance` | Retention sweeps for every short-horizon table in the node's own database (`events`, `scheduled_runs`, `conversation_sessions`, `chat_thread_follows`), plus both halves of the A2A channel sweep: the idle-close of an ask no turn ever answered, and the delete of one closed long enough. And the retirement of a [removed seat's mailbox](#the-removed-seat) once the seat has been absent for 24 hours. The channel and mailbox records are the *shared* things swept here, and the [coordination store](coordination.md#retention-is-a-buckets-age) says why: its other slots expire on a bucket's age, which cannot tell an open channel from a closed one, or a present seat from a removed one | Idempotent range deletes, so peers are harmless, just N times the write amplification and vacuum churn. The mailbox retirement is not idempotent in the same way, so it takes its own compare-and-set on every record rather than relying on the lease |
 
 Without a placement host — the single-node case — the answer is always yes: there is no fleet to be a singleton within. A duty claim that *fails* (an unreachable lease store) skips the tick rather than proceeding: unknown ownership is not ownership, and assuming otherwise is how every node decides it is the singleton at once.
 

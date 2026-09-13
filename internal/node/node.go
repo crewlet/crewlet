@@ -48,6 +48,13 @@ type Config struct {
 	// Coord is the coordination backend. Required.
 	Coord coord.Backend
 
+	// Mailboxes records each agent seat's mailbox with the fleet BEFORE the
+	// node creates it, so a mailbox whose seat later leaves the company can
+	// be retired rather than retained for ever. Nil records nothing, which
+	// is a node with no fleet store: there is no shared record to keep, and
+	// nothing will ever retire what it creates.
+	Mailboxes MailboxRegistry
+
 	// NodeID is the stable node identity; Owner is this process
 	// incarnation. Both required — see seat.Config for why they differ.
 	NodeID string
@@ -105,6 +112,17 @@ type Config struct {
 	LeaseTTL          time.Duration
 	HeartbeatInterval time.Duration
 	SweepInterval     time.Duration
+}
+
+// MailboxRegistry is the fleet record a node writes before it creates a seat's
+// mailbox. Declared here, by the consumer; internal/maintenance implements it,
+// beside the sweep that reads the record back.
+type MailboxRegistry interface {
+	// Register records that the seat's mailbox exists or is about to, and
+	// returns once the node may create it. It may wait: a retirement of the
+	// seat's previous mailbox that is still deleting it has to finish first,
+	// or the subscription this node creates is deleted under it.
+	Register(ctx context.Context, handle string) error
 }
 
 // Node is one process's participation in a company.
@@ -218,12 +236,37 @@ func (n *Node) Start(ctx context.Context) error {
 // Exported so a config apply can run it again: a revision that ADDS a role
 // adds a seat, and that seat's mail is dropped until somebody makes it a
 // mailbox.
+//
+// REGISTERED FIRST. Each seat's mailbox is recorded with the fleet before it is
+// created, because once the seat leaves the company that record is the only
+// thing left that knows the subscription exists: the handle is gone from the
+// org every node derives the name from, and the broker cannot list them. A
+// registration that fails is logged and the mailbox is created anyway, since a
+// seat in the company losing mail is worse than a mailbox the maintenance sweep
+// registers on its next tick.
 func (n *Node) EnsureMailboxes(ctx context.Context) {
 	created := 0
-	for _, seat := range n.cfg.Seats() {
+	// ONE READ of the seat list for the walk and the line that reports it. Two
+	// reads straddled an apply that changed the seats, and the log then
+	// claimed a count the walk never covered.
+	seats := n.cfg.Seats()
+	for _, seat := range seats {
 		inbox, group := topics.AgentInbox(seat.Handle), topics.AgentInboxGroup(seat.Handle)
 		if inbox == "" || group == "" {
 			continue
+		}
+		if n.cfg.Mailboxes != nil {
+			if err := n.cfg.Mailboxes.Register(ctx, seat.Handle); err != nil {
+				if ctx.Err() != nil {
+					n.log.Warn("seat_mailboxes_interrupted", "error", ctx.Err(),
+						"detail", "the walk stopped before every seat's mailbox was created; "+
+							"the next apply or start runs it again")
+					return
+				}
+				n.log.Warn("seat_mailbox_unregistered", "handle", seat.Handle, "error", err,
+					"detail", "the mailbox is created anyway; until the maintenance sweep "+
+						"registers it, it cannot be retired if this seat is removed")
+			}
 		}
 		made, err := n.cfg.Queue.EnsureSubscription(ctx, inbox, group)
 		if errors.Is(err, queue.ErrNotLive) {
@@ -248,7 +291,7 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 			created++
 		}
 	}
-	n.log.Info("seat_mailboxes_ready", "seats", len(n.cfg.Seats()), "created", created)
+	n.log.Info("seat_mailboxes_ready", "seats", len(seats), "created", created)
 }
 
 // Stop gives up every seat and stops consuming.

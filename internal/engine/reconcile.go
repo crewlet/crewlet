@@ -191,7 +191,7 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 	if logger == nil {
 		logger = log
 	}
-	return &Reconciler{
+	r := &Reconciler{
 		log:     logger,
 		nudged:  make(chan struct{}, 1),
 		engine:  e,
@@ -202,7 +202,13 @@ func (e *Engine) NewReconciler(opts ReconcilerOptions) (*Reconciler, error) {
 		cipher:  opts.Cipher,
 		onApply: opts.OnApply,
 		now:     now,
-	}, nil
+	}
+	// RECORDED ON THE ENGINE, because the reconciler is the only thing that
+	// knows which activation the engine's epoch was applied from, and the
+	// mailbox sweep must not judge a seat absent against a revision the
+	// fleet has already replaced. See [Engine.activeSeatHandles].
+	e.reconciler.Store(r)
+	return r, nil
 }
 
 // applyProgress is what the tick has achieved against what it is aiming at.
