@@ -182,11 +182,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               shrink: true,
               sortValue: (n) => (n.counted ? 1 : 0),
               cell: (n) =>
-                n.counted ? (
-                  <Badge tone="positive">yes</Badge>
-                ) : (
-                  <span className="faint">no</span>
-                ),
+                n.counted ? <Badge tone="positive">yes</Badge> : <span className="faint">no</span>,
             },
             {
               key: "reported",
@@ -327,13 +323,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         </Panel>
       )}
 
-      {gate && (
-        <GateDialog
-          node={gate.node}
-          evict={gate.evict}
-          onClose={() => setGate(null)}
-        />
-      )}
+      {gate && <GateDialog node={gate.node} evict={gate.evict} onClose={() => setGate(null)} />}
     </>
   );
 }
@@ -377,8 +367,8 @@ export function ServedLevelBanner({ level }: { level?: string }) {
   if (!level || level === "stale") return null;
   return (
     <Banner tone="caution" icon="alert">
-      This node could not measure its own distance from the log, so the figures below are a
-      coherent point in its order with no statement about age (read level{" "}
+      This node could not measure its own distance from the log, so the figures below are a coherent
+      point in its order with no statement about age (read level{" "}
       <code className="inline">{level}</code>).
     </Banner>
   );
@@ -510,7 +500,13 @@ function DomainBlock({ domain: d }: { domain: RetentionDomain }) {
 }
 
 /** Terms renders the six, each with its own sentence and its own remedy. */
-export function Terms({ terms, snapshotBlocked }: { terms: RetentionTerm[]; snapshotBlocked?: string }) {
+export function Terms({
+  terms,
+  snapshotBlocked,
+}: {
+  terms: RetentionTerm[];
+  snapshotBlocked?: string;
+}) {
   return (
     <div className="col gap-2">
       {snapshotBlocked && (

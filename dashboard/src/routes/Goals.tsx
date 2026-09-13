@@ -37,13 +37,15 @@ import type { WorkGoal, WorkGoalTarget } from "~/protocol/index.ts";
 
 /** The health values, and their tone. A closed set, so one the engine adds
  *  later renders as itself rather than vanishing. */
-const HEALTH: Record<string, { label: string; tone: "positive" | "caution" | "critical" | "neutral" }> =
-  {
-    on_track: { label: "On track", tone: "positive" },
-    at_risk: { label: "At risk", tone: "caution" },
-    off_track: { label: "Off track", tone: "critical" },
-    done: { label: "Done", tone: "positive" },
-  };
+const HEALTH: Record<
+  string,
+  { label: string; tone: "positive" | "caution" | "critical" | "neutral" }
+> = {
+  on_track: { label: "On track", tone: "positive" },
+  at_risk: { label: "At risk", tone: "caution" },
+  off_track: { label: "Off track", tone: "critical" },
+  done: { label: "Done", tone: "positive" },
+};
 
 export function Goals() {
   const now = useNow();
@@ -189,8 +191,8 @@ function GoalPanel({
           "there is nothing to measure" are different facts. */}
       {goal.progress === undefined ? (
         <p className="t-caption faint">
-          No targets, so there is nothing to measure — which is not the same as
-          nothing having happened.
+          No targets, so there is nothing to measure — which is not the same as nothing having
+          happened.
         </p>
       ) : (
         <Meter
@@ -210,9 +212,7 @@ function GoalPanel({
 
 function TargetMeter({ target }: { target: WorkGoalTarget }) {
   if (target.progress === undefined) {
-    return (
-      <Meter used={0} max={100} label={target.name} right="—" tone="neutral" />
-    );
+    return <Meter used={0} max={100} label={target.name} right="—" tone="neutral" />;
   }
   return (
     <Meter

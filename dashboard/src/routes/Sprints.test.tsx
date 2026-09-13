@@ -45,9 +45,7 @@ test("an assignee with no declared capacity renders an em-dash", () => {
   render(
     <SprintPanel
       sprint={sprint({
-        by_assignee: [
-          { handle: "ada", committed: 8, done: 3, remaining: 5, total: 8, tasks: 4 },
-        ],
+        by_assignee: [{ handle: "ada", committed: 8, done: 3, remaining: 5, total: 8, tasks: 4 }],
       })}
     />,
   );
@@ -76,9 +74,7 @@ test("a declared capacity somebody is over is marked as such", () => {
   // THE BADGE'S TONE IS THE SIGNAL. The number alone says nothing about
   // whether it has been exceeded, and a capacity column that renders the
   // same either way is a column nobody reads.
-  const badge = [...container.querySelectorAll(".badge")].find(
-    (el) => el.textContent === "21",
-  );
+  const badge = [...container.querySelectorAll(".badge")].find((el) => el.textContent === "21");
   expect(badge).toBeTruthy();
   expect(badge?.className).toMatch(/caution/);
   expect(screen.queryByText("—")).toBeNull();
@@ -115,9 +111,7 @@ test("a sprint with everything estimated says nothing about it", () => {
 // A PENDING SPILLOVER IS THE ONE THING ON THIS SCREEN A LEAD HAS TO ACT ON,
 // and a closed sprint that does not say so looks finished.
 test("a closed sprint whose spillover nobody settled is marked", () => {
-  render(
-    <SprintPanel sprint={sprint({ state: "closed", rollover_pending: true })} />,
-  );
+  render(<SprintPanel sprint={sprint({ state: "closed", rollover_pending: true })} />);
   expect(screen.getByText("spillover pending")).toBeTruthy();
 });
 
@@ -193,9 +187,16 @@ test("no overview is drawn before the answer arrives", () => {
 test("a change with deltas renders them", () => {
   expect(
     describeChange({
-      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
-      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
-      kind: "status", subject_kind: "task", subject_id: "t", notified: true,
+      id: "r",
+      log_seq: 1,
+      log_stream: "s",
+      log_generation: 1,
+      at: "2031-04-16T00:00:00Z",
+      effective_at: "2031-04-16T00:00:00Z",
+      kind: "status",
+      subject_kind: "task",
+      subject_id: "t",
+      notified: true,
       fields: { status: { from: "todo", to: "in_progress" } },
     }),
   ).toBe("status: todo → in_progress");
@@ -207,9 +208,16 @@ test("a change with deltas renders them", () => {
 test("an empty side of a delta renders as a dash", () => {
   expect(
     describeChange({
-      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
-      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
-      kind: "assignee", subject_kind: "task", subject_id: "t", notified: true,
+      id: "r",
+      log_seq: 1,
+      log_stream: "s",
+      log_generation: 1,
+      at: "2031-04-16T00:00:00Z",
+      effective_at: "2031-04-16T00:00:00Z",
+      kind: "assignee",
+      subject_kind: "task",
+      subject_id: "t",
+      notified: true,
       fields: { assignee: { from: "", to: "ada" } },
     }),
   ).toBe("assignee: — → ada");
@@ -221,9 +229,16 @@ test("an empty side of a delta renders as a dash", () => {
 test("a cleared value renders as a dash", () => {
   expect(
     describeChange({
-      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
-      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
-      kind: "assignee", subject_kind: "task", subject_id: "t", notified: true,
+      id: "r",
+      log_seq: 1,
+      log_stream: "s",
+      log_generation: 1,
+      at: "2031-04-16T00:00:00Z",
+      effective_at: "2031-04-16T00:00:00Z",
+      kind: "assignee",
+      subject_kind: "task",
+      subject_id: "t",
+      notified: true,
       fields: { assignee: { from: "ada", to: "" } },
     }),
   ).toBe("assignee: ada → —");
@@ -234,9 +249,16 @@ test("a cleared value renders as a dash", () => {
 test("a change with no deltas renders its excerpt", () => {
   expect(
     describeChange({
-      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
-      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
-      kind: "comment", subject_kind: "task", subject_id: "t", notified: true,
+      id: "r",
+      log_seq: 1,
+      log_stream: "s",
+      log_generation: 1,
+      at: "2031-04-16T00:00:00Z",
+      effective_at: "2031-04-16T00:00:00Z",
+      kind: "comment",
+      subject_kind: "task",
+      subject_id: "t",
+      notified: true,
       excerpt: "rolled back, the migration was the cause",
     }),
   ).toBe("rolled back, the migration was the cause");
@@ -248,9 +270,15 @@ test("a change with no deltas renders its excerpt", () => {
 test("a change with nothing to show falls back to its kind", () => {
   expect(
     describeChange({
-      id: "r", log_seq: 1, log_stream: "s", log_generation: 1,
-      at: "2031-04-16T00:00:00Z", effective_at: "2031-04-16T00:00:00Z",
-      kind: "comment_resolved", subject_kind: "task", subject_id: "t",
+      id: "r",
+      log_seq: 1,
+      log_stream: "s",
+      log_generation: 1,
+      at: "2031-04-16T00:00:00Z",
+      effective_at: "2031-04-16T00:00:00Z",
+      kind: "comment_resolved",
+      subject_kind: "task",
+      subject_id: "t",
       notified: false,
     }),
   ).toBe("comment resolved");

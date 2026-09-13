@@ -58,10 +58,22 @@ test("a subgroup's rows are not counted twice", () => {
 // to another — the filter became a one-way door.
 test("the project filter comes from the listing, not from the visible rows", () => {
   const listed: WorkProjectRow[] = [
-    { key: "ENG", name: "Engineering", unit: { resolved: true }, lead: {},
-      task_counts: { open: 1, done: 0, closed: 0 }, version: 1 },
-    { key: "OPS", name: "Operations", unit: { resolved: true }, lead: {},
-      task_counts: { open: 0, done: 0, closed: 0 }, version: 1 },
+    {
+      key: "ENG",
+      name: "Engineering",
+      unit: { resolved: true },
+      lead: {},
+      task_counts: { open: 1, done: 0, closed: 0 },
+      version: 1,
+    },
+    {
+      key: "OPS",
+      name: "Operations",
+      unit: { resolved: true },
+      lead: {},
+      task_counts: { open: 0, done: 0, closed: 0 },
+      version: 1,
+    },
   ];
   expect(projectKeys(listed, [row("a")])).toEqual(["ENG", "OPS"]);
 });
@@ -69,9 +81,6 @@ test("the project filter comes from the listing, not from the visible rows", () 
 // AND FALLS BACK RATHER THAN EMPTYING while the listing is in flight: a
 // control that disappears on every re-read is worse than one offering less.
 test("the filter falls back to the rows before the listing arrives", () => {
-  expect(projectKeys(undefined, [row("a"), row("b", { project: "OPS" })])).toEqual([
-    "ENG",
-    "OPS",
-  ]);
+  expect(projectKeys(undefined, [row("a"), row("b", { project: "OPS" })])).toEqual(["ENG", "OPS"]);
   expect(projectKeys([], [row("a")])).toEqual(["ENG"]);
 });

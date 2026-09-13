@@ -986,13 +986,7 @@ export interface KnowledgeAnswer {
  *  `cancelled` IS "finished without being delivered", which is what keeps it
  *  invisible to velocity with no second value to keep in step. */
 export type WorkStatus =
-  | "todo"
-  | "in_progress"
-  | "in_review"
-  | "done"
-  | "cancelled"
-  | "closed"
-  | (string & {});
+  "todo" | "in_progress" | "in_review" | "done" | "cancelled" | "closed" | (string & {});
 
 /** The four groups every rule is written at. */
 export type WorkStatusGroup = "not_started" | "active" | "done" | "closed" | (string & {});
@@ -1014,12 +1008,7 @@ export type WorkPriority = "none" | "low" | "normal" | "high" | "urgent" | (stri
  *
  *  The open `string` arm stays: a newer build may serve a level this bundle
  *  does not know, and a badge that renders it is better than a type error. */
-export type ReadLevel =
-  | "linearizable"
-  | "session"
-  | "stale"
-  | "consistent_prefix"
-  | (string & {});
+export type ReadLevel = "linearizable" | "session" | "stale" | "consistent_prefix" | (string & {});
 
 /** One task as a board row draws it. The BODY IS ABSENT — fifty tasks at
  *  64 KiB each is three megabytes to draw a list of titles. */

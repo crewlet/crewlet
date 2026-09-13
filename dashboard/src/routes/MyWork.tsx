@@ -44,7 +44,10 @@ export function MyWork() {
   // EVERY SEAT AND EVERY PERSON the chart names, so the screen can be
   // reached with nobody chosen and still offer somebody.
   const handles = useMemo(
-    () => indexOrg(org).seats.map((s) => s.handle).sort(),
+    () =>
+      indexOrg(org)
+        .seats.map((s) => s.handle)
+        .sort(),
     [org],
   );
   const whose = handle || handles[0] || "";

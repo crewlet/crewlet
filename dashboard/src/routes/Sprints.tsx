@@ -54,11 +54,9 @@ export function Sprints() {
   const keys = (projects.data?.projects ?? []).map((p) => p.key);
   const chosen = project || keys[0] || "";
 
-  const report = useQuery(
-    "work_sprints",
-    chosen ? { project: chosen } : undefined,
-    { pollMs: 60_000 },
-  );
+  const report = useQuery("work_sprints", chosen ? { project: chosen } : undefined, {
+    pollMs: 60_000,
+  });
   const sprints = report.data?.sprints ?? [];
   const measure = measureLabel(report.data?.measure ?? "points");
 
@@ -123,7 +121,9 @@ export function Sprints() {
                 </Banner>
               )}
 
-              {[...sprints].reverse().map((s) => <SprintPanel key={s.number} sprint={s} />)}
+              {[...sprints].reverse().map((s) => (
+                <SprintPanel key={s.number} sprint={s} />
+              ))}
             </>
           )}
         </QueryState>
@@ -151,7 +151,8 @@ export function SprintPanel({ sprint }: { sprint: WorkSprintRow }) {
       }
     >
       <p className="muted">
-        {fmtDate(sprint.start_at)} → {sprint.closed_at ? fmtDate(sprint.closed_at) : fmtDate(sprint.end_at)}
+        {fmtDate(sprint.start_at)} →{" "}
+        {sprint.closed_at ? fmtDate(sprint.closed_at) : fmtDate(sprint.end_at)}
         {sprint.days_remaining !== undefined && ` · ${sprint.days_remaining}d left`}
         {sprint.goal ? ` · ${sprint.goal}` : ""}
       </p>

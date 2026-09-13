@@ -158,11 +158,9 @@ export function Work() {
   // AND THE PROJECT'S OWN OVERVIEW, only while one is selected: its sprint,
   // its lead and the unit that owns it are what a board scoped to a project
   // cannot say from its rows.
-  const overview = useQuery(
-    "work_project",
-    project ? { key: project } : undefined,
-    { pollMs: 60_000 },
-  );
+  const overview = useQuery("work_project", project ? { key: project } : undefined, {
+    pollMs: 60_000,
+  });
   // AND WHAT HAPPENED, which is a different question from what is there: the
   // feed is ordered by the LOG rather than by anything this board sorts on,
   // so a change that moved nothing on screen is still visible.
@@ -557,13 +555,16 @@ export function ProjectOverview({ detail }: { detail?: WorkProjectDetail | null 
             to one team and minutes to another. */}
         <Stat
           label={sprint ? `Sprint ${sprint.number}` : "Sprint"}
-          value={sprint ? `${sprint.figures.done} / ${sprint.figures.committed +
-            sprint.figures.added}` : "none"}
+          value={
+            sprint
+              ? `${sprint.figures.done} / ${sprint.figures.committed + sprint.figures.added}`
+              : "none"
+          }
           sub={
             sprint
               ? `${sprint.figures.measure === "points" ? "points" : "minutes"} · ${
-                sprint.days_remaining
-              }d left`
+                  sprint.days_remaining
+                }d left`
               : "this project runs none"
           }
         />
@@ -590,13 +591,7 @@ export function ProjectOverview({ detail }: { detail?: WorkProjectDetail | null 
  *
  *  ABSENT when empty rather than drawn as an empty panel: a board with no
  *  history yet has nothing to say about it. */
-export function ActivityFeed({
-  records,
-  now,
-}: {
-  records: WorkActivityRecord[];
-  now: number;
-}) {
+export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; now: number }) {
   if (records.length === 0) return null;
   return (
     <Panel title="Recent activity" count={records.length} padding="tight">
@@ -627,18 +622,13 @@ export function ActivityFeed({
 export function describeChange(record: WorkActivityRecord): string {
   const moved = Object.entries(record.fields ?? {});
   if (moved.length > 0) {
-    return moved
-      .map(([field, d]) => `${field}: ${d.from || "—"} → ${d.to || "—"}`)
-      .join(", ");
+    return moved.map(([field, d]) => `${field}: ${d.from || "—"} → ${d.to || "—"}`).join(", ");
   }
   if (record.excerpt) return record.excerpt;
   return record.kind.replaceAll("_", " ");
 }
 
-export function projectKeys(
-  listed: WorkProjectRow[] | undefined,
-  shown: WorkSummary[],
-): string[] {
+export function projectKeys(listed: WorkProjectRow[] | undefined, shown: WorkSummary[]): string[] {
   if (listed && listed.length > 0) return listed.map((p) => p.key);
   const keys = new Set<string>();
   for (const item of shown) keys.add(item.project);

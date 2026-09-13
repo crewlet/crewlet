@@ -244,7 +244,11 @@ export function SeatScreen({ handle }: { handle: string }) {
       />
 
       {tab === "overview" && human && person.data?.held && (
-        <Panel title="Their day" icon="check" subtitle="Read-only here: an inbox is moved on by the person whose it is, through their own assistant.">
+        <Panel
+          title="Their day"
+          icon="check"
+          subtitle="Read-only here: an inbox is moved on by the person whose it is, through their own assistant."
+        >
           <StatRow cols={3}>
             <Stat
               icon="inbox"
