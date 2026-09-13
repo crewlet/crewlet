@@ -305,6 +305,17 @@ test("a request eases and a gesture does not", () => {
   expect(canvas.getAttribute("data-animate")).toBe("false");
 });
 
+test("a data push while a requested move eases does not cut the easing short", () => {
+  const { container, handle, rerender } = mount();
+  const canvas = container.querySelector(".canvas")!;
+  act(() => handle.current!.fit());
+  act(() => handle.current!.zoomBy(ZOOM_STEP));
+  expect(canvas.getAttribute("data-animate")).toBe("true");
+  // The same bounds as a new object: what every push of a live chart sends.
+  rerender(<Harness content={{ ...SMALL }} handle={handle} />);
+  expect(canvas.getAttribute("data-animate")).toBe("true");
+});
+
 test("items inside reach an overlay layer that the zoom does not transform", () => {
   function Menu() {
     const layer = useCanvasOverlay();

@@ -177,10 +177,13 @@ export function Canvas({
   touchNow.current = touchActive;
   sizeNow.current = size;
 
-  const apply = useCallback((next: View, eased: boolean) => {
+  // `eased` says whether this move eases; left out, the move keeps whatever
+  // motion is under way, so a clamp run by a data push never cuts short the
+  // easing of a fit the operator just asked for.
+  const apply = useCallback((next: View, eased?: boolean) => {
     const bounds = contentNow.current;
     const clamped = bounds ? clampPan(next, bounds, sizeNow.current) : next;
-    setAnimate(eased);
+    if (eased !== undefined) setAnimate(eased);
     const was = viewNow.current;
     // Unchanged is not a change: a resize or a data push that leaves the view
     // where it was must not tell the overlay that anything moved.
@@ -213,7 +216,7 @@ export function Canvas({
   // A resize, or content that changed shape, keeps the view and only makes
   // sure the content is still reachable: a data push never refits.
   useLayoutEffect(() => {
-    if (ready) apply(viewNow.current, false);
+    if (ready) apply(viewNow.current);
   }, [ready, size, content, apply]);
 
   // ---- tell the overlay and the owner that the content moved ---------------
