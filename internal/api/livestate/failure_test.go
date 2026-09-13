@@ -8,18 +8,18 @@ import (
 
 // --- the AFK hold -------------------------------------------------------- //
 
-func TestATaskFailedDoesNotClearTheFailureThatCausedIt(t *testing.T) {
+func TestATurnEndingDoesNotClearTheFailureThatCausedIt(t *testing.T) {
 	t.Parallel()
-	// An engine-detected failure publishes its AFK event and TaskFailed
-	// microseconds apart, in that order. Forcing idle on the second would
-	// erase the cause the instant it was set — which is why an agent whose
-	// provider died still showed as a healthy idle seat, and why a reload
-	// showed the same.
+	// An engine-detected failure publishes its AFK event and the turn's
+	// own completion microseconds apart, in that order. Forcing idle on
+	// the second would erase the cause the instant it was set — which is
+	// why an agent whose provider died still showed as a healthy idle
+	// seat, and why a reload showed the same.
 	s := livestate.New()
 	s.Apply(env("llm_unavailable", map[string]any{
 		"role": "Lead", "kind": "provider_down", "detail": "429 forever",
 	}, at("2026-06-14T12:00:00Z")))
-	s.Apply(env("task_failed", map[string]any{"role": "Lead", "error": "gave up"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
 		at("2026-06-14T12:00:01Z")))
 
 	got := overlayOf(t, s, "Lead")
@@ -191,40 +191,16 @@ func TestACleanPhaseClearsTheCallAsBefore(t *testing.T) {
 	}
 }
 
-func TestAFailedTaskRecordsWhy(t *testing.T) {
+func TestTheNextTurnClearsTheFailure(t *testing.T) {
 	t.Parallel()
-	// TaskFailed carries the error and nothing else recorded it, so a task
-	// that died for a reason the engine does not treat as AFK — an
-	// unhandled handler exception, a rejected delegation — left the seat
-	// looking like a healthy idle one, with the cause visible only as one
-	// line in the feed.
 	s := livestate.New()
-	s.Apply(env("task_failed", map[string]any{
-		"role": "Lead", "error": "delegation refused", "turn_id": "tn-3",
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"role": "Lead", "phase": "execute", "turn_id": "tn-8", "failed": true,
+		"error": "boom",
 	}, at("2026-06-14T12:00:05Z")))
-
-	got := overlayOf(t, s, "Lead")
-	if got.State != "idle" {
-		t.Errorf("state = %q, want idle", got.State)
-	}
-	if got.LastError == nil {
-		t.Fatal("a failed task recorded no error")
-	}
-	if got.LastError.Kind != "task_failed" || got.LastError.Message != "delegation refused" {
-		t.Errorf("error = %+v", got.LastError)
-	}
-	if got.LastError.TurnID != "tn-3" {
-		t.Errorf("error turn id = %q", got.LastError.TurnID)
-	}
-}
-
-func TestTheNextTaskClearsTheFailure(t *testing.T) {
-	t.Parallel()
-	s := livestate.New()
-	s.Apply(env("task_failed", map[string]any{"role": "Lead", "error": "boom"},
-		at("2026-06-14T12:00:05Z")))
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-9"},
-		at("2026-06-14T12:01:00Z")))
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "Lead", "phase": "plan", "turn_id": "tn-9",
+	}, at("2026-06-14T12:01:00Z")))
 
 	got := overlayOf(t, s, "Lead")
 	if got.LastError != nil {

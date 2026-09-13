@@ -31,22 +31,18 @@ var categories = map[string]string{
 	// changes an operator is most likely to go looking for after the fact.
 	"org_started":               "lifecycle",
 	"org_stopped":               "lifecycle",
-	"agent_spawned":             "lifecycle",
-	"agent_terminated":          "lifecycle",
-	"agent_reassigned":          "lifecycle",
-	"role_updated":              "lifecycle",
 	"config_revision_activated": "lifecycle",
 	"config_revision_applied":   "lifecycle",
 
-	// Task: work being created, assigned and done — including a detached
-	// sandbox run, which is the execution of a task, and a schedule firing,
-	// which creates one.
-	"task_created":                    "task",
+	// Task: work reaching a seat — including a detached sandbox run, which
+	// is the execution of one, and a schedule firing, which creates one.
+	//
+	// THERE IS NO TASK LIFECYCLE HERE. The five that were — created,
+	// started, completed, failed, delegated — described an engine-owned
+	// task object the native tracker replaced, and none of them ever had a
+	// publisher. Work's own record is the tracker's log, its history rows
+	// and its change feed.
 	"task_assigned":                   "task",
-	"task_started":                    "task",
-	"task_completed":                  "task",
-	"task_failed":                     "task",
-	"task_delegated":                  "task",
 	"sandbox_run_started":             "task",
 	"sandbox_clarification_requested": "task",
 	"sandbox_run_completed":           "task",
@@ -58,12 +54,9 @@ var categories = map[string]string{
 	"sandbox_run_failed":   "task",
 	"scheduled_task_fired": "task",
 
-	"message_sent": "communication",
-
-	"a2a_channel_opened":    "a2a",
-	"a2a_message_sent":      "a2a",
-	"a2a_message_delivered": "a2a",
-	"a2a_channel_closed":    "a2a",
+	"a2a_channel_opened": "a2a",
+	"a2a_message_sent":   "a2a",
+	"a2a_channel_closed": "a2a",
 
 	// DACI is behavioural guidance carried on the org's own chat surfaces,
 	// not an engine subsystem — nothing in Crewlet publishes these four.
@@ -74,9 +67,6 @@ var categories = map[string]string{
 	"decision_resolved":      "decision",
 	"contribution_requested": "decision",
 	"contribution_received":  "decision",
-
-	"document_created": "knowledge",
-	"document_updated": "knowledge",
 
 	// Notification: what arrived from outside, and what the engine decided
 	// to do about it. Coalescing and a ledger-skipped redelivery are here
@@ -134,20 +124,21 @@ var excluded = map[string]string{
 		"matching agent_phase_completed is its durable record, so persisting " +
 		"this would fill the log with intermediate states of rows it also " +
 		"holds finished",
-	"budget_reported": "a snapshot of LIVE, in-memory meters whose values mean " +
-		"nothing outside the engine run that produced them; persisting it lets " +
-		"a dashboard hydrate a dead process's counters and render them as the " +
-		"current ones — a number that is not merely stale but describes a " +
-		"different run",
+	"agent_spawned": "placement moves a seat between nodes on every " +
+		"rebalance, so a durable row per claim would fill the audit log with " +
+		"a fact about SCHEDULING rather than about the company. The live seat " +
+		"state is what asks 'is this seat running, and where'",
+	"agent_terminated": "the counterpart of agent_spawned, and excluded for " +
+		"the same reason; it is what returns a released seat to `terminated` " +
+		"on a live screen rather than leaving it showing whatever it last did",
 	"a2a_request": "the ASK is already a row: the A2A service publishes " +
 		"a2a_channel_opened and a2a_message_sent for the same exchange, under " +
 		"the ids the audit trail is keyed on. This event is the WAKE it puts " +
 		"on the target seat's inbox, so categorising it would write a second " +
 		"row per ask saying the same thing — the same reason raw_webhook is " +
 		"kept out below",
-	"a2a_message": "the ANSWER is already a row (a2a_message_sent, and " +
-		"a2a_message_delivered for the read). This event is the wake it puts " +
-		"on the requester's inbox; see a2a_request",
+	"a2a_message": "the ANSWER is already a row (a2a_message_sent). This " +
+		"event is the wake it puts on the requester's inbox; see a2a_request",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +
@@ -157,14 +148,15 @@ var excluded = map[string]string{
 
 // liveOnly is the subset of [excluded] that still drives the live projection.
 //
-// A subset rather than the same set: agent_turn_progress moves a seat's live
-// row and budget_reported moves the budget slice, both without joining the
-// activity feed — while raw_webhook reaches the projector not at all, because
-// it is published onto a seat's inbox rather than onto crewlet.events.*, and
-// the receiver ingests its own envelope for it.
+// A subset rather than the same set: agent_turn_progress and the two seat
+// lifecycle events move a seat's live row without joining the activity feed,
+// while raw_webhook reaches the projector not at all, because it is published
+// onto a seat's inbox rather than onto crewlet.events.*, and the receiver
+// ingests its own envelope for it.
 var liveOnly = map[string]bool{
 	"agent_turn_progress": true,
-	"budget_reported":     true,
+	"agent_spawned":       true,
+	"agent_terminated":    true,
 }
 
 // Category names an event type's dashboard category and reports whether the

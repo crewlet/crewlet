@@ -1100,7 +1100,7 @@ Each `events` row is the payload-free feed shape — `id`, `type`,
 `span_id`, `parent_span_id`, `topic` — plus **`failed`**: `true` when the
 work the event reports did not succeed.  It is `true` for an event carrying
 its own `failed` field (a phase or turn that died) and for an event type that
-*is* a failure (`task_failed`, `llm_unavailable`, `budget_exhausted`,
+*is* a failure (`sandbox_run_failed`, `llm_unavailable`, `budget_exhausted`,
 `turn.guard_breach`).  Deciding it once, here, is what lets a dashboard mark
 failures without re-deriving them from a type list of its own.
 

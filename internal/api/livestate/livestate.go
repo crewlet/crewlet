@@ -103,9 +103,6 @@ const (
 // applyProgress sets the state itself, after its discard guards.
 var eventState = map[string]string{
 	"agent_spawned":         "idle",
-	"task_started":          "working",
-	"task_completed":        "idle",
-	"task_failed":           "idle",
 	"agent_terminated":      "terminated",
 	"agent_phase_started":   "working",
 	"agent_phase_completed": "working",
@@ -148,7 +145,6 @@ type agentLive struct {
 	runtimeID string
 	state     string
 
-	currentTask      string
 	currentPhase     string
 	currentIteration int
 
@@ -170,7 +166,6 @@ func (a *agentLive) overlay() Overlay {
 	return Overlay{
 		State:            a.state,
 		RuntimeID:        a.runtimeID,
-		CurrentTask:      optional(a.currentTask),
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
 		InputTokens:      a.inputTokens,
@@ -543,42 +538,6 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 			agent.liveCall = nil
 		}
 
-	case env.Type == "task_started":
-		agent.state = "working"
-		agent.currentTask = str(payload, "task_id")
-		agent.afkReason = ""
-		agent.lastError = nil
-
-	case env.Type == "task_completed" || env.Type == "task_failed":
-		agent.currentTask = ""
-		agent.currentPhase = ""
-		agent.currentIteration = 0
-		// A task that failed says so. TaskFailed carries the error and
-		// nothing else recorded it, so a task that died for a reason the
-		// engine does not treat as AFK — an unhandled handler exception,
-		// a rejected delegation — left the seat looking like a healthy
-		// idle one, with the cause visible only as one line in the feed.
-		if env.Type == "task_failed" {
-			agent.lastError = &ErrorInfo{
-				Kind:    "task_failed",
-				Message: str(payload, "error"),
-				TurnID:  str(payload, "turn_id"),
-				At:      env.Timestamp,
-				EventID: env.ID,
-			}
-		}
-		// An engine-detected failure publishes its AFK event and
-		// TaskFailed microseconds apart, in that order. Forcing idle here
-		// would erase the cause the instant it was set — which is why an
-		// agent whose provider died still showed as a healthy idle seat,
-		// and why a reload showed the same. A seat leaves AFK only when
-		// it does real work again.
-		if agent.state != "afk" {
-			agent.state = "idle"
-			agent.afkReason = ""
-			agent.liveCall = nil
-		}
-
 	case env.Type == "agent_phase_started":
 		agent.state = "working"
 		agent.afkReason = ""
@@ -669,9 +628,23 @@ func endTurn(agent *agentLive, turnID string) {
 	if agent.liveCall != nil && turnID != "" && agent.liveCall.TurnID != turnID {
 		return
 	}
-	agent.state = "idle"
 	agent.currentPhase = ""
 	agent.currentIteration = 0
+	// AN AFK SEAT STAYS AFK, and this is the one path that reaches it. An
+	// engine-detected failure publishes its AFK event and then the turn's
+	// own completion, microseconds apart and in that order — so forcing
+	// idle here erases the cause the instant it was set, and an agent
+	// whose provider died renders as a healthy idle seat on the screen and
+	// on every reload. The hold used to be written on the task_completed
+	// branch, which nothing ever published: the guard was real and
+	// unreachable, and the reachable path had none.
+	//
+	// A seat leaves AFK only when it does real work again, which is
+	// agent_phase_started's business.
+	if agent.state == "afk" {
+		return
+	}
+	agent.state = "idle"
 	agent.liveCall = nil
 }
 

@@ -142,7 +142,6 @@ type Meter struct {
 type Overlay struct {
 	State            string    `json:"state"`
 	RuntimeID        string    `json:"runtime_id"`
-	CurrentTask      *string   `json:"current_task"`
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
 	InputTokens      int       `json:"input_tokens"`

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
@@ -325,6 +326,10 @@ type Engine struct {
 	// loop this process runs, and rebuilding it on an apply would leave
 	// two loops publishing one fleet's floor.
 	retention *retention
+
+	// budgetReports is the live token-meter loop. Every node runs one —
+	// the counters are shared, so this is a frame rather than a duty.
+	budgetReports *budgetReporter
 
 	// embedding is the vector domain's one writer: the fleet singleton
 	// that turns sources whose text has moved into vector records. On the
@@ -753,6 +758,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// and a trim that ran before the lease existed would run on every node
 	// at once. Without it a domain's log only ever grows — to its ceiling,
 	// where appends are refused.
+	// THE LIVE TOKEN METERS, which the dashboard's header pushes from and
+	// which nothing published — so every header carried zeroes. Armed
+	// before the native backends, because it needs neither: the counters
+	// are coordination's and the company's caps are the epoch's.
+	e.startBudgetReports(ctx)
 	if e.native != nil {
 		e.startRetention(ctx, opts.Bootstrap, e.native.log)
 		// AND THE VECTOR DOMAIN'S ONE WRITER. Without it every other
@@ -922,7 +932,40 @@ func (e *Engine) Start(ctx context.Context) error {
 	}
 	log.InfoContext(ctx, "engine_started", "company", name,
 		"seats", len(company.Seats()), "configured", company != nil)
+	// AND INTO THE AUDIT LOG, which had no line for it: the event store is
+	// what an operator reads days later, and "when did this node last come
+	// up" was answerable only from whatever kept the process's stdout.
+	//
+	// NOT ON AN UNCONFIGURED NODE. The event names the company, and a node
+	// waiting for its first revision is not serving one — a line naming
+	// "(unconfigured)" would be a company by that name in every listing
+	// that groups on it.
+	if company != nil {
+		e.publishLifecycle(ctx, events.New(
+			types.OrgStarted{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
+	}
 	return nil
+}
+
+// publishLifecycle puts one node's start or stop into the audit event log.
+//
+// BEST EFFORT AND UNATTRIBUTED TO ANY SEAT: no seat is running at either
+// moment, so the envelope's source is this node — which is also what tells one
+// member's line from another's on a fleet, since every member publishes its
+// own pair.
+func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
+	if e.backends == nil || e.backends.Queue == nil {
+		return
+	}
+	if e.node != nil {
+		ev.Source = e.node.ID()
+	}
+	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		log.WarnContext(ctx, "lifecycle_event_not_published", "type", ev.Type,
+			"error", err.Error(),
+			"detail", "the audit log has no line for this node's start or stop; "+
+				"the engine log does")
+	}
 }
 
 // Stop drains and shuts down.
@@ -940,6 +983,13 @@ func (e *Engine) Stop(ctx context.Context) {
 	if e.watchdog != nil {
 		e.watchdog.Stop()
 	}
+	// BEFORE THE DRAIN, because the drain is what closes the broker
+	// connection this publishes over: announced afterwards, the line
+	// would be written on a queue that is already gone, every time.
+	if company := e.Company(); company != nil {
+		e.publishLifecycle(ctx, events.New(
+			types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
+	}
 	e.node.Drain(ctx)
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
@@ -948,6 +998,7 @@ func (e *Engine) Stop(ctx context.Context) {
 	e.stopNotifications(ctx)
 	e.stopMaintenance()
 	e.stopRetention()
+	e.stopBudgetReports()
 	e.stopEmbedding()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing

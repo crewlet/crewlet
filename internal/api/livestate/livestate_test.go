@@ -81,28 +81,30 @@ func TestASpawnMarksIdleAndRecordsTheRuntimeID(t *testing.T) {
 	}
 }
 
-func TestATaskRunsAndFinishes(t *testing.T) {
+// A TURN RUNS AND FINISHES, which is what a seat's live state is about.
+//
+// It reads the PHASE events, not a task lifecycle: the five task_* types this
+// projection used to branch on had no publisher at all — they described an
+// engine-owned task object the native tracker replaced — so `working` and
+// `idle` have always come from here.
+func TestATurnRunsAndFinishes(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+	}))
 
 	got := overlayOf(t, s, "Lead")
 	if got.State != "working" {
 		t.Errorf("state = %q, want working", got.State)
 	}
-	if got.CurrentTask == nil || *got.CurrentTask != "t-1" {
-		t.Errorf("current task = %v, want t-1", got.CurrentTask)
-	}
 
-	s.Apply(env("task_completed", map[string]any{"role": "Lead"}, at("2026-06-14T12:01:00+00:00")))
+	s.Apply(env("agent_turn_completed", map[string]any{
+		"role": "Lead", "turn_id": "t-1",
+	}, at("2026-06-14T12:01:00+00:00")))
 	got = overlayOf(t, s, "Lead")
 	if got.State != "idle" {
 		t.Errorf("state = %q, want idle", got.State)
-	}
-	// Null, not "": the dashboard reads an absent task as no task, and an
-	// empty string as a task with no name.
-	if got.CurrentTask != nil {
-		t.Errorf("current task = %v, want null", *got.CurrentTask)
 	}
 }
 
@@ -164,17 +166,13 @@ func TestAnOlderStateEventCannotClobberNewerState(t *testing.T) {
 	// topic, and different event types are different topics — so a
 	// state-affecting event can arrive out of order relative to another.
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-2"},
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"},
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("task_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
 		at("2026-06-14T12:01:00+00:00")))
 
-	got := overlayOf(t, s, "Lead")
-	if got.State != "working" {
-		t.Errorf("state = %q: an older event clobbered newer state", got.State)
-	}
-	if got.CurrentTask == nil || *got.CurrentTask != "t-2" {
-		t.Errorf("current task = %v, want the newer t-2", got.CurrentTask)
+	if got := overlayOf(t, s, "Lead").State; got != "working" {
+		t.Errorf("state = %q: an older event clobbered newer state", got)
 	}
 }
 
@@ -185,8 +183,8 @@ func TestSameInstantEventsAreBothApplied(t *testing.T) {
 	// equal timestamps pass, and the later-applied wins.
 	s := livestate.New()
 	ts := at("2026-06-14T12:05:00+00:00")
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}, ts))
-	s.Apply(env("task_completed", map[string]any{"role": "Lead"}, ts))
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"}, ts))
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"}, ts))
 
 	if got := overlayOf(t, s, "Lead").State; got != "idle" {
 		t.Errorf("state = %q: a same-instant event was refused as stale", got)
@@ -199,9 +197,9 @@ func TestTheReorderGuardComparesInstantsNotStrings(t *testing.T) {
 	// a Z reads as newer than a "+00:00" one and walks the state
 	// backwards.
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-2"},
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "phase": "execute"},
 		at("2026-06-14T12:05:00+00:00")))
-	s.Apply(env("task_completed", map[string]any{"role": "Lead"},
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"},
 		at("2026-06-14T12:01:00Z")))
 
 	if got := overlayOf(t, s, "Lead").State; got != "working" {
@@ -226,7 +224,7 @@ func TestAnUnknownEventTypeMovesNothing(t *testing.T) {
 func TestAnEventWithNoRoleIsHarmless(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	change := s.Apply(env("task_started", map[string]any{"task_id": "t-1"}))
+	change := s.Apply(env("agent_phase_started", map[string]any{"phase": "execute"}))
 	if len(change.Agents) != 0 {
 		t.Errorf("a role-less event moved %v", change.Agents)
 	}

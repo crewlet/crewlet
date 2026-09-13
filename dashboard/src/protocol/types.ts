@@ -206,7 +206,6 @@ export interface Meter {
 export interface Overlay {
   state?: string;
   runtime_id?: string;
-  current_task?: string | null;
   current_phase?: string | null;
   current_iteration?: number;
   input_tokens?: number;

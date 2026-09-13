@@ -64,17 +64,19 @@ func TestTurnsWithNoEventIDAreEachCounted(t *testing.T) {
 func TestPersistedEventsAreReturnedNewestFirst(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	for i, kind := range []string{"task_created", "task_started", "task_completed"} {
+	for i, kind := range []string{
+		"agent_phase_started", "agent_phase_completed", "agent_turn_completed",
+	} {
 		s.Apply(env(kind, map[string]any{"role": "Lead"}, id(string(rune('a'+i)))))
 	}
 	feed := s.RecentEvents(0)
 	if len(feed) != 3 {
 		t.Fatalf("feed = %d rows, want 3", len(feed))
 	}
-	if feed[0].Type != "task_completed" {
-		t.Errorf("newest row = %q, want task_completed", feed[0].Type)
+	if feed[0].Type != "agent_turn_completed" {
+		t.Errorf("newest row = %q, want agent_turn_completed", feed[0].Type)
 	}
-	if got := s.RecentEvents(2); len(got) != 2 || got[0].Type != "task_completed" {
+	if got := s.RecentEvents(2); len(got) != 2 || got[0].Type != "agent_turn_completed" {
 		t.Errorf("limited feed = %v", got)
 	}
 }
@@ -83,7 +85,7 @@ func TestTheFeedIsBoundedAndDropsTheOldest(t *testing.T) {
 	t.Parallel()
 	s := livestate.New(livestate.WithFeedLimit(3))
 	for i := range 6 {
-		s.Apply(env("task_created", map[string]any{"role": "Lead"},
+		s.Apply(env("agent_phase_started", map[string]any{"role": "Lead"},
 			id(string(rune('a'+i))), at(time.Date(2026, 6, 14, 12, i, 0, 0, time.UTC).Format(time.RFC3339))))
 	}
 	feed := s.RecentEvents(0)
@@ -98,7 +100,7 @@ func TestTheFeedIsBoundedAndDropsTheOldest(t *testing.T) {
 func TestUncategorizedEventsAreNotBuffered(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead"}, streamOnly))
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead"}, streamOnly))
 	if got := s.RecentEvents(0); len(got) != 0 {
 		t.Errorf("feed = %v, want empty", got)
 	}
@@ -118,7 +120,9 @@ func TestFailureByEventTypeNeedsNoPayloadFlag(t *testing.T) {
 	t.Parallel()
 	// Some events ARE a failure by their very type, independent of any
 	// payload flag, and three layers have to agree about which.
-	for _, kind := range []string{"task_failed", "llm_unavailable", "budget_exhausted", "turn.guard_breach"} {
+	for _, kind := range []string{
+		"sandbox_run_failed", "llm_unavailable", "budget_exhausted", "turn.guard_breach",
+	} {
 		s := livestate.New()
 		s.Apply(env(kind, map[string]any{"role": "Lead"}))
 		feed := s.RecentEvents(0)
@@ -131,7 +135,7 @@ func TestFailureByEventTypeNeedsNoPayloadFlag(t *testing.T) {
 func TestAnOrdinaryEventIsNotMarkedFailed(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("task_completed", map[string]any{"role": "Lead"}))
+	s.Apply(env("agent_turn_completed", map[string]any{"role": "Lead"}))
 	if feed := s.RecentEvents(0); len(feed) != 1 || feed[0].Failed {
 		t.Errorf("feed = %+v, want an unfailed row", feed)
 	}
@@ -142,7 +146,9 @@ func TestAnOrdinaryEventIsNotMarkedFailed(t *testing.T) {
 func TestTheOverlayIsMergedOntoStaticRows(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+	}))
 
 	rows := s.MergeAgents([]map[string]any{
 		{"role": "Lead", "handle": "lead", "unit": "Eng"},
@@ -167,7 +173,9 @@ func TestTheOverlayIsMergedOntoStaticRows(t *testing.T) {
 func TestMergingDoesNotMutateTheCallersRows(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-1"}))
+	s.Apply(env("agent_phase_started", map[string]any{
+		"role": "Lead", "phase": "execute", "turn_id": "t-1",
+	}))
 
 	static := map[string]any{"role": "Lead", "handle": "lead"}
 	s.MergeAgents([]map[string]any{static})
@@ -356,7 +364,7 @@ func TestAnEventWithNoAgentIDKeepsTheKnownRuntimeID(t *testing.T) {
 	// page would lose the link to the instance mid-turn.
 	s := livestate.New()
 	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
-	s.Apply(env("task_started", map[string]any{"role": "Lead", "task_id": "t-1"},
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "task_id": "t-1"},
 		at("2026-06-14T12:01:00Z")))
 
 	if got := s.RuntimeIDFor("Lead"); got != "a-1" {
@@ -422,7 +430,7 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	// Several payloads name the same thing two ways. The fallback only
 	// helps if an EMPTY first value falls through to it.
 	s := livestate.New()
-	s.Apply(env("task_started", map[string]any{
+	s.Apply(env("agent_phase_started", map[string]any{
 		"role": "", "agent_role": "Lead", "task_id": "t-1",
 	}))
 	if s.AgentOverlay("Lead") == nil {
@@ -430,7 +438,7 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	}
 
 	s2 := livestate.New()
-	s2.Apply(env("task_started", map[string]any{
+	s2.Apply(env("agent_phase_started", map[string]any{
 		"role": "Primary", "agent_role": "Fallback", "task_id": "t-1",
 	}))
 	if s2.AgentOverlay("Primary") == nil {

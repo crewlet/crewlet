@@ -100,14 +100,8 @@ const DID = new Set([
   "skill_used",
   "a2a_channel_opened",
   "a2a_message_sent",
-  "a2a_message_delivered",
   "a2a_channel_closed",
-  "message_sent",
-  "task_created",
   "task_assigned",
-  "task_delegated",
-  "task_completed",
-  "task_failed",
 ]);
 
 /**
