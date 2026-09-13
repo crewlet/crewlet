@@ -3,7 +3,12 @@
  *
  * A WRITE CAN LAND WITHOUT ITS ANSWER. A PATCH that activated a revision and
  * then lost its connection is, to the browser, indistinguishable from one
- * that never arrived: both are status 0. Pressing Save again then meets the
+ * that never arrived: both are status 0. So is a 5xx: a gateway that gave up
+ * waiting (502, 504) says nothing about the engine behind it, and the engine
+ * itself stores the revision before it activates it, so a failure reported
+ * after that point leaves a revision that may be active. The one 5xx that is
+ * certain is `503 no_control_plane`, refused before anything is stored.
+ * Pressing Save again then meets the
  * operator's OWN revision as a 409, and a builder that took every 409 as
  * "somebody else saved" would rebase the draft onto its own save and replay
  * every operation a second time, producing duplicate seats or dropping the
@@ -17,6 +22,14 @@
  * save, and one with this id and another parent cannot exist. A 409 or a 412
  * that follows an unanswered attempt is settled the same way, before it is
  * believed.
+ *
+ * THE WRITE MAY NO LONGER BE THE ACTIVE REVISION. A colleague who saved in
+ * the seconds between the lost answer and the settling read built on it, so
+ * the active revision is theirs and its parent is this write. Settling reads
+ * back from the active revision to the draft's base, one parent at a time,
+ * and finds the write wherever it sits in that line. Reading only the active
+ * revision would call such a write not landed, and the conflict flow would
+ * then replay every operation onto a document that already holds them.
  *
  * AN UPDATE WAITS FOR THE NODE TO CATCH UP. A 409 names the revision the node
  * holds, and the document the draft is rebased onto has to be that revision
@@ -92,12 +105,21 @@ export type SaveOutcome =
     }
   /** Refused, with the same meaning a check's answer would have. */
   | { readonly kind: "refused"; readonly outcome: CheckOutcome }
-  /** Whether it landed is not known yet: settle it with [settleUnknownWrite]. */
-  | { readonly kind: "unknown"; readonly currentRevisionId: string | null };
+  /**
+   * Whether it landed is not known yet: settle it with [settleUnknownWrite].
+   * `detail` is what the answer said, if it said anything, for a failure
+   * that settles as not landed and would otherwise be reported with no cause.
+   */
+  | {
+      readonly kind: "unknown";
+      readonly currentRevisionId: string | null;
+      readonly detail: string;
+    };
 
 /**
- * Classifies a save's answer. `afterUnknown` says the previous attempt of this
- * draft was never answered, which is what makes a 409 or 412 ambiguous.
+ * Classifies a save's answer. `afterUnknown` says the outcome of the previous
+ * attempt of this draft was unknown, which is what makes a 409 or 412
+ * ambiguous.
  */
 export function classifySave(
   answer: HttpAnswer,
@@ -115,12 +137,22 @@ export function classifySave(
       derived: isRecord(result.derived) ? (result.derived as unknown as Derived) : null,
     };
   }
-  if (answer.status === 0) return { kind: "unknown", currentRevisionId: null };
+  const detail =
+    typeof body.detail === "string" && body.detail !== ""
+      ? body.detail
+      : typeof body.error === "string"
+        ? body.error
+        : "";
+  const refusedBeforeStoring = answer.status === 503 && body.error === "no_control_plane";
+  if (answer.status === 0 || (answer.status >= 500 && !refusedBeforeStoring)) {
+    return { kind: "unknown", currentRevisionId: null, detail };
+  }
   if (afterUnknown && (answer.status === 409 || answer.status === 412)) {
     const current = body.current_revision_id;
     return {
       kind: "unknown",
       currentRevisionId: typeof current === "string" && current !== "" ? current : null,
+      detail,
     };
   }
   return { kind: "refused", outcome: classifyCheck(answer, attempt.mode, attempt.baseRevision) };
@@ -141,18 +173,25 @@ export function isRevisionOfWrite(
 
 /** How an unanswered save settled. */
 export type Settlement =
-  /** It landed, as this revision. */
-  | { readonly kind: "landed"; readonly revisionId: string }
+  /**
+   * It landed, as `revisionId`. `activeRevisionId` is what is active now:
+   * the write itself, or a later revision built on it.
+   */
+  | { readonly kind: "landed"; readonly revisionId: string; readonly activeRevisionId: string }
   /** It did not land. `currentRevisionId` is what is active instead (`null` for nothing). */
   | { readonly kind: "not_landed"; readonly currentRevisionId: string | null }
   /** Still unknown: the engine could not be asked, or this node does not hold the revision yet. */
   | { readonly kind: "unknown"; readonly detail: string };
 
 /**
- * Settles a save whose answer never arrived, by reading what is active.
+ * Settles a save whose answer never arrived, by reading what is active and
+ * the line of revisions it descends by.
  *
  * `currentRevisionId` is the revision a 409 or 412 named, when one did;
- * without it the active revision is read from `GET /config`.
+ * without it the active revision is read from `GET /config`. The walk back
+ * stops at the first revision whose parent is the draft's base (in create
+ * mode, the first revision of all), which is the only place this write can
+ * sit, and gives up as unknown past [UPDATE_ANCESTRY_LIMIT].
  */
 export async function settleUnknownWrite(
   transport: ConfigTransport,
@@ -177,20 +216,33 @@ export async function settleUnknownWrite(
   }
   if (current === attempt.baseRevision) return { kind: "not_landed", currentRevisionId: current };
 
-  const answer = await transport.revision(current, signal);
-  if (answer.status !== 200 || !isRecord(answer.body)) {
-    return {
-      kind: "unknown",
-      detail:
-        answer.status === 404
-          ? "This node does not hold the active revision yet."
-          : unanswered(answer),
-    };
+  let at = current;
+  for (let step = 0; step < UPDATE_ANCESTRY_LIMIT; step++) {
+    const answer = await transport.revision(at, signal);
+    if (answer.status !== 200 || !isRecord(answer.body)) {
+      return {
+        kind: "unknown",
+        detail:
+          answer.status === 404
+            ? "This node does not hold the active revision yet."
+            : unanswered(answer),
+      };
+    }
+    const revision = answer.body as unknown as ConfigRevision;
+    if (isRevisionOfWrite(revision, attempt)) {
+      return { kind: "landed", revisionId: at, activeRevisionId: current };
+    }
+    const parent = revision.parent_revision_id ? revision.parent_revision_id : null;
+    if (parent === null || parent === attempt.baseRevision) {
+      return { kind: "not_landed", currentRevisionId: current };
+    }
+    at = parent;
   }
-  const revision = answer.body as unknown as ConfigRevision;
-  return isRevisionOfWrite(revision, attempt)
-    ? { kind: "landed", revisionId: current }
-    : { kind: "not_landed", currentRevisionId: current };
+  return {
+    kind: "unknown",
+    detail:
+      "The configuration has moved on by more revisions than the builder reads back. Check the revision history for this save before saving again.",
+  };
 }
 
 function unanswered(answer: HttpAnswer): string {
@@ -201,15 +253,15 @@ function unanswered(answer: HttpAnswer): string {
 }
 
 /**
- * How many revisions [readyToUpdate] follows back from the active one looking
- * for the conflict's revision.
+ * How many revisions [readyToUpdate] and [settleUnknownWrite] follow back from
+ * the active one, looking for the conflict's revision or for the write.
  *
- * Each step is one request. The walk only has to cover the writes activated
- * between the conflict being reported and the operator choosing to update
- * their draft, which is seconds to minutes of a fleet's activity; twenty-five
+ * Each step is one request. A walk only has to cover the writes activated
+ * between the moment it is about (a conflict reported, an answer lost) and
+ * the read, which is seconds to minutes of a fleet's activity; twenty-five
  * covers far more writes than any fleet activates in that time while bounding
- * what one click can send. Past it the node is reported as not caught up,
- * which a second attempt resolves.
+ * what one click can send. Past it an update reports the node as not caught
+ * up, which a second attempt resolves, and a settlement stays unknown.
  */
 export const UPDATE_ANCESTRY_LIMIT = 25;
 

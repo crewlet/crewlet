@@ -2,12 +2,13 @@
 /**
  * Saves, and settling a save whose answer never arrived.
  *
- * What these protect: an unanswered save, or a 409 or 412 right after one, is
- * never taken as somebody else's write until the active revision has been
- * read; the write landed exactly when that revision's parent is the draft's
- * base and its summary carries the write id; and a conflicted draft is updated
- * only onto the conflict's revision or a descendant of it, with the engine's
- * derivation of that document.
+ * What these protect: an unanswered save (status 0 or a 5xx), or a 409 or 412
+ * right after one, is never taken as somebody else's write until the line of
+ * revisions back to the draft's base has been read; the write landed exactly
+ * when a revision in that line has the base as its parent and the write id in
+ * its summary, even under a colleague's later save; and a conflicted draft is
+ * updated only onto the conflict's revision or a descendant of it, with the
+ * engine's derivation of that document.
  */
 
 import { describe, expect, test } from "vitest";
@@ -114,6 +115,7 @@ describe("classifySave", () => {
     expect(classifySave({ status: 0, body: null }, EDIT, false)).toEqual({
       kind: "unknown",
       currentRevisionId: null,
+      detail: "",
     });
     expect(
       classifySave(
@@ -124,6 +126,7 @@ describe("classifySave", () => {
     ).toEqual({
       kind: "unknown",
       currentRevisionId: "r2",
+      detail: "revision_advanced",
     });
     expect(
       classifySave(
@@ -134,7 +137,37 @@ describe("classifySave", () => {
     ).toEqual({
       kind: "unknown",
       currentRevisionId: "r1",
+      detail: "already_configured",
     });
+  });
+
+  test("a 5xx is unknown, because the engine stores a revision before it activates it, except a refusal made before storing", () => {
+    // A failure after the revision was stored, and a gateway that gave up
+    // waiting, both leave a write that may be active.
+    for (const answer of [
+      { status: 500, body: { error: "internal_error", detail: "activate the config: timeout" } },
+      { status: 502, body: null },
+      { status: 504, body: "Gateway Timeout" },
+    ]) {
+      expect(classifySave(answer, EDIT, false), String(answer.status)).toMatchObject({
+        kind: "unknown",
+        currentRevisionId: null,
+      });
+    }
+    expect(
+      classifySave({ status: 500, body: { error: "internal_error", detail: "boom" } }, EDIT, false),
+    ).toMatchObject({ detail: "boom" });
+    // So the next 409 is settled rather than taken for a colleague's save.
+    expect(
+      classifySave(
+        { status: 409, body: { error: "revision_advanced", current_revision_id: "mine" } },
+        EDIT,
+        true,
+      ),
+    ).toMatchObject({ kind: "unknown", currentRevisionId: "mine" });
+    expect(classifySave({ status: 503, body: { error: "no_control_plane" } }, EDIT, false)).toEqual(
+      { kind: "refused", outcome: { status: "readonly" } },
+    );
   });
 
   test("a 409 on a first attempt is a conflict, and a refused document its problems", () => {
@@ -165,8 +198,60 @@ describe("settleUnknownWrite", () => {
     expect(await settleUnknownWrite(engine, EDIT, "r2", signal)).toEqual({
       kind: "landed",
       revisionId: "r2",
+      activeRevisionId: "r2",
     });
     expect(engine.calls).toEqual(["revision r2"]);
+  });
+
+  test("landed when a colleague's save already built on it, found by reading back towards the base", async () => {
+    const engine = new Engine({
+      revisions: {
+        r3: revision("r2", "A colleague's save (write zzzzzzzz)"),
+        r2: revision("base", signedSummary("Edit", EDIT.writeId)),
+      },
+    });
+    expect(await settleUnknownWrite(engine, EDIT, "r3", signal)).toEqual({
+      kind: "landed",
+      revisionId: "r2",
+      activeRevisionId: "r3",
+    });
+    expect(engine.calls).toEqual(["revision r3", "revision r2"]);
+
+    // A create that landed and was edited since is the first revision of all.
+    const created = new Engine({
+      revisions: {
+        r2: revision("r1", "An edit"),
+        r1: revision(undefined, signedSummary("Create", CREATE.writeId)),
+      },
+    });
+    expect(await settleUnknownWrite(created, CREATE, "r2", signal)).toEqual({
+      kind: "landed",
+      revisionId: "r1",
+      activeRevisionId: "r2",
+    });
+  });
+
+  test("not landed once the walk reaches the base without meeting the write, and unknown past the limit", async () => {
+    const colleague = new Engine({
+      revisions: {
+        r3: revision("r2", "Another save"),
+        r2: revision("base", "A colleague's save (write zzzzzzzz)"),
+      },
+    });
+    expect(await settleUnknownWrite(colleague, EDIT, "r3", signal)).toEqual({
+      kind: "not_landed",
+      currentRevisionId: "r3",
+    });
+    // The base is never read: nothing before it can be this write.
+    expect(colleague.calls).toEqual(["revision r3", "revision r2"]);
+
+    const revisions: Record<string, HttpAnswer> = {};
+    for (let i = 0; i <= UPDATE_ANCESTRY_LIMIT; i++) {
+      revisions[`r${i}`] = revision(`r${i + 1}`, "Somebody else");
+    }
+    const long = new Engine({ revisions });
+    expect(await settleUnknownWrite(long, EDIT, "r0", signal)).toMatchObject({ kind: "unknown" });
+    expect(long.calls).toHaveLength(UPDATE_ANCESTRY_LIMIT);
   });
 
   test("not landed when that revision is a colleague's", async () => {
@@ -187,6 +272,7 @@ describe("settleUnknownWrite", () => {
     expect(await settleUnknownWrite(landed, EDIT, null, signal)).toEqual({
       kind: "landed",
       revisionId: "r3",
+      activeRevisionId: "r3",
     });
     expect(landed.calls).toEqual(["current", "revision r3"]);
 
