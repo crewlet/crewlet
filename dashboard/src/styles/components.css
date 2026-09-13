@@ -1367,6 +1367,14 @@ kbd {
   padding: 1px 5px;
   color: var(--text-muted);
 }
+/* A shortcut of several keys (`ui/Kbd.tsx`): the keys side by side, and the
+   sentence a screen reader reads instead beside them. */
+.kbd-combo,
+.kbd-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
 
 /* ---- Overlay ------------------------------------------------------------ */
 
