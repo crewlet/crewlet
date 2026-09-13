@@ -66,9 +66,14 @@ func (o *Organization) Ancestors(r *Role) []*Role {
 
 // UnitFor returns the unit that holds r as a DIRECT member, or nil for a
 // root-level seat.
+//
+// BY THE SEAT, NOT BY ITS NAME. A seat is used by pointer everywhere (see
+// [Role]), and a stored revision can still hold two seats of one name: looked
+// up by name, the second seat was answered with the first one's unit, so its
+// prompt named a team it is not in.
 func (o *Organization) UnitFor(r *Role) *Unit {
 	for u := range o.AllUnits() {
-		if u.Role(r.Name) != nil {
+		if slices.Contains(u.Roles, r) {
 			return u
 		}
 	}
@@ -80,10 +85,12 @@ func (o *Organization) UnitFor(r *Role) *Unit {
 //
 // The chain is what onboarding walks (a seat reads the Onboarding page of
 // every scope above it) and what the engine hashes to decide that a seat
-// has MOVED and must onboard again.
+// has MOVED and must onboard again. Found by the seat itself, as
+// [Organization.UnitFor] is: by name, the second of two seats sharing one was
+// onboarded for the first one's chain, and moving it re-onboarded nothing.
 func (o *Organization) UnitChainFor(r *Role) []*Unit {
 	for _, u := range o.Units {
-		if chain := buildUnitChain(u, r.Name); chain != nil {
+		if chain := buildUnitChain(u, r); chain != nil {
 			slices.Reverse(chain)
 			return chain
 		}
@@ -91,15 +98,14 @@ func (o *Organization) UnitChainFor(r *Role) []*Unit {
 	return nil
 }
 
-// buildUnitChain collects the units from the one holding roleName back up
-// to u, innermost first. Reversing once at the end beats prepending at
-// every level.
-func buildUnitChain(u *Unit, roleName string) []*Unit {
-	if u.Role(roleName) != nil {
+// buildUnitChain collects the units from the one holding r back up to u,
+// innermost first. Reversing once at the end beats prepending at every level.
+func buildUnitChain(u *Unit, r *Role) []*Unit {
+	if slices.Contains(u.Roles, r) {
 		return []*Unit{u}
 	}
 	for _, c := range u.Children {
-		if chain := buildUnitChain(c, roleName); chain != nil {
+		if chain := buildUnitChain(c, r); chain != nil {
 			return append(chain, u)
 		}
 	}
