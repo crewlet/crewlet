@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/github"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -38,29 +39,85 @@ func TestOnlyTheOrganizationLeadsTheConnectForm(t *testing.T) {
 	}
 }
 
-// THIS FORM ASKS FOR NO PERSONAL ACCESS TOKEN, at any point.
+// THE ORG TOKEN IS OFFERED, AND NEVER ON THE WAY IN.
 //
-// It led the form once, then it was optional; now nothing here wants it. Its
-// one job in routing was the list of who is participating in a thread, and
-// the agents' own apps answer that, scoped to what each may see rather than
-// to whatever the person who minted the token could reach. Asking every
-// company for one bought a permanent note on a card with nothing wrong with
-// it.
+// It led the connect form once, for a job it no longer has: participant
+// fan-out is answered by each agent's own app now, scoped to what that agent
+// may see. Asking every company for a personal access token before anything
+// could be connected bought a permanent note on a card with nothing wrong
+// with it, and that half of the decision stands — this pins it, through
+// [TestOnlyTheOrganizationLeadsTheConnectForm] beside it.
 //
-// The organization stays REQUIRED, and the contrast is the point: without it
-// the engine does not know where to install an app or register a hook.
-func TestTheConnectFormAsksForNoPersonalAccessToken(t *testing.T) {
+// Removing the field entirely went one step too far. It kept its OTHER job,
+// which is the whole organization-level client: with none, the pass registers
+// nothing at GitHub, and the finding that says so names
+// `integrations.github.token` — a field the dashboard then had no box for. So
+// an operator installed every agent's app, which is what the card had been
+// asking for, and watched the same warning sit there, because an App
+// installation carries no `admin:org_hook` and never will.
+//
+// Optional, off the connect step, and declaring the finding it clears, so the
+// screen puts it in front of whoever is reading that warning and nobody else.
+func TestTheOrgTokenIsAskableWithoutLeadingTheForm(t *testing.T) {
 	t.Parallel()
 	reqs := byField(github.Requirements(nil, nil))
 
-	if token, listed := reqs["token"]; listed {
-		t.Errorf("the form asks for %q, and no agent acts through it: each has "+
-			"its own app, and those answer the one question this was read for",
-			token.Label)
+	token, listed := reqs["token"]
+	if !listed {
+		t.Fatal("the form offers no organization token, so the finding that " +
+			"names one sends an operator to a field this screen cannot set")
+	}
+	if token.Required {
+		t.Error("the organization token is required, so a company hooking each " +
+			"agent's own app cannot connect without a credential it never uses")
+	}
+	if token.Connect {
+		t.Error("the organization token is back on the connect step, which is " +
+			"a personal access token demanded before anything works")
+	}
+	// THE JOIN IS WHAT PUTS IT ON THE RIGHT SCREEN. Without it the field is
+	// offered to everybody and to nobody in particular, which is the same
+	// as not offering it to the person reading the warning.
+	if token.Blocks != integration.FindingIngressBlocked {
+		t.Errorf("the token blocks %q, so the ingress finding that names it "+
+			"offers no field that clears it", token.Blocks)
 	}
 	if !reqs["provisioning.org"].Required {
 		t.Error("the organization is optional, so a company could connect GitHub " +
 			"without saying where its repositories are")
+	}
+}
+
+// AND THE HOOK CHOICE OPENS ON ONE ORGANIZATION HOOK.
+//
+// It covers repositories created after the run, which is the difference
+// between a new repository routing on day one and routing whenever somebody
+// remembers. `true` rather than `auto` because the two differ only in what
+// happens when the hook cannot be made, and a silent fall back to
+// per-repository hooks leaves a company believing it has one hook when it has
+// several.
+//
+// Affordable only because the token above is askable: defaulting to `true`
+// over a form with no box for it would put a permanent finding on every fresh
+// connect, which is the bug noRegistrarReason was narrowed to remove.
+func TestTheHookChoiceDefaultsToOneOrganizationHook(t *testing.T) {
+	t.Parallel()
+	reqs := byField(github.Requirements(nil, nil))
+	hook := reqs["provisioning.org_webhook"]
+	if hook.Default != "true" {
+		t.Errorf("the hook choice opens on %q, want one organization hook",
+			hook.Default)
+	}
+	// AND THE DEFAULT IS ONE OF THE OFFERED VALUES, or the form opens on a
+	// selection that is not in its own list.
+	var offered bool
+	for _, c := range hook.Choices {
+		if c.Value == hook.Default {
+			offered = true
+		}
+	}
+	if !offered {
+		t.Errorf("the default %q is not among the choices %v", hook.Default, hook.Choices)
 	}
 }
 

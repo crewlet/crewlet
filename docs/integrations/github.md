@@ -31,7 +31,14 @@ the agent's own identity.
 Connect GitHub on the Integrations screen. The engine generates the webhook
 secret and the reconcile loop registers the hook on its next tick, running the
 same pass `crewlet github provision` runs with the same secret store behind
-it. Nothing on that form asks for a personal access token.
+it. The connect step asks for a personal access token nowhere — only the
+organization, which is the one answer nobody else has.
+
+The form opens on **one organization hook**, which keeps covering repositories
+created after the run. That needs an **organization token** (`admin:org_hook`),
+offered as an optional field beside the hook choice: leave it empty and switch
+the choice to *One hook per repository*, or to *Organization hook, falling back
+to each repository*, and each agent's own app carries its own hook instead.
 
 The loop keeps checking after that, so a grant you change at GitHub is
 reflected on the screen within a tick without anything to press.
@@ -106,16 +113,28 @@ integrations:
   the organization pass reads nothing and says so as a note, which is not a
   fault: there is nothing it was going to do for such a company.
 
-  It is not on the connect form. Asking every company for a hand-minted
-  personal access token, for a credential no agent ever acts as, put a
-  permanent note on cards with nothing wrong with them.
+  **Installing an agent's App is not a substitute for it.** An
+  organization-wide hook needs the `admin:org_hook` scope, which only a user
+  token carries — no App installation grants it, at any permission. So with
+  `org_webhook: true` and no token the finding naming this field never clears,
+  however many apps get installed, which is exactly what it looked like when
+  the dashboard offered no box for it: an operator did everything the card
+  asked and the warning stayed put.
+
+  It is **offered but never on the connect step**. Asking every company for a
+  hand-minted personal access token before anything works put a permanent note
+  on cards with nothing wrong with them; having no field for it at all left the
+  warning pointing at a setting the dashboard could not set. It now appears
+  with the finding that needs it.
 - **`provisioning:`** says where hooks are registered and which organization
   these agents work in, and it is read by the engine's own pass as well as by
   the CLI. `org` is the GitHub organization holding the repositories, and it is
   also the account a [per-agent app](#one-github-app-per-agent) is registered
   under; `repos` are `owner/repo` entries to hook individually; `org_webhook`
-  is `auto` (default) / `true` / `false`, described under
-  [Webhooks](#webhooks).
+  is `auto` / `true` / `false`, described under [Webhooks](#webhooks). The
+  config default is `auto`; the **dashboard form** opens on `true`, because a
+  fallback nobody was told about leaves a company believing it has one hook
+  when it has several.
 
 ### Seat identity is derived, never declared
 

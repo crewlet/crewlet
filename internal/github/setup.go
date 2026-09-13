@@ -20,26 +20,30 @@ import (
 // against, and a route with nothing to check against answers 503 rather than
 // accepting one. It is mintable because both ends of it belong to the engine.
 //
-// THE ORG TOKEN IS NOT ASKED FOR AT ALL, which is the end of a road it spent
-// two versions being demoted along: it led the form, then it was optional,
-// and now nothing here wants it. Its one job in routing was the list of who
-// is participating in a thread, and the agents' own apps answer that
-// ([SeatLookup]), scoped to what each may see rather than to whatever the
-// person who minted the token could reach.
+// THE ORG TOKEN IS ASKED FOR, AND ONLY FOR THE HOOK. It led the form once,
+// for a job it no longer has: participant fan-out — the list of who is in a
+// thread — is answered by each agent's own app now ([SeatLookup]), scoped to
+// what that agent may see rather than to whatever the person who minted the
+// token could reach. So it was demoted to optional, and then removed from
+// the form entirely.
 //
-// The FIELD remains on the config block, because a company that wants one
-// organization-wide hook still reconciles through it. It is not a question
-// worth putting to everyone connecting GitHub, though: the flow this form
-// serves gives each agent its own app, with its own hook baked into its own
-// manifest, and asks nobody for a personal access token at any point.
+// Removing it went one step too far. The field kept its OTHER job, which is
+// the whole organization-level client: with none, the pass registers nothing
+// at GitHub, and `org_webhook: true` says so in a finding naming
+// `integrations.github.token`. A form with no box for that field left the
+// warning pointing at a setting the dashboard could not set — so an operator
+// installed every agent's app, as the card had been asking, and watched it
+// sit there, because an App installation carries no `admin:org_hook` and
+// never will. It is back, optional, declaring the finding it clears, so the
+// screen offers it to whoever is reading that warning and to nobody else.
 
 // Requirements says what this company still needs for GitHub.
 func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setup.Requirement {
-	var secret, url, org, orgHook string
+	var secret, url, org, orgHook, token string
 	var enabled bool
 	if in != nil {
 		enabled = in.Enabled
-		secret, url = in.WebhookSecret, in.URL
+		secret, url, token = in.WebhookSecret, in.URL, in.Token
 		// The provisioning block is a POINTER and is absent on every
 		// company that has not run a pass, which is precisely the
 		// company this list is being built for.
@@ -102,6 +106,34 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			Blocks:     integration.FindingIngressBlocked,
 		},
 		{
+			// THE TOKEN THE HOOK CHOICE ABOVE NEEDS, asked for here because
+			// the warning about it named a field the dashboard had no box
+			// for.
+			//
+			// An organization-wide hook needs `admin:org_hook`, which only
+			// a user token carries: an App installation grants nothing of
+			// the sort, so installing every agent's app — the thing the
+			// card spends its time asking for — cannot clear it, and an
+			// operator who did exactly as they were told watched the same
+			// finding sit there. Measured, and reported as the install not
+			// having worked.
+			//
+			// OPTIONAL, because it genuinely is for the default shape: a
+			// company hooking each agent's own app needs none. It blocks
+			// the same finding the warning carries, so the form puts this
+			// field in front of whoever is reading that warning rather
+			// than every connect.
+			Field:      "token",
+			Label:      "Organization token",
+			Kind:       setup.KindSecret,
+			ConfigPath: "integrations.github.token",
+			SecretName: "GITHUB_TOKEN",
+			Required:   false,
+			Help: "A user token with admin:org_hook, for one organization-wide " +
+				"hook. Leave empty to let each agent's own app carry its own.",
+			Blocks: integration.FindingIngressBlocked,
+		},
+		{
 			Field:      "provisioning.org_webhook",
 			Label:      "Where to register the hook",
 			Kind:       setup.KindChoice,
@@ -110,15 +142,60 @@ func Requirements(in *config.GitHub, resolve func(string) (string, bool)) []setu
 			// THE VENDOR'S OWN CLOSED SET, so a form cannot offer a
 			// value the config validator refuses.
 			Choices: choices(),
+			// ONE ORGANIZATION HOOK IS WHAT MOST COMPANIES WANT, and it is
+			// the one that keeps covering repositories created after this
+			// run — the difference between a new repository routing on day
+			// one and routing whenever somebody remembers.
+			//
+			// `true` rather than `auto`, which differs only in what
+			// happens when the hook cannot be made: auto falls back to
+			// per-repository hooks silently, and a fallback nobody was
+			// told about is a company that thinks it has one hook and has
+			// several, each needing the same maintenance. This one says
+			// so. That visibility is only affordable because the token
+			// above is now askable — defaulting to `true` over a form with
+			// no box for it would have put a permanent finding on every
+			// fresh connect, which is the bug [noRegistrarReason] was
+			// narrowed to remove.
+			Default: string(config.ContainerWebhookRequire),
 			Help:    "One hook for the organization, or one per repository.",
 		},
 	}
 
-	reqs[0].Present, reqs[0].Resolved, reqs[0].Stored = setup.Toggle(enabled)
-	reqs[1].Present, reqs[1].Resolved, reqs[1].Stored = setup.Held(secret, resolve)
-	reqs[2].Present, reqs[2].Resolved, reqs[2].Stored = setup.Plain(url)
-	reqs[3].Present, reqs[3].Resolved, reqs[3].Stored = setup.Plain(org)
-	reqs[4].Present, reqs[4].Resolved, reqs[4].Stored = setup.Plain(orgHook)
+	// RESOLVED BY FIELD, not by position, which datadog's own list says at
+	// length and this one had not been given yet. Five index writes against
+	// a literal above them means inserting a field — the organization token
+	// here — silently pairs every later field's value with the row before
+	// it: the hook choice would have reported the organization's presence,
+	// and nothing would have failed to compile.
+	values := map[string]struct {
+		raw    string
+		sealed bool
+		toggle bool
+	}{
+		"enabled":                  {toggle: true},
+		"webhook_secret":           {raw: secret, sealed: true},
+		"url":                      {raw: url},
+		"provisioning.org":         {raw: org},
+		"token":                    {raw: token, sealed: true},
+		"provisioning.org_webhook": {raw: orgHook},
+	}
+	for i := range reqs {
+		v, ok := values[reqs[i].Field]
+		if !ok {
+			continue
+		}
+		switch {
+		case v.toggle:
+			// Present when it is ON: reporting `false` as written down
+			// would make a paused integration look complete.
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Toggle(enabled)
+		case v.sealed:
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(v.raw, resolve)
+		default:
+			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Plain(v.raw)
+		}
+	}
 	return reqs
 }
 

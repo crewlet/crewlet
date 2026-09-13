@@ -452,7 +452,7 @@
           "description": "Inputs the reconcile loop and the provisioning CLI both read."
         },
         "token": {
-          "description": "Read token for participant fan-out; empty degrades thread routing.",
+          "description": "Organization token with admin:org_hook, for one organization-wide hook. Empty means each agent's own app carries its own.",
           "type": "string"
         },
         "url": {

@@ -909,15 +909,24 @@ type GitHub struct {
 	// anyone's POST.
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"HMAC secret for inbound deliveries; required when enabled."`
 
-	// Token is an optional READ credential for participant fan-out.
+	// Token is the optional ORGANIZATION credential, and it now has one
+	// job rather than two.
 	//
-	// A webhook payload carries the author, the assignees and the
-	// requested reviewers, but not who has COMMENTED or REVIEWED — which
-	// is most of the set GitHub itself would notify. Recovering it costs
-	// one REST call per issue event and two per pull request. When empty,
-	// routing degrades to the payload-derived targets; directed events are
-	// unaffected.
-	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Read token for participant fan-out; empty degrades thread routing."`
+	// IT IS THE WHOLE ORGANIZATION-LEVEL CLIENT. Empty, the reconcile pass
+	// builds none and registers nothing at GitHub — no organization hook,
+	// no repository hook — which is what `org_webhook: true` with no token
+	// reports. Installing an agent's App does not substitute for it: an
+	// organization-wide hook needs `admin:org_hook`, a user-token scope
+	// that no App installation carries.
+	//
+	// ITS OTHER JOB IS GONE. It was also the READ credential for
+	// participant fan-out — a webhook payload carries the author, the
+	// assignees and the requested reviewers, but not who has COMMENTED or
+	// REVIEWED, which is most of the set GitHub itself would notify. Each
+	// agent's own App answers that now ([github.SeatLookup]), scoped to
+	// what that agent may see rather than to whatever the person who
+	// minted this token could reach.
+	Token string `secret:"true" yaml:"token,omitempty" json:"token,omitempty" desc:"Organization token with admin:org_hook, for one organization-wide hook. Empty means each agent's own app carries its own."`
 
 	// Provisioning is read by the engine's own reconcile loop as well as by
 	// the provisioning CLI — see [Mattermost.Provisioning], whose doc made
