@@ -40,6 +40,23 @@ type DomainConsumer struct {
 	name   string
 }
 
+// domainConsumerMaxAckPending is how many records the broker may hand this
+// node's applier before one is acknowledged, and it is THE COUNT BOUND ON A
+// PULL.
+//
+// The vendored client cannot bound one pull by both bytes and count, so the
+// applier pulls by bytes and the count has to live somewhere the broker
+// enforces it. This is that place: a pull hands over at most this many
+// records however many bytes it asked for, and [DomainConsumer.Fetch] returns
+// every one of them. The alternative — the applier taking a prefix of a
+// byte-bounded batch — left the remainder delivered and unacknowledged, so
+// the broker hit its own default cap of a thousand, handed over nothing more
+// for a thirty-second ack window, and then redelivered the same prefix.
+//
+// [statelog.FetchMessages] is the number, and it is the applier's transaction
+// budget: one pull is at most one transaction's worth of records in flight.
+const domainConsumerMaxAckPending = statelog.FetchMessages
+
 // domainConsumerAckWait is how long the broker waits for an acknowledgement
 // before redelivering.
 //
@@ -75,9 +92,10 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	}
 	name := domainConsumerName(stream, nodeID)
 	config := jetstream.ConsumerConfig{
-		Durable:   name,
-		AckPolicy: jetstream.AckExplicitPolicy,
-		AckWait:   domainConsumerAckWait,
+		Durable:       name,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       domainConsumerAckWait,
+		MaxAckPending: domainConsumerMaxAckPending,
 		// NO MaxDeliver. A record this node cannot apply is not a
 		// poison message to be given up on: it is either a transient
 		// failure the loop retries or a version this build retains
@@ -99,14 +117,49 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// drops anything below it, so a consumer sitting lower costs
 	// redeliveries rather than correctness.
 	cons, err := q.js.Consumer(ctx, stream, name)
-	if errors.Is(err, jetstream.ErrConsumerNotFound) {
+	switch {
+	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		cons, err = q.js.CreateConsumer(ctx, stream, config)
+	case err == nil:
+		// THE IN-FLIGHT CEILING IS BROUGHT UP TO DATE on a consumer
+		// that already exists, because it is the count bound on every
+		// pull and a consumer created by an earlier build carries the
+		// broker's own default. Unlike the start sequence it IS
+		// updatable, and the update carries the consumer's current
+		// configuration with that one field changed — a config built
+		// from this build's defaults would reset the start policy the
+		// broker refuses to move.
+		cons, err = q.alignDomainConsumer(ctx, stream, cons)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
 			name, stream, err)
 	}
 	return &DomainConsumer{cons: cons, stream: stream, name: name}, nil
+}
+
+// alignDomainConsumer updates an existing consumer's updatable bounds to this
+// build's, leaving its position alone.
+func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
+	cons jetstream.Consumer) (jetstream.Consumer, error) {
+
+	info, err := cons.Info(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read the consumer's configuration: %w", err)
+	}
+	config := info.Config
+	if config.MaxAckPending == domainConsumerMaxAckPending &&
+		config.AckWait == domainConsumerAckWait {
+		return cons, nil
+	}
+	config.MaxAckPending = domainConsumerMaxAckPending
+	config.AckWait = domainConsumerAckWait
+	updated, err := q.js.UpdateConsumer(ctx, stream, config)
+	if err != nil {
+		return nil, fmt.Errorf("raise the consumer's in-flight ceiling to %d: %w",
+			domainConsumerMaxAckPending, err)
+	}
+	return updated, nil
 }
 
 // domainConsumerName is what this node's reader is called on the broker.
@@ -137,6 +190,16 @@ func domainConsumerName(stream, nodeID string) string {
 // the applier's checkpoint, its contiguity check and the next writer's
 // expectation, so a record delivered as sequence zero would move the cursor
 // backwards on every node that applied it.
+//
+// # Everything a pull delivered is returned
+//
+// A byte-bounded pull cannot also be count-bounded by this client, and the
+// count is enforced by the consumer's own in-flight ceiling instead — see
+// [domainConsumerMaxAckPending]. So maxMessages is passed to the broker only
+// on the count-bounded path, and on the byte-bounded one the batch is drained
+// whole: a message the broker delivered and this call did not return is one it
+// holds against that ceiling and redelivers after the ack window, which is a
+// hole in the applier's run for thirty seconds.
 func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	wait time.Duration) ([]statelog.Message, error) {
 
@@ -199,9 +262,6 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 			Payload:  msg.Data(),
 			Ack:      msg.Ack,
 		})
-		if len(out) >= maxMessages {
-			break
-		}
 	}
 	if err := batch.Error(); err != nil && !errors.Is(err, context.Canceled) {
 		return out, fmt.Errorf("jetstream: fetch from %s: %w", c.name, err)

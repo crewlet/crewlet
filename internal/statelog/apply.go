@@ -53,6 +53,15 @@ type Message struct {
 type Fetcher interface {
 	// Fetch pulls up to maxMessages records or maxBytes of them,
 	// whichever binds first, waiting up to wait for the first one.
+	//
+	// EVERYTHING THE BROKER DELIVERED IS RETURNED. An implementation may
+	// not take a prefix of what a pull handed over and drop the rest: a
+	// delivered record the loop never sees is one the broker holds
+	// against the consumer's ack-pending cap and redelivers only after
+	// its ack window — a hole in a strict log, on every pull, for as long
+	// as the window is. Where the broker cannot bound a pull by both
+	// count and bytes, the count is the consumer's own in-flight ceiling
+	// (see [FetchMessages]) and maxMessages is honoured by that.
 	Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]Message, error)
 
 	// Pending is how many records this consumer has not yet delivered. It
@@ -491,8 +500,20 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			return nil, r.stop(ctx, err)
 		}
 		run = append(run, ready...)
-		if len(run) == 0 && len(batch) == 0 {
-			return nil, nil
+		if len(batch) == 0 {
+			if len(run) == 0 {
+				return nil, nil
+			}
+			// THE LINGER EXPIRED WITH RECORDS IN HAND, so the run
+			// commits. A pull that handed over nothing while the
+			// broker still reports records pending is the broker
+			// WITHHOLDING them: the consumer's in-flight ceiling is
+			// reached by exactly the records this run holds, and it
+			// hands over no more until they are acknowledged — which
+			// happens only after this commit. A loop that kept pulling
+			// here waited for a delivery its own commit was the
+			// precondition of, and did so for ever.
+			return run, nil
 		}
 	}
 }

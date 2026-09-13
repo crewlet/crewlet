@@ -96,6 +96,12 @@ type probeFetch struct {
 	queue   []statelog.Message
 	acked   map[uint64]int
 	fetches int
+
+	// withhold is how many queued records the broker keeps back from
+	// every fetch while still counting them as pending — which is what a
+	// consumer at its in-flight ceiling looks like from the loop: Pending
+	// says records remain and Fetch hands over none of them.
+	withhold int
 }
 
 func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
@@ -129,8 +135,8 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 	for {
 		f.mu.Lock()
 		f.fetches++
-		if len(f.queue) > 0 {
-			n := min(len(f.queue), maxMessages)
+		if deliverable := len(f.queue) - f.withhold; deliverable > 0 {
+			n := min(deliverable, maxMessages)
 			out := f.queue[:n]
 			f.queue = f.queue[n:]
 			f.mu.Unlock()
@@ -1177,5 +1183,72 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 		t.Errorf("the commit rate (%v/s) is above the record rate (%v/s), "+
 			"which cannot happen: a run is one transaction over at least one "+
 			"record", commits, drain)
+	}
+}
+
+// A PARTIAL RUN COMMITS WHEN THE BROKER HANDS OVER NOTHING.
+//
+// The loop fills a run toward its budget while records are pending, and the
+// broker reports records pending for as long as it has not DELIVERED them —
+// which includes records it is deliberately withholding because the consumer
+// is at its in-flight ceiling. That ceiling is reached by exactly the records
+// the run holds, and it clears only when they are acknowledged, which happens
+// only after the run commits. A loop that kept pulling while anything was
+// pending was therefore waiting on its own commit, for ever: measured on the
+// embedded broker, a 257-record backlog stopped a node applying anything at
+// all. The linger is the bound: a pull that returns nothing inside it closes
+// the run.
+func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 3; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", string(rune('a'+seq-1)), fmt.Sprintf("op-%d", seq), 1))
+	}
+	// The broker withholds the third: it stays pending and is never
+	// delivered until the first two are acknowledged.
+	h.fetch.mu.Lock()
+	h.fetch.withhold = 1
+	h.fetch.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+
+	// Two records, one linger: the run commits inside a couple of lingers
+	// rather than never.
+	deadline := time.Now().Add(4 * statelog.ApplyLinger)
+	for time.Now().Before(deadline) && h.runner.Committed().Seq < 2 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := h.runner.Committed().Seq; got != 2 {
+		cancel()
+		<-errs
+		t.Fatalf("the checkpoint is at %d after %s with two records in hand and "+
+			"one withheld, want 2 — a run that waits for a pending record the "+
+			"broker will not deliver until the run commits waits for ever",
+			got, 4*statelog.ApplyLinger)
+	}
+	if h.fetch.ackCount(1) != 1 || h.fetch.ackCount(2) != 1 {
+		cancel()
+		<-errs
+		t.Fatalf("the committed records were acknowledged %d and %d time(s), "+
+			"want once each", h.fetch.ackCount(1), h.fetch.ackCount(2))
+	}
+
+	// Acknowledged, the broker releases the third and the loop takes it.
+	h.fetch.mu.Lock()
+	h.fetch.withhold = 0
+	h.fetch.mu.Unlock()
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && h.runner.Committed().Seq < 3 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := h.runner.Committed().Seq
+	cancel()
+	<-errs
+	if got != 3 {
+		t.Fatalf("the checkpoint is at %d after the broker released the third "+
+			"record, want 3", got)
 	}
 }
