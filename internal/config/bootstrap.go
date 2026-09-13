@@ -820,10 +820,15 @@ type Coordination struct {
 	// network.
 	Type CoordinationType `yaml:"type,omitempty" json:"type,omitempty" js:"enum=local|embedded-kv" desc:"local (single node, default) or embedded-kv (a fleet)."`
 
-	// LeaseTTLSeconds overrides how long a lease survives without a renew.
-	// 0 takes the coordination layer's own measured default; shortening it
-	// speeds up failover at the cost of shedding seats over a store blip.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Lease TTL; 0 takes the measured default."`
+	// LeaseTTLSeconds overrides how long a seat or presence lease survives
+	// without a renew. 0 takes the coordination layer's own measured
+	// default; shortening it speeds up failover at the cost of shedding
+	// seats over a store blip.
+	//
+	// It does not bound a fleet duty's lease: a duty's TTL follows its own
+	// tick, up to coord.MaxDutyTTL, which is why duties are kept in a lease
+	// bucket of their own.
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own."`
 }
 
 // NATSTLS is the transport material for an external NATS server.

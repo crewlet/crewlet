@@ -413,7 +413,9 @@ coordination:
                                     #   intervals, so two consecutive missed
                                     #   renewals still leave a full interval to
                                     #   recover in. Shorter speeds failover and
-                                    #   sheds healthy seats on ordinary jitter
+                                    #   sheds healthy seats on ordinary jitter.
+                                    #   Seats and presence only: a fleet duty
+                                    #   sizes its lease from its own tick
 
 api:
   host: "0.0.0.0"

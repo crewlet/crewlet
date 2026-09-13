@@ -69,7 +69,7 @@
       "additionalProperties": false,
       "properties": {
         "lease_ttl_seconds": {
-          "description": "Lease TTL; 0 takes the measured default.",
+          "description": "Seat and presence lease TTL; 0 takes the measured default. Fleet duties size their own.",
           "minimum": 0,
           "type": "number"
         },
