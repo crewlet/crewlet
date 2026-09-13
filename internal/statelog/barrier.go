@@ -138,7 +138,7 @@ func NewReadIndex(d Domain, log Appender, encode func(Envelope) ([]byte, error),
 func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 	arrived := time.Now()
 	for {
-		run, mine := r.claim(arrived)
+		run, mine := r.claim()
 		if mine {
 			r.run(ctx, run)
 		}
@@ -161,7 +161,13 @@ func (r *ReadIndex) Read(ctx context.Context) (Position, error) {
 }
 
 // claim joins the in-flight run or becomes it.
-func (r *ReadIndex) claim(arrived time.Time) (*barrierRun, bool) {
+//
+// IT TAKES NO ARRIVAL TIME, deliberately: the run it may create is stamped
+// with the instant the lock was won, which is after EVERY caller already
+// waiting rather than after this one — and that is the comparison
+// [ReadIndex.Read] makes. Stamping it with one caller's arrival would hand
+// every other member of the same run a bound that predates them.
+func (r *ReadIndex) claim() (*barrierRun, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.inflight != nil {

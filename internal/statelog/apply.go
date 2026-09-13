@@ -439,6 +439,14 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 		if len(run) > 0 {
 			pending, err := r.fetch.Pending(ctx)
 			if err != nil || pending == 0 {
+				//nolint:nilerr // Pending is a HINT and its failure
+				// closes the batch rather than the applier: it says
+				// only whether another fetch could add anything, and
+				// what the run already holds is decoded, contiguous
+				// and safe to commit either way. A broker that cannot
+				// answer it fails the next Fetch too — and THAT call
+				// is the one that reports, because it is the one whose
+				// failure means the loop cannot proceed.
 				return run, nil
 			}
 			if r.budgetWouldBind(run) {

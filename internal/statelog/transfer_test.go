@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/nats-io/nats.go"
 )
 
 // transferHarness is a broker, a donor holding an artefact, and a joiner.
@@ -209,15 +210,15 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 	}
 
 	for name, tc := range map[string]struct {
-		break_ func(*statelog.Offer)
+		breaks func(*statelog.Offer)
 		names  string
 	}{
 		"a domain this build registers and the artefact never named": {
-			break_: func(o *statelog.Offer) { delete(o.Manifest.Domains, "probe") },
+			breaks: func(o *statelog.Offer) { delete(o.Manifest.Domains, "probe") },
 			names:  "adopted wholesale",
 		},
 		"a donor that read more record versions than this build": {
-			break_: func(o *statelog.Offer) {
+			breaks: func(o *statelog.Offer) {
 				p := o.Manifest.Domains["probe"]
 				p.RecordVersion = 9
 				o.Manifest.Domains["probe"] = p
@@ -225,7 +226,7 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			names: "never can",
 		},
 		"a different replay protocol": {
-			break_: func(o *statelog.Offer) {
+			breaks: func(o *statelog.Offer) {
 				p := o.Manifest.Domains["probe"]
 				p.Replay = statelog.ReplayCompacted
 				o.Manifest.Domains["probe"] = p
@@ -233,7 +234,7 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			names: "permanent stall",
 		},
 		"another generation's sequences": {
-			break_: func(o *statelog.Offer) {
+			breaks: func(o *statelog.Offer) {
 				p := o.Manifest.Domains["probe"]
 				p.Generation = 2
 				o.Manifest.Domains["probe"] = p
@@ -241,7 +242,7 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			names: "different history",
 		},
 		"a position below the floor": {
-			break_: func(o *statelog.Offer) {
+			breaks: func(o *statelog.Offer) {
 				p := o.Manifest.Domains["probe"]
 				p.Seq = 3_000
 				o.Manifest.Domains["probe"] = p
@@ -249,13 +250,13 @@ func TestAnUnusableOfferIsRefusedBeforeTheTransfer(t *testing.T) {
 			names: "already gone",
 		},
 		"a manifest version this build does not read": {
-			break_: func(o *statelog.Offer) { o.Manifest.V = 99 },
+			breaks: func(o *statelog.Offer) { o.Manifest.V = 99 },
 			names:  "version 99",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			o := base()
-			tc.break_(&o)
+			tc.breaks(&o)
 			err := o.Usable(req, build)
 			if err == nil {
 				t.Fatalf("an offer with %s was accepted", name)

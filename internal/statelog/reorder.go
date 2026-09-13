@@ -154,7 +154,3 @@ func chain(first, second func() error) func() error {
 	// delivery open, which is what returning early on the first would do.
 	return func() error { return errors.Join(first(), second()) }
 }
-
-// waiting is how many records are held above a hole, for the operator surface
-// and for a test that asserts the buffer is doing something.
-func (b *reorderBuffer) waiting() int { return len(b.held) }

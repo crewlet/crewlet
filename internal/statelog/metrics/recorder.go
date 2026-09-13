@@ -50,10 +50,6 @@ type Recorder struct {
 	series map[string]*series
 	byName map[string]Instrument
 
-	// now is injectable so a window's expiry is testable without sleeping
-	// through it. Nil takes the wall clock.
-	now func() time.Time
-
 	// sinks are the exporter's synchronous histogram instruments, bound
 	// after the provider exists.
 	//
@@ -147,9 +143,11 @@ func (r *Recorder) BindHistogram(name string, sink func(float64, map[string]stri
 func (r *Recorder) WithClock(now func() time.Time) *Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.now = now
-	// THE WINDOW TAKES IT TOO, or the clock is injectable for everything
-	// except the one thing whose expiry it exists to test.
+	// THE WINDOW IS THE ONLY THING HERE THAT READS A CLOCK: the recorder's
+	// own series are counters, gauges and histograms, none of which carries
+	// a timestamp. So the clock goes straight into the window whose expiry
+	// it exists to test, rather than onto a field that would advertise an
+	// injectability the recorder does not have.
 	r.window = NewWindow(now)
 	return r
 }
@@ -405,12 +403,4 @@ func attrString(in map[string]string) string {
 		fmt.Fprintf(&b, "%s=%s;", k, in[k])
 	}
 	return b.String()
-}
-
-// clock reads the injected or wall clock.
-func (r *Recorder) clock() time.Time {
-	if r.now != nil {
-		return r.now()
-	}
-	return time.Now()
 }

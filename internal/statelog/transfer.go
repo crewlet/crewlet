@@ -279,6 +279,12 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 			chunk := nats.NewMsg(deliver)
 			chunk.Reply = credits.Subject
 			chunk.Data = append([]byte(nil), buf[:n]...)
+			// THE PUBLISH ERROR MUST NOT LAND ON THE OUTER err: that
+			// one is file.Read's, and the EOF check below the block is
+			// what ends the transfer. Assigning here would either end
+			// the loop on a successful read or lose the read's own
+			// failure.
+			//nolint:govet // shadow: deliberate; see the paragraph above
 			if err := nc.PublishMsg(chunk); err != nil {
 				d.terminate(nc, deliver, 500, fmt.Sprintf("send a chunk: %v", err))
 				return
@@ -390,14 +396,17 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string)
 	// The subscription's own buffer, sized for the credit window: the
 	// donor is allowed a window of chunks in flight, so a smaller buffer
 	// here drops exactly what the window was for.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := sub.SetPendingLimits(SnapshotTransferWindow*4,
 		SnapshotChunkBytes*SnapshotTransferWindow*4); err != nil {
 		return 0, fmt.Errorf("statelog: size the transfer buffer: %w", err)
 	}
 
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := nc.PublishRequest(offer.Fetch, nats.NewInbox(), []byte(deliver)); err != nil {
 		return 0, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := nc.Flush(); err != nil {
 		return 0, fmt.Errorf("statelog: flush the fetch: %w", err)
 	}

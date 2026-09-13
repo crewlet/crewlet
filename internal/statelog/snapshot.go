@@ -13,8 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/store"
 	"golang.org/x/sys/unix"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // The snapshot repository's own constants.
@@ -545,8 +546,10 @@ func (s *Snapshotter) space() (free, size int64, err error) {
 		dir = filepath.Dir(dir)
 	}
 	var fs unix.Statfs_t
-	if err := unix.Statfs(dir, &fs); err != nil {
-		return 0, 0, fmt.Errorf("statelog: measure the free space on %s: %w", dir, err)
+	// Its own name, like statErr above: the function's err is a named
+	// RESULT, and an inner `err` here would shadow it.
+	if statfsErr := unix.Statfs(dir, &fs); statfsErr != nil {
+		return 0, 0, fmt.Errorf("statelog: measure the free space on %s: %w", dir, statfsErr)
 	}
 	info, err := os.Stat(s.deps.DB.ReplicatedPath())
 	if err != nil {
@@ -554,6 +557,11 @@ func (s *Snapshotter) space() (free, size int64, err error) {
 	}
 	// Bavail is what an unprivileged process may actually use, which is
 	// what this loop is: Bfree includes the reserve only root can reach.
+	//
+	// BOTH CONVERSIONS ARE LOAD-BEARING ACROSS THE RELEASE MATRIX, whatever
+	// this platform's linter says: Statfs_t.Bsize is int64 on linux and
+	// uint32 on darwin, and both darwin targets are release artefacts.
+	//nolint:unconvert // int64(fs.Bsize) is a no-op on linux and required on darwin
 	return int64(fs.Bavail) * int64(fs.Bsize), info.Size(), nil
 }
 

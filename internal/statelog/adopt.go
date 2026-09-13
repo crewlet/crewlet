@@ -9,8 +9,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/store"
 	"github.com/nats-io/nats.go"
+
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 // AdoptPartSuffix is what a fetched artefact is called while it is being
@@ -218,11 +219,13 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 	_ = os.Remove(part)
 
 	// 3. TRANSFER.
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if _, err := FetchArtefact(ctx, a.deps.Conn, offer, part); err != nil {
 		return Manifest{}, err
 	}
 	defer func() {
 		// Removed on every path that did not install it.
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := os.Stat(part); err == nil {
 			_ = os.Remove(part)
 		}
@@ -265,6 +268,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer) (Manifest, error) {
 			"its manifest says %s — a transfer that dropped or reordered a chunk "+
 			"arrives looking exactly like one that did not", digest, offer.Manifest.SHA256)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := a.verifyPositions(ctx, part, offer.Manifest); err != nil {
 		return Manifest{}, err
 	}

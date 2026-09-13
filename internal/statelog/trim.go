@@ -3,10 +3,11 @@ package statelog
 import (
 	"fmt"
 
-	"github.com/crewlet/crewlet/internal/coord"
 	"slices"
 	"sort"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // TermName is one of the six things that must permit a record's removal.

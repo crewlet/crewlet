@@ -407,7 +407,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 		// does: it asks only for a coherent point in the log's order,
 		// which a frozen prefix still is. Every other refusal here says
 		// this node's rows are wrong rather than old.
-		if !(code == RefuseStalled && q.Level == ReadConsistentPrefix) {
+		if code != RefuseStalled || q.Level != ReadConsistentPrefix {
 			return r.refuse(h, q, code, r.refusalDetail(h, code, now), started)
 		}
 	}

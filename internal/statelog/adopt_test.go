@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
-	"github.com/nats-io/nats.go"
 )
 
 // joinHarness is a donor holding a real replicated estate and a joiner about

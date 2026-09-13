@@ -381,6 +381,7 @@ func (p *Publisher) publish(ctx context.Context, req Request) (Result, error) {
 			// caller's own context is not a budget either: a request
 			// with no deadline waits for ever, and one with a deadline
 			// gets a cancellation where it needs the reason.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			if err := p.waitBehind(ctx, req, *behind); err != nil {
 				return Result{Rounds: round}, err
 			}

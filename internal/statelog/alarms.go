@@ -8,7 +8,6 @@
 package statelog
 
 import (
-	"cmp"
 	"fmt"
 	"slices"
 	"time"
@@ -124,6 +123,16 @@ const (
 // for one has to be able to type it.
 type Kind string
 
+// The alarm kinds, one per rule in [table].
+//
+// CONSTANTS RATHER THAN THE LITERALS AT EACH USE, because the value travels
+// (see [Kind]): a kind spelled at two sites is one that is eventually spelled
+// two ways, and the misspelling surfaces as a dashboard row nobody can find
+// rather than as a compile error. What each one MEANS in an operator's words
+// is [alarmMeaning] and what to do about it is its rule's remedy, which
+// [AlarmReference] renders into the published page — so adding a kind is three
+// things, and the reference suite is what refuses a rule whose meaning nobody
+// wrote.
 const (
 	KindApplyLag         Kind = "apply_lag"
 	KindReadRefusals     Kind = "read_refusals"
@@ -542,7 +551,7 @@ func Kinds() []Kind {
 	for _, rule := range table {
 		out = append(out, rule.kind)
 	}
-	slices.SortFunc(out, func(a, b Kind) int { return cmp.Compare(a, b) })
+	slices.Sort(out)
 	return out
 }
 

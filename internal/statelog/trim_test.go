@@ -66,7 +66,7 @@ func TestTheTrimTakesTheLowestTermAndNothingElse(t *testing.T) {
 // about any node's own store file, which trimming the stream does not touch.
 func TestMinAgeOnlyLowersTheTrimPoint(t *testing.T) {
 	t.Parallel()
-	var last uint64 = ^uint64(0)
+	last := ^uint64(0)
 	for _, age := range []uint64{9_000, 6_000, 3_000, 0} {
 		in := baseInputs()
 		in.AgeFloor = age
@@ -127,29 +127,29 @@ func TestACountedNodesPositionIsNeverTrimmedPast(t *testing.T) {
 func TestAnUnreadableTermBlocksTheTrim(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		break_ func(*statelog.TrimInputs)
+		breaks func(*statelog.TrimInputs)
 		want   statelog.TermName
 	}{
 		"the register could not be listed": {
-			break_: func(in *statelog.TrimInputs) { in.CountedReadable = false },
+			breaks: func(in *statelog.TrimInputs) { in.CountedReadable = false },
 			want:   statelog.TermApplied,
 		},
 		"the holds could not be listed": {
-			break_: func(in *statelog.TrimInputs) { in.HoldsReadable = false },
+			breaks: func(in *statelog.TrimInputs) { in.HoldsReadable = false },
 			want:   statelog.TermMinHold,
 		},
 		"nothing has ever been backed up": {
-			break_: func(in *statelog.TrimInputs) { in.HasBackupFloor = false },
+			breaks: func(in *statelog.TrimInputs) { in.HasBackupFloor = false },
 			want:   statelog.TermBackupFloor,
 		},
 		"the newest backup is too old": {
-			break_: func(in *statelog.TrimInputs) {
+			breaks: func(in *statelog.TrimInputs) {
 				in.BackupAt = in.Now.Add(-48 * time.Hour)
 			},
 			want: statelog.TermBackupFloor,
 		},
 		"too few nodes hold a snapshot": {
-			break_: func(in *statelog.TrimInputs) {
+			breaks: func(in *statelog.TrimInputs) {
 				for i := range in.Counted {
 					in.Counted[i].HasSnapshot = false
 				}
@@ -157,22 +157,22 @@ func TestAnUnreadableTermBlocksTheTrim(t *testing.T) {
 			want: statelog.TermSnapshotFloor,
 		},
 		"the wake consumer could not be read": {
-			break_: func(in *statelog.TrimInputs) { in.FeedReadable = false },
+			breaks: func(in *statelog.TrimInputs) { in.FeedReadable = false },
 			want:   statelog.TermFeedAckFloor,
 		},
 		"a node reports from a dead generation": {
-			break_: func(in *statelog.TrimInputs) { in.Counted[1].Generation = 0 },
+			breaks: func(in *statelog.TrimInputs) { in.Counted[1].Generation = 0 },
 			want:   statelog.TermApplied,
 		},
 		"the backup is from a dead generation": {
-			break_: func(in *statelog.TrimInputs) { in.BackupFloorGen = 0 },
+			breaks: func(in *statelog.TrimInputs) { in.BackupFloorGen = 0 },
 			want:   statelog.TermBackupFloor,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			in := baseInputs()
-			tc.break_(&in)
+			tc.breaks(&in)
 			d := statelog.Trim(in.Terms())
 			if !d.Blocked() {
 				t.Fatalf("the trim advanced to %d with %s", d.To, name)

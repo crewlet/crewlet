@@ -269,11 +269,11 @@ func reanchorStore(t *testing.T) *store.DB {
 }
 
 // seedAnchor writes one subject's arbitration anchor at a generation.
-func seedAnchor(t *testing.T, db *store.DB, subject string, gen uint32, seq uint64) {
+func seedAnchor(ctx context.Context, t *testing.T, db *store.DB, subject string, gen uint32, seq uint64) {
 	t.Helper()
 	packed := int64(gen)*statelog.GenerationStride + int64(seq)
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
+	if err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 			INSERT INTO statelog_anchor (stream, subject, anchor) VALUES (?, ?, ?)
 			ON CONFLICT (stream, subject) DO UPDATE SET anchor = excluded.anchor`,
 			probeStream, subject, packed)
@@ -285,10 +285,10 @@ func seedAnchor(t *testing.T, db *store.DB, subject string, gen uint32, seq uint
 
 // seedCursor writes the domain's committed cursor at a generation, which is
 // what a node that has been running has.
-func seedCursor(t *testing.T, db *store.DB, gen uint32, seq uint64) {
+func seedCursor(ctx context.Context, t *testing.T, db *store.DB, gen uint32, seq uint64) {
 	t.Helper()
-	if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `
+	if err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 			INSERT INTO statelog_cursor
 				(stream, generation, seq, stream_created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?)
@@ -351,20 +351,22 @@ func TestAReanchorIsResumable(t *testing.T) {
 	t.Run("a crash inside the reset is finished by re-running", func(t *testing.T) {
 		t.Parallel()
 		db := reanchorStore(t)
-		seedCursor(t, db, 1, 9_000)
-		seedAnchor(t, db, "probe.reached", 1, 500)
-		seedAnchor(t, db, "probe.missed", 1, 600)
+		seedCursor(t.Context(), t, db, 1, 9_000)
+		seedAnchor(t.Context(), t, db, "probe.reached", 1, 500)
+		seedAnchor(t.Context(), t, db, "probe.missed", 1, 600)
 
 		crash := errors.New("the process died between two bounded transactions")
 		var attempts, published, recorded atomic.Int64
 		deps := statelog.ReanchorDeps{
 			Domains: map[string]statelog.Registered{"probe": {Domain: probeDomain{}}},
 			DB:      db,
-			ResetVersions: func(_ context.Context, gen uint32) error {
+			ResetVersions: func(ctx context.Context, gen uint32) error {
 				if attempts.Add(1) == 1 {
 					// One bounded transaction committed, then the
-					// process died before the next.
-					seedAnchor(t, db, "probe.reached", gen, 0)
+					// process died before the next. ON THE CALLER'S
+					// OWN CONTEXT: the seed stands in for a write
+					// the reset itself would have made.
+					seedAnchor(ctx, t, db, "probe.reached", gen, 0)
 					return crash
 				}
 				return nil

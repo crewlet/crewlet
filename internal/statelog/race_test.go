@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/statelog"
 	natsjs "github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // purgeBelow trims the log the way the retention duty does — by sequence,

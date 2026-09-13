@@ -193,22 +193,28 @@ func CheckTables(ctx context.Context, db *store.DB, d Domain) error {
 	// the check writes nothing and still exercises the writes.
 	probe := errCheckRolledBack
 	err = db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := t.retain(ctx, tx, rec, false); err != nil {
 			return fmt.Errorf("the deferred record's own tables: %w", err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, _, err := t.deferredIn(ctx, tx, rec.Scope); err != nil {
 			return fmt.Errorf("the deferral probe: %w", err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := t.writeOp(ctx, tx, rec.OpID, t.subjectOf(rec.Subject), at,
 			store.DecodeTime(0)); err != nil {
 			return fmt.Errorf("the operation ledger: %w", err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, _, err := t.op(ctx, tx, rec.OpID); err != nil {
 			return fmt.Errorf("the operation ledger's own read: %w", err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := t.advanceAnchor(ctx, tx, t.subjectOf(rec.Subject), at); err != nil {
 			return fmt.Errorf("the arbitration anchor: %w", err)
 		}
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if _, err := t.anchor(ctx, tx, t.subjectOf(rec.Subject), at.Generation); err != nil {
 			return fmt.Errorf("the arbitration anchor's own read: %w", err)
 		}

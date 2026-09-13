@@ -3,6 +3,7 @@ package statelog
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -102,7 +103,7 @@ func (t tables) readCursor(ctx context.Context, tx *sql.Tx) (Position, time.Time
 		`SELECT generation, seq, stream_created_at FROM statelog_cursor WHERE stream = ?`,
 		t.stream).Scan(&gen, &seq, &created)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return Position{Stream: t.stream}, time.Time{}, false, nil
 	case err != nil:
 		return Position{}, time.Time{}, false, fmt.Errorf("statelog: read the cursor: %w", err)
@@ -164,7 +165,7 @@ func (t tables) anchor(ctx context.Context, tx *sql.Tx, subject string, gen uint
 		`SELECT anchor FROM statelog_anchor WHERE stream = ? AND subject = ?`,
 		t.stream, subject).Scan(&packed)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return Position{Stream: t.stream, Generation: gen}, nil
 	case err != nil:
 		return Position{}, fmt.Errorf("statelog: read the anchor on %s: %w", subject, err)
@@ -256,7 +257,7 @@ func (t tables) op(ctx context.Context, tx *sql.Tx, opID string) (Position, bool
 	err := tx.QueryRowContext(ctx,
 		`SELECT position FROM `+t.ops+` WHERE op_id = ?`, opID).Scan(&packed)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return Position{}, false, nil
 	case err != nil:
 		return Position{}, false, fmt.Errorf("statelog: read operation %q: %w", opID, err)
@@ -358,7 +359,7 @@ func (t tables) deferredIn(ctx context.Context, tx *sql.Tx, s ScopeSet) (Deferra
 	var version int64
 	err := tx.QueryRowContext(ctx, q, args...).Scan(&packed, &version)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return Deferral{}, false, nil
 	case err != nil:
 		return Deferral{}, false, fmt.Errorf("statelog: probe the deferred scope: %w", err)
@@ -408,7 +409,7 @@ func (t tables) oldestDeferred(ctx context.Context, tx *sql.Tx) (Deferral, bool,
 		`SELECT position, version FROM `+t.deferred+` ORDER BY position LIMIT 1`).
 		Scan(&packed, &version)
 	switch {
-	case err == sql.ErrNoRows:
+	case errors.Is(err, sql.ErrNoRows):
 		return Deferral{}, false, nil
 	case err != nil:
 		return Deferral{}, false, fmt.Errorf("statelog: read the oldest deferred record: %w", err)

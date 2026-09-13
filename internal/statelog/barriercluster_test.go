@@ -5,6 +5,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,34 +148,43 @@ func TestLinearizableKeepsWorkingOnTheSurvivingMajority(t *testing.T) {
 // trip, and the check it appears to be is one that cannot fire.
 func TestStreamInfoIsNotOnTheReadPath(t *testing.T) {
 	t.Parallel()
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, 0)
+	// ONE PARSE PER FILE rather than go/parser's ParseDir, which is
+	// deprecated for a limitation this walk would inherit: it groups files
+	// into packages without reading their build tags. Nor go/packages,
+	// which answers that properly by loading and type-checking the world —
+	// this is a walk over SELECTOR NAMES, and it needs neither types nor
+	// package structure to see one.
+	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("parse the package: %v", err)
+		t.Fatalf("list the package directory: %v", err)
 	}
+	fset := token.NewFileSet()
 	var scanned int
-	for _, pkg := range pkgs {
-		for path, file := range pkg.Files {
-			if isTestFile(path) {
-				continue
-			}
-			scanned++
-			ast.Inspect(file, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				switch sel.Sel.Name {
-				case "CachedInfo", "Leader":
-					t.Errorf("%s reads %s — the read index is a quorum-committed "+
-						"append precisely because a member's own view of its "+
-						"cluster answers with a nonempty leader and a stale last "+
-						"sequence in the case this level exists to refuse",
-						path, sel.Sel.Name)
-				}
-				return true
-			})
+	for _, entry := range entries {
+		path := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(path, ".go") || isTestFile(path) {
+			continue
 		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		scanned++
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "CachedInfo", "Leader":
+				t.Errorf("%s reads %s — the read index is a quorum-committed "+
+					"append precisely because a member's own view of its "+
+					"cluster answers with a nonempty leader and a stale last "+
+					"sequence in the case this level exists to refuse",
+					path, sel.Sel.Name)
+			}
+			return true
+		})
 	}
 	// A GUARD ASSERTING AN ABSENCE MUST PROVE IT SCANNED SOMETHING, or
 	// "found no violations" and "scanned nothing" are the same green.
