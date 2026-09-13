@@ -1501,6 +1501,70 @@ kbd {
   animation: rise var(--dur) var(--ease-out);
 }
 
+/* A menu button's list (`ui/Menu.tsx`). A popover sized to its longest item
+   rather than to the popover's own minimum, under its trigger by default and
+   positioned by the component inside a canvas overlay layer. */
+.menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+.popover.menu {
+  top: calc(100% + var(--space-1));
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: max-content;
+  padding: var(--space-1);
+  border-radius: var(--r-sm);
+}
+.popover.menu.end {
+  left: auto;
+  right: 0;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: var(--row-h-sm);
+  padding: 0 var(--space-2);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.menu-item > svg {
+  color: var(--text-muted);
+}
+/* Focus is the highlight: the keyboard moves it, and the pointer's hover
+   draws the same tint so the two never show two different rows. */
+.menu-item:hover,
+.menu-item:focus {
+  background: var(--surface-hover);
+}
+.menu-item.danger,
+.menu-item.danger > svg {
+  color: var(--critical-ink);
+}
+/* Still focusable, so it is read out as unavailable rather than skipped. */
+.menu-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.menu-item-hint {
+  margin-left: auto;
+  padding-left: var(--space-4);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.menu-separator {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border-subtle);
+}
+
 .toast-host {
   position: fixed;
   bottom: var(--space-4);
