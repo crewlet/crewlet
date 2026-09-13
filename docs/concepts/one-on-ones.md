@@ -224,13 +224,13 @@ carries the shape of the conversation instead.
 
 ## See also
 
-- [Scheduling](scheduling.md) — the `each` / `lead` targets, at-most-once
+- [Scheduling](scheduling.md): the `each` / `lead` targets, at-most-once
   delivery, catchup, the per-fire timeout.
-- [Agent Runtime](agent-runtime.md) — `a2a_ask`; built-in tools
+- [Agent Runtime](agent-runtime.md): `a2a_ask`; built-in tools
   (`query_episodes`).
-- [Event System](event-system.md#ephemeral-a2a-channels-internala2a) — what an
+- [Event System](event-system.md#ephemeral-a2a-channels-internala2a): what an
   A2A channel is, and why one exchange is one channel.
-- [Agent Learning](agent-learning.md) — the `PersistDecider` tiers and the
+- [Agent Learning](agent-learning.md): the `PersistDecider` tiers and the
   `## Relevant knowledge` prefetch that surfaces the playbook.
-- [Humans in the Org Chart](humans-in-the-org.md) — why a human manager's
+- [Humans in the Org Chart](humans-in-the-org.md): why a human manager's
   1:1 runs over Slack, not A2A.

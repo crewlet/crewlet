@@ -302,7 +302,7 @@ Runs the engine's own walk and admission test against a *throwaway* registry and
 
 ## Page representation
 
-The shape is one idea: a machine-readable YAML frontmatter block at the top of the page (edit to change binding metadata — `key` / `trigger` / `phases` / `title`), followed by the guidance rendered as a normal page body (edit to change the prose). When the sync worker reads a page back, it parses the YAML and flattens the body HTML to plain text for the LLM. The conversion is intentionally lossy on formatting — bullets and headings flatten to text-with-newlines — because the body's only consumer is an LLM, not a human reader. Operators who want exact source-text fidelity should keep the `.md` files in version control and re-run the import when they change; an existing page is updated in place.
+The shape is one idea: a machine-readable YAML frontmatter block at the top of the page (edit to change binding metadata: `key`, `trigger`, `phases`, `title`), followed by the guidance rendered as a normal page body (edit to change the prose). When the sync worker reads a page back, it parses the YAML and flattens the body HTML to plain text for the LLM. The conversion is intentionally lossy on formatting (bullets and headings flatten to text-with-newlines) because the body's only consumer is an LLM, not a human reader. Operators who want exact source-text fidelity should keep the `.md` files in version control and re-run the import when they change; an existing page is updated in place.
 
 Every synced skill records the backend page it came from in `skills.Skill.SourcePageID` and `SourcePageVersion`, as provenance. Confluence stamps its integer page version; a backend without one leaves `SourcePageVersion` at 0.
 
