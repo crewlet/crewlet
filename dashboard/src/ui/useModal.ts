@@ -27,7 +27,10 @@
  *   modal first rendered. That is captured during render on purpose: by the
  *   time an effect runs, `autoFocus` has already moved focus into the modal,
  *   and a capture taken then would restore focus to an element that no longer
- *   exists.
+ *   exists. When that element has gone because it sat in a modal that closed
+ *   as this one opened, focus goes where that modal would have sent it; when
+ *   it has gone from a modal that is still open, to that modal's panel, never
+ *   behind its veil (`returnChain`).
  * - A VEIL CLOSES ONLY ITS OWN MODAL, and only when the press lands on the
  *   veil itself. The decision is taken on `pointerdown`, before any surface
  *   closes, so the press that dismisses a menu is never also read as a press
@@ -55,6 +58,8 @@ interface Entry {
   order: number;
   /** The surface itself: a modal's panel, a popup's list. */
   panel: () => HTMLElement | null;
+  /** Where a modal hands focus back on close, first choice first (see `returnChain`). */
+  returnTo: readonly Element[];
   /** A modal's veil, whose own presses close it. */
   veil: () => HTMLElement | null;
   /** Elements a press inside does not count as outside, such as a menu's trigger. */
@@ -231,6 +236,31 @@ function useOpeningOrder(open: boolean): number {
   return ref.current;
 }
 
+/**
+ * Where a modal opening now hands focus back when it closes, first choice
+ * first, read during its first render.
+ *
+ * The opener alone is not enough when it lives inside another modal. A
+ * control in one modal often closes that modal and opens the next in one
+ * gesture (a status panel's "Set token" that hands over to a credential
+ * dialog), so
+ * by the time the new modal closes its opener has been unmounted, and focus
+ * restored to a detached element lands on the page body. The chain carries on
+ * from there: the host modal's panel, which is still connected only while the
+ * host is still open (so focus never goes behind a veil that is still up),
+ * and then wherever the host itself would have returned focus.
+ */
+function returnChain(opener: Element | null): Element[] {
+  if (!opener) return [];
+  let host: Entry | undefined;
+  for (const entry of stack) {
+    if (entry.kind !== "modal" || !entry.panel()?.contains(opener)) continue;
+    if (!host || entry.order > host.order) host = entry;
+  }
+  const panel = host?.panel();
+  return host && panel ? [opener, panel, ...host.returnTo] : [opener];
+}
+
 /** Whether `entry` is the surface a key press or a press would reach now. */
 function isTopmost(order: number): boolean {
   return top()?.order === order;
@@ -268,8 +298,8 @@ export function useModal({ onClose, dismissable = true, initialFocus }: ModalOpt
   const order = useOpeningOrder(true);
   // WHERE FOCUS CAME FROM, read during the first render. See the module doc
   // for why an effect is too late.
-  const [opener] = useState<Element | null>(() =>
-    typeof document === "undefined" ? null : document.activeElement,
+  const [returnTo] = useState<Element[]>(() =>
+    typeof document === "undefined" ? [] : returnChain(document.activeElement),
   );
 
   useLayoutEffect(
@@ -278,12 +308,13 @@ export function useModal({ onClose, dismissable = true, initialFocus }: ModalOpt
         kind: "modal",
         order,
         panel: () => panel.current,
+        returnTo,
         veil: () => veil.current,
         inside: () => [],
         dismiss: () => close.current(),
         dismissable: () => canClose.current,
       }),
-    [order],
+    [order, returnTo],
   );
 
   useEffect(() => {
@@ -295,11 +326,13 @@ export function useModal({ onClose, dismissable = true, initialFocus }: ModalOpt
       (start.current?.() ?? focusables(root)[0] ?? root).focus();
     }
     return () => {
-      if (opener instanceof HTMLElement && opener.isConnected && opener !== document.body) {
-        opener.focus();
-      }
+      const back = returnTo.find(
+        (el): el is HTMLElement =>
+          el instanceof HTMLElement && el.isConnected && el !== document.body,
+      );
+      back?.focus();
     };
-  }, [opener]);
+  }, [returnTo]);
 
   const panelRef = useCallback((el: HTMLElement | null) => {
     panel.current = el;
@@ -342,6 +375,9 @@ export function usePopup({ open, onDismiss }: PopupOptions): Popup {
       kind: "popup",
       order,
       panel: () => panel.current,
+      // A popup hands focus back itself (a menu to its trigger), and nothing
+      // is ever opened from inside one: an action gives focus back first.
+      returnTo: [],
       veil: () => null,
       inside: () => [inside.current],
       dismiss: (reason) => dismiss.current(reason),

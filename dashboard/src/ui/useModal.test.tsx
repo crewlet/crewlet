@@ -241,6 +241,84 @@ test("focus returns to the opener even when a field in the dialog took autoFocus
   expect(document.activeElement).toBe(opener);
 });
 
+test("a modal opened as the modal around its opener closes returns focus where that one would have", () => {
+  // A status panel's "Set token" closes the panel and opens the credential
+  // dialog in one click. The button that opened the dialog is gone by the
+  // time the dialog closes, and focus restored to it would fall to the body.
+  function Handover() {
+    const [panel, setPanel] = useState(false);
+    const [token, setToken] = useState(false);
+    return (
+      <>
+        <button onClick={() => setPanel(true)}>engine</button>
+        {panel && (
+          <Dialog title="Engine" onClose={() => setPanel(false)}>
+            <button
+              onClick={() => {
+                setPanel(false);
+                setToken(true);
+              }}
+            >
+              Set token
+            </button>
+          </Dialog>
+        )}
+        {token && (
+          <Dialog title="API token" onClose={() => setToken(false)}>
+            <input aria-label="Token" />
+          </Dialog>
+        )}
+      </>
+    );
+  }
+  render(<Handover />);
+  const opener = screen.getByRole("button", { name: "engine" });
+  opener.focus();
+  fireEvent.click(opener);
+  const setToken = screen.getByRole("button", { name: "Set token" });
+  expect(document.activeElement).toBe(setToken);
+
+  fireEvent.click(setToken);
+  expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByLabelText("Token"));
+
+  press("Escape");
+  expect(document.activeElement).toBe(opener);
+});
+
+test("when the opener has gone from a modal that is still open, focus goes to that modal, not behind it", () => {
+  function Removed() {
+    const [row, setRow] = useState(true);
+    const [confirm, setConfirm] = useState(false);
+    return (
+      <>
+        <button>behind the veil</button>
+        <Dialog title="Editor" onClose={() => {}}>
+          <button>first</button>
+          {row && <button onClick={() => setConfirm(true)}>Delete row</button>}
+        </Dialog>
+        {confirm && (
+          <Dialog
+            title="Delete this row?"
+            onClose={() => {
+              setRow(false);
+              setConfirm(false);
+            }}
+          >
+            <button>Delete</button>
+          </Dialog>
+        )}
+      </>
+    );
+  }
+  render(<Removed />);
+  screen.getByRole("button", { name: "Delete row" }).focus();
+  fireEvent.click(screen.getByRole("button", { name: "Delete row" }));
+  press("Escape");
+  expect(screen.queryByRole("dialog", { name: "Delete this row?" })).toBeNull();
+  expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Editor" }));
+});
+
 /** A minimal popup on the stack, rendered inside a dialog the way a menu is. */
 function Popup() {
   const [open, setOpen] = useState(true);

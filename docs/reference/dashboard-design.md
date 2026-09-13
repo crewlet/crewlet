@@ -897,10 +897,14 @@ rendered idle from the first phase to the last.
   prompt over the node editor closes on its own Escape and leaves the editor
   open, and an open menu closes before the dialog it sits in. A modal traps
   Tab, moves focus in when it opens (honouring a field's `autoFocus`) and
-  returns it to whatever opened it. A control that consumes Escape itself,
-  such as a completion list, keeps the key. A veil press closes its modal on
-  the press's click rather than on its first contact, so the tap that
-  dismisses a dialog never also lands on the control the veil was covering.
+  returns it to whatever opened it. When that control has gone with a modal
+  that closed as this one opened (a panel's "Set token" handing over to the
+  token dialog), focus goes back where that modal would have sent it; when it
+  has gone from a modal that is still open, to that modal rather than behind
+  its veil. A control that consumes Escape itself, such as a completion list,
+  keeps the key. A veil press closes its modal on the press's click rather
+  than on its first contact, so the tap that dismisses a dialog never also
+  lands on the control the veil was covering.
   What happens inside an open menu stays there: its keys, presses and clicks
   do not reach the card or row it was opened from, so Enter on "Delete" is
   never also the card's Enter.
