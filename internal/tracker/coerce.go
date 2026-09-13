@@ -541,8 +541,12 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q is not "+
 			"one: %v", field.Slug, clip(text), err)
 	case parsed.Scheme == "":
+		// THE PRESCRIPTION IS THE WHOLE VALUE. It is an address the caller
+		// is being told to write, so a shortened one is a dead link rather
+		// than a hint — see [MaxRefusalQuote], which is wider than this
+		// field's own cap for exactly this line.
 		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q has no "+
-			"scheme — write https://%s", field.Slug, clip(text), clip(text))
+			"scheme — write https://%s", field.Slug, clip(text), text)
 	case parsed.Host == "" && parsed.Opaque == "":
 		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q names "+
 			"no host", field.Slug, clip(text))
@@ -608,11 +612,28 @@ func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
 
 // MaxRefusalQuote is how much of a rejected value a refusal echoes.
 //
-// 64 BYTES, which is enough to recognise what was sent and short enough that a
-// refusal naming several fields stays one message a model can act on. The
-// value itself is in the caller's own request; this is the identifying
-// fragment, not a copy.
-const MaxRefusalQuote = 64
+// [MaxFieldValueBytes], which is the largest value any of these fields would
+// have stored — so the quote holds anything that could have been accepted and
+// the cut only ever fires on a value that was never a candidate. It is a
+// guard against a caller pasting a document into a scalar field, not a budget.
+//
+// IT WAS 64 BYTES, on the reasoning that a fragment is enough to recognise
+// what was sent. It is not, and internal/agent/builtin's own `clip`
+// already says why for the same gesture: what is echoed here is the caller's
+// OWN value, quoted back so it can see what failed to match, and "a shortened
+// echo names a query the model never sent — which is worse than a long line,
+// because the model then retries against the wrong string". Sixty-four bytes
+// is under the length of an ordinary URL, so the refusal a model reads most
+// often was the one it could least act on.
+//
+// [coerceURL] is where that turned from unhelpful into WRONG: its refusal
+// composes the correction — "write https://<value>" — out of this same quote,
+// so a URL past the old cap was answered with an instruction to store a
+// truncated address with an ellipsis inside it. That value then PARSES, and
+// lands on the board as a dead link nobody typed. Any refusal that prescribes
+// a value has to build it from the whole one, which is what this cap being
+// wider than the field's own now guarantees.
+const MaxRefusalQuote = MaxFieldValueBytes
 
 // settleFields runs the table inside the decide, against the declarations this
 // node holds.
