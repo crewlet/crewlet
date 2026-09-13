@@ -72,7 +72,10 @@ func openStore(t *testing.T, nc *nats.Conn, ttl time.Duration) *Store {
 // would reap a LongTTL record early, and this backend refuses a TTL it cannot
 // honour rather than quietly shortening it. The suite's ShortTTL and churnTTL
 // leases are honoured by the deadline the record carries, judged against the
-// STORE's clock (Store.resolveNow), never the test process's.
+// STORE's clock (Store.storeNow), never the test process's. The duty cases
+// are the exception the suite names: they claim at coord.MaxDutyTTL, far past
+// this bucket's age, and are honoured by the duty bucket, whose ceiling is the
+// contract's rather than this configuration's.
 //
 // And there is no coordtest.Advancer: a real broker's clock is its own and
 // cannot be moved, which is exactly the case the hook was made optional for.
@@ -307,7 +310,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	if got, err := s.Get(ctx, "seat:ceo"); err != nil || got != nil {
 		t.Fatalf("an unrenewed lease is still readable: (%v, %v)", got, err)
 	}
-	if raw, err := s.leases.Get(ctx, encodeKey("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if raw, err := s.leases.kv.Get(ctx, encodeKey("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Fatalf("the lease KEY survived its bucket TTL: (%v, %v)", raw, err)
 	}
 
@@ -351,7 +354,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	}
 	// A delete would take the record away; a tombstone leaves it, which is
 	// what keeps the resource's history readable while it is unheld.
-	kve, err := s.leases.Get(ctx, encodeKey("seat:ceo"))
+	kve, err := s.leases.kv.Get(ctx, encodeKey("seat:ceo"))
 	if err != nil {
 		t.Fatalf("the released key was deleted, not expired in place: %v", err)
 	}

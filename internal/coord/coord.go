@@ -8,7 +8,11 @@
 //
 //   - seat:{handle} — one agent seat this node runs.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
-//     scheduler tick, the lifecycle pass.
+//     scheduler tick, the lifecycle pass. A duty's TTL is sized from its own
+//     cadence rather than from the seat heartbeat, so it runs from seconds to
+//     hours, and every backend must honour any of them up to [MaxDutyTTL]
+//     whatever its seat lease TTL is. See [MaxDutyTTL] for why that is a
+//     contract rather than a backend's choice.
 //   - node:{id} — the node's own PRESENCE, which is the kind that is easy to
 //     forget and the one the placement math counts. Membership is not work:
 //     a node holds it to say it is alive, `ListLive("node:")` is the fleet
@@ -60,6 +64,7 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -97,6 +102,83 @@ const ProtocolVersion = 3
 // ANY non-nil error means unknown — but it gives the common case one name
 // in logs and lets tests assert the tri-state deliberately.
 var ErrUnavailable = errors.New("coordination store unavailable")
+
+// ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
+// honour.
+//
+// An ERROR, never a (nil, nil) refusal: nobody else holds the resource, the
+// caller asked for a deadline the store cannot keep. And never a silent clamp,
+// because a heartbeat computes its next tick from [Lease.ExpiresAt], so a
+// deadline quietly cut short has the holder renewing too late and losing what
+// it still holds.
+var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
+
+// MaxDutyTTL is the longest TTL a fleet duty (a `worker:` resource) may be
+// claimed with, and the TTL every backend must be able to honour for one.
+//
+// # Why a duty's ceiling is the contract's and not the seat lease's
+//
+// A seat lease and a duty lease want opposite TTLs. A seat is renewed on a
+// heartbeat, so its TTL is a few heartbeats and a dead node's seats move within
+// a minute. A duty is re-claimed once per TICK of the work it guards, and a
+// tick runs from ten seconds (the scheduler) to an hour (the learning passes),
+// so a duty TTL has to outlive several of its own ticks or it moves to a peer
+// on ordinary jitter.
+//
+// The embedded KV backend fixes a lease's expiry as its BUCKET's age, so it
+// can only honour TTLs up to the bucket it writes into. For as long as duties
+// shared the seat lease bucket, every duty claim longer than the seat lease
+// TTL (45 seconds by default) was refused, and on every `embedded-kv` fleet
+// the retention sweep, the mailbox retirement, the integration reconcile, the
+// skill curator and every integration setup pass failed on their lease claim
+// and never ran at all, with one warning per attempt as the only symptom. The
+// in-memory twin honoured any TTL, so no single-node test could see it.
+//
+// So the ceiling is stated HERE, every backend enforces it through
+// [CheckDutyTTL], and a duty TTL the embedded KV cannot keep is refused by the
+// twin too, in the tests that run against it. The contract suite certifies
+// both halves on every backend: a duty at exactly this TTL is honoured, one
+// beyond it is an error wrapping [ErrTTLTooLong].
+//
+// # The rolling upgrade a duty ceiling costs
+//
+// A backend that stores duties apart from seats (the embedded KV does) meets a
+// build that stored them together, and two builds locking one duty in two
+// places would both hold it. The rule every such backend follows: a duty claim
+// is REFUSED, as the ordinary (nil, nil), while any node of a build that
+// predates the move is live, and a holder's own re-claim is refused with it so
+// the duty stops at its next tick. An older node never looks for the newer
+// record, so this is the only side that can wait. See the kv package doc for
+// how a backend tells the two builds apart, and for the one window the check
+// cannot close.
+//
+// # Why three hours
+//
+// The longest duty the engine claims: the learning passes tick hourly and the
+// skill curator's lease survives three of those ticks, the same
+// "one missed tick must not move the duty" ratio every other duty follows. An
+// engine test asserts that this is exactly the longest duty TTL, so the number
+// cannot drift away from the duty that justifies it. Raising it is safe on a
+// running fleet (the KV backend only ever raises its duty bucket's age);
+// lowering it leaves an existing bucket older than it needs to be, which costs
+// nothing, because no duty record is judged by the bucket's age.
+const MaxDutyTTL = 3 * time.Hour
+
+// CheckDutyTTL refuses a claim on a duty resource whose TTL exceeds
+// [MaxDutyTTL], and accepts everything else.
+//
+// Backends MUST call this rather than comparing the constant themselves, so the
+// rule and its message have one implementation, and so a backend that can
+// honour longer TTLs (the in-memory twin can honour any) still refuses the
+// ones another backend cannot.
+func CheckDutyTTL(resource string, ttl time.Duration) error {
+	if !IsWorkerResource(resource) || ttl <= MaxDutyTTL {
+		return nil
+	}
+	return fmt.Errorf("%w: duty %q asked for a %v lease and a duty may hold one for at most "+
+		"coord.MaxDutyTTL (%v); shorten the duty's TTL, or raise coord.MaxDutyTTL together "+
+		"with the duty that needs the longer lease", ErrTTLTooLong, resource, ttl, MaxDutyTTL)
+}
 
 // Lease is a held lease. Epoch is the fencing token: thread it into writes.
 type Lease struct {
@@ -255,11 +337,17 @@ type Backend interface {
 	// Refuses — the same (nil, nil) — while any live lease is held at a
 	// lower protocol, unless Ungated. Ask FleetProtocolFloor once per
 	// claim sweep to tell a protocol refusal apart from a peer simply
-	// holding the resource.
+	// holding the resource. A duty claim may also be refused, Ungated or
+	// not, during the storage-layout upgrade [MaxDutyTTL] describes.
+	//
+	// A duty (a `worker:` resource) is honoured at any TTL up to
+	// [MaxDutyTTL] whatever TTL the backend's seat leases run on, and
+	// refused beyond it with an error wrapping [ErrTTLTooLong].
 	TryAcquire(ctx context.Context, resource string, opts AcquireOptions) (*Lease, error)
 
 	// Renew extends a lease the caller already holds at this epoch.
-	// Reports false when the lease is definitively no longer theirs.
+	// Reports false when the lease is definitively no longer theirs. A
+	// duty's TTL is bounded exactly as TryAcquire's is.
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
 
 	// Release gives up a lease the caller holds.
@@ -324,6 +412,9 @@ const (
 
 // IsSeatResource reports whether a resource names a seat.
 func IsSeatResource(resource string) bool { return strings.HasPrefix(resource, seatPrefix) }
+
+// IsWorkerResource reports whether a resource names a fleet duty.
+func IsWorkerResource(resource string) bool { return strings.HasPrefix(resource, workerPrefix) }
 
 // IsNodeResource reports whether a resource names a node's presence.
 func IsNodeResource(resource string) bool { return strings.HasPrefix(resource, nodePrefix) }

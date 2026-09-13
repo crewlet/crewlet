@@ -38,7 +38,8 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 ```mermaid
 flowchart LR
     subgraph COORD["coordination store — shared by the fleet"]
-        L[("leases<br/>seats · duties · presence")]
+        L[("leases<br/>seats · presence")]
+        D[("duties<br/>fleet singletons")]
         E[("epochs<br/>the fencing counter")]
         C[("config<br/>activation pointer")]
         S[("status<br/>one key per node")]
@@ -64,8 +65,9 @@ flowchart LR
 
 | Slot | Answers | Documented in |
 |---|---|---|
-| `leases` | Which node runs which seat, which node holds which duty, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
-| `epochs` | The monotonic fencing counter each resource's tokens are minted from. Its own bucket because it is the one thing here that must never expire — see the retention table below | [Seat Ownership](seat-ownership.md#the-lease) |
+| `leases` | Which node runs which seat, and which nodes are alive at all | [Seat Ownership](seat-ownership.md#the-lease) |
+| `duties` | Which node holds which [singleton duty](seat-ownership.md#singleton-duties). Its own bucket because a duty and a seat want opposite TTLs: see [Duties have a bucket of their own](#duties-have-a-bucket-of-their-own) | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
+| `epochs` | The monotonic fencing counter each seat's, duty's and node's tokens are minted from. Its own bucket because it is the one thing here that must never expire (see the retention table below) | [Seat Ownership](seat-ownership.md#the-lease) |
 | `config` | Which company revision is current. The key's own revision is the fencing epoch | [Control Plane](control-plane.md) |
 | `status` | What each node managed to apply, and when it last said so | [Control Plane](control-plane.md) |
 | `ledger` | Has this trigger already been worked — read before a turn, written after one | [The completion ledger](seat-ownership.md#the-completion-ledger) |
@@ -116,7 +118,8 @@ That is a constraint rather than a preference. On the default embedded backend a
 | Bucket | Age | Sized from |
 |---|---|---|
 | `leases` | the lease TTL (45 s by default) | The expiry **is** the mechanism: a renew rewrites the key and restarts the clock, so a node that stops renewing stops holding, and its seats become claimable without anything having to notice it died |
-| `epochs` | none | The fencing counter, and a fence that restarts is not a fence — a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` for exactly this: the two want opposite retentions |
+| `duties` | 3 hours, the longest duty's TTL, and never lowered | Each record carries the TTL its duty asked for and is judged by that deadline against the broker's clock, so the scheduler's 30-second duty moves within 30 seconds. The age only has to outlive the longest duty, and it is only ever raised, because a lowered age would have the broker reap a long duty a peer still holds |
+| `epochs` | none | The fencing counter, and a fence that restarts is not a fence: a deleted key would hand the next owner a token a zombie is still writing under. It is a separate bucket from `leases` and `duties` for exactly this: they want opposite retentions |
 | `rate` | a few multiples of the window | A closed window must age out, and must never outlive its successor |
 | `claims` | 5 minutes | A third-party app's redelivery and an operator's replay, not the third-party app's full retry schedule |
 | `ledger` | 7 days | Must outlast the queue's redelivery horizon **and** the scheduler's catchup ceiling — expiring a completion a tick could still evaluate lets that fire run twice |
@@ -134,6 +137,30 @@ That is a constraint rather than a preference. On the default embedded backend a
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
 This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for any of them: the broker expires the records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Three ageless buckets are exceptions, for the reason their rows give: nothing expires them, so removal is a decision somebody takes. `channels` and `mailboxes` are the maintenance duty's; `integrations` is the reconcile loop's own, which forgets a surface whose block has left the company document on the tick that notices.
+
+---
+
+## Duties have a bucket of their own
+
+A seat lease and a duty lease want opposite TTLs. A seat is renewed on a heartbeat, so its TTL is a few heartbeats and a dead node's seats move within a minute. A [duty](seat-ownership.md#singleton-duties) is claimed once per **tick** of the work it guards, and a tick runs from ten seconds (the scheduler) to an hour (the learning passes), so a duty's TTL has to outlive several of its own ticks: the scheduler's is 30 seconds, the integration reconcile's four and a half minutes, the retention sweep's 45 minutes and the skill curator's three hours.
+
+A bucket's age is the longest TTL it can keep, so one bucket cannot serve both. While duties shared `leases`, every duty longer than the seat lease TTL was refused, and on a fleet running `coordination.type: embedded-kv` the retention sweep, the mailbox retirement, the integration reconcile, the skill curator and every integration setup pass never ran, with one warning per attempt (`maintenance_duty_claim_failed`, `integration_duty_unknown`) as the only sign. A single node running `local` coordination was unaffected.
+
+So `duties` holds every `worker:` lease, and the rules are these:
+
+- **A duty may ask for any TTL up to three hours** (`coord.MaxDutyTTL`), on every backend, whatever the seat lease TTL is. One that asks for more is refused with an error naming the ceiling, on the in-memory backend as well, so a duty too long for a fleet fails in a single-node test rather than only in production.
+- **The ceiling is the longest duty's TTL**, and an engine test holds the two equal, so neither can move without the other.
+- **Changing `coordination.lease_ttl_seconds` changes seats and presence only.** A duty's TTL comes from its own cadence.
+
+### The rolling upgrade across the duty bucket
+
+A build that predates `duties` locks a duty in `leases`, and it cannot be taught to look anywhere else. A newer node claiming the same duty in `duties` beside it would give the fleet two holders of one duty. So:
+
+> **While any node of a build that predates the duty bucket is live, newer nodes run no duties.**
+
+Every lease record a newer build writes carries its storage layout, and a record of an older build carries none. An older node renews its presence in `leases` for as long as it runs, so a newer node that sees such a record refuses every duty claim, and a newer node already holding a duty is refused its next per-tick claim and stops. The older nodes keep running the duties they can (those whose TTL fits the seat lease TTL, which is all they could ever run); once the last of them stops and its records lapse, the newer nodes take every duty in `duties`. The older build's own duty record lapses in `leases` in that same interval, so the two holdings never overlap. Seats are not held back by any of this.
+
+A KV cannot put "no older record exists" inside a compare-and-set, so the check is made before a claim and again after it, and a new claim the second check refuses is given back at once. What that cannot close is an older node that had no live record at all when a newer node claimed (a node the fleet already counts as gone) coming back and claiming the duty in its own bucket: the newer holder's next per-tick claim is refused and it stops, so the overlap lasts at most one tick of that duty. The fleet view shows a duty an older node holds in `leases` as held by that node, so an operator sees who is actually running it during the upgrade. A downgrade across this change needs every newer node stopped first.
 
 ---
 

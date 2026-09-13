@@ -163,7 +163,7 @@ back what it wrote.
 | `/mcp/{token}` | Signed-token tool bridge: one running seat's own tool surface, served to a coding agent in a box. Per-run, expires with the run. |
 | `/health` · `/ready` | The two probes — [section 6](#6-one-node-or-a-fleet) says why they answer different questions. |
 
-**`workers` is four company-wide singletons, each held on its own
+**`workers` is five company-wide singletons, each held on its own
 `worker:DUTY` lease.**
 
 | Lease | Duty |
@@ -172,6 +172,7 @@ back what it wrote.
 | `worker:sandbox-waiter` | Polls detached runs and resumes the turns waiting on them, over the stream. The same tick is the box keepalive. |
 | `worker:maintenance` | The retention sweep, over this node's store. |
 | `worker:skill-curator` | Every learning background pass: skill ageing, episode compaction, clustering. |
+| `worker:integration-reconcile` | The [integration reconcile](integration-reconcile.md) loop: each configured surface's pass, against the third-party app. |
 
 **Five more services run on every node, whatever the roles say.**
 
@@ -494,7 +495,7 @@ question: **who has to agree on it?**
 flowchart LR
     Q{"Who has to agree<br/>on this fact?"}
     LOCAL["<b>This node alone</b> — the store<br/><i>one file, one process, exclusively owned</i>"]
-    FLEET["<b>The whole company</b>: coordination KV<br/><i>fifteen buckets on the stream's own connection</i>"]
+    FLEET["<b>The whole company</b>: coordination KV<br/><i>sixteen buckets on the stream's own connection</i>"]
     STREAM["<b>In flight, or keyed</b> — the event stream<br/><i>6 streams</i>"]
 
     Q -->|"nobody — it is this node's<br/>own record of what it did"| LOCAL
@@ -518,7 +519,8 @@ What each of the three holds, in full:
 
 | Bucket | What it holds |
 |---|---|
-| **`crewlet_leases`** | `node:` · `seat:` · `worker:` ownership. The bucket's age **is** the lease TTL |
+| **`crewlet_leases`** | `node:` · `seat:` ownership. The bucket's age **is** the lease TTL |
+| **`crewlet_duties`** | `worker:` ownership. Each record is judged by its own duty's deadline; the bucket's age only has to outlive the longest duty |
 | **`crewlet_epochs`** | The monotonic fencing counter. No age at all — see below |
 | **`crewlet_config`** | The activation pointer and its payload — the pointer's own revision **is** the epoch |
 | **`crewlet_status`** | One key per node: which revision it applied |
@@ -566,12 +568,15 @@ They were moved, and the rule is now the one above. See
 **Retention here is a bucket's age, never a per-write TTL.** On the embedded
 broker a per-key TTL is create-only — an update clears it, leaving the key
 immortal — so a horizon has to be fixed when its bucket is created, and that is
-why there are fifteen of them rather than one with prefixes: two in the lease
-store, thirteen in the fleet store. The first two are the sharpest illustration: `crewlet_leases` has an age, *and that age is the
+why there are sixteen of them rather than one with prefixes: three in the lease
+store, thirteen in the fleet store. The lease store is the sharpest illustration: `crewlet_leases` has an age, *and that age is the
 lease TTL* — a renew rewrites the key and restarts the clock, so a node that
 stops renewing stops holding and nothing has to notice it died. `crewlet_epochs`
 sits beside it with no age at all, because a fence that restarts is not a fence.
-Two buckets, opposite retentions, for the same subsystem.
+And `crewlet_duties` holds the fleet singletons apart from the seats, because a
+duty's TTL follows its own tick, up to three hours, and a bucket whose age is
+the 45-second seat TTL refused every duty longer than that. Three buckets, three
+retentions, for the same subsystem.
 
 ---
 
