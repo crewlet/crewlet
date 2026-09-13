@@ -221,6 +221,83 @@ func TestAGitHubSeatWithWorkOutstandingHoldsTheCardOpen(t *testing.T) {
 	}
 }
 
+// THE DELETE LINK OPENS THE PAGE THE DELETE CONTROL IS ON.
+//
+// GitHub has no API for deleting an App at any permission, so a disconnect
+// uninstalls each agent's App — which is what revokes its access — and hands
+// the operator a link for the rest. That link is the whole of what the engine
+// can do about it, so landing on the wrong tab wastes the one gesture it
+// offers: the settings root opens on General, and the delete control lives
+// only under Advanced, at the bottom, under a heading named nothing like
+// "delete".
+//
+// PINNED HERE, at the seam, and not only at [github.ManageURL]. The builder
+// has had its own test since the page was corrected; what had none was this —
+// which of the builders this roster calls. Nothing would have caught
+// `InstallURL` here, or a bare settings root, and the failure is silent: the
+// link works, opens, and shows the operator a page without the control they
+// came for.
+func TestTheAppDeleteLinkOpensTheAdvancedPage(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/github", "", nil))
+	seats, _ := state["seats"].([]any)
+	var found bool
+	for _, entry := range seats {
+		seat, _ := entry.(map[string]any)
+		if seat["handle"] != "builder" {
+			continue
+		}
+		found = true
+		want := "https://github.com/organizations/acme/settings/apps/acme-builder/advanced"
+		got, _ := seat["manage_url"].(string)
+		if got != want {
+			t.Errorf("manage_url = %q, want %q: the delete control is only on "+
+				"the Advanced page, so every other page is a wasted trip",
+				got, want)
+		}
+	}
+	if !found {
+		t.Fatalf("no seat named builder in %v", seats)
+	}
+	// AND WHAT IS LEFT TO CLICK IS SAID, because the control is at the
+	// bottom of that page under a heading that does not say delete.
+	if state["manage_path"] != "Delete GitHub App" {
+		t.Errorf("manage_path = %v, so the link lands them somewhere with no "+
+			"word about what to press", state["manage_path"])
+	}
+
+	// AND THE LISTING CARRIES IT, which is the route that matters: the
+	// disconnect dialog is drawn from GET /setup/integrations, not from the
+	// single-kind read above. The two share one builder today and this is
+	// what keeps that true — a listing that dropped its seats, or built
+	// them its own way, would take the link out of the one screen that
+	// offers it while every single-kind test went on passing.
+	listing := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
+	tools, _ := listing["tools"].([]any)
+	var linked string
+	for _, entry := range tools {
+		tool, _ := entry.(map[string]any)
+		if tool["key"] != "github" {
+			continue
+		}
+		rows, _ := tool["seats"].([]any)
+		for _, row := range rows {
+			seat, _ := row.(map[string]any)
+			if seat["handle"] == "builder" {
+				linked, _ = seat["manage_url"].(string)
+			}
+		}
+	}
+	if want := "https://github.com/organizations/acme/settings/apps/acme-builder/advanced"; linked != want {
+		t.Errorf("the listing the disconnect dialog reads carries %q, want %q",
+			linked, want)
+	}
+}
+
 // fakeGitHub answers the one call the app flow makes: the manifest
 // conversion. It records what it was asked to convert so a test can assert
 // the code reached it, and answers with what GitHub answers with: a private
