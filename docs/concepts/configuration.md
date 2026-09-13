@@ -89,7 +89,7 @@ node:
 |---|---|---|
 | `ingress` | Serves the HTTP API: webhooks, the dashboard, the REST endpoints | No integration can reach the company, and there is nothing to look at |
 | `seats` | Claims seat leases and runs agents | Every trigger queues up unread |
-| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, skill clustering and curation, seat-subscription creation | Nothing fires on a schedule, no sandbox run is collected, no table is swept |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning background passes (episode lifecycle, skill curation, clustering and promotion) | Nothing fires on a schedule, no sandbox run is collected, no table is swept, no integration is reconciled |
 
 Subtracting a role subtracts it from **this node, never from the
 company**, so the fleet as a whole still needs every role somewhere. That
@@ -245,31 +245,31 @@ in a fixed order, and names each stage it got through:
 4. **`learning`** — rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting.
 5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
 6. **`parties`** — rebuild the party index *before* the epoch is published, so a seat the revision **adds** is addressable the instant the epoch carrying it is current.
-7. **`integrations`** — rebuild the four trackers against the new epoch, so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** — its block removed, or `enabled: false` for GitHub and GitLab — has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org — space and project key to unit lead — which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
+7. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
 8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
-9. **`mailboxes`** — ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. **Conditional:** only where the engine has a node — `crewlet validate` applies to nothing.
-10. **`seat_tools`** — rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched — they belong to the seat's lease, not to the epoch (see below) — so what is rebuilt is the catalogue a turn is built against, never a process. **Conditional:** absent where this node holds no seat with per-role children.
+9. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
+10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
 11. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
-Then `crewlet.config.revision_applied` is published with `status`, the
-`applied_subsystems` list and any error.
+Then a `config_revision_applied` event is published on
+`crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
+and any error.
 
 **A failure is reported by how far it got, not undone.** Every refusal above
 happens before the epoch swap, so it leaves the previous epoch current and
 serving — that, rather than a rollback, is what makes a failed apply safe. The
 returned list is the stages that *did* complete, in the order they completed,
 so "secrets, company" names both what was rebuilt and where the refusal landed.
-It travels on `ConfigRevisionApplied` into the audit event log, where it
+It travels on `config_revision_applied` into the audit event log, where it
 outlives the fleet view's one-minute bucket. The fleet view carries each node's
 epoch, revision, status and failure text but *not* the stage list, so that
 detail lives on the event rather than on the operator surfaces reading the
 bucket. The active row stays active either way; the control plane records
 the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-**Read that list by name, never by number.** Three of the eleven stages are
-conditional, so a successful apply on a node that booted without a sandbox and
-holds no seat with per-role children reports eight names and the swap is the
-sixth of them. The numbering above is the order the code runs, not an index
+**Read that list by name, never by number.** Two of the eleven stages are
+conditional, so a successful apply on a node that booted without a sandbox
+reports ten names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
 into what a node reports.
 
 > **"No rollback" is not "no mutation".** What the build-first ordering buys is
