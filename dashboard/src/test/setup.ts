@@ -39,7 +39,7 @@ if (!("scrollTo" in globalThis)) {
   Object.defineProperty(globalThis, "scrollTo", { writable: true, value: () => {} });
 }
 
-// localStorage is the third gap, and the one that only shows up on somebody
+// Web Storage is the third gap, and the one that only shows up on somebody
 // else's machine. jsdom exposes it from the document's ORIGIN, so whether it
 // is there depends on how the environment was constructed rather than on the
 // version: two suites that store an operator token passed every local run and
@@ -55,17 +55,25 @@ if (!("scrollTo" in globalThis)) {
 // safely use — skipped this polyfill entirely and the suites failed exactly
 // as they had before it existed. Reading it can also throw, which is the same
 // reason apiToken() wraps its own read.
-function storageMissing(): boolean {
+//
+// sessionStorage has exactly the same origin dependence, and it is filled by
+// the same factory rather than a second copy, so the two areas cannot come to
+// behave differently in the suite while they behave the same in a browser.
+// Each area gets its OWN map: a key written to one must not be readable from
+// the other.
+type StorageArea = "localStorage" | "sessionStorage";
+
+function storageMissing(area: StorageArea): boolean {
   try {
-    return !globalThis.localStorage;
+    return !globalThis[area];
   } catch {
     return true;
   }
 }
 
-if (storageMissing()) {
+function memoryStorage(): Storage {
   const store = new Map<string, string>();
-  const memory: Storage = {
+  return {
     get length() {
       return store.size;
     },
@@ -75,5 +83,10 @@ if (storageMissing()) {
     removeItem: (key: string) => void store.delete(key),
     clear: () => store.clear(),
   };
-  Object.defineProperty(globalThis, "localStorage", { writable: true, value: memory });
+}
+
+for (const area of ["localStorage", "sessionStorage"] as const) {
+  if (storageMissing(area)) {
+    Object.defineProperty(globalThis, area, { writable: true, value: memoryStorage() });
+  }
 }

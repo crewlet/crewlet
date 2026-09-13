@@ -9,7 +9,7 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
@@ -121,11 +121,41 @@ describe("an engine with no active configuration", () => {
   });
 });
 
+/**
+ * A fetch that answers by path, in the Secrets suite's idiom: the REST-backed
+ * screens read over it, and an unstubbed fetch in jsdom is a network error on
+ * some machines and a hang on others, which makes a smoke test measure the
+ * runner rather than the screen.
+ */
+function stubFetch(handler: (path: string) => Response) {
+  const spy = vi.fn((input: RequestInfo | URL) =>
+    Promise.resolve(handler(new URL(String(input), "http://engine.test").pathname)),
+  );
+  vi.stubGlobal("fetch", spy);
+  return spy;
+}
+
+const answer = (status: number, payload: unknown) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+
 describe("routing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   test("every nav route renders a screen rather than a blank", () => {
+    // An engine with no company yet: the state a builder's create mode opens
+    // on, and the one every REST read has to render honestly.
+    stubFetch((path) =>
+      path === "/config" ? answer(404, { error: "no_active_revision" }) : answer(200, {}),
+    );
     for (const hash of [
       "#/people",
       "#/org",
+      "#/org?lens=builder",
       "#/runs",
       "#/conversations",
       "#/schedules",
