@@ -216,19 +216,28 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// that comes from this process rather than from the document's author.
 	// A credential still holding the marker means a config read was edited
 	// and sent back, and the mask could not be matched to what it hid: a
-	// member that is NEW or RENAMED has no prior value of its own, and a
-	// list of bare credentials that changed length no longer says by
+	// member that is NEW or RENAMED has no prior value of its own, a member
+	// whose identity the stored revision does not give to exactly one member
+	// (a duplicate, or an empty one) cannot be matched without guessing, and
+	// a list of bare credentials that changed length no longer says by
 	// position which one is which. Storing it silently would hand a
 	// provider the literal "__redacted__" as an API key, and the failure
 	// would surface hours later as an authentication error naming nothing
 	// about where it came from.
+	//
+	// The message names every cause, because the restore does not record
+	// which one applied and an operator reading only "new or renamed" about
+	// a unit they did neither to has nothing to act on.
 	for _, path := range c.UnresolvedMasks() {
 		p.add(path, ErrUnknownValue,
 			"still holds the redaction marker %q: a masked credential could "+
-				"not be matched to the value it hid. Either this member is new "+
-				"or was renamed, so there is no prior value to restore, or a "+
+				"not be matched to the value it hid. A seat is matched by its "+
+				"handle, and a unit, an MCP server and a sandbox setup step by "+
+				"its name, so this happens when the member is new or was "+
+				"renamed, when the stored revision gives that handle or name "+
+				"to more than one member or the member has none, or when a "+
 				"list of bare credentials changed length. Write the real value "+
-				"here",
+				"or a ${VAR} reference here",
 			Redacted)
 	}
 

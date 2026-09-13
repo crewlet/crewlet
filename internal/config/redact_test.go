@@ -1062,3 +1062,42 @@ func holdsCredential(t reflect.Type, seen map[reflect.Type]bool) bool {
 	}
 	return false
 }
+
+// A STANDING MASK SAYS EVERY REASON IT COULD NOT BE MATCHED, AND WHAT TO DO.
+//
+// The refusal once named only a new or renamed member and a bare list that
+// changed length. A stored revision with two units called "Platform" leaves
+// masks standing on units nobody created or renamed, and an operator told
+// only those two causes has nothing to act on.
+func TestAStandingMaskNamesEveryCauseAndTheRemedy(t *testing.T) {
+	t.Parallel()
+	original, err := ParseCompanyDocument([]byte(`
+name: Acme
+mcp_servers:
+  - {name: tracker, command: tracker-mcp, shared: false}
+units:
+  - {name: Platform, mcp_env: {tracker: {TOKEN: secret-A}}, roles: [{name: Dev A, handle: dev-a}]}
+  - {name: Platform, mcp_env: {tracker: {TOKEN: secret-B}}, roles: [{name: Dev B, handle: dev-b}]}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	edited := original.Redact()
+	edited.RestoreRedacted(original)
+
+	err = edited.ValidateRunnable()
+	if err == nil {
+		t.Fatal("a document holding standing masks validated")
+	}
+	for _, want := range []string{
+		"units[0].mcp_env.tracker.TOKEN",
+		"new or was renamed",
+		"more than one member",
+		"changed length",
+		"${VAR} reference",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+}
