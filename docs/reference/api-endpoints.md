@@ -1762,6 +1762,7 @@ resolves that itself rather than making a caller know which.
   "skills": [
     { "id", "key", "title", "summary", "version", "updated_at", "uses" }
   ],
+  "skills_total": 0,
   "counterparties": [
     { "observer_handle", "subject", "summary", "updated_at" }
   ],
@@ -1797,7 +1798,12 @@ Sources:
 * **`skills`** — the seat's own synthesized skills, drafted from its
   repeated work and loadable mid-turn via `use_skill`. Archived rows are
   hidden and stale ones shown, because a stale skill still works and
-  still revives on use.
+  still revives on use. Capped at 50 like the two above, and
+  **`skills_total`** is how many the seat actually has — the diary and the
+  episodes ask their store for a recency feed, where "the most recent 50"
+  is the question, but skills are a set a seat loads from, so the listing
+  is cut after the read and the count beside it is what says so. Render
+  the total, not the length of the list.
 * **`counterparties`** — profiles built up from observed interactions.
 
 The table is strictly per-agent; cross-agent procedural artefacts are

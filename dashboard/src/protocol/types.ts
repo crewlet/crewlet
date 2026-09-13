@@ -878,6 +878,9 @@ export interface AgentMemoryAnswer {
   diary: DiaryEntry[];
   episodes: Episode[];
   skills: SynthesizedSkill[];
+  /** How many the seat HAS, which is not how many `skills` carries: the
+   *  listing is cut at the page limit, and this is what says so. */
+  skills_total?: number;
   counterparties: CounterpartyProfile[];
   onboarded_at: string;
 }

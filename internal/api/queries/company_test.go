@@ -1767,3 +1767,74 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 		}
 	}
 }
+
+// A SKILL LISTING PAST THE PAGE LIMIT SAYS SO, and the count is the seat's
+// whole set rather than the page's length.
+//
+// The diary and the episodes ask their store for [queries.MemoryPageLimit] and
+// get a recency feed, where "the most recent fifty" IS the question. Skills
+// are a SET the seat loads from and the store takes no limit, so the listing
+// is cut after the read — and it was cut SILENTLY, which is the one shape this
+// tree does not allow a cut to have. The panel counts what it is given, so a
+// seat with more skills than the page holds reported exactly the page limit:
+// a number an operator has no reason to doubt and no way to check.
+func TestASkillListingPastThePageLimitReportsWhatItCut(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	skills := learning.NewSkills(db)
+	const held = queries.MemoryPageLimit + 7
+	for i := range held {
+		name := "skill-" + strconv.Itoa(i)
+		if err := skills.Insert(t.Context(), learning.Skill{
+			ID: name, AgentHandle: "ceo", Name: name,
+			Description: "drafted from repeated work",
+			CreatedAt:   pinned, UpdatedAt: pinned,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	body := asMap(t, answer(t, queries.Sources{Skills: skills},
+		"agent_memory", map[string]any{"id": "ceo"}))
+
+	rows, _ := body["skills"].([]any)
+	if len(rows) != queries.MemoryPageLimit {
+		t.Fatalf("the listing carries %d skill(s), want the page limit %d",
+			len(rows), queries.MemoryPageLimit)
+	}
+	total, present := body["skills_total"]
+	if !present {
+		t.Fatal("the answer omits skills_total, so a page of the set is " +
+			"indistinguishable from the whole of it")
+	}
+	if got, want := jsonInt(t, total), held; got != want {
+		t.Errorf("skills_total = %d, want %d — the count a screen renders is "+
+			"the seat's whole set, not the length of the page", got, want)
+	}
+}
+
+// AND IT IS PRESENT WHEN NOTHING WAS CUT, so a client never has to tell an
+// absent key from a total of zero.
+func TestSkillsTotalIsAlwaysPresent(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	body := asMap(t, answer(t, queries.Sources{Skills: learning.NewSkills(db)},
+		"agent_memory", map[string]any{"id": "nobody"}))
+	if _, present := body["skills_total"]; !present {
+		t.Error("the answer omits skills_total for a seat with none")
+	}
+}
+
+// jsonInt reads a number that survived a JSON round trip as either shape.
+func jsonInt(t *testing.T, v any) int {
+	t.Helper()
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	default:
+		t.Fatalf("%v is not a number (%T)", v, v)
+		return 0
+	}
+}

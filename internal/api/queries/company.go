@@ -739,6 +739,7 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		"diary":          []map[string]any{},
 		"episodes":       []map[string]any{},
 		"skills":         []map[string]any{},
+		"skills_total":   0,
 		"counterparties": []map[string]any{},
 		"onboarded_at":   "",
 	}
@@ -788,6 +789,17 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		if err != nil {
 			return nil, err
 		}
+		// THE TOTAL, ALWAYS, and that is the difference between a page and
+		// a lie. This is the one collection here the store does not bound
+		// for us — the diary and the episodes ask for their limit and get
+		// a recency feed — so it is cut after the read, and the panel that
+		// renders it counts the rows it was given. A seat past the cap
+		// therefore reported exactly [MemoryPageLimit] skills, which is a
+		// number an operator has no reason to doubt and no way to check.
+		// Every other cut in this tree says so: a diff appends "N further
+		// changes not listed", a trace answers `truncated`, a ledger line
+		// appends "+N more".
+		out["skills_total"] = len(skills)
 		if len(skills) > MemoryPageLimit {
 			skills = skills[:MemoryPageLimit]
 		}
@@ -800,7 +812,13 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	return out, nil
 }
 
-// MemoryPageLimit bounds each half of a seat's memory page.
+// MemoryPageLimit bounds each collection of a seat's memory page.
+//
+// FIFTY, and it reaches the three collections differently: the diary and the
+// episodes ask their store for that many and get a recency feed, where "the
+// most recent fifty" IS the question. The skills are a SET the seat loads
+// from and the store has no limit to pass, so they are cut here — which is
+// why `skills_total` travels beside them.
 const MemoryPageLimit = 50
 
 // countOrNil renders an outcome count, or null when nothing was counted.
