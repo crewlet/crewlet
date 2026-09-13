@@ -55,6 +55,32 @@ type Unit struct {
 	// do not set their own.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 
+	// DeclaredLead and DeclaredChannel are what this unit itself WROTE,
+	// recorded by [Organization.Normalize] before the cascade fills Lead and
+	// Channel with an ancestor's value. Empty means the unit named none.
+	//
+	// They mirror [Role.DeclaredHandle]: every reader resolves through the
+	// effective field, and the authored half exists for the questions the
+	// effective value can no longer answer once the cascade has run. Two
+	// such questions exist. A dangling-reference report has to name the unit
+	// that wrote a misspelled lead ONCE, rather than every descendant that
+	// inherited it and whose author wrote nothing; and a chart has to tell
+	// an inherited lead from a unit naming the same seat itself, which read
+	// identically in Lead.
+	//
+	// Not part of the wire form: the authored values are `lead` and
+	// `channel` in the document, and these are derived from them. A caller
+	// building a Unit sets Lead and Channel.
+	DeclaredLead    string `yaml:"-" json:"-"`
+	DeclaredChannel string `yaml:"-" json:"-"`
+
+	// declared reports that DeclaredLead and DeclaredChannel have been
+	// recorded. It is what keeps Normalize idempotent: after the cascade an
+	// inherited Lead and an authored one are the same string, so a second
+	// pass that recorded again would promote every inherited lead to a
+	// declared one.
+	declared bool
+
 	// JiraProject and ConfluenceSpace are the unit's integration IDENTITY:
 	// inbound activity with no better recipient routes to the unit lead,
 	// and this is where the team files work and writes pages. Neither is an

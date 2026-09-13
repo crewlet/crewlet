@@ -119,6 +119,138 @@ func TestUnresolvedLeadIsKeptAndReported(t *testing.T) {
 	}
 }
 
+// TestNestedUnitsReportAnInheritedDanglingLeadOnce: the misspelling is
+// written once, on the division, and reported once. DanglingRefs used to run
+// over the effective leads after the cascade, so every descendant that
+// inherited the name was reported as well, naming units whose authors had
+// written no lead at all. A descendant that WRITES the same name is a second
+// misspelling and is reported on its own.
+func TestNestedUnitsReportAnInheritedDanglingLeadOnce(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "Ghost", Roles: []*Role{{Name: "VP Eng"}},
+			Children: []*Unit{
+				{
+					Name: "Backend", Roles: []*Role{{Name: "Dev A"}},
+					Children: []*Unit{{Name: "Storage", Roles: []*Role{{Name: "Dev S"}}}},
+				},
+				{Name: "Infra", Roles: []*Role{{Name: "Dev I"}}},
+				{Name: "Security", Lead: "Ghost", Roles: []*Role{{Name: "Dev X"}}},
+			},
+		}},
+	})
+	// The inheritance itself is unchanged: every descendant still carries
+	// the reference, and every reader still treats it as no lead.
+	for _, name := range []string{"Backend", "Storage", "Infra"} {
+		if got := o.Unit(name).Lead; got != "Ghost" {
+			t.Errorf("unit %q lead = %q, want the inherited Ghost", name, got)
+		}
+	}
+	want := []DanglingRef{
+		{Kind: RefLead, From: "Engineering", To: "Ghost"},
+		{Kind: RefLead, From: "Security", To: "Ghost"},
+	}
+	if got := o.DanglingRefs(); !slices.Equal(got, want) {
+		t.Errorf("DanglingRefs() = %v, want %v", got, want)
+	}
+}
+
+// TestNormalizeRecordsWhatEachUnitDeclared: after the cascade an inherited
+// lead and a declared one are the same string, so the authored value has to
+// be recorded before it is overwritten, and a second pass must read that
+// record rather than record the inherited value as authored.
+func TestNormalizeRecordsWhatEachUnitDeclared(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
+			Roles: []*Role{{Name: "VP Eng"}},
+			Children: []*Unit{
+				{Name: "Backend", Roles: []*Role{{Name: "Dev A"}}},
+				// Names the same seat and channel as its parent. Declared,
+				// not inherited: changing the parent must not move it.
+				{Name: "Platform", Lead: "VP Eng", Channel: "C_ENG", Roles: []*Role{{Name: "Dev P"}}},
+				{Name: "Frontend", Channel: "C_WEB", Roles: []*Role{{Name: "Dev F"}}},
+			},
+		}},
+	})
+	o.Normalize()
+
+	for _, tc := range []struct {
+		unit                     string
+		lead, declaredLead       string
+		channel, declaredChannel string
+	}{
+		{unit: "Engineering", lead: "VP Eng", declaredLead: "VP Eng", channel: "C_ENG", declaredChannel: "C_ENG"},
+		{unit: "Backend", lead: "VP Eng", declaredLead: "", channel: "C_ENG", declaredChannel: ""},
+		{unit: "Platform", lead: "VP Eng", declaredLead: "VP Eng", channel: "C_ENG", declaredChannel: "C_ENG"},
+		{unit: "Frontend", lead: "VP Eng", declaredLead: "", channel: "C_WEB", declaredChannel: "C_WEB"},
+	} {
+		u := o.Unit(tc.unit)
+		if u.Lead != tc.lead || u.DeclaredLead != tc.declaredLead {
+			t.Errorf("unit %q lead = %q declared %q, want %q declared %q",
+				tc.unit, u.Lead, u.DeclaredLead, tc.lead, tc.declaredLead)
+		}
+		if u.Channel != tc.channel || u.DeclaredChannel != tc.declaredChannel {
+			t.Errorf("unit %q channel = %q declared %q, want %q declared %q",
+				tc.unit, u.Channel, u.DeclaredChannel, tc.channel, tc.declaredChannel)
+		}
+	}
+}
+
+// A manages entry naming neither a seat nor a unit is kept verbatim (the seat
+// may not have landed yet) and reported; an entry naming a seat, a unit, or a
+// unit that happens to hold no seats is not a misspelling.
+func TestADanglingManagesEntryIsReported(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Roles: []*Role{
+			{Name: "CEO", Manages: []string{"CTO", "Engineering", "Hiring", "Ghost"}},
+			{Name: "CTO"},
+			human(func(r *Role) { r.Manages = []string{"CEO", "Nobody"} }),
+		},
+		Units: []*Unit{
+			{Name: "Engineering", Lead: "Tech Lead", Roles: []*Role{{Name: "Tech Lead"}, {Name: "Dev"}}},
+			{Name: "Hiring"},
+		},
+	})
+	want := []DanglingRef{
+		{Kind: RefManages, From: "CEO", To: "Ghost"},
+		{Kind: RefManages, From: "Sarah Chen", To: "Nobody"},
+	}
+	if got := o.DanglingRefs(); !slices.Equal(got, want) {
+		t.Errorf("DanglingRefs() = %v, want %v", got, want)
+	}
+	if err := o.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil: a dangling entry is a warning", err)
+	}
+}
+
+// Every kind renders a message naming both ends of the reference, so a log
+// line or a warning is actionable without the structured fields beside it.
+func TestADanglingReferenceMessageNamesBothEnds(t *testing.T) {
+	t.Parallel()
+	for _, ref := range []DanglingRef{
+		{Kind: RefLead, From: "Engineering", To: "Ghost"},
+		{Kind: RefUnit, From: "Dev", To: "Nowhere"},
+		{Kind: RefManages, From: "CEO", To: "Ghost"},
+		{Kind: RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "old-seat"},
+		{Kind: RefKind("future_kind"), From: "somewhere", To: "something"},
+	} {
+		msg := ref.Message()
+		if !strings.Contains(msg, ref.From) || !strings.Contains(msg, ref.To) {
+			t.Errorf("%s message %q does not name %q and %q", ref.Kind, msg, ref.From, ref.To)
+		}
+		if strings.Contains(msg, "\u2014") {
+			t.Errorf("%s message %q contains an em dash", ref.Kind, msg)
+		}
+	}
+}
+
 // ---- auto-management ------------------------------------------------- //
 
 func TestLeadAutoManagesOnlyUnmanagedMembers(t *testing.T) {
@@ -671,6 +803,21 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 	}
 	if string(first) != string(second) {
 		t.Errorf("a second Normalize changed the org:\n--- once ---\n%s\n--- twice ---\n%s", first, second)
+	}
+	// The declared record is not part of the wire form, so the marshal
+	// above cannot see it: a second pass that promoted an inherited lead
+	// to a declared one would pass that comparison and still report
+	// every descendant of a misspelled lead.
+	onceUnits, twiceUnits := slices.Collect(once.AllUnits()), slices.Collect(twice.AllUnits())
+	for i := range onceUnits {
+		a, b := onceUnits[i], twiceUnits[i]
+		if a.DeclaredLead != b.DeclaredLead || a.DeclaredChannel != b.DeclaredChannel {
+			t.Errorf("unit %q declared lead %q channel %q after one pass, %q and %q after two",
+				a.Name, a.DeclaredLead, a.DeclaredChannel, b.DeclaredLead, b.DeclaredChannel)
+		}
+	}
+	if got := twice.Unit("Backend").DeclaredLead; got != "" {
+		t.Errorf("Backend declared lead = %q after two passes, want none: it inherits", got)
 	}
 }
 

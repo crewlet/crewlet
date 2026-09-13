@@ -296,6 +296,56 @@ func TestDanglingReferencesAreReportedNotRejected(t *testing.T) {
 	}
 }
 
+// TestAGitLabAccessLevelForNoSeatIsReported: an override keyed by a handle no
+// seat holds is a grant waiting for whichever seat next derives that handle,
+// typically a seat re-added after a delete. The org model cannot see the
+// integrations block, so the check lives here, after the org's own
+// references, against the handles of the same normalized organization.
+func TestAGitLabAccessLevelForNoSeatIsReported(t *testing.T) {
+	t.Parallel()
+	cfg := mustCompany(t, `
+name: Acme
+integrations:
+  gitlab:
+    enabled: true
+    url: https://gitlab.example.com
+    signing_secret: "${GITLAB_SIGNING_SECRET}"
+    provisioning:
+      group: acme
+      access_levels:
+        tech-lead: maintainer
+        sre: maintainer
+        founder: developer
+        former-engineer: maintainer
+roles:
+  - name: Founder
+    kind: human
+    manages: [CEO, Ghost]
+    contact: {gitlab_username: founder}
+  - name: CEO
+units:
+  - name: Platform
+    lead: Tech Lead
+    roles:
+      - name: Tech Lead
+      - name: Site Reliability
+        handle: sre
+`)
+	want := []org.DanglingRef{
+		{Kind: org.RefManages, From: "Founder", To: "Ghost"},
+		{Kind: org.RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "former-engineer"},
+	}
+	if got := cfg.DanglingRefs(); !slices.Equal(got, want) {
+		t.Errorf("DanglingRefs() = %v, want %v", got, want)
+	}
+
+	// A company without provisioning overrides has nothing to report here.
+	plain := mustCompany(t, "name: Acme\nroles:\n  - {name: CEO}\n")
+	if got := plain.DanglingRefs(); len(got) != 0 {
+		t.Errorf("DanglingRefs() = %v, want none", got)
+	}
+}
+
 // A toggle's third state is load-bearing: unset means "inherit", which is
 // not the same answer as false.
 func TestToggleKeepsItsThirdState(t *testing.T) {

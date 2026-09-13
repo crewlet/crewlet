@@ -1,6 +1,7 @@
 package org
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"iter"
@@ -189,10 +190,10 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 // before the expansion rewrites the lists, so it has to see each entry the
 // way the expansion will leave it: a direct member that manages its own unit
 // (or an ancestor) by name shields the members that reference reaches,
-// exactly as if it had listed them one by one. Reading the entry as written instead let the lead
-// claim those members too, giving each a second manager, and claim the
-// member itself when the reference reached the lead, which is a two-seat
-// management cycle.
+// exactly as if it had listed them one by one. Reading the entry as written
+// instead let the lead claim those members too, giving each a second
+// manager, and claim the member itself when the reference reached the lead,
+// which is a two-seat management cycle.
 //
 // It is idempotent (running it twice changes nothing) because live config
 // management re-applies whole revisions and a second pass must not compound
@@ -236,16 +237,21 @@ func (o *Organization) attachRootSeats() {
 // A child inherits what its parent RESOLVED to, not what the parent
 // literally declared, so a lead set on a division reaches a team three
 // levels down through units that named nothing themselves.
+//
+// What each unit wrote is recorded first, in [Unit.DeclaredLead] and
+// [Unit.DeclaredChannel], and the effective values are computed from that
+// record on every pass, which is what makes a second pass land on the same
+// tree as the first.
 func propagateDownward(u *Unit, parentLead, parentChannel string) {
 	if u.Type == "" {
 		u.Type = UnitTypeTeam
 	}
-	if u.Lead == "" {
-		u.Lead = parentLead
+	if !u.declared {
+		u.DeclaredLead, u.DeclaredChannel = u.Lead, u.Channel
+		u.declared = true
 	}
-	if u.Channel == "" {
-		u.Channel = parentChannel
-	}
+	u.Lead = cmp.Or(u.DeclaredLead, parentLead)
+	u.Channel = cmp.Or(u.DeclaredChannel, parentChannel)
 	for _, c := range u.Children {
 		propagateDownward(c, u.Lead, u.Channel)
 	}
@@ -453,44 +459,109 @@ func (o *Organization) expandManages(index managesIndex) {
 type RefKind string
 
 const (
-	// RefLead is a unit whose lead names no seat in the org.
+	// RefLead is a unit whose own lead names no seat in the org.
 	RefLead RefKind = "lead"
 	// RefUnit is a root seat whose unit: names no unit in the org.
 	RefUnit RefKind = "unit"
+	// RefManages is a manages entry naming neither a seat nor a unit.
+	RefManages RefKind = "manages"
+	// RefGitLabAccessLevel is a key of
+	// integrations.gitlab.provisioning.access_levels naming no seat's
+	// handle. The organization carries no integrations, so
+	// [Organization.DanglingRefs] never reports it: the config layer does
+	// (config.Company.DanglingRefs). The kind is declared here so the whole
+	// vocabulary of dangling references, and its rendering in
+	// [DanglingRef.Message], lives in one place.
+	RefGitLabAccessLevel RefKind = "gitlab_access_level"
 )
 
 // DanglingRef is a name that resolved to nothing.
 type DanglingRef struct {
 	Kind RefKind
-	// From is the unit (for a lead) or the seat (for a unit reference)
-	// that carries the reference.
+	// From is what carries the reference: the unit (for a lead), the seat
+	// (for a unit reference or a manages entry), or the document path of
+	// the map (for a GitLab access level).
 	From string
 	// To is the name that resolved to nothing.
 	To string
 }
 
+// Message renders the reference for an operator: what names what, what the
+// engine does with it meanwhile, and the two ways to resolve it.
+func (d DanglingRef) Message() string {
+	switch d.Kind {
+	case RefLead:
+		return fmt.Sprintf("unit %q names lead %q, which is no seat, so the unit "+
+			"and every descendant inheriting its lead run with no lead. "+
+			"Correct the lead or add a seat with that name", d.From, d.To)
+	case RefUnit:
+		return fmt.Sprintf("seat %q names unit %q, which does not exist, so the "+
+			"seat stays at the root. Correct its unit or add a unit with that name",
+			d.From, d.To)
+	case RefManages:
+		return fmt.Sprintf("seat %q manages %q, which is neither a seat nor a "+
+			"unit, so the entry manages nobody. Correct the entry or add a seat "+
+			"or unit with that name", d.From, d.To)
+	case RefGitLabAccessLevel:
+		return fmt.Sprintf("%s names handle %q, which no seat has, so a seat "+
+			"added later with that handle would be given this access level. "+
+			"Remove the entry or correct the handle", d.From, d.To)
+	default:
+		return fmt.Sprintf("%s reference %q on %q resolves to nothing", d.Kind, d.To, d.From)
+	}
+}
+
 // DanglingRefs reports the soft references [Organization.Normalize] could
-// not resolve.
+// not resolve, in the order an author reads the document: root seats' unit
+// references, then each unit's own lead, then every seat's manages entries.
+// It assumes Normalize has run, like every other accessor.
 //
 // These are NOT validation errors, deliberately. Live config management
-// bootstraps an org in pieces — a unit is allowed to land before the seat
-// that leads it, and the engine applies every intermediate revision —
-// so rejecting a partially-wired org would make per-entity bootstrap
+// bootstraps an org in pieces (a unit is allowed to land before the seat
+// that leads it, and the engine applies every intermediate revision), so
+// rejecting a partially-wired org would make per-entity bootstrap
 // impossible. Every reader already treats a dangling reference as absent.
 //
 // They are worth a WARNING though: once the org is fully wired this list is
 // empty, and an entry that persists across revisions is a misspelling
-// nothing else will ever report. The config layer logs them.
+// nothing else will ever report. Each node logs them, through
+// config.Company.DanglingRefs, as org_dangling_reference once per epoch it
+// applies.
+//
+// WHAT WAS WRITTEN, ONCE. A lead is reported on the unit that declares it
+// ([Unit.DeclaredLead]), never on the descendants that inherited it: they
+// wrote nothing, and naming them sent an operator to fix units whose authors
+// had nothing to fix. A manages entry is reported when it names neither a
+// seat nor a unit. One naming a unit with no seats resolves to nobody, but it
+// is not a misspelling, so it is not reported.
 func (o *Organization) DanglingRefs() []DanglingRef {
+	seats := make(map[string]struct{})
+	for r := range o.AllRoles() {
+		seats[r.Name] = struct{}{}
+	}
+	units := make(map[string]struct{})
+	for u := range o.AllUnits() {
+		units[u.Name] = struct{}{}
+	}
+
 	var out []DanglingRef
 	for _, r := range o.Roles {
-		if r.UnitRef != "" && o.Unit(r.UnitRef) == nil {
+		if _, found := units[r.UnitRef]; r.UnitRef != "" && !found {
 			out = append(out, DanglingRef{Kind: RefUnit, From: r.Name, To: r.UnitRef})
 		}
 	}
 	for u := range o.AllUnits() {
-		if u.Lead != "" && o.Role(u.Lead) == nil {
-			out = append(out, DanglingRef{Kind: RefLead, From: u.Name, To: u.Lead})
+		if _, found := seats[u.DeclaredLead]; u.DeclaredLead != "" && !found {
+			out = append(out, DanglingRef{Kind: RefLead, From: u.Name, To: u.DeclaredLead})
+		}
+	}
+	for r := range o.AllRoles() {
+		for _, entry := range r.Manages {
+			_, isSeat := seats[entry]
+			_, isUnit := units[entry]
+			if !isSeat && !isUnit {
+				out = append(out, DanglingRef{Kind: RefManages, From: r.Name, To: entry})
+			}
 		}
 	}
 	return out

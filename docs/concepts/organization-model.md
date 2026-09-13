@@ -342,7 +342,7 @@ You can mix role names and unit names freely:
 manages: ["CTO", "Backend"]   # CTO is a role, Backend is a unit
 ```
 
-If a name matches both a role and a unit, the **role takes priority** (no expansion happens for that entry). A unit name expands to every seat in that unit's subtree **except the seat that lists it**: a lead that manages its own team by name does not manage itself. A name matching neither a role nor a unit is kept as written, so a seat that has not been added yet can already be named.
+If a name matches both a role and a unit, the **role takes priority** (no expansion happens for that entry). A unit name expands to every seat in that unit's subtree **except the seat that lists it**: a lead that manages its own team by name does not manage itself. A name matching neither a role nor a unit is kept as written, so a seat that has not been added yet can already be named, and the engine reports it as a [dangling reference](#dangling-references).
 
 ### Unit Lead
 
@@ -434,6 +434,25 @@ units:
         lead: "Backend Lead"
         roles: [...]
 ```
+
+### Dangling references
+
+A `lead`, a root seat's `unit`, or a `manages` entry names another entity by name, and that name may resolve to nothing: a misspelling, a seat that was removed, or a seat that has not been added yet. None of these refuses the revision. Live configuration changes build an organization in pieces (a unit can be added before the seat that leads it, and every node applies each intermediate revision), so refusing a partly wired organization would make that sequence impossible. Every reader treats the reference as absent instead: a unit whose lead is dangling runs with no lead, a seat whose `unit` names nothing stays at the root, and a `manages` entry naming nothing manages nobody.
+
+The engine reports them rather than letting them pass silently. **Each node logs every dangling reference once for each epoch it applies**, as a warning named `org_dangling_reference`, and never for a revision it refused. A reference that is still logged after the organization is fully wired is a misspelling nothing else will report.
+
+| `ref` | Reported when | `from` | `to` |
+|---|---|---|---|
+| `lead` | A unit's own `lead` names no seat | The unit | The lead as written |
+| `unit` | A root seat's `unit` names no unit | The seat | The unit as written |
+| `manages` | A `manages` entry names neither a seat nor a unit | The seat | The entry as written |
+| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` is no seat's handle | `integrations.gitlab.provisioning.access_levels` | The handle |
+
+Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
+
+**What was written is reported, once.** A dangling lead is reported on the unit that declares it, never on the child units that inherit it: they wrote nothing, and there is nothing to fix on them. A child unit that writes the same name itself is reported separately, because it is a second place to correct. A `manages` entry naming a unit that holds no seats resolves to nobody but is not a misspelling, so it is not reported.
+
+**A stale GitLab access level is worth removing promptly.** Access level overrides are looked up by handle when a seat's service account is provisioned, so the entry left behind by a removed seat grants its level to the next seat that derives the same handle. It is reported whether or not GitLab is currently enabled, since re-enabling it is exactly when the stale grant would take effect.
 
 ---
 
