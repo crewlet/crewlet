@@ -112,9 +112,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// data race, and one test's log lines landing in another's
 		// output. See [logging.Configure].
 		logging.SetVerbosity(operatorLogLevel(), operatorLogFormat())
-		warnUnrecognisedLogNames(logging.Get("cli"), "environment",
-			"CREWLET_LOG_LEVEL", os.Getenv("CREWLET_LOG_LEVEL"),
-			"CREWLET_LOG_FORMAT", os.Getenv("CREWLET_LOG_FORMAT"))
+		// THE FILE OPENS BEFORE THE FIRST THING THESE COMMANDS LOG, which
+		// is the warning below: a misspelled $CREWLET_LOG_LEVEL is part of
+		// the command's log, and a file attached afterwards would hold
+		// every line of it except the one saying the invocation was wrong.
+		//
 		// AND THE SAME LEVER OVER WHERE THEY WRITE. $CREWLET_LOG_FILE is
 		// the third sibling of the two above and exists for the one
 		// reason they do: these commands take no logging flags, so a CI
@@ -133,6 +135,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		defer detach()
+		warnUnrecognisedLogNames(logging.Get("cli"), "environment",
+			"CREWLET_LOG_LEVEL", os.Getenv("CREWLET_LOG_LEVEL"),
+			"CREWLET_LOG_FORMAT", os.Getenv("CREWLET_LOG_FORMAT"))
 	}
 
 	switch cmd {
@@ -319,10 +324,16 @@ func (c configFlags) loadForRun(set *flag.FlagSet, importPath string) (
 	bootErr = nameTheNeighbour(*c.bootstrap, bootErr)
 
 	seed, seedErr := c.resolveSeed(set, importPath)
-	if err := errors.Join(bootErr, seedErr); err != nil {
-		return nil, tierBSeed{}, err
+	// TIER A COMES BACK EVEN WHEN THE SEED DID NOT. The two documents fail
+	// independently, and a caller holding a valid Tier A can do something
+	// with it before reporting the other one's error — `crewlet run` opens
+	// the log file Tier A names, so a malformed company.yaml is recorded
+	// there rather than only on a terminal. A nil Bootstrap beside a
+	// non-nil error stays the contract when TIER A itself is what failed.
+	if bootErr != nil {
+		return nil, tierBSeed{}, errors.Join(bootErr, seedErr)
 	}
-	return boot, seed, nil
+	return boot, seed, seedErr
 }
 
 // resolveSeed decides which Tier B file this invocation carries and why.
@@ -698,7 +709,7 @@ func summaryLine(res validation) string {
 // errSilent asks the caller to exit non-zero without printing anything more.
 var errSilent = errors.New("")
 
-func runEngine(args []string, stderr io.Writer) error {
+func runEngine(args []string, stderr io.Writer) (err error) {
 	file, args := splitSubject(args)
 
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
@@ -771,11 +782,12 @@ func runEngine(args []string, stderr io.Writer) error {
 	log := logging.Get("cli")
 	warnUnrecognisedLogNames(log, "flag", "-log-level", *logLevel, "-log-format", *logFormat)
 
-	boot, seed, err := cfg.loadForRun(fs, *importCompany)
-	if err != nil {
-		return err
+	boot, seed, loadErr := cfg.loadForRun(fs, *importCompany)
+	if boot == nil {
+		// Tier A itself is what failed, so there is no document naming a
+		// log file and nothing to open. stderr is the whole record.
+		return loadErr
 	}
-	company := seed.Company
 	// AND NOW THE FILE, which is what makes Tier A's `logging:` block mean
 	// anything. Its ancestor `debug: true` was a declared field nothing
 	// ever read: the quickstart told an operator to write it and the
@@ -807,6 +819,27 @@ func runEngine(args []string, stderr io.Writer) error {
 		return err
 	}
 	defer detachLogFile()
+	// AND THE FAILURE THAT ENDS THIS FUNCTION IS RECORDED BEFORE THE FILE
+	// CLOSES. Registered after the detach, so LIFO runs it first.
+	//
+	// runEngine returns its errors for main to print, and main prints them
+	// after this function has returned — by which time the log file would
+	// already be shut. Every boot failure below (a keyring that will not
+	// build, a store that will not open, a company that will not activate)
+	// would reach a terminal and never the durable record, which is the
+	// one place an operator looks for a boot that failed while nobody was
+	// watching.
+	defer func() {
+		if err != nil {
+			log.Error("run_failed", "error", err)
+		}
+	}()
+
+	// THE SEED'S OWN FAILURE, now that it can be recorded.
+	if loadErr != nil {
+		return loadErr
+	}
+	company := seed.Company
 	// THE FLAGS OVERRIDE THE FILE, and are applied AFTER it loads so a
 	// validation failure names the file's own value rather than one the
 	// command line put there. Each is applied only when it was actually

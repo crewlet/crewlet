@@ -52,9 +52,13 @@ __pycache__/
 # The numbered suffixes need their own pattern because `*.log` does not match
 # `crewlet.log.1`, which is exactly the file an operator attaches to a bug
 # report without looking at it twice.
+#
+# `[0-9]*` rather than one pattern per digit count: max_backups goes up to
+# 1000, so a fixed-width list would have to grow with the ceiling and would
+# silently stop covering `.100` the day it did not. Anchoring on a DIGIT is
+# what keeps an operator's own `crewlet.log.old` out of it.
 *.log
-*.log.[0-9]
-*.log.[0-9][0-9]
+*.log.[0-9]*
 
 .env
 # Minted-credential env files the provisioning CLIs write from the repo

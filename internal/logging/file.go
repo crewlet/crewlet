@@ -226,6 +226,20 @@ func OpenFile(opts FileOptions, report io.Writer) (*File, error) {
 	if err := f.open(); err != nil {
 		return nil, err
 	}
+	// AND THE ESTATE CONVERGES ON THE CAP AT OPEN, not only at the next
+	// rotation. Lowering max_backups on a quiet node would otherwise leave
+	// the higher setting's files on the disk indefinitely — the rotation
+	// that would prune them may be days away, or never. Pruning from
+	// maxBackups+1 rather than maxBackups is the difference between this
+	// call site and [File.rotate]'s: nothing is about to be shifted here,
+	// so `.1`..`.maxBackups` are all legitimate.
+	//
+	// Best effort: a directory this process cannot prune is not a reason
+	// to refuse to log, but it is a reason to say so.
+	if err := f.pruneFrom(maxBackups + 1); err != nil {
+		fmt.Fprintf(report, "crewlet: log file %s: could not prune backups "+
+			"above %d: %v\n", f.path, maxBackups, err)
+	}
 	return f, nil
 }
 
@@ -287,9 +301,21 @@ func (f *File) Write(p []byte) (int, error) {
 			return 0, f.note(err)
 		}
 	}
+	before := f.size
 	n, err := f.f.Write(p)
 	f.size += int64(n)
 	if err != nil {
+		// A SHORT WRITE LEAVES HALF A RECORD IN THE FILE, and os.File
+		// does return one — a disk that fills mid-write reports the
+		// bytes it took alongside ENOSPC. Left there it is the exact
+		// corruption the size check is arranged to prevent: the next
+		// write rotates the fragment into a backup, and a shipper
+		// parsing that file hits half a JSON object at its end. So the
+		// fragment is rolled back before the descriptor goes, and only
+		// if the rollback itself fails does the file keep it — in which
+		// case the notice says so, because half a record nobody is told
+		// about is worse than a gap.
+		n, err = f.rollBackPartial(before, n, err)
 		// THE DESCRIPTOR IS GIVEN UP ON, not just this write. The two
 		// failures that recover on their own recover only through a
 		// fresh open — a file replaced underneath a bind mount, a
@@ -304,6 +330,30 @@ func (f *File) Write(p []byte) (int, error) {
 	}
 	f.recovered()
 	return n, nil
+}
+
+// rollBackPartial discards a fragment a failed write left in the file, and
+// reports what the caller should say happened.
+//
+// It is its own method because it is the one piece of [File.Write] that
+// cannot be driven through the public surface: os.File short-writes only on
+// a full disk or a hit RLIMIT_FSIZE, neither of which a test can arrange on
+// every platform this ships to. Kept whole here, it is exercised directly.
+//
+// A successful rollback reports ZERO bytes written, because that is what
+// happened: io.Writer's contract is the count the file holds, and the file
+// holds none of them. A failed one leaves the fragment and says so in the
+// error, because half a record nobody is told about is worse than a gap.
+func (f *File) rollBackPartial(before int64, n int, err error) (int, error) {
+	if n <= 0 {
+		return n, err
+	}
+	if truncErr := f.f.Truncate(before); truncErr != nil {
+		return n, fmt.Errorf("%w (and %d bytes of a partial record could not "+
+			"be rolled back: %v)", err, n, truncErr)
+	}
+	f.size = before
+	return 0, err
 }
 
 // rotate renames the live file down the stack and opens a fresh one.
@@ -323,10 +373,15 @@ func (f *File) Write(p []byte) (int, error) {
 // operator clearing out `.3` by hand must not break the next rotation.
 func (f *File) rotate() error {
 	if f.f != nil {
-		// A close error is reported but not fatal: the bytes are the
-		// kernel's now, and refusing to rotate would leave the sink
-		// pinned to a file it has already given up on.
-		_ = f.f.Close()
+		// A CLOSE ERROR IS A WRITE ERROR THE FILESYSTEM DEFERRED — NFS
+		// and a few others report a failed flush here and nowhere else —
+		// so it enters the failure episode like any other. It is not
+		// fatal to the rotation: the bytes are the kernel's now, and
+		// refusing to rotate would pin the sink to a file it has already
+		// given up on.
+		if closeErr := f.f.Close(); closeErr != nil {
+			_ = f.note(closeErr)
+		}
 		f.f = nil
 	}
 	// Every backup the shift below would push past the cap, gone before
@@ -372,6 +427,13 @@ func (f *File) rotate() error {
 // own `crewlet.log.old`, an editor's swap file, a shipper's cursor. Those are
 // left alone, whatever they are named.
 func (f *File) pruneFrom(n int) error {
+	// BACKUPS ARE NUMBERED FROM 1. `<path>.0` is not one of ours — this
+	// rotator has never created one — so a caller asking to prune from 0
+	// (max_backups: 0, meaning keep none) must still not take an
+	// operator's own `.0` sibling with it.
+	if n < 1 {
+		n = 1
+	}
 	dir := filepath.Dir(f.path)
 	entries, err := os.ReadDir(dir)
 	if err != nil {

@@ -680,3 +680,139 @@ func TestTheFailureNoticeKnowsWhetherAnythingElseIsInstalled(t *testing.T) {
 		})
 	}
 }
+
+// A PARTIAL WRITE LEAVES NO FRAGMENT BEHIND.
+//
+// os.File returns a short count with its error — a disk that fills mid-write
+// reports the bytes it took alongside ENOSPC — and a fragment left in the
+// live file is the exact corruption the size check is arranged to prevent:
+// the next write rotates half a record into a backup, and whatever ships the
+// log hits half a JSON object at a file boundary.
+//
+// Driven through [File.rollBackPartial] rather than through Write, because
+// os.File short-writes only on a full disk or a hit RLIMIT_FSIZE and neither
+// is arrangeable on every platform this ships to.
+func TestAPartialWriteIsRolledBack(t *testing.T) {
+	f, _, path := sink(t, "crewlet.log", 1, 2)
+
+	whole := []byte("a_whole_record\n")
+	if _, err := f.Write(whole); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	before := f.size
+
+	// The fragment a failed write would have left, and the rollback.
+	fragment := []byte("half_a_rec")
+	f.mu.Lock()
+	if _, err := f.f.Write(fragment); err != nil {
+		t.Fatalf("planting the fragment: %v", err)
+	}
+	f.size += int64(len(fragment))
+	n, err := f.rollBackPartial(before, len(fragment), errors.New("no space left on device"))
+	f.mu.Unlock()
+
+	if err == nil {
+		t.Fatal("the rollback swallowed the write error")
+	}
+	if n != 0 {
+		t.Errorf("a rolled-back write reported %d bytes written, want 0", n)
+	}
+	if f.size != before {
+		t.Errorf("the size counter is %d, want %d — the next rotation would "+
+			"fire early and rotate the fragment", f.size, before)
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	if string(body) != string(whole) {
+		t.Errorf("the fragment survived in the file: %q", body)
+	}
+}
+
+// AND A ROLLBACK THAT CANNOT HAPPEN SAYS SO, rather than leaving half a
+// record in the file with nothing pointing at it.
+func TestAFailedRollbackIsNamedInTheError(t *testing.T) {
+	f, _, _ := sink(t, "crewlet.log", 1, 2)
+
+	// A closed descriptor cannot be truncated.
+	f.mu.Lock()
+	_ = f.f.Close()
+	n, err := f.rollBackPartial(0, 10, errors.New("no space left on device"))
+	f.mu.Unlock()
+
+	if n != 10 {
+		t.Errorf("a failed rollback reported %d bytes written, want the 10 the "+
+			"file still holds", n)
+	}
+	if !strings.Contains(err.Error(), "could not be rolled back") {
+		t.Errorf("the error does not mention the fragment left behind: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no space left on device") {
+		t.Errorf("the original write error was lost: %v", err)
+	}
+}
+
+// `<path>.0` IS NOT OURS. This rotator numbers backups from 1 and has never
+// created a `.0`, so a prune that started at 0 — which `max_backups: 0` asks
+// for in so many words — would delete an operator's own file on the first
+// rotation.
+func TestAZeroSuffixSiblingIsNeverPruned(t *testing.T) {
+	f, _, path := sink(t, "crewlet.log", 1, 0)
+
+	zero := path + ".0"
+	if err := os.WriteFile(zero, []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 1100 * 2 {
+		if _, err := f.Write(record(i, 1024)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	if _, err := os.Stat(zero); err != nil {
+		t.Errorf("the sink deleted `<path>.0`, which it never wrote: %v", err)
+	}
+}
+
+// A LOWERED CAP CONVERGES AT OPEN, not only at the next rotation.
+//
+// The rotation that would prune the old setting's files may be days away on
+// a quiet node, or never — so a deployment that lowered max_backups would
+// keep paying for the higher one's disk with nothing saying why.
+func TestOpeningPrunesBackupsAboveTheCap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crewlet.log")
+	for i := 1; i <= 6; i++ {
+		if err := os.WriteFile(fmt.Sprintf("%s.%d", path, i), []byte("old\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := path + ".old"
+	if err := os.WriteFile(keep, []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	size, backups := 1, 2
+	f, err := OpenFile(FileOptions{Path: path, MaxSizeMB: &size, MaxBackups: &backups}, io.Discard)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	// `.1` and `.2` are the cap, and nothing rotated, so both survive.
+	for i := 1; i <= 2; i++ {
+		if _, err = os.Stat(fmt.Sprintf("%s.%d", path, i)); err != nil {
+			t.Errorf("a backup inside the cap was pruned at open: %v", err)
+		}
+	}
+	for i := 3; i <= 6; i++ {
+		name := fmt.Sprintf("%s.%d", path, i)
+		if _, err = os.Stat(name); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s survived an open at max_backups 2: %v", name, err)
+		}
+	}
+	if _, err = os.Stat(keep); err != nil {
+		t.Errorf("the sink deleted a file it did not write: %v", err)
+	}
+}

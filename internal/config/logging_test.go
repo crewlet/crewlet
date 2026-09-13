@@ -595,3 +595,52 @@ func TestTheRotationCapCeilingsAreThemselvesValid(t *testing.T) {
 		t.Errorf("the documented ceilings are refused by the validator: %v", err)
 	}
 }
+
+// AN UNRESOLVED `${VAR}` IN THE LOG FILE PATH STOPS THE BOOT.
+//
+// An unresolved reference expands to the empty string, and empty is a
+// legitimate SETTING for this field — "write no file". So without this,
+// `path: "${LOG_PATH}"` with the variable unset does not fail and does not
+// look wrong; it silently becomes the deployment that asked for no durable
+// log at all, which is the precise failure the whole surface is arranged
+// against. Every other Tier A field catches it on its own terms (an empty
+// store.path is refused as a missing store); this one cannot.
+func TestAnUnresolvedLogFilePathIsRefused(t *testing.T) {
+	_, err := ParseBootstrap(
+		[]byte("logging:\n  file:\n    path: \"${CREWLET_TEST_UNSET_LOG_PATH}\"\n"),
+		EnvOnly())
+	if err == nil {
+		t.Fatal("a log file named by an unanswered variable was accepted")
+	}
+	if !strings.Contains(err.Error(), "logging.file.path") {
+		t.Errorf("the error does not name the field: %v", err)
+	}
+	if !strings.Contains(err.Error(), "CREWLET_TEST_UNSET_LOG_PATH") {
+		t.Errorf("the error does not name the variable to set: %v", err)
+	}
+}
+
+// AND A RESOLVED ONE IS FINE, or the guard above would refuse every
+// container that templates its log path — the ordinary case.
+func TestAResolvedLogFilePathIsAccepted(t *testing.T) {
+	t.Setenv("CREWLET_TEST_SET_LOG_PATH", "/var/log/crewlet/crewlet.log")
+	boot, err := ParseBootstrap(
+		[]byte("logging:\n  file:\n    path: \"${CREWLET_TEST_SET_LOG_PATH}\"\n"),
+		EnvOnly())
+	if err != nil {
+		t.Fatalf("a resolved path was refused: %v", err)
+	}
+	settings, ok := boot.Logging.File.LogFileSettings()
+	if !ok || settings.Open.Path != "/var/log/crewlet/crewlet.log" {
+		t.Errorf("path = %q, ok = %v", settings.Open.Path, ok)
+	}
+}
+
+// A DOCUMENT THAT NAMES NO FILE AT ALL stays legitimate — the guard is about
+// a reference that went unanswered, never about the absence of the block.
+func TestNoLogFileBlockIsStillFine(t *testing.T) {
+	t.Parallel()
+	if _, err := ParseBootstrap([]byte("logging:\n  level: debug\n"), EnvOnly()); err != nil {
+		t.Fatalf("a document with no log file was refused: %v", err)
+	}
+}
