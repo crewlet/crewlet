@@ -263,6 +263,20 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 // rather than a fact; and a bare pid from a build that recorded only that is
 // exactly the identity with no start time [procgroup.ParseLeader] refuses.
 func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
+	leader, found, err := readJobRecord(l)
+	if err != nil || !found {
+		return leader, false, err
+	}
+	current, err := leader.Current()
+	if err != nil {
+		return leader, false, err
+	}
+	return leader, current, nil
+}
+
+// readJobRecord is the job identity a box recorded, false when it recorded
+// none it can use. See [jobGroup] for which failures are which answer.
+func readJobRecord(l boxLayout) (procgroup.Leader, bool, error) {
 	raw, err := os.ReadFile(l.pidFile())
 	if errors.Is(err, fs.ErrNotExist) {
 		return procgroup.Leader{}, false, nil
@@ -278,11 +292,7 @@ func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 				"is sent through it and the box counts as having no running job")
 		return procgroup.Leader{}, false, nil
 	}
-	current, err := leader.Current()
-	if err != nil {
-		return leader, false, err
-	}
-	return leader, current, nil
+	return leader, true, nil
 }
 
 // signalJob sends one signal to the box's job group, but only to a group that

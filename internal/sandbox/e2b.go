@@ -258,6 +258,12 @@ func (s *E2BSandbox) StartBackground(ctx context.Context, cmd string, opts ExecO
 	return strconv.Itoa(res.PID), nil
 }
 
+// JobRunning implements [Sandbox]: the handle is a pid inside the VM, so
+// `kill -0` there answers it.
+func (s *E2BSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+	return probeByKill(ctx, s, commandID)
+}
+
 // WriteFile implements [Sandbox].
 func (s *E2BSandbox) WriteFile(ctx context.Context, path string, content []byte) error {
 	return s.envd.writeFile(ctx, path, content)

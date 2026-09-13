@@ -752,6 +752,52 @@ func assertUntouched(t *testing.T, stranger procgroup.Leader, when string) {
 	}
 }
 
+// THE COMPLETION POLL'S LIVENESS QUESTION, answered by the job's identity
+// rather than by its pid. The handle a direct box hands out is a host pid, and
+// once the wrapper is gone the kernel may give that pid to anything: a probe
+// that took the pid on trust read the stranger as the job, and a wrapper that
+// died without writing its marker held its run open until the stranger exited.
+func TestTheJobProbeFollowsTheJobAndNotItsPid(t *testing.T) {
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+
+	handle, err := box.StartBackground(t.Context(), "sleep 300", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	if running, err := box.JobRunning(t.Context(), handle); err != nil || !running {
+		t.Fatalf("JobRunning of a live job = %v, %v; want true", running, err)
+	}
+
+	// The job's pid now names a stranger: a live process that is not the job.
+	stranger := startStranger(t)
+	recordAsJob(t, box.Home(), recycled(stranger))
+	if running, err := box.JobRunning(t.Context(), strconv.Itoa(stranger.PID)); err != nil || running {
+		t.Fatalf("JobRunning of a recycled pid = %v, %v; want false: a stranger held the run open", running, err)
+	}
+	// And a handle the record does not name is a job this box has replaced.
+	if running, err := box.JobRunning(t.Context(), handle); err != nil || running {
+		t.Fatalf("JobRunning of a handle the record no longer names = %v, %v; want false", running, err)
+	}
+	if _, err := box.JobRunning(t.Context(), "not-a-pid"); err == nil {
+		t.Fatal("a handle that is not a pid was answered rather than refused")
+	}
+}
+
+// An exited wrapper is not running, and the answer does not wait for the reap.
+func TestAFinishedJobIsNotRunning(t *testing.T) {
+	local := newDirect(t)
+	box := mustCreate(t, local, Spec{})
+	handle, err := box.StartBackground(t.Context(), "exit 0", ExecOptions{})
+	if err != nil {
+		t.Fatalf("StartBackground: %v", err)
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		running, err := box.JobRunning(t.Context(), handle)
+		return err == nil && !running
+	}, "a finished job still reads as running")
+}
+
 // A job record that exists and cannot be read is the unknown answer, not an
 // absent one. Deleting a live box's checkout is unrecoverable and a lingering
 // directory is not, so the reaper keeps a box whose record it cannot read.

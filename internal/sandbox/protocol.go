@@ -15,6 +15,8 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -218,6 +220,19 @@ type Sandbox interface {
 	// writes its result to a file a later collect reads.
 	StartBackground(ctx context.Context, cmd string, opts ExecOptions) (string, error)
 
+	// JobRunning reports whether the background job whose handle
+	// StartBackground returned is still running.
+	//
+	// ASKED OF THE BOX, because only the backend knows what its handle
+	// names. Inside a remote VM or a container the handle is a pid in the
+	// box's own process namespace, where nothing but the box's own work
+	// can hold it. On the engine host it is a host pid, which the kernel
+	// hands to any process once the job is gone: a probe that took the pid
+	// on trust would read a stranger as the job and hold a dead run open
+	// until the stranger exits. An error means the box could not be asked,
+	// which is not proof of either answer.
+	JobRunning(ctx context.Context, commandID string) (bool, error)
+
 	WriteFile(ctx context.Context, path string, content []byte) error
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
@@ -332,3 +347,21 @@ func Run(ctx context.Context, r Runner, box Sandbox, req RunRequest, wait WaitFu
 // WaitFunc blocks until a predicate holds or the context ends. Injected so the
 // inline shape's polling cadence is the caller's choice — a test wants none.
 type WaitFunc func(ctx context.Context, done func(context.Context) (bool, error)) error
+
+// probeByKill answers [Sandbox.JobRunning] for a box whose handle is a pid in
+// the box's own process namespace, by running `kill -0` inside it.
+//
+// The handle is parsed rather than interpolated: it is read back from the run's
+// record in the coordination store, and a shell command is the wrong place to
+// find out it was not a number.
+func probeByKill(ctx context.Context, box Sandbox, commandID string) (bool, error) {
+	pid, err := strconv.Atoi(commandID)
+	if err != nil || pid <= 0 {
+		return false, fmt.Errorf("sandbox: job handle %q is not a process id", commandID)
+	}
+	res, err := box.Exec(ctx, "kill -0 "+strconv.Itoa(pid)+" 2>/dev/null", ExecOptions{})
+	if err != nil {
+		return false, err
+	}
+	return res.ExitCode == 0, nil
+}

@@ -77,6 +77,12 @@ func (s *FakeSandbox) StartBackground(ctx context.Context, cmd string, opts Exec
 	return strconv.Itoa(len(s.background)), nil
 }
 
+// JobRunning answers through [FakeSandbox.Exec], the way a remote box does,
+// so a test scripts liveness with ExecFunc.
+func (s *FakeSandbox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+	return probeByKill(ctx, s, commandID)
+}
+
 // WriteFile stores the content in memory, where [FakeSandbox.Put] and
 // ReadFile can see it.
 func (s *FakeSandbox) WriteFile(ctx context.Context, p string, content []byte) error {

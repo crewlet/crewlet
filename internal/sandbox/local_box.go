@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -212,6 +213,37 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	go reap(proc)
 	localLog.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
 	return strconv.Itoa(pid), nil
+}
+
+// JobRunning implements [Sandbox] for a job on the engine host.
+//
+// The handle is a HOST pid, so it is only this job while the box's record
+// says so and the kernel's record of that pid still carries the start time the
+// box recorded. A zombie has exited, so it is not running even before its
+// parent reaps it. A handle that is not the recorded job is not running: the
+// record is rewritten by every StartBackground, so a handle it no longer names
+// belongs to a job this box has already replaced.
+//
+// The process, not its group, because the question is whether the WRAPPER is
+// alive: a wrapper that died without writing its marker is a run that is
+// over, even while an orphaned member of its group lingers on.
+func (b *directBox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+	pid, err := strconv.Atoi(commandID)
+	if err != nil || pid <= 1 {
+		return false, localErrorf("local sandbox %s: job handle %q is not a process id", b.layout.id, commandID)
+	}
+	leader, found, err := readJobRecord(b.layout)
+	if err != nil {
+		return false, err
+	}
+	if !found || leader.PID != pid {
+		return false, nil
+	}
+	proc, found, err := procgroup.Inspect(pid)
+	if err != nil {
+		return false, fmt.Errorf("local sandbox %s: reading the kernel's record of job %d: %w", b.layout.id, pid, err)
+	}
+	return found && !proc.Zombie && proc.Start == leader.Start, nil
 }
 
 // reap waits on a detached job so it does not linger as a zombie once it
@@ -511,6 +543,12 @@ func (b *containerBox) StartBackground(ctx context.Context, cmd string, opts Exe
 	localLog.Info("local_sandbox_job_started",
 		"sandbox_id", b.layout.id, "pid", pid, "container", b.container)
 	return pid, nil
+}
+
+// JobRunning implements [Sandbox]: the handle is a pid inside the container,
+// whose --init reaps a finished job, so `kill -0` there answers it.
+func (b *containerBox) JobRunning(ctx context.Context, commandID string) (bool, error) {
+	return probeByKill(ctx, b, commandID)
 }
 
 // trailingPID is the last numeric line of output — the backgrounded job's pid.

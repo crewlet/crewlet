@@ -188,10 +188,16 @@ func withShimPath(cmd string, paths Paths) string {
 //     never exits — an open file watcher or an MCP subprocess keeps its event
 //     loop alive, so the shell never reaches the marker write. The keepalive
 //     holds the box open so the terminal event lands and Collect reads it.
-//  3. PROCESS LIVENESS. The wrapper's pid is gone yet no marker was written:
-//     the whole process group died abnormally, before the tail echo ran.
-//     Without this the run hangs forever; with it, Collect surfaces the
-//     partial result and the failure.
+//  3. PROCESS LIVENESS. The wrapper is gone yet no marker was written: the
+//     whole process group died abnormally, before the tail echo ran. Without
+//     this the run hangs forever; with it, Collect surfaces the partial result
+//     and the failure. The box answers it ([sandbox.Sandbox.JobRunning]),
+//     because only the backend knows whether its handle is a pid in the box's
+//     own namespace or a host pid the kernel may since have handed to a
+//     stranger. The wrapper is the right process to ask about: while the
+//     coding agent runs, or has finished but not exited, the wrapper is alive,
+//     and once it exits it has already written the done marker, which is
+//     checked first.
 //
 // A still-alive wrapper reports NOT DONE, whether it is working or hung: a
 // genuinely hung-but-alive process is indistinguishable from a working one
@@ -213,7 +219,7 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 		return true, nil
 	}
 	if handle.CommandID != "" {
-		alive, err := processAlive(ctx, box, handle.CommandID)
+		alive, err := box.JobRunning(ctx, handle.CommandID)
 		if err != nil {
 			// An unreadable liveness probe is not proof of death, and
 			// declaring the run over on one would collect a partial result
@@ -228,21 +234,6 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 		}
 	}
 	return false, nil
-}
-
-// processAlive probes the wrapper with kill -0, which sends no signal.
-//
-// The pid is the shell wrapper Start launched: while the coding agent runs —
-// or has finished but not exited — the wrapper is alive, and once it exits it
-// has already written the done marker, which Poll checks first. So a DEAD
-// WRAPPER WITH NO MARKER means the process group was killed outright and the
-// run is over.
-func processAlive(ctx context.Context, box sandbox.Sandbox, pid string) (bool, error) {
-	res, err := box.Exec(ctx, "kill -0 "+shellQuote(pid)+" 2>/dev/null", sandbox.ExecOptions{})
-	if err != nil {
-		return false, err
-	}
-	return res.ExitCode == 0, nil
 }
 
 // Collect reads the finished job's result out of the box.
