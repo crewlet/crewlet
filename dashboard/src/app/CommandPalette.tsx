@@ -25,10 +25,11 @@
  * of its own (`popup: false`).
  *
  * THE SHORTCUT THAT OPENED IT CLOSES IT, but only from inside it. The shell
- * listens on the window and only ever opens search; a chord pressed while
- * another surface raised over search holds the keyboard (a token dialog a
- * refused request opened) belongs to that surface, and closing search from
- * beneath it would change a page the reader cannot see.
+ * listens on the window and only ever opens search, and only while no modal
+ * is open; a chord pressed while another surface raised over search holds the
+ * keyboard (a token dialog a refused request opened) belongs to that surface,
+ * and closing search from beneath it would change a page the reader cannot
+ * see.
  */
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";

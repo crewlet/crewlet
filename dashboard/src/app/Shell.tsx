@@ -28,7 +28,8 @@ import { TokenDialog } from "./TokenDialog.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
 import { Badge, Button, ButtonLink, Segmented, cx } from "~/ui/primitives.tsx";
-import { focusables, useModal } from "~/ui/useModal.ts";
+import { isComposing } from "~/ui/keys.ts";
+import { focusables, isModalOpen, useModal } from "~/ui/useModal.ts";
 import {
   useAgents,
   useClient,
@@ -81,21 +82,28 @@ export function Shell({ children }: { children: ReactNode }) {
   // whatever sat above or beneath them, and a toggle here closed search from
   // beneath a dialog raised over it. A press a surface already handled (search
   // closing on its own chord) is left alone.
+  //
+  // AND ONLY FROM THE PAGE. While a modal is open the page behind it is inert,
+  // and search opened over a dialog could navigate away from under it: the
+  // screen unmounts, and the dialog goes with it, an unsaved editor or a
+  // write whose outcome the operator has not seen yet included.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      if (e.defaultPrevented) return;
+      if (e.defaultPrevented || isComposing(e) || isModalOpen()) return;
       if (isSearchShortcut(e)) {
         e.preventDefault();
         setPaletteOpen(true);
         return;
       }
       // A bare "/" opens search the way every list-shaped tool does, but not
-      // while somebody is typing into a field.
+      // while somebody is typing into a field, and not as part of a chord
+      // (Ctrl or Command with "/" is the browser's or the platform's).
       const el = document.activeElement;
       const typing =
         el instanceof HTMLElement &&
         (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (e.key === "/" && !typing) {
+      const chord = e.ctrlKey || e.metaKey || e.altKey;
+      if (e.key === "/" && !typing && !chord) {
         e.preventDefault();
         setPaletteOpen(true);
       }

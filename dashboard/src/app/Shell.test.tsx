@@ -16,6 +16,7 @@ import { Router } from "./router.tsx";
 import { Shell } from "./Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, requestToken } from "~/protocol/index.ts";
+import { Dialog } from "~/ui/Dialog.tsx";
 import { Drawer } from "~/ui/Drawer.tsx";
 
 class InertWebSocket {
@@ -54,8 +55,8 @@ function mount(screenContent: ReactNode, store = new Store()) {
   return { store, socket };
 }
 
-function press(key: string, init: Partial<KeyboardEventInit> = {}) {
-  fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {
+  return fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
 }
 
 /** A screen with an editor drawer open, the way the organization builder's is. */
@@ -189,24 +190,63 @@ test("the shortcut hints name the keys the reader's own keyboard prints, in word
   ).toBe(true);
 });
 
-test("one Escape closes search raised over the engine panel, and leaves the panel", () => {
+test("the search shortcuts do nothing while a modal holds the keyboard", () => {
   mount(<p>screen</p>);
   const pill = screen.getByRole("button", { name: /engine unreachable/ });
   pill.focus();
   fireEvent.click(pill);
   const panel = screen.getByRole("dialog", { name: "Engine" });
-
-  press("k", { metaKey: true });
-  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
-
-  press("Escape");
-  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
-  expect(screen.getByRole("dialog", { name: "Engine" })).toBe(panel);
   expect(document.activeElement).toBe(panel);
+
+  // The page behind the panel is inert: search opened over it would sit on
+  // a page the reader cannot reach, and could navigate it away.
+  for (const init of [{ key: "k", metaKey: true }, { key: "k", ctrlKey: true }, { key: "/" }]) {
+    expect(press(init.key, init)).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+    expect(document.activeElement).toBe(panel);
+  }
 
   press("Escape");
   expect(screen.queryByRole("dialog", { name: "Engine" })).toBeNull();
   expect(document.activeElement).toBe(pill);
+  // Back on the page, the same keys open search again.
+  press("k", { metaKey: true });
+  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
+});
+
+test("search never opens over a dialog whose write is still in flight", () => {
+  // A screen's dialog that may not close yet. Search opened over it could
+  // navigate, and the navigation would unmount the dialog before the
+  // operator saw whether the write took.
+  function Saving() {
+    return (
+      <Dialog title="Saving" onClose={() => {}} dismissable={false}>
+        <button>Wait</button>
+      </Dialog>
+    );
+  }
+  mount(<Saving />);
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Wait" }));
+  press("k", { ctrlKey: true });
+  press("/");
+  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+  expect(screen.getByRole("dialog", { name: "Saving" })).toBeDefined();
+});
+
+test("a slash opens search only on its own, never as part of a chord or a composition", () => {
+  mount(<button>Retry</button>);
+  screen.getByRole("button", { name: "Retry" }).focus();
+  for (const init of [
+    { ctrlKey: true },
+    { metaKey: true },
+    { altKey: true },
+    { isComposing: true },
+  ]) {
+    expect(press("/", init)).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+  }
+  press("/");
+  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
 });
 
 test("the engine panel hands over to the token dialog, and focus comes back to the engine pill", () => {

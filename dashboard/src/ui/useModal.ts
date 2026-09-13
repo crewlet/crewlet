@@ -253,6 +253,21 @@ function returnChain(opener: Element | null): Element[] {
   return host && panel ? [opener, panel, ...host.returnTo] : [opener];
 }
 
+/**
+ * Whether a modal is open, which makes everything behind it inert.
+ *
+ * For a shortcut that belongs to the page rather than to any surface, such as
+ * the shell's search. `aria-modal` tells a screen reader that nothing behind
+ * the dialog can be reached, and a page shortcut that fires through it breaks
+ * that in the most expensive way: search opened over a dialog navigates, and
+ * the navigation unmounts the dialog, a write still in flight included, which
+ * is exactly what `dismissable: false` exists to prevent. A popup does not
+ * count: it is not modal, and the page's keys still reach past a menu.
+ */
+export function isModalOpen(): boolean {
+  return top("modal") !== undefined;
+}
+
 /** Whether `entry` is the surface a key press or a press would reach now. */
 function isTopmost(order: number): boolean {
   return top()?.order === order;

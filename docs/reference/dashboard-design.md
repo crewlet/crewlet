@@ -905,20 +905,27 @@ rendered idle from the first phase to the last.
   or listens for Escape beside the stack. The sections drawer is the rail
   itself, a dialog only while it is open; closed, the stylesheet hides it
   rather than only sliding it away, so its links leave the tab order, and it
-  closes when a resize takes the layout past the breakpoint. Only the topmost handles Escape or a press outside, so a prompt over
-  the node editor closes on its own Escape and leaves the editor open, a
-  token dialog raised by a refused request over that editor does the same,
-  and an open menu closes before the dialog it sits in. A modal traps Tab,
-  moves focus in when it opens (honouring a field's `autoFocus`) and returns
-  it to whatever opened it. When that control has gone with a modal
-  that closed as this one opened (a panel's "Set token" handing over to the
-  token dialog), focus goes back where that modal would have sent it; when it
-  has gone from a modal that is still open, to that modal rather than behind
-  its veil. A modal closed beneath a surface still open above it (by a route
-  change, a data push or a shortcut) leaves focus where it is. A control that consumes Escape itself, such as a completion list,
-  keeps the key. A veil press closes its modal on the press's click rather
-  than on its first contact, so the tap that dismisses a dialog never also
-  lands on the control the veil was covering.
+  closes when a resize takes the layout past the breakpoint. Only the topmost
+  surface handles Escape or a press outside, so a prompt over the node editor
+  closes on its own Escape and leaves the editor open, a token dialog raised
+  by a refused request over that editor does the same, and an open menu
+  closes before the dialog it sits in. A modal traps Tab, moves focus in when
+  it opens (honouring a field's `autoFocus`) and returns it to whatever opened
+  it. When that control has gone with a modal that closed as this one opened
+  (a panel's "Set token" handing over to the token dialog), focus goes back
+  where that modal would have sent it; when it has gone from a modal that is
+  still open, to that modal rather than behind its veil. A modal closed
+  beneath a surface still open above it (by a route change or a data push)
+  leaves focus where it is. A control that consumes Escape itself, such as a
+  completion list, keeps the key. A veil press closes its modal on the
+  press's click rather than on its first contact, so the tap that dismisses a
+  dialog never also lands on the control the veil was covering.
+  The page's own shortcuts (Ctrl or Command with K, and a bare `/`, for
+  search) wait for the page: while a modal is open (`isModalOpen`) they do
+  nothing, because the page behind `aria-modal` is inert and search opened
+  over a dialog could navigate away from under it, unmounting an unsaved
+  editor or a write whose outcome the operator has not seen. Search closes on
+  its own chord only from inside it.
   What happens inside an open menu stays there: its keys, presses and clicks
   do not reach the card or row it was opened from, so Enter on "Delete" is
   never also the card's Enter.
