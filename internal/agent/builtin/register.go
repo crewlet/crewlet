@@ -299,7 +299,7 @@ func annotationsFor(name string) tools.Annotations {
 		tracker.GetWorkCatalogueTool, tracker.ListProjectsTool,
 		tracker.DescribeProjectTool, tracker.SprintReportTool,
 		tracker.TaskActivityTool, tracker.MyWorkTool,
-		tracker.ListWorkGoalsTool:
+		tracker.ListWorkGoalsTool, tracker.SearchWorkItemsTool:
 		// Reads, and idempotent: asking twice costs a round and changes
 		// nothing. The catalogue lookup belongs here with the rest — left
 		// out, it fell to the default arm, whose ReadOnly=No with
@@ -317,6 +317,23 @@ func annotationsFor(name string) tools.Annotations {
 		// refused rather than free.
 		return tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes,
+		}
+	case tracker.MergeWorkItemTool:
+		// A WRITE EVERYBODY SEES: the duplicate is closed on every board
+		// in the company and its subtasks move to somebody else's item,
+		// so OpenWorld is Yes and [mcp.WritesToSharedSurface] reads true
+		// — which keeps it away from a sub-agent acting under its
+		// parent's name.
+		//
+		// DESTRUCTIVE, because the flag asks whether a call can undo
+		// somebody else's work and this one can: the subtree moves, and
+		// nothing puts it back.
+		//
+		// NOT idempotent. A second fold of the same pair is refused —
+		// the duplicate is already cancelled and already linked — and a
+		// fold of a DIFFERENT pair after it is another item closed.
+		return tools.Annotations{
+			ReadOnly: mcp.No, Destructive: mcp.Yes, OpenWorld: mcp.Yes,
 		}
 	case tracker.WriteProjectTool:
 		// A WRITE EVERYBODY SEES — a declared tag is a filter on

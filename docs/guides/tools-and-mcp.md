@@ -22,7 +22,7 @@ These tools are registered globally and available to all agents:
 
 ### The native tracker and knowledge base
 
-Ten more, registered **only where the company runs the engine's own backends**
+Twelve more, registered **only where the company runs the engine's own backends**
 (`tracker.backend: native` / `knowledge.backend: native`, which are the
 defaults). A company on Jira and Confluence gets none of them, and that is the
 point: a seat offered a tool against a tracker its company does not run would
@@ -49,7 +49,7 @@ did-this-reach-anybody gate, and each waits for its own write to reach this
 node's projection before answering — so a turn that files an item and then
 lists the project sees what it just filed.
 
-The same thirteen tools are served to **your** AI assistant over
+The same fifteen tools are served to **your** AI assistant over
 [`/operator/mcp`](../reference/api-endpoints.md#operatormcp--your-own-assistant),
 with the writes attributed to your token rather than to a seat.
 
@@ -104,10 +104,11 @@ Two things MCP does not cover, and what to do instead:
   a parser, and that is an in-tree Go interface — the
   [notification spine](../concepts/event-system.md) is backend-neutral by
   design, but a third-party app contributes a client, a parser and a transport as code.
-  That is a pull request, not a config entry. The six this build serves are
+  That is a pull request, not a config entry. The eight this build serves are
   [Mattermost](../integrations/mattermost.md), [Slack](../integrations/slack.md),
   [Jira](../integrations/jira.md), [Confluence](../integrations/confluence.md),
-  [GitLab](../integrations/gitlab.md) and [GitHub](../integrations/github.md) —
+  [GitLab](../integrations/gitlab.md), [GitHub](../integrations/github.md) and
+  [Datadog](../integrations/datadog.md), plus Atlassian's own Forge relay —
   every one of them routes end to end (see
   [Design Decisions](../reference/design-decisions.md#every-third-party-app-is-served)).
 - **Company-wide periodic work.** An MCP server is called by an agent; it does

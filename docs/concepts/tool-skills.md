@@ -65,7 +65,7 @@ by rows that rolled back is how a company loses every skill it has.
 
 ## Skill file format
 
-Skills are authored as markdown files with YAML frontmatter — the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships eleven bundled examples under `examples/tool-skills/`.
+Skills are authored as markdown files with YAML frontmatter — the same format the backend pages round-trip to via the per-backend codec ([below](#page-representation)). The repository ships ten bundled examples under `examples/tool-skills/`.
 
 ```markdown
 ---

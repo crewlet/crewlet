@@ -174,7 +174,7 @@ func OperatorOnlyTools() []string {
 	}
 }
 
-// Tools are the thirteen a seat holds, so a caller registering them names one thing.
+// Tools are the fifteen a seat holds, so a caller registering them names one thing.
 func Tools() []string {
 	return []string{ListWorkItemsTool, GetWorkItemTool, CreateWorkItemTool,
 		UpdateWorkItemTool, CommentOnWorkTool, MergeWorkItemTool,
@@ -183,7 +183,7 @@ func Tools() []string {
 		TaskActivityTool, MyWorkTool}
 }
 
-// WriteTools are the three that count as a DELIVERY.
+// WriteTools are the four that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the task, commenting on it,
 // or filing the follow-up work — and the delivery gate has to know that, or

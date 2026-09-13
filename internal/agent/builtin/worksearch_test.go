@@ -76,3 +76,30 @@ func TestNoIndexMeansNoSearchTool(t *testing.T) {
 		t.Error("search_work_items was registered with no index behind it")
 	}
 }
+
+// A RANKED ANSWER SAYS WHAT THE RANKING IS.
+//
+// It carried a `score` that could only ever be zero: the fan-out's answer is
+// fused KEYS, best first — the arithmetic that ordered them is finished before
+// a coordinator sees them — so nothing downstream had a score to set. A place
+// is what the answer actually has, and it is what a caller can act on.
+func TestARankedAnswerNumbersItsPlaces(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.ranked = []tracker.Ranked{
+		{ID: "i1", Key: "ENG-7", Title: "first", Rank: 1},
+		{ID: "i2", Key: "ENG-9", Title: "second", Rank: 2},
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Search: trk})
+
+	got := callWork(t, reg, builtin.SearchWorkItemsTool, map[string]any{"text": "anything"})
+	if got.Failed {
+		t.Fatalf("the search failed: %s", got.Output)
+	}
+	if strings.Contains(got.Output, `"score"`) {
+		t.Errorf("the answer still carries a score nothing can set: %s", got.Output)
+	}
+	if !strings.Contains(got.Output, `"rank": 1`) || !strings.Contains(got.Output, `"rank": 2`) {
+		t.Errorf("the answer is %q and does not number its places", got.Output)
+	}
+}

@@ -231,6 +231,49 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
 	}
+	// THE LEXICAL INDEX COVERS BOTH CORPORA, so it is built under EITHER
+	// backend rather than under the wiki's.
+	//
+	// It used to sit inside the block below, which was correct while the
+	// index was the knowledge base's alone and silently wrong the moment
+	// it stopped being: a company with `tracker.backend: native` and
+	// Confluence for its knowledge indexed none of its own work items,
+	// served no `search_work_items`, and went on paying the embedding
+	// duty for a vector on every one of them — because that duty is armed
+	// on `e.native != nil`, which is either backend.
+	//
+	// BEFORE the block, because the searcher built there takes it.
+	n.indexer = search.NewIndexerOver(e.backends.Store,
+		lexicalSources(runTracker, wiki))
+	// AND THE TRACKER'S OWN SEARCH over it, with its own fan-out rather
+	// than the knowledge searcher's: each verb's corpus filter is its own,
+	// and neither can widen into the other's.
+	n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
+		index: n.indexer,
+		fan: &search.FanOut{
+			Self:   nodeID,
+			Local:  search.NodeScanner{Index: n.indexer},
+			Peers:  e.searchPeers(),
+			Roster: e.searchRoster,
+			Corpus: n.indexer.Corpus,
+			Report: e.reportSearch,
+			Enter:  e.enterSearch,
+		},
+	})
+	// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather than
+	// beside the coordinator because they are different jobs on one node:
+	// every node with an index answers, whether or not anybody on it ever
+	// searches.
+	if e.backends.Queue != nil {
+		stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
+			search.NodeScanner{Index: n.indexer})
+		if err != nil {
+			cancel()
+			return fmt.Errorf("engine: serve search slices: %w", err)
+		}
+		n.stopSlices = stop
+	}
+
 	if wiki {
 		running := sl.Domain(pages.Domain{}.Name())
 		if running == nil {
@@ -253,11 +296,15 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			cancel()
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
-		n.indexer = search.NewIndexer(e.backends.Store)
 		// LIVE off the epoch, not off the company this node booted
 		// with: `knowledge.skills_container` is Tier B, and this
 		// searcher is built once per node while an apply can move the
 		// key underneath it.
+		//
+		// THE INDEX ITSELF IS NOT BUILT HERE — see below. It covers the
+		// tracker too, and gating it on the WIKI's backend left a
+		// tracker-native company on Confluence indexing none of its own
+		// work items.
 		n.searcher = pages.NewSearcher(pages.SearcherOptions{
 			Index: n.indexer, SkillsContainer: e.skillsContainer,
 			Node:   nodeID,
@@ -266,35 +313,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Report: e.reportSearch,
 			Enter:  e.enterSearch,
 		})
-		// AND THE TRACKER'S OWN, over the same index: the fan-out is
-		// built here rather than borrowed from the searcher above so
-		// each verb's corpus filter is its own, and neither can widen
-		// into the other's.
-		n.itemSearch = tracker.NewSearcher(e.backends.Store, itemRanker{
-			index: n.indexer,
-			fan: &search.FanOut{
-				Self:   nodeID,
-				Local:  search.NodeScanner{Index: n.indexer},
-				Peers:  e.searchPeers(),
-				Roster: e.searchRoster,
-				Corpus: n.indexer.Corpus,
-				Report: e.reportSearch,
-				Enter:  e.enterSearch,
-			},
-		})
-		// AND THIS NODE ANSWERS FOR ITS PEERS. Registered here rather
-		// than beside the coordinator because they are different jobs
-		// on one node: every node with an index answers, whether or not
-		// anybody on it ever searches.
-		if e.backends.Queue != nil {
-			stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
-				search.NodeScanner{Index: n.indexer})
-			if err != nil {
-				cancel()
-				return fmt.Errorf("engine: serve search slices: %w", err)
-			}
-			n.stopSlices = stop
-		}
 	}
 
 	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log

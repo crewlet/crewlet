@@ -196,6 +196,16 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// A project's own settings, which every seat holds for one
 		// facet: a declared tag is a filter on everybody's board.
 		tracker.WriteProjectTool: true,
+
+		// A FOLD IS A SHARED WRITE: it closes somebody's item on every
+		// board and moves its subtasks to another.
+		tracker.MergeWorkItemTool: true,
+
+		// AND THE RANKED SEARCH IS A READ. It sat on the default arm,
+		// whose ReadOnly=No with OpenWorld unset is exactly what
+		// WritesToSharedSurface reads as TRUE — so a worker granted it
+		// was refused it, while list_work_items beside it was admitted.
+		tracker.SearchWorkItemsTool: false,
 	}
 
 	reg := tools.NewRegistry()
@@ -779,6 +789,13 @@ func fullDeps(t *testing.T) builtin.Deps {
 			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter {
 				return newFakeTracker()
 			},
+			// THE TWO SEQUENCES AND THE SEARCH, so every tool this
+			// package registers is actually registered here. Left out,
+			// the table below classified tools that were never in the
+			// snapshot — which is how a pure READ came to sit on the
+			// default arm's shared-write verdict unnoticed.
+			Merges: newFakeTracker().merges,
+			Search: newFakeTracker(),
 		},
 		Pages: builtin.PageDeps{Reader: &fakeKB{}, Writer: &fakeKB{}},
 	}

@@ -334,27 +334,18 @@ func (x *Indexer) versions(ctx context.Context, batch []Doc) (map[string]uint64,
 	return out, rows.Err()
 }
 
-// Orphans returns index rows whose source is gone, so the indexer can drop
-// them.
+// orphanPass reads index rows whose source is gone, WITH the source they
+// belong to, so the caller can drop them under the right name.
 //
 // Its own pass rather than a foreign key, for the reason [Indexer.Remove]
-// gives: a cascade from the source table would delete a posting list while
-// the indexer is writing it.
-func (x *Indexer) Orphans(ctx context.Context, limit int) ([]string, error) {
-	if limit <= 0 {
-		limit = IndexBatch
-	}
-	// ONE SOURCE PER CALL, exactly as [Indexer.Stale] takes them: the
-	// orphan check is a batch from each estate, and mixing two sources in
-	// one batch would ask each source's existence query about the other's
-	// ids. The caller removes what comes back UNDER the source named
-	// beside it, which is why both travel together.
-	_, gone, err := x.orphanPass(ctx, limit)
-	return gone, err
-}
-
-// orphanPass is [Indexer.Orphans] with the SOURCE the ids belong to, which is
-// what a removal needs and what an id on its own cannot say.
+// gives: a cascade from the source table would delete a posting list while the
+// indexer is writing it.
+//
+// IT CARRIES THE SOURCE because the index is ONE table over every corpus and a
+// page and a work item can share an id-shaped string — removing by id alone
+// would delete whichever row sorted first. An exported form that answered bare
+// ids stood here after the walk became source-plural, with no caller and
+// exactly the signature the new code could not use safely.
 func (x *Indexer) orphanPass(ctx context.Context, limit int) (string, []string, error) {
 	if limit <= 0 {
 		limit = IndexBatch

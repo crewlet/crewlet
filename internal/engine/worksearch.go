@@ -55,9 +55,7 @@ func (r itemRanker) RankItems(ctx context.Context, text string,
 	}
 	out := make([]tracker.RankedDoc, 0, len(hits))
 	for _, hit := range hits {
-		out = append(out, tracker.RankedDoc{
-			ID: hit.ID, Snippet: hit.Snippet, Score: hit.Score,
-		})
+		out = append(out, tracker.RankedDoc{ID: hit.ID, Snippet: hit.Snippet})
 	}
 	return out, nil
 }
@@ -96,4 +94,51 @@ func workSearchOrNil(e *Engine) builtin.WorkSearcher {
 		return s
 	}
 	return nil
+}
+
+// EngineWorkSearch is [Engine.WorkSearch] as the tool layer's seam, for a
+// surface built outside this package — the operator's MCP endpoint, which
+// assembles its own WorkDeps.
+//
+// IT ANSWERS A TYPED NIL rather than a non-nil interface holding one, for
+// [workSearchOrNil]'s reason: a `Search != nil` gate would otherwise register
+// a tool that can only fail.
+func EngineWorkSearch(e *Engine) builtin.WorkSearcher { return workSearchOrNil(e) }
+
+// indexedCorpora is which corpora a node with these two backends indexes, and
+// it is what the startup actually builds the index over.
+//
+// A FUNCTION rather than three lines inside the startup, because the defect it
+// replaces could not be reached from a test without standing a whole company
+// up: the index was built inside the block gated on the WIKI's backend, so a
+// company with `tracker.backend: native` and Confluence for its knowledge
+// indexed none of its own work items and served no ranked item search — while
+// the embedding duty, armed on EITHER backend, went on paying for a vector on
+// every one of them.
+//
+// IT FOLLOWS THE BACKENDS rather than covering both unconditionally: a company
+// on Jira has no `tracker_tasks` worth walking, and a walk over a table its
+// backend never fills is a cursor cycling over nothing on every tick.
+func indexedCorpora(runTracker, wiki bool) []string {
+	var out []string
+	if runTracker {
+		out = append(out, string(search.SourceTask))
+	}
+	if wiki {
+		out = append(out, string(search.SourcePage))
+	}
+	return out
+}
+
+// lexicalSources is [indexedCorpora] as the indexer's own seam.
+func lexicalSources(runTracker, wiki bool) []search.LexicalSource {
+	byName := map[string]search.LexicalSource{
+		string(search.SourceTask): search.TaskSource{},
+		string(search.SourcePage): search.PageSource{},
+	}
+	var out []search.LexicalSource
+	for _, name := range indexedCorpora(runTracker, wiki) {
+		out = append(out, byName[name])
+	}
+	return out
 }

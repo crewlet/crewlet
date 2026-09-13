@@ -38,7 +38,7 @@ const (
 // one thing.
 func WorkTools() []string { return tracker.Tools() }
 
-// WorkWrites are the three that count as a DELIVERY.
+// WorkWrites are the four that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the item, commenting on it,
 // or filing the follow-up work — and the delivery gate has to know that, or
@@ -585,7 +585,7 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	for _, key := range []string{
 		"assignee", "limit", "sprint", "removed",
 		"type", "priority", "due", "updated", "created",
-		"parent", "reporter", "watcher", "unit", "goal",
+		"reporter", "watcher", "unit", "goal",
 		"sort", "cursor",
 	} {
 		if v, held := args[key]; held {
@@ -599,6 +599,18 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	// than a list of strings, because the value is the model's and the
 	// slug is the company's, and splitting a typed string on `=` would
 	// make a value containing one unwritable.
+	// THE PARENT IS A REFERENCE AND IS RESOLVED, like every other one this
+	// surface takes. `parent` is matched raw against `parent_id`, which
+	// holds an ID — so a model passing the key it read answered an empty
+	// list and no error, which is the failure `references` carries its own
+	// comment about two lines from where this one is parsed.
+	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
+		id, refusal := t.deps.resolveRef(ctx, ListWorkItemsTool, "`parent`", ref)
+		if refusal != "" {
+			return failed(refusal), nil
+		}
+		params["parent"] = id
+	}
 	if raw, held := args["field_filters"].(map[string]any); held {
 		for slug, value := range raw {
 			slug = strings.TrimSpace(slug)
@@ -688,6 +700,13 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	}
 	if answer.TotalHint > len(answer.Rows) {
 		result["total"] = answer.TotalHint
+	}
+	// THE NEXT PAGE'S CURSOR, which is what makes the `cursor` argument
+	// reachable at all: a caller cannot page without one, and this tool was
+	// the only reader of this query grammar that dropped it — the REST
+	// route beside it has always passed it on.
+	if answer.NextCursor != "" {
+		result["next_cursor"] = answer.NextCursor
 	}
 	if !answer.Complete {
 		// AN INCOMPLETE ANSWER SAYS SO, in the result the model reads.
@@ -827,8 +846,8 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	case err != nil:
 		return failed(readFailure(GetWorkItemTool, err)), nil
 	}
-	narrow := "Ask for less with `include`: the parts are comments, history " +
-		"and links."
+	narrow := "Ask for less with `include`: the parts are comments, history, " +
+		"links and fields."
 	if !detail.Complete {
 		return jsonAnswer(map[string]any{
 			"task": detail, "incomplete": incompleteNote(detail.Incomplete),

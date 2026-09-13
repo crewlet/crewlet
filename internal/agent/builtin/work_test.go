@@ -1071,7 +1071,10 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 	}
 	for key, want := range map[string]string{
 		"type": "bug", "priority": "high", "due": "thisweek",
-		"updated": "gte:-1d", "created": "gte:-7d", "parent": "ENG-1",
+		"updated": "gte:-1d", "created": "gte:-7d",
+		// RESOLVED, not forwarded: `parent` is matched against the id
+		// column. See TestTheParentFilterIsResolvedToAnID.
+		"parent":   "i1",
 		"reporter": "bo", "watcher": "ana", "unit": "platform",
 		"sort": "-updated", "cursor": "c1", "f.impact": "high",
 	} {
@@ -1081,5 +1084,57 @@ func TestEveryDeclaredFilterReachesTheQuery(t *testing.T) {
 				"not refused for, and gets an unfiltered list back from",
 				key, got, want)
 		}
+	}
+}
+
+// A PAGING ARGUMENT NEEDS A PAGE TO COME FROM.
+//
+// `cursor` tells a caller to pass "the `next_cursor` from a previous call",
+// and this tool was the one reader of the query grammar that never put one in
+// its answer — the REST route beside it has always passed it on. An argument
+// whose only source is an answer the tool does not give is an argument nobody
+// can use.
+func TestTheListAnswerCarriesTheCursorItsOwnArgumentAsksFor(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	trk.answer = &tracker.Answer{
+		Complete:   true,
+		Rows:       []tracker.TaskRow{{ID: "i1", Key: "ENG-1", Title: "one"}},
+		NextCursor: "opaque-cursor",
+	}
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{})
+	if got.Failed {
+		t.Fatalf("the list failed: %s", got.Output)
+	}
+	if !strings.Contains(got.Output, "opaque-cursor") {
+		t.Fatalf("the answer is %q and carries no next_cursor, so the "+
+			"`cursor` argument beside it can never be used", got.Output)
+	}
+}
+
+// A REFERENCE ARGUMENT IS RESOLVED TO AN ID, and `parent` is matched against
+// `parent_id`, which holds one.
+//
+// A model types the key it read. Forwarded raw, `parent: ENG-1` compares a key
+// against an id column and answers an EMPTY LIST with no error — which reads
+// as "that item has no subtasks" rather than as a refusal, so nobody finds out.
+// It is the same failure `references` carries its own comment about in the
+// parser, two lines from where this one is read.
+func TestTheParentFilterIsResolvedToAnID(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	if got := callWork(t, reg, builtin.ListWorkItemsTool, map[string]any{
+		"parent": "ENG-1",
+	}); got.Failed {
+		t.Fatalf("the list failed: %s", got.Output)
+	}
+	if got := trk.params["parent"]; got != "i1" {
+		t.Fatalf("the query filters on parent=%q — a key compared against the "+
+			"id column answers an empty list and no error, which a model "+
+			"reads as the item having no subtasks", got)
 	}
 }

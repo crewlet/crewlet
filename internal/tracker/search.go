@@ -35,14 +35,23 @@ import (
 
 // Ranked is one work item as a ranked search answers it.
 type Ranked struct {
-	ID       string  `json:"id"`
-	Key      string  `json:"key"`
-	Title    string  `json:"title"`
-	Project  string  `json:"project"`
-	Type     string  `json:"type"`
-	Status   Status  `json:"status"`
-	Assignee string  `json:"assignee,omitempty"`
-	Score    float64 `json:"score"`
+	ID       string `json:"id"`
+	Key      string `json:"key"`
+	Title    string `json:"title"`
+	Project  string `json:"project"`
+	Type     string `json:"type"`
+	Status   Status `json:"status"`
+	Assignee string `json:"assignee,omitempty"`
+	// Rank is this hit's 1-based place in the answer.
+	//
+	// A PLACE AND NOT A SCORE, because a place is what the fan-out
+	// actually produces: [search.Answer] carries fused KEYS, best first,
+	// and the arithmetic that ordered them — score within a method, RRF
+	// across methods, per slice — is finished before a coordinator sees
+	// them. A `score` field here could only ever have serialised zero,
+	// which is the same defect as every other value in this tree with no
+	// writer, wearing a number's clothes.
+	Rank int `json:"rank"`
 
 	// Snippet is the index's own excerpt, which is what makes a ranked
 	// answer readable without opening every hit.
@@ -51,10 +60,12 @@ type Ranked struct {
 
 // RankedDoc is one hit as the INDEX knows it, before this package says what it
 // is a hit ON.
+//
+// NO SCORE, for [Ranked.Rank]'s reason: the order IS the ranking by the time a
+// fused answer reaches a caller.
 type RankedDoc struct {
 	ID      string
 	Snippet string
-	Score   float64
 }
 
 // Ranker is the index seam, declared here because this is the caller.
@@ -142,7 +153,10 @@ func (s *Searcher) Search(ctx context.Context, text string, limit int) ([]Ranked
 			// rather than reported as an item nobody can open.
 			continue
 		}
-		row.Score, row.Snippet = doc.Score, doc.Snippet
+		// THE PLACE IS COUNTED OVER WHAT SURVIVES, so a hit dropped
+		// above leaves no gap in the numbering a reader would take for
+		// a result that went missing.
+		row.Snippet, row.Rank = doc.Snippet, len(out)+1
 		out = append(out, row)
 	}
 	return out, nil
