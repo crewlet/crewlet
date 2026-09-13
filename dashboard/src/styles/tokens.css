@@ -137,6 +137,11 @@
      they are the one content that genuinely wants the whole viewport. */
   --measure: 76ch;
   --screen-max: 1560px;
+  /* A side sheet's width. Wide enough for a form field, its help line and a
+     refusal beside it at body size; narrow enough that on a laptop-width
+     screen (1280px, less the rail) most of the thing being edited stays in
+     view beside it. Below the shell's breakpoint the sheet is full width. */
+  --drawer-w: 560px;
 
   /* ---- Motion -----------------------------------------------------------
      Short, and only ever on entrance or on a control's own state. Nothing in

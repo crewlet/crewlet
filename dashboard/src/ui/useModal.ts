@@ -212,6 +212,12 @@ export interface ModalOptions {
   onClose: () => void;
   /** False while a request is in flight: Escape and the veil stop closing. */
   dismissable?: boolean;
+  /**
+   * Where focus starts when nothing inside has taken it, if not the first
+   * control. A drawer's first control is its Close button, and an editor
+   * that opens with focus on Close has made closing the first thing it asks.
+   */
+  initialFocus?: () => HTMLElement | null;
 }
 
 export interface Modal {
@@ -222,13 +228,15 @@ export interface Modal {
 }
 
 /** A modal surface: a dialog or a drawer. Mount it only while it is open. */
-export function useModal({ onClose, dismissable = true }: ModalOptions): Modal {
+export function useModal({ onClose, dismissable = true, initialFocus }: ModalOptions): Modal {
   const panel = useRef<HTMLElement | null>(null);
   const veil = useRef<HTMLElement | null>(null);
   const close = useRef(onClose);
   const canClose = useRef(dismissable);
+  const start = useRef(initialFocus);
   close.current = onClose;
   canClose.current = dismissable;
+  start.current = initialFocus;
   const order = useOpeningOrder(true);
   // WHERE FOCUS CAME FROM, read during the first render. See the module doc
   // for why an effect is too late.
@@ -253,9 +261,10 @@ export function useModal({ onClose, dismissable = true }: ModalOptions): Modal {
   useEffect(() => {
     const root = panel.current;
     if (root && !root.contains(document.activeElement)) {
-      // The first control, or the panel itself when it has none, so a screen
-      // reader announces the label rather than continuing behind the veil.
-      (focusables(root)[0] ?? root).focus();
+      // The surface's chosen start, else the first control, else the panel
+      // itself, so a screen reader announces the label rather than continuing
+      // behind the veil.
+      (start.current?.() ?? focusables(root)[0] ?? root).focus();
     }
     return () => {
       if (opener instanceof HTMLElement && opener.isConnected && opener !== document.body) {
