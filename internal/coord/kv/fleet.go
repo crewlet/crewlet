@@ -20,7 +20,7 @@ import (
 
 // The fleet-shared state on JetStream KV.
 //
-// # Why TWELVE buckets and not one
+// # Why THIRTEEN buckets and not one
 //
 // The package doc records the constraint this whole file is shaped by: a
 // bucket's TTL is its stream's MaxAge, and jetstream.KeyTTL is create-only —
@@ -61,6 +61,11 @@ import (
 //	           that expired would make a converged surface read as one
 //	           nobody has looked at, sending the loop to re-provision
 //	           against a third-party app it had already agreed with
+//	mailboxes  none at all, for the channels' reason: a record's age cannot
+//	           tell a seat still in the company from one that left, so an
+//	           age would forget a mailbox that still exists and leave it
+//	           retaining mail for a seat nobody runs, with nothing left to
+//	           retire it
 //
 // Putting two of those in one bucket would give one of them the other's
 // retention, and every such mistake is silent — a cooldown that expired in a
@@ -87,6 +92,7 @@ const (
 	runsSuffix         = "_sandbox_runs"
 	secretsSuffix      = "_secrets"
 	integrationsSuffix = "_integrations"
+	mailboxesSuffix    = "_mailboxes"
 	activationKey      = "activation"
 	// payloadKey holds the CURRENT revision's sealed body, in the same
 	// bucket as the pointer and for the same reason: neither may expire,
@@ -99,7 +105,7 @@ const (
 // FleetConfig is what a [FleetStore] needs at construction. Every duration is
 // a BUCKET's retention; see the file doc for why each is its own bucket.
 type FleetConfig struct {
-	// BucketPrefix names the twelve buckets. Empty means "crewlet", matching
+	// BucketPrefix names the thirteen buckets. Empty means "crewlet", matching
 	// the lease store — two companies on one NATS account are separated by
 	// giving them different prefixes.
 	BucketPrefix string
@@ -128,7 +134,7 @@ type FleetConfig struct {
 	// StatusFreshness is how long a node's apply status counts as current.
 	StatusFreshness time.Duration
 
-	// Replicas is the JetStream replica count for all eleven.
+	// Replicas is the JetStream replica count for every one of them.
 	Replicas int
 }
 
@@ -190,6 +196,7 @@ type FleetStore struct {
 	fires        jetstream.KeyValue
 	runs         jetstream.KeyValue
 	integrations jetstream.KeyValue
+	mailboxes    jetstream.KeyValue
 
 	rateWindow time.Duration
 	freshness  time.Duration
@@ -197,7 +204,7 @@ type FleetStore struct {
 
 var _ coord.Fleet = (*FleetStore)(nil)
 
-// OpenFleet creates or adopts the twelve buckets and returns the backend.
+// OpenFleet creates or adopts the thirteen buckets and returns the backend.
 //
 // Idempotent and safe to call from every node at once, like [Open]: creating
 // a bucket that already exists with the same shape is a no-op, and a changed
@@ -262,6 +269,8 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
 		{&store.integrations, integrationsSuffix,
 			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
+		{&store.mailboxes, mailboxesSuffix,
+			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
 	} {
 		got, err := open(bucket.suffix, bucket.describe, bucket.ttl)
 		if err != nil {

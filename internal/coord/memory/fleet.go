@@ -41,6 +41,14 @@ type Fleet struct {
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
+	mailboxes    map[string]coord.MailboxRecord
+
+	// mailboxVersion is the one version counter every mailbox write draws
+	// from. Store-wide rather than per record, as a KV revision is, so a
+	// record deleted and created again never hands back a version an older
+	// incarnation of it already used: a caller still holding that version
+	// must lose, not win against a record it never read.
+	mailboxVersion uint64
 
 	epoch   int64
 	target  coord.Activation
@@ -74,6 +82,7 @@ func NewFleet() *Fleet {
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
+		mailboxes:    map[string]coord.MailboxRecord{},
 	}
 }
 

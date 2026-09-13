@@ -232,9 +232,9 @@ than something a reconnect policy should paper over.
 uses, on every start and idempotently: the five engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
 `CREWLET_CONFIG`, `CREWLET_DLQ`), a stream per extra subject namespace a
-company publishes under, one durable consumer per seat mailbox — an ordinary
-API call, measured at 1.7 ms — and the fourteen `crewlet_*` KV buckets:
-two in the lease store, holding the leases and the fencing epochs, and twelve
+company publishes under, one durable consumer per seat mailbox (an ordinary
+API call, measured at 1.7 ms), and the fifteen `crewlet_*` KV buckets:
+two in the lease store, holding the leases and the fencing epochs, and thirteen
 in the fleet store holding the shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.

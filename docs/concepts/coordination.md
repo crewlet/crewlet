@@ -51,6 +51,8 @@ flowchart LR
         F[("fires<br/>scheduled dispatch claims")]
         SR[("sandbox runs<br/>detached coding jobs")]
         SEC[("secrets<br/>the company's sealed credentials")]
+        INT[("integrations<br/>reconcile status per surface")]
+        MB[("mailboxes<br/>seat mailboxes that may exist")]
     end
     subgraph NODE["node — its own database"]
         DB[("events · episodes · diary<br/>conversations<br/>company payload · secrets")]
@@ -76,6 +78,7 @@ flowchart LR
 | `sandbox runs` | Every detached coding run: its box, its suspended conversation, its owner and fencing epoch. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next* | [Code Sandbox](code-sandbox.md) |
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name. Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
+| `mailboxes` | Which seat mailboxes may exist, and since when a seat has been missing from the active revision. Every node records a handle before it creates the seat's durable subscription, because the broker cannot list subscriptions and a removed seat's handle is gone from the org every node derives names from. Every change is a compare-and-set, since a returning seat's registration and the sweep that retires a mailbox write the same record | [Seat Ownership § Singleton duties](seat-ownership.md#singleton-duties) |
 
 A fleet is not configured — it is **discovered** from these, which is why adding a node is starting a process and removing one is stopping it.
 
@@ -106,7 +109,7 @@ A single node shares nothing, because there is no peer to tell. Cooldowns stay i
 
 ## Retention is a bucket's age
 
-Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets` and `integrations` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL — which is exactly what makes a dead node's seat reclaimable with nobody around to release it.
+Every slot above except `epochs`, `config`, `budgets`, `channels`, `sandbox runs`, `secrets`, `integrations` and `mailboxes` forgets on a horizon, and the horizon is a property of the **bucket**, not of the write. `leases` is in that group and is the load-bearing case: a lease does not expire because something deletes it, it expires because the bucket's age *is* the lease TTL, which is exactly what makes a dead node's seat reclaimable with nobody around to release it.
 
 That is a constraint rather than a preference. On the default embedded backend a per-key TTL is *create-only*: an update clears it, leaving the key immortal. A rate window that is incremented four times would therefore never expire — the one key in the system guaranteed to be written more than once. So each retention is fixed when its bucket is created, which is why they are **separate buckets** rather than prefixes in one:
 
@@ -126,10 +129,11 @@ That is a constraint rather than a preference. On the default embedded backend a
 | `channels` | none | A bucket's age cannot tell an **open** channel from a closed one, so a TTL would reap the authorization record of an ask still waiting for its answer. Closing an idle channel and deleting a closed one are decisions instead, taken by the [maintenance duty](seat-ownership.md#singleton-duties) |
 | `secrets` | none | A credential is not short-horizon state, and **an expiring secret is an outage on a timer** — one that arrives at the moment a vendor rejects a token every node believes it still has. A secret leaves when an operator unsets it |
 | `integrations` | none | A status is standing state, not a recent event: it says what the last pass found, and it is true until the next one. One that expired would make a converged surface read as never-reconciled and send the loop to re-provision what is already there. It is bounded by the number of surfaces a company has rather than by a horizon, and a row leaves when its block leaves the company document |
+| `mailboxes` | none | A record's age cannot tell a seat that is still in the company from one that left, so an age would forget a mailbox that still exists and leave it retaining mail for a seat nobody runs. It is bounded by the handles a company has ever used, and a record leaves when the [maintenance duty](seat-ownership.md#singleton-duties) retires its mailbox |
 
 Putting two of those in one bucket gives one of them the other's retention, and **every such mistake is silent** — a cooldown that expired in a second, a fleet view showing a node that died last week.
 
-This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for any of them: the broker expires the records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Two ageless buckets are exceptions, for the reason their rows give — nothing expires them, so removal is a decision somebody takes. `channels` is the maintenance duty's; `integrations` is the reconcile loop's own, which forgets a surface whose block has left the company document on the tick that notices.
+This is also why the retention sweep in the [maintenance duty](seat-ownership.md#singleton-duties) has no jobs for any of them: the broker expires the records, so there is nothing left for a sweep to delete, and a job that swept an empty table every tick would only report that it had. Three ageless buckets are exceptions, for the reason their rows give: nothing expires them, so removal is a decision somebody takes. `channels` and `mailboxes` are the maintenance duty's; `integrations` is the reconcile loop's own, which forgets a surface whose block has left the company document on the tick that notices.
 
 ---
 
