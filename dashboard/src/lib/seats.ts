@@ -73,7 +73,7 @@ export interface Unit {
 }
 
 export interface Seat {
-  /** Stable React key: the handle, or the seat's position when no handle is known. */
+  /** Stable React key and DOM id suffix: the handle, or `#<position>` when no unique handle is known. */
   key: string;
   name: string;
   /**
@@ -236,20 +236,32 @@ function overlay(
     unit.leadInherited = !!d.lead_inherited;
   }
 
-  // Seats pair by NAME, in the order each name appears. The engine's order
-  // differs from the document's only where a root seat was moved into a
-  // unit, and a name can repeat only in a stored revision that predates the
-  // uniqueness rule, where the engine itself resolves the first.
-  const byNameQueue = new Map<string, OrgSeat[]>();
+  // Seats pair by NAME, and a name that repeats (only possible in a revision
+  // stored before names had to be unique) is not paired by position. The
+  // engine's order is not the document's: a root seat moved into a unit comes
+  // after that unit's own seats, so the first "Designer" the engine lists can
+  // be the second one the document wrote, and pairing them in turn would
+  // draw one seat's goal and responsibilities under the other's handle. A
+  // declared handle is what tells two such seats apart, so a seat pairs with
+  // the authored one declaring its handle, or else with one declaring none;
+  // anything else does not describe this tree.
+  const unpaired = new Map<string, OrgSeat[]>();
   for (const { raw } of authored.seats) {
     const name = raw.name ?? "";
-    byNameQueue.set(name, [...(byNameQueue.get(name) ?? []), raw]);
+    unpaired.set(name, [...(unpaired.get(name) ?? []), raw]);
   }
+  const claim = (name: string, handle: string): OrgSeat | null => {
+    const candidates = unpaired.get(name) ?? [];
+    let at = candidates.findIndex((raw) => raw.handle === handle);
+    if (at < 0) at = candidates.findIndex((raw) => !raw.handle);
+    return at < 0 ? null : candidates.splice(at, 1)[0]!;
+  };
   const byHandle = new Map<string, Seat>();
   const seats: Seat[] = [];
   for (const d of dSeats) {
-    const raw = byNameQueue.get(d.name)?.shift();
-    if (!raw || !d.handle || byHandle.has(d.handle)) return null;
+    if (!d.handle || byHandle.has(d.handle)) return null;
+    const raw = claim(d.name, d.handle);
+    if (!raw) return null;
     const seat = newSeat(raw, d.handle, d.handle);
     // The derived kind is the engine's reading of the field, so an unknown
     // value off the wire is the same value everywhere.
@@ -326,9 +338,17 @@ function authoredOnly(authored: Authored): Omit<OrgIndex, "byName"> {
     unit.parent?.children.push(unit);
     unit.chain = [...(unit.parent?.chain ?? []), unit];
   });
+  // A key is the declared handle where that is unique, and the seat's
+  // position otherwise. The position key carries a `#`, which no handle can
+  // (a handle is lower case letters, digits and hyphens), so a seat declaring
+  // the handle `s1` cannot collide with the second seat's position key, and
+  // two seats declaring one handle in a stored revision cannot share a key.
+  const keys = new Set<string>();
   const seats = authored.seats.map(({ raw, container }, i) => {
     const handle = raw.handle ?? "";
-    const seat = newSeat(raw, handle, handle || `s${i}`);
+    const key = handle && !keys.has(handle) ? handle : `#${i}`;
+    keys.add(key);
+    const seat = newSeat(raw, handle, key);
     if (container >= 0) {
       const unit = units[container]!;
       seat.unit = unit;

@@ -237,6 +237,16 @@ describe("an engine that sends no derived hierarchy", () => {
     expect(new Set(bare.seats.map((s) => s.key)).size).toBe(bare.seats.length);
   });
 
+  test("a position key never collides with a declared handle", () => {
+    // `s1` is a valid handle, and it used to be the second seat's position key
+    // as well: two React siblings, and two DOM ids, with one key.
+    const clash = indexOrg({
+      roles: [{ name: "First", handle: "s1" }, { name: "Second" }, { name: "Third", handle: "s1" }],
+    });
+    expect(new Set(clash.seats.map((s) => s.key)).size).toBe(3);
+    expect(clash.byName.get("First")?.key).toBe("s1");
+  });
+
   test("nothing only the engine could conclude is invented", () => {
     for (const s of bare.seats) {
       expect(s.manager).toBeNull();
@@ -280,6 +290,58 @@ describe("a derived block that does not describe its tree is not believed", () =
     expect(broken.hierarchy).toBe(false);
     // Every seat is still there once, from the authored tree.
     expect(broken.seats.length).toBe(7);
+  });
+
+  test("a repeated name pairs by the handle it declares, never by position", () => {
+    // Only a revision stored before names had to be unique can hold this. The
+    // engine lists the root "Designer" AFTER Backend's own "Designer", since
+    // it moved the root one into the unit, which is the reverse of the
+    // document's order: paired in turn, each would carry the other's goal.
+    const repeated: OrgProjection = {
+      roles: [{ name: "Designer", handle: "designer-root", goal: "Root goal" }],
+      units: [
+        {
+          name: "Backend",
+          roles: [{ name: "Designer", handle: "designer-unit", goal: "Unit goal" }],
+        },
+      ],
+      derived: {
+        seats: [
+          seat({ handle: "designer-unit", name: "Designer" }),
+          seat({ handle: "designer-root", name: "Designer", placed_by_ref: true }),
+        ],
+        units: [
+          {
+            name: "Backend",
+            type: "team",
+            lead: "",
+            lead_inherited: false,
+            channel: "",
+            channel_inherited: false,
+            seats: ["designer-unit", "designer-root"],
+          },
+        ],
+      },
+    };
+    const built = indexOrg(repeated);
+    expect(built.hierarchy).toBe(true);
+    expect(built.byHandle.get("designer-root")?.goal).toBe("Root goal");
+    expect(built.byHandle.get("designer-root")?.placedByRef).toBe(true);
+    expect(built.byHandle.get("designer-unit")?.goal).toBe("Unit goal");
+
+    // A handle the tree does not declare for that name is not this tree.
+    const foreign = indexOrg({
+      ...repeated,
+      derived: {
+        ...repeated.derived!,
+        seats: [
+          seat({ handle: "designer-unit", name: "Designer" }),
+          seat({ handle: "someone-else", name: "Designer" }),
+        ],
+        units: [{ ...repeated.derived!.units![0]!, seats: ["designer-unit", "someone-else"] }],
+      },
+    });
+    expect(foreign.hierarchy).toBe(false);
   });
 
   test("null lists are empty lists, as Go marshals a nil slice", () => {
