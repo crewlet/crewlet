@@ -428,9 +428,11 @@ type Role struct {
 	Responsibilities []string `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty"`
 
 	// Manages is the seats this one manages. An entry naming a UNIT
-	// expands to every role in it, including descendants — see
-	// [Organization.Normalize]. Read it after normalisation and it is
-	// always role names.
+	// expands to every seat in it, descendants included, except this seat
+	// itself (see [Organization.Normalize]). Read after normalisation,
+	// every entry is a seat name bar one that named neither a seat nor a
+	// unit: that entry is kept verbatim, because the seat it names may not
+	// have been added yet, and [Organization.DanglingRefs] reports it.
 	Manages []string `yaml:"manages,omitempty" json:"manages,omitempty"`
 
 	BehavioralGuidelines []string `yaml:"behavioral_guidelines,omitempty" json:"behavioral_guidelines,omitempty"`
