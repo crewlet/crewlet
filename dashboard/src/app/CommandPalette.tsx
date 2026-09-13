@@ -205,9 +205,21 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   }, [q, index, agents, tools, nav]);
 
   useEffect(() => setCursor(0), [q]);
+  // THE HIGHLIGHTED ROW STAYS IN VIEW, by scrolling the result list and
+  // nothing else. `scrollIntoView` scrolls every scrollable ancestor it finds,
+  // which is why the router scrolls `#screen-scroll` directly too, and it does
+  // not exist in the suite's DOM, so the palette threw the moment it opened
+  // there. Re-run when the results change as well as the cursor: typing over a
+  // list scrolled by the wheel leaves the cursor at 0 and the row out of view.
   useEffect(() => {
-    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-  }, [cursor]);
+    const list = listRef.current;
+    const row = list?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!list || !row) return;
+    const box = list.getBoundingClientRect();
+    const at = row.getBoundingClientRect();
+    if (at.top < box.top) list.scrollTop -= box.top - at.top;
+    else if (at.bottom > box.bottom) list.scrollTop += at.bottom - box.bottom;
+  }, [cursor, hits]);
 
   const groups = useMemo(() => {
     const map = new Map<string, Hit[]>();
