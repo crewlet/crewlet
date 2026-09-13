@@ -276,7 +276,7 @@ func relationKindList() string {
 	return strings.Join(out, ", ")
 }
 
-// scopeForStatus widens a status write's scope to the dependents its apply
+// scopeForDependents widens a task write's scope to the dependents its apply
 // will write.
 //
 // # Why this read is BEFORE the request rather than inside its decide
@@ -292,10 +292,20 @@ func relationKindList() string {
 // whose scope came up short. That is the honest pairing: an early read is safe
 // exactly when something later proves it was still right.
 //
+// # Every patch, not only a status one
+//
+// The apply rewrites `blocker_open` and `cleared_at` on every row naming this
+// task as a blocker on EVERY task apply — `maintainDeps` runs out of
+// `explodeTask`, which nothing gates on what the patch changed. Widening only
+// a status write left every other patch to a task somebody waits on claiming a
+// scope short of what its own apply writes, which [ScopeSet.covers] then
+// refused inside the decide — permanently, since the re-run it asked for took
+// the same gate and came up short again.
+//
 // It returns the scope unchanged when the task has no dependents, which is the
-// overwhelming majority of tasks — a create-and-close never reads a row here
-// at all, because the enumeration is gated on [TaskPatch.Status] being present.
-func (w *Writer) scopeForStatus(ctx context.Context, id, project string,
+// overwhelming majority of tasks: the read below is one indexed lookup and the
+// widening is nothing at all.
+func (w *Writer) scopeForDependents(ctx context.Context, id, project string,
 	scope ScopeSet) (ScopeSet, error) {
 
 	if w.db == nil {
