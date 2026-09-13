@@ -941,6 +941,13 @@ a.brand:hover {
   background: var(--accent);
   transition: width var(--dur-slow) var(--ease-out);
 }
+/* A ranked list's own bar. Its colour and width are the datum's, set
+   inline, so the class carries only the identity a test and a reader need
+   — the fill is the one part of a bar that MEANS something, and it has to
+   be addressable to be asserted about. */
+.bar-fill {
+  transition: width var(--dur-slow) var(--ease-out);
+}
 .meter-fill[data-tone="caution"] {
   background: var(--caution);
 }
