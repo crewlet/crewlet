@@ -115,7 +115,7 @@ node:
 |---|---|
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns |
-| `workers` | The company-wide singleton duties — scheduler tick, retention sweep, sandbox waiter, and the learning passes (skill clustering, curation, episode compaction) on one lease |
+| `workers` | The company-wide singleton duties: the scheduler tick, the maintenance sweep (retention and removed-seat mailbox retirement), the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
 
 A role is subtracted from **this node, not from the company**. That means
 a fleet can be assembled, node by node, into a shape where a whole job is
