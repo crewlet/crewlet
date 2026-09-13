@@ -10,7 +10,16 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { ToastProvider } from "~/ui/Toast";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { HELD, SetupDialog, fieldsFor, fillTemplate, vendorLink } from "./SetupDialog.tsx";
+import {
+  HELD,
+  SetupDialog,
+  fieldsFor,
+  fillTemplate,
+  gateOpen,
+  neededField,
+  shownField,
+  vendorLink,
+} from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
@@ -2061,4 +2070,51 @@ test("a refusal naming a visible field leaves the fold shut", async () => {
 
   const more = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
   expect(more.open).toBe(false);
+});
+
+// A FIELD REQUIRED BY AN ANSWER IS HIDDEN UNTIL THAT ANSWER IS GIVEN.
+//
+// GitHub's organization token is the pair this exists for. Stated `required`
+// it blocked a connect that needed nothing — a hand-minted personal access
+// token demanded before anything worked. Stated optional it let the API store
+// "cover every repository in the organization" with nothing able to register
+// the hook, which is a company one apply later holding a demand it cannot
+// meet.
+const gated: SetupRequirement = {
+  field: "token",
+  label: "Organization token",
+  kind: "secret",
+  config_path: "integrations.github.token",
+  required: false,
+  present: false,
+  required_when: { field: "provisioning.org_webhook", equals: "true" },
+};
+
+test("a gated field is hidden until its answer is chosen", () => {
+  expect(shownField(gated, () => "false")).toBe(false);
+  expect(shownField(gated, () => "true")).toBe(true);
+});
+
+test("a gated field is required exactly when it is shown", () => {
+  // THE TWO ARE ONE DECISION. A field shown under an answer that needs it is
+  // a field that needs it, and splitting them would allow "visible but
+  // optional" — a form asking a question whose answer it will ignore.
+  expect(neededField(gated, () => "false")).toBe(false);
+  expect(neededField(gated, () => "true")).toBe(true);
+  // AND AN UNGATED FIELD ANSWERS TO `required` ALONE.
+  expect(neededField({ ...gated, required_when: undefined, required: true })).toBe(true);
+});
+
+// A GATE WITH NOTHING TO READ IS SHUT.
+//
+// A caller that only wants the hidden/mintable rule — a count, a fold — must
+// not be handed a field nobody has opened. Open-by-default would put the
+// token in the connect form of every company again, which is the bug it
+// exists to remove.
+test("a gate with no answers to read stays shut", () => {
+  expect(gateOpen(gated)).toBe(false);
+  expect(shownField(gated)).toBe(false);
+  // AND AN UNGATED FIELD IS UNAFFECTED, so the resolver stays optional for
+  // every caller that has no gates to evaluate.
+  expect(gateOpen({ ...gated, required_when: undefined })).toBe(true);
 });

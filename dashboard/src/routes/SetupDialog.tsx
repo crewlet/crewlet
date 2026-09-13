@@ -170,8 +170,44 @@ export function fillTemplate(text: string, resolve: (field: string) => string): 
  * because the count came from the requirement list and the rendering from
  * this rule. Both read it now.
  */
-export function shownField(r: SetupRequirement): boolean {
-  return !r.hidden && !(r.kind === "secret" && r.mintable);
+export function shownField(r: SetupRequirement, answered?: Answered): boolean {
+  if (r.hidden || (r.kind === "secret" && r.mintable)) return false;
+  return gateOpen(r, answered);
+}
+
+/** What another field currently holds on this form. See [gateOpen]. */
+export type Answered = (field: string) => string;
+
+/**
+ * Whether a gated requirement's condition is met right now.
+ *
+ * A FIELD REQUIRED BY AN ANSWER, not in general. GitHub's organization token
+ * is the pair it exists for: choose "every repository in the organization"
+ * and it is the one thing standing between that answer and its being true;
+ * choose the other and it is a credential the company never uses. Stated
+ * statically, `required` blocked a connect that needed nothing and optional
+ * let a choice be stored that could not be carried out.
+ *
+ * READ FROM THE FORM, never from what is stored. The gating field is being
+ * answered in this same dialog, so the stored value is the one being
+ * replaced: gating on it would hide the token behind the choice the operator
+ * just moved away from. (The server checks the same condition against the
+ * submission, for the same reason — see refuseUngated.)
+ *
+ * With no resolver — a caller that only wants the hidden/mintable rule — a
+ * gate reads as CLOSED, which keeps a gated field out of counts and folds
+ * rather than showing one nobody has opened.
+ */
+export function gateOpen(r: SetupRequirement, answered?: Answered): boolean {
+  if (!r.required_when) return true;
+  if (!answered) return false;
+  return answered(r.required_when.field) === r.required_when.equals;
+}
+
+/** Whether a requirement must be answered, given what the form now holds. */
+export function neededField(r: SetupRequirement, answered?: Answered): boolean {
+  if (!r.required_when) return r.required;
+  return gateOpen(r, answered);
 }
 
 /**
@@ -188,12 +224,15 @@ export function shownField(r: SetupRequirement): boolean {
  * An app that declares no connect fields has one group and no disclosure:
  * every field is part of connecting, so there is nothing to fold.
  */
-export function splitFields(reqs: SetupRequirement[]): {
+export function splitFields(
+  reqs: SetupRequirement[],
+  answered?: Answered,
+): {
   connect: SetupRequirement[];
   more: SetupRequirement[];
 } {
   // WHAT IS RENDERED, on both sides of the fold. See [shownField].
-  const shown = reqs.filter(shownField);
+  const shown = reqs.filter((r) => shownField(r, answered));
   const connect = shown.filter((r) => r.connect);
   if (connect.length === 0) return { connect: shown, more: [] };
   return { connect, more: shown.filter((r) => !r.connect) };
@@ -410,33 +449,6 @@ export function SetupDialog({
   // calls its blocks, so its surfaces run together with no headings and one
   // fold at the end.
   const perSeat = sections.some((section) => section.seat !== undefined);
-  const grouped = useMemo(
-    () =>
-      sections
-        .map((section) => {
-          const { connect, more } = splitFields(shownBy.get(sectionKey(section)) ?? []);
-          return { section, heading: perSeat ? section.name : "", connect, more };
-        })
-        .filter((g) => g.connect.length > 0 || g.more.length > 0),
-    [sections, shownBy, perSeat],
-  );
-  // AN AGENT'S OWN BLOCK IS ITS OWN DISCLOSURE, and the rest of the form is
-  // not. A per-seat app asks for the same two credentials once per agent, so
-  // a company with ten agents opened a dialog with twenty inputs in one
-  // scroll and no way to see how many were left. Folded, the dialog opens as
-  // the roster it actually is: every agent named, each saying whether it is
-  // done, and one of them expanded to work in.
-  const seatGroups = useMemo(() => grouped.filter((g) => g.section.seat !== undefined), [grouped]);
-  const plainGroups = useMemo(() => grouped.filter((g) => g.section.seat === undefined), [grouped]);
-  // THE SHARED FOLD IS FOR THE COMPANY'S FIELDS ALONE. A seat's optional
-  // fields go inside that seat's own block: gathered at the foot of the
-  // dialog they lost the one thing that said whose they were, and a
-  // three-agent company showed three identical "Default channel" boxes in
-  // one list.
-  const folded = useMemo(
-    () => plainGroups.flatMap(({ section, more }) => more.map((r) => ({ section, r }))),
-    [plainGroups],
-  );
   // NOBODY IS COMING TO DO THIS FOR YOU, said once, at the top.
   //
   // Where an app's seats are mandatory (each agent acts as itself there, so
@@ -479,6 +491,51 @@ export function SetupDialog({
     }
     return initial;
   });
+
+  // WHAT ANOTHER FIELD HOLDS RIGHT NOW, for a gated requirement. See
+  // [gateOpen]: the gating field is being answered in this same dialog, so
+  // the stored value is the one being replaced and reading it would hide the
+  // gated field behind the choice somebody just moved away from.
+  //
+  // Per section, because a gate names a field WITHIN its own surface and the
+  // value map is keyed by section — two tools may both have a `token`.
+  const answeredIn = useCallback(
+    (section: SetupSection, reqs: SetupRequirement[]): Answered =>
+      (field: string) => {
+        const r = reqs.find((other) => other.field === field);
+        if (!r) return "";
+        return values[valueKey(section, r)] ?? "";
+      },
+    [values],
+  );
+  const grouped = useMemo(
+    () =>
+      sections
+        .map((section) => {
+          const own = shownBy.get(sectionKey(section)) ?? [];
+          const { connect, more } = splitFields(own, answeredIn(section, own));
+          return { section, heading: perSeat ? section.name : "", connect, more };
+        })
+        .filter((g) => g.connect.length > 0 || g.more.length > 0),
+    [sections, shownBy, perSeat, answeredIn],
+  );
+  // AN AGENT'S OWN BLOCK IS ITS OWN DISCLOSURE, and the rest of the form is
+  // not. A per-seat app asks for the same two credentials once per agent, so
+  // a company with ten agents opened a dialog with twenty inputs in one
+  // scroll and no way to see how many were left. Folded, the dialog opens as
+  // the roster it actually is: every agent named, each saying whether it is
+  // done, and one of them expanded to work in.
+  const seatGroups = useMemo(() => grouped.filter((g) => g.section.seat !== undefined), [grouped]);
+  const plainGroups = useMemo(() => grouped.filter((g) => g.section.seat === undefined), [grouped]);
+  // THE SHARED FOLD IS FOR THE COMPANY'S FIELDS ALONE. A seat's optional
+  // fields go inside that seat's own block: gathered at the foot of the
+  // dialog they lost the one thing that said whose they were, and a
+  // three-agent company showed three identical "Default channel" boxes in
+  // one list.
+  const folded = useMemo(
+    () => plainGroups.flatMap(({ section, more }) => more.map((r) => ({ section, r }))),
+    [plainGroups],
+  );
 
   /**
    * Whether this field still holds exactly what the engine reports.
@@ -665,6 +722,35 @@ export function SetupDialog({
     setBusy(true);
     setError("");
     setFieldErrors({});
+
+    // A GATED FIELD ITS ANSWER NEEDS, CAUGHT HERE RATHER THAN AT THE ROUTE.
+    //
+    // The API refuses the same thing (refuseUngated) and that refusal is the
+    // boundary; this is the courtesy, and it is worth having because the
+    // route's answer arrives after a write to some other surface may already
+    // have landed. Marking the field is also what tells somebody WHICH
+    // answer is asking for it, where a banner names only the field.
+    //
+    // "Already held" counts as answered: a company re-saving the same choice
+    // sends nothing for a credential nobody can read back, and demanding it
+    // again would make the choice unre-submittable without retyping it.
+    const ungated: Record<string, string> = {};
+    for (const section of sections) {
+      const own = shownBy.get(sectionKey(section)) ?? [];
+      const answered = answeredIn(section, own);
+      for (const r of own) {
+        if (!r.required_when || !gateOpen(r, answered)) continue;
+        const key = valueKey(section, r);
+        if ((values[key] ?? "").trim() !== "" || r.present) continue;
+        ungated[key] = "Needed by the answer above.";
+      }
+    }
+    if (Object.keys(ungated).length > 0) {
+      setFieldErrors(ungated);
+      setError("One answer needs a value that is not filled in yet.");
+      setBusy(false);
+      return;
+    }
 
     // ONE REQUEST PER SURFACE, and only for the surfaces that have
     // something to send. Each is atomic on its own vendor block, so a
@@ -1102,7 +1188,10 @@ export function SetupDialog({
             // It does not force a re-entry: nothing here is an HTML
             // required attribute, and an empty credential field means keep
             // the stored one (see payloadFor).
-            required={r.required}
+            // WHAT THE APP SAYS, AND WHAT THIS FORM NOW HOLDS. A gated
+            // field is required by an ANSWER, so the marker follows the
+            // answer rather than a static flag: see [neededField].
+            required={neededField(r, answeredIn(section, ownBy.get(sectionKey(section)) ?? []))}
             error={fieldErrors[key]}
             choices={
               r.kind === "toggle"

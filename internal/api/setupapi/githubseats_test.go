@@ -736,3 +736,52 @@ func TestAGitHubToolWithOneWorkingAgentIsSatisfied(t *testing.T) {
 		t.Error("a company with enrolled unfinished agents reported satisfied")
 	}
 }
+
+// THE ORGANIZATION-WIDE ANSWER IS REFUSED WITHOUT ITS TOKEN, AT THE ROUTE.
+//
+// The form checks the same thing and that is a courtesy; this is the
+// boundary. A submission choosing coverage of the whole organization and
+// sending no token would otherwise store a choice the engine cannot carry
+// out, leaving a company one apply later demanding an organization hook with
+// nothing able to register it.
+//
+// AGAINST THE SUBMITTED VALUES, never the stored ones — this request is what
+// changes the answer, so every gate read against the document would see the
+// value being replaced and wave it through.
+func TestTheOrgWideAnswerIsRefusedWithoutItsToken(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/inputs",
+		`{"values":{"provisioning.org_webhook":"true"}}`, nil)
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("got %d: %s", res.Code, res.Body)
+	}
+	// NAMING THE FIELD, because a refusal that says only "invalid" leaves
+	// somebody guessing which of the answers they gave was the problem.
+	if body := res.Body.String(); !strings.Contains(body, "token") ||
+		!strings.Contains(body, "provisioning.org_webhook") {
+		t.Errorf("the refusal names neither the field nor the answer asking "+
+			"for it:\n%s", body)
+	}
+}
+
+// AND THE ANSWER THAT NEEDS NOTHING IS ACCEPTED WITH NOTHING.
+//
+// The whole point of the gate: a company taking the recommendation connects
+// without a credential it will never use. Required in general, this was a
+// personal access token demanded before anything worked.
+func TestTheRecommendedAnswerNeedsNoToken(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seedGitHubApps(t)
+	s.seedGitHub(t)
+
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/inputs",
+		`{"values":{"provisioning.org_webhook":"false"}}`, nil)
+	if res.Code < 200 || res.Code >= 300 {
+		t.Fatalf("the recommended answer was refused: %d %s", res.Code, res.Body)
+	}
+}
