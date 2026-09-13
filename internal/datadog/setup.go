@@ -181,7 +181,21 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 				Label: "None: dismiss alerts nobody owns",
 				Hint:  "Only monitors tagged with a seat wake an agent.",
 			}},
-			Help: "The seat an alert wakes when no monitor tag names an owner.",
+			// AND IT IS THE ONE OFFERED, because it is the only answer
+			// that is right for a company the form knows nothing about.
+			//
+			// Every other choice here is one of THIS company's seats, and
+			// picking one for them is picking whose phone rings for every
+			// alert nobody labelled — which is a decision about somebody's
+			// working life, made by a form, from a roster it has no basis
+			// for ranking. "Choose one" made the field an unanswerable
+			// question at exactly the moment an operator wanted to be
+			// done; this makes it an answerable one, and the answer it
+			// suggests is the conservative half of the pair: an alert that
+			// wakes nobody is a gap somebody can close later, where an
+			// alert waking the wrong agent is work already misrouted.
+			Default: config.DatadogIgnore,
+			Help:    "The seat an alert wakes when no monitor tag names an owner.",
 			// A ROUTING FLOOR IS NOT A CREDENTIAL. It claimed
 			// credential_missing, so a row reporting a Datadog key this
 			// engine could not resolve offered the fallback seat as the
