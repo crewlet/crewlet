@@ -386,14 +386,14 @@ hand-created credential turned out to be.
 
 ## The one thing to get right before you run
 
-**Handles are effectively permanent.** An agent's durable id is
-`uuid5(namespace, f"{org.name}:{handle}")`, so renaming a seat's
-`handle` — *or the company `name`* — mints a new id and orphans that
+**Handles are effectively permanent.** An agent's durable id is a UUIDv5
+over `"<company name>:<handle>"` (`org.DeriveAgentID`), so renaming a
+seat's `handle`, *or the company `name`*, mints a new id and orphans that
 agent's diary, onboarding markers, and counterparty profiles. The seat
 keeps working, but it has lost its memory.
 
 Settle the company name and each handle before the company runs. See
-[Agent Runtime § Agent Definition vs Agent Instance](../concepts/agent-runtime.md#agent-definition-vs-agent-instance).
+[Agent Runtime § Seat Definition and the Runner](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ---
 

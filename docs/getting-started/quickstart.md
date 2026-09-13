@@ -163,13 +163,13 @@ units:
         backstory: "Full-stack engineer who writes clean, tested code"
 ```
 
-> **Set `handle` now, and keep it.** An agent's durable id is
-> `uuid5(namespace, f"{company name}:{handle}")`, so changing a handle —
-> *or the company `name`* — mints a new id and orphans that seat's diary,
-> onboarding markers, and counterparty profiles. It keeps working, but it
+> **Set `handle` now, and keep it.** An agent's durable id is a UUIDv5
+> over `"<company name>:<handle>"` (`org.DeriveAgentID`), so changing a
+> handle, *or the company `name`*, mints a new id and orphans that seat's
+> diary, onboarding markers, and counterparty profiles. It keeps working, but it
 > has lost its memory. Leaving `handle` unset auto-derives it from the
 > role name, which ties the id to a label you may well rename later. See
-> [Agent Runtime](../concepts/agent-runtime.md#agent-definition-vs-agent-instance).
+> [Agent Runtime](../concepts/agent-runtime.md#seat-definition-and-the-runner).
 
 ### LLM options
 
