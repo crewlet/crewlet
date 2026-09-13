@@ -916,6 +916,18 @@ export interface RevisionMeta {
   is_active?: boolean;
 }
 
+/**
+ * One revision with its document, as `GET /config/revisions/{id}` answers:
+ * the metadata of [RevisionMeta] beside a REDACTED `payload`.
+ *
+ * The builder reads it to settle a write whose answer never arrived: the
+ * write landed exactly when the revision now active names the draft's base
+ * as its parent and its summary carries the write id the save sent.
+ */
+export interface ConfigRevision extends RevisionMeta {
+  payload: CompanyDocument;
+}
+
 /** One difference, as `configapi.Change` writes it: `kind`, not `op`. */
 export interface ConfigChange {
   path: string;
@@ -1292,7 +1304,7 @@ export interface ConfigRole {
   llm_judge?: ProviderKeys;
   llm_sandbox?: ProviderKeys;
   learning_enabled?: boolean | null;
-  /** Human seats: one identity per surface (`slack_user_id`, `github_login`, ...). */
+  /** Human seats: one identity per surface, keyed by [HumanContactKey]. */
   contact?: Record<string, string>;
   availability?: string;
   /** Server name to variable name to a `${VAR}` reference or the mask. */
@@ -1303,6 +1315,19 @@ export interface ConfigRole {
   schedules?: ScheduleSpec[];
   [key: string]: unknown;
 }
+
+/**
+ * The identities a human seat's `contact` holds, as `org.HumanContact` names
+ * them: a Slack member ID, a Mattermost USERNAME (the key says user id, the
+ * value is the name a mention renders), an Atlassian account ID, a GitHub
+ * login and a GitLab username. The engine refuses a human seat with none.
+ */
+export type HumanContactKey =
+  | "slack_user_id"
+  | "mattermost_user_id"
+  | "atlassian_account_id"
+  | "github_login"
+  | "gitlab_username";
 
 /** A seat's own integration blocks, as `config.RoleIntegrations` writes them. */
 export interface ConfigRoleIntegrations {
