@@ -426,10 +426,16 @@ logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default: columns and colour for a person),
                     #   text (slog key=value), json (for a log shipper)
+  stderr: true      # default. `false` hands the stream to the file below and
+                    #   needs one: a node logging nowhere is refused. It never
+                    #   silences a boot failure or the watchdog's exit notice,
+                    #   which is what it has over `2>/dev/null`
   file:             # optional — a durable copy, IN ADDITION to stderr
     path: "/var/log/crewlet/${CREWLET_NODE_ID}.log"
                     #   missing directories are created; empty writes no file
     format: json    # the file's OWN shape — empty follows logging.format
+    level: debug    # the file's OWN level — empty follows logging.level.
+                    #   A debug file behind a warn console, or the reverse
     max_size_mb: 100    # rotate here. There is no "never": an uncapped log
                         #   file fills the disk the store is on (default 100)
     max_backups: 5      # kept as <path>.1 (newest) … <path>.5.

@@ -134,10 +134,11 @@ func TestBootstrapSchemaEnumsMatchTheValidators(t *testing.T) {
 	}{
 		{"Logging", "level", strs(logging.Levels)},
 		{"Logging", "format", strs(logging.Formats)},
-		// The file sink carries its own shape — the whole reason it is a
-		// second handler rather than a tee — so it has its own enum to
-		// drift.
+		// The file sink carries its own shape AND its own level — the
+		// whole reason it is a second handler rather than a tee — so each
+		// has its own enum to drift.
 		{"LogFile", "format", strs(logging.Formats)},
+		{"LogFile", "level", strs(logging.Levels)},
 	} {
 		def, ok := defs[tc.def].(map[string]any)
 		if !ok {
@@ -252,8 +253,25 @@ func parityCases() []parityCase {
 		{
 			name: "bootstrap log file block",
 			tier: TierBootstrap,
-			yaml: "logging:\n  format: console\n  file:\n    path: /var/log/crewlet/crewlet.log\n" +
-				"    format: json\n    max_size_mb: 50\n    max_backups: 0\n",
+			yaml: "logging:\n  level: warn\n  format: console\n  stderr: false\n" +
+				"  file:\n    path: /var/log/crewlet/crewlet.log\n" +
+				"    format: json\n    level: debug\n" +
+				"    max_size_mb: 50\n    max_backups: 0\n",
+		},
+		// A NODE THAT LOGS NOWHERE — a cross-field implication the schema
+		// is not asked to carry, so the validator is the only layer that
+		// refuses it.
+		{
+			name:          "stderr off with no file",
+			tier:          TierBootstrap,
+			yaml:          "logging:\n  stderr: false\n",
+			validatorOnly: true,
+		},
+		{
+			name:          "an unknown level for the file",
+			tier:          TierBootstrap,
+			yaml:          "logging:\n  file:\n    path: /tmp/c.log\n    level: dbug\n",
+			editorCatches: true,
 		},
 		// `max_backups: 0` above is the setting that must survive BOTH
 		// layers: it is the zero value of its own type, and a schema or a

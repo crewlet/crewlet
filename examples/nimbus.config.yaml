@@ -43,13 +43,18 @@ logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default: columns, and colour on a terminal),
                     #   text (slog key=value), json (for a log shipper)
-  file:             # optional — a durable copy, IN ADDITION to stderr;
-                    #   stderr is never silenced. Delete the block to write
-                    #   no file at all, which is the default.
+  # stderr: false  # hands the stream below the file, for a host whose
+                    #   platform already captures stderr and would store
+                    #   every line twice. It needs a file, and it never
+                    #   silences a boot failure or the watchdog exit notice
+  file:             # optional — a durable copy, IN ADDITION to stderr.
+                    #   Delete the block to write no file at all, the default.
     path: "./nimbus-data/crewlet.log"
                     #   `${VAR}` works here; on a host running two nodes put
                     #   the node id in the path so they do not share a file
     # format: json  #   the file's OWN shape — unset follows `format` above
+    # level: debug  #   the file's OWN level — unset follows `level` above.
+                    #   A debug file behind a warn console, or the reverse
     # max_size_mb: 100  # rotates here. There is no "never": an uncapped log
                         #   file fills the disk the store is on
     # max_backups: 5    # kept as <path>.1 (newest) … <path>.5;

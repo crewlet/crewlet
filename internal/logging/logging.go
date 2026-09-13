@@ -86,28 +86,52 @@ func (l Level) Slog() slog.Level { return ParseLevel(string(l)) }
 // already grabbed a logger) reaches loggers handed out earlier.
 var root atomic.Pointer[slog.Logger]
 
-// settings is everything the three installers decide between them: how loud
-// this process is, in what shape, and WHERE it writes.
+// FileSink is the log file destination and everything that may differ about
+// it from the console one.
+//
+// Both overrides default to "follow the process", because the ordinary case
+// is one log written twice. They exist for the two deployments that genuinely
+// want a split: a shipper reading `json` out of the file while a person reads
+// columns on the terminal, and a durable `debug` record kept behind a `warn`
+// console (or the reverse — a small file behind a loud terminal).
+type FileSink struct {
+	// Writer is the file. Nil removes the destination.
+	Writer io.Writer
+	// Format is the shape written here. Empty follows the process format,
+	// so `-log-format json` reaches both destinations.
+	Format Format
+	// Level is how loud this destination is. Nil follows the process
+	// level.
+	//
+	// A POINTER because [slog.LevelInfo] is 0: a plain slog.Level could
+	// not tell "info" from "nothing was said", and the two must differ —
+	// `logging.level: warn` with an unset file level means a warn file,
+	// not an info one.
+	Level *slog.Level
+}
+
+// settings is everything the installers decide between them: how loud this
+// process is, in what shape, and WHERE it writes.
 type settings struct {
 	level   slog.Level
 	format  Format
 	console io.Writer
-	// file is the second destination, nil when none is configured, and
-	// fileFormat the shape written to it — empty meaning "follow format",
-	// so `-log-format json` reaches both sinks unless the file was given a
-	// shape of its own.
-	file       io.Writer
-	fileFormat Format
+	// consoleOff silences the console destination — see [SetConsole]. It
+	// is spelled OFF rather than on so the zero value is the default
+	// every process starts at, which is what makes an unset field in this
+	// struct mean the safe thing.
+	consoleOff bool
+	file       FileSink
 }
 
 // current holds them, behind a mutex rather than an atomic pointer.
 //
-// Each of [Configure], [SetVerbosity] and [SetFile] is a READ-MODIFY-WRITE of
-// this value — SetFile keeps the level the flags chose, SetVerbosity keeps
-// the file the config named — and two of them racing on an atomic pointer
-// would silently drop whichever landed first. Nothing on the logging path
-// reads it: a record resolves [root], which stays an atomic pointer for
-// exactly that reason.
+// Each of [Configure], [SetVerbosity], [SetFile] and [SetConsole] is a
+// READ-MODIFY-WRITE of this value — SetFile keeps the level the flags chose,
+// SetVerbosity keeps the file the config named — and two of them racing on an
+// atomic pointer would silently drop whichever landed first. Nothing on the
+// logging path reads it: a record resolves [root], which stays an atomic
+// pointer for exactly that reason.
 var (
 	mu      sync.Mutex
 	current settings
@@ -155,8 +179,9 @@ func Configure(level slog.Level, format Format, w io.Writer) {
 // neither says anything about where the bytes go. The writers deliberately
 // cannot be changed here — see [Configure] for what that cost.
 //
-// A file sink given no format of its own follows this one, so a node that
-// switches to `json` for a shipper switches on both sinks at once.
+// A file sink given no format or level of its own follows these, so a node
+// that switches to `json` for a shipper, or turns `-debug` on, switches both
+// destinations at once. One given its own keeps it.
 //
 // A no-op before the first Configure, which cannot happen: this package's own
 // init installs os.Stderr.
@@ -193,13 +218,46 @@ func SetVerbosity(level slog.Level, format Format) {
 //
 // format empty means "whatever [SetVerbosity] last chose", which is what
 // makes `-log-format` reach both sinks.
-func SetFile(w io.Writer, format Format) {
+func SetFile(s FileSink) {
 	mu.Lock()
 	defer mu.Unlock()
 	if current.console == nil {
 		return
 	}
-	current.file, current.fileFormat = w, format
+	current.file = s
+	install(current)
+}
+
+// SetConsole turns the console destination on or off.
+//
+// # Off is only meaningful beside a log file, and this is not where that is enforced
+//
+// A process with no destination at all logs nowhere, which is never what
+// anybody meant, so [install] keeps the console when switching it off would
+// leave nothing — and says so, once, on the console it just kept. That is a
+// backstop rather than the rule: the Tier A validator refuses
+// `logging.stderr: false` with no file by name, and `crewlet run` refuses the
+// same combination arrived at through `-log-file ""`, because an operator
+// told what is wrong with their document can fix it and one silently
+// overridden cannot.
+//
+// # What it does NOT silence
+//
+// Three things reach stderr without passing through here, and all three stay:
+// the lines emitted before the Tier A document has been read (the log file is
+// named BY that document, so it cannot be open yet), the seat watchdog's
+// hard-exit notice, which writes to os.Stderr directly because a wedged
+// process has not earned a configured handler, and this package's own report
+// when the log file cannot be written. That is the whole reason this is a
+// config field rather than advice to redirect stderr: a shell redirect throws
+// those away too, and they are the three an operator most needs.
+func SetConsole(enabled bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	if current.console == nil {
+		return
+	}
+	current.consoleOff = !enabled
 	install(current)
 }
 
@@ -208,21 +266,60 @@ func SetFile(w io.Writer, format Format) {
 // ONE SINK IS INSTALLED UNWRAPPED, deliberately: the overwhelming majority of
 // runs have no log file, and a fan-out around a single handler would put an
 // indirection on every record to no purpose — and would hide which handler a
-// format installed from the test that asserts each format has its own.
+// format installed from the test that asserts each format has its own. A node
+// that silenced its console in favour of a file gets the same unwrapped
+// treatment, for the same reason.
 func install(s settings) {
-	h := handlerFor(s.format, s.console, s.level)
-	if s.file != nil {
-		format := s.fileFormat
+	var handlers []slog.Handler
+	// admits is the level the ROOT answers Enabled from: the most verbose
+	// of the destinations, because a line any destination would take has
+	// to get past [lazy.Enabled] to reach the fan-out that filters it —
+	// see [fanout].
+	admits := slog.Level(0)
+	add := func(h slog.Handler, level slog.Level) {
+		if len(handlers) == 0 || level < admits {
+			admits = level
+		}
+		handlers = append(handlers, h)
+	}
+
+	if !s.consoleOff {
+		add(handlerFor(s.format, s.console, s.level), s.level)
+	}
+	if s.file.Writer != nil {
+		format := s.file.Format
 		if format == "" {
 			format = s.format
 		}
-		h = fanout{level: s.level, handlers: []slog.Handler{
-			h, handlerFor(format, s.file, s.level),
-		}}
+		level := s.level
+		if s.file.Level != nil {
+			level = *s.file.Level
+		}
+		add(handlerFor(format, s.file.Writer, level), level)
+	}
+	// A PROCESS WITH NO DESTINATION LOGS NOWHERE, which is never what
+	// anybody asked for — `logging.stderr: false` is a statement about the
+	// file taking over, not about going silent. Both layers that can say
+	// so refuse the combination by name (see [SetConsole]); this is the
+	// backstop for the path neither of them sees, and it is loud.
+	silent := len(handlers) == 0
+	if silent {
+		add(handlerFor(s.format, s.console, s.level), s.level)
+	}
+
+	h := handlers[0]
+	if len(handlers) > 1 {
+		h = fanout{level: admits, handlers: handlers}
 	}
 	l := slog.New(h)
 	root.Store(l)
 	slog.SetDefault(l)
+
+	if silent {
+		l.Warn("console_kept_open",
+			"reason", "the console was switched off with no log file installed, "+
+				"which would leave this process logging nowhere")
+	}
 }
 
 // handlerFor builds the handler one format writes one destination through.
@@ -250,10 +347,21 @@ func handlerFor(format Format, w io.Writer, level slog.Level) slog.Handler {
 // keeps, and for the same reason: [lazy.Enabled] consults the root handler
 // directly, without replaying the recorded attribute ops, so a handler whose
 // Enabled depended on anything but the level would filter different lines
-// depending on how the call site was spelled. Every destination shares one
-// level — there is deliberately no per-sink level, because "was this line
-// written" must not depend on which file you look in — so the answer here is
-// the same one each child would give.
+// depending on how the call site was spelled.
+//
+// # And the level is the MOST VERBOSE of its children, never an average
+//
+// Destinations may differ in level — a `debug` file behind a `warn` console
+// is the point of [FileSink.Level] — and slog asks the ROOT handler first:
+// a record that root refuses never reaches Handle at all. So root has to
+// admit anything ANY destination would take, and each child then filters
+// with its own [slog.Handler.Enabled] inside [fanout.Handle]. Taking the
+// quieter level here would silently make the verbose destination a lie.
+//
+// The visible consequence, and it is the right one: `log.Enabled(ctx,
+// LevelDebug)` now answers "will this be recorded anywhere", so a call site
+// guarding an expensive debug computation does the work when only the file
+// wants it. That is what the operator asked for by asking for a debug file.
 type fanout struct {
 	level    slog.Level
 	handlers []slog.Handler
@@ -419,10 +527,15 @@ func (l lazy) resolve() slog.Handler {
 // replay would allocate a handler per call to answer a question that does
 // not depend on attributes. Configure only ever builds slog's own text and
 // JSON handlers, this package's [consoleHandler], and the [fanout] over them
-// when a log file is installed — all four of which answer Enabled from their
-// level and nothing else. A HANDLER WHOSE Enabled CONSULTED ITS ATTRIBUTES
-// WOULD BREAK THIS, silently and only for the lines it was supposed to
-// filter.
+// when more than one destination is installed — all four of which answer
+// Enabled from their level and nothing else. A HANDLER WHOSE Enabled
+// CONSULTED ITS ATTRIBUTES WOULD BREAK THIS, silently and only for the lines
+// it was supposed to filter.
+//
+// The fan-out answers from the MOST VERBOSE of its destinations, which is
+// what keeps this shortcut correct once destinations differ in level: a line
+// refused here never reaches Handle, so anything any destination would take
+// has to be admitted here and filtered there.
 func (l lazy) Enabled(ctx context.Context, level slog.Level) bool {
 	return root.Load().Handler().Enabled(ctx, level)
 }

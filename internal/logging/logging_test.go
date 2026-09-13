@@ -220,9 +220,9 @@ func TestAFileSinkDoesNotSilenceTheConsoleOne(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, "")
+	logging.SetFile(logging.FileSink{Writer: &file})
 	logging.Get("both").Info("a_line", "k", "v")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
 		if !strings.Contains(got, "a_line") {
@@ -240,9 +240,9 @@ func TestTheFileSinkCarriesItsOwnFormat(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, logging.FormatJSON)
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatJSON})
 	logging.Get("split").Info("a_line")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	if !strings.HasPrefix(strings.TrimSpace(file.String()), "{") {
 		t.Errorf("the file is not JSON: %q", file.String())
@@ -259,10 +259,10 @@ func TestAFileWithNoFormatFollowsTheProcessFormat(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, "")
+	logging.SetFile(logging.FileSink{Writer: &file})
 	logging.SetVerbosity(slog.LevelInfo, logging.FormatJSON)
 	logging.Get("follow").Info("a_line")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	if !strings.HasPrefix(strings.TrimSpace(file.String()), "{") {
 		t.Errorf("the file did not follow the process format: %q", file.String())
@@ -277,10 +277,10 @@ func TestSetVerbosityKeepsTheFileDestination(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, logging.FormatText)
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
 	logging.SetVerbosity(slog.LevelDebug, logging.FormatText)
 	logging.Get("kept").Debug("a_debug_line")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	if !strings.Contains(file.String(), "a_debug_line") {
 		t.Errorf("the file destination was lost to a verbosity change: %q", file.String())
@@ -295,7 +295,7 @@ func TestConfigureClearsTheFileDestination(t *testing.T) {
 	var first, file, second bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &first)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
-	logging.SetFile(&file, logging.FormatText)
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
 
 	logging.Configure(slog.LevelInfo, logging.FormatText, &second)
 	logging.Get("cleared").Info("after_reconfigure")
@@ -315,8 +315,8 @@ func TestRemovingTheFileLeavesTheConsoleSink(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, logging.FormatText)
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
+	logging.SetFile(logging.FileSink{})
 	logging.Get("detached").Info("after_detach")
 
 	if strings.Contains(file.String(), "after_detach") {
@@ -337,14 +337,14 @@ func TestBothDestinationsShareOneLevel(t *testing.T) {
 	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, logging.FormatText)
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
 	log := logging.Get("levelled")
 	if log.Enabled(t.Context(), slog.LevelInfo) {
 		t.Error("info is enabled at a warn level with a file attached")
 	}
 	log.Info("an_info_line")
 	log.Warn("a_warn_line")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
 		if strings.Contains(got, "an_info_line") {
@@ -364,8 +364,8 @@ func TestDerivedLoggersDoNotShareAttributesAcrossSinks(t *testing.T) {
 	var console, file bytes.Buffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
-	logging.SetFile(&file, logging.FormatText)
-	t.Cleanup(func() { logging.SetFile(nil, "") })
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
+	t.Cleanup(func() { logging.SetFile(logging.FileSink{}) })
 
 	base := logging.Get("shared")
 	base.With("side", "left").Info("left_line")
@@ -391,9 +391,9 @@ func TestAFailingDestinationDoesNotStopTheOthers(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(brokenWriter{}, logging.FormatText)
+	logging.SetFile(logging.FileSink{Writer: brokenWriter{}, Format: logging.FormatText})
 	logging.Get("resilient").Info("a_line")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	if !strings.Contains(console.String(), "a_line") {
 		t.Errorf("a failing file sink took the console sink down with it: %q",
@@ -414,9 +414,9 @@ func TestGroupsAndAttributesReachEveryDestination(t *testing.T) {
 	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
 	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
 
-	logging.SetFile(&file, logging.FormatText)
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
 	logging.Get("grouped").With("node", "n1").WithGroup("turn").Info("a_line", "id", "t1")
-	logging.SetFile(nil, "")
+	logging.SetFile(logging.FileSink{})
 
 	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
 		for _, want := range []string{"component=grouped", "node=n1", "turn.id=t1"} {
@@ -424,5 +424,169 @@ func TestGroupsAndAttributesReachEveryDestination(t *testing.T) {
 				t.Errorf("the %s sink is missing %s: %q", name, want, got)
 			}
 		}
+	}
+}
+
+// EACH DESTINATION CAN HAVE ITS OWN LEVEL — a durable `debug` record behind
+// a `warn` console, which is the split a deployment configures a file for.
+//
+// The root handler has to admit anything ANY destination would take, because
+// slog asks it first and a record it refuses never reaches the fan-out that
+// would have filtered it. A fan-out that took the quieter level here would
+// make the verbose destination a lie, silently.
+func TestEachDestinationCanCarryItsOwnLevel(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	debug := slog.LevelDebug
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText, Level: &debug})
+	log := logging.Get("split")
+	log.Debug("a_debug_line")
+	log.Warn("a_warn_line")
+	logging.SetFile(logging.FileSink{})
+
+	if !strings.Contains(file.String(), "a_debug_line") {
+		t.Errorf("the debug file did not get the debug line: %q", file.String())
+	}
+	if strings.Contains(console.String(), "a_debug_line") {
+		t.Errorf("the warn console took a debug line: %q", console.String())
+	}
+	// And the line both want still reaches both.
+	for name, got := range map[string]string{"console": console.String(), "file": file.String()} {
+		if !strings.Contains(got, "a_warn_line") {
+			t.Errorf("the %s sink dropped a line both levels admit: %q", name, got)
+		}
+	}
+}
+
+// AND THE QUIET DIRECTION TOO: a small durable file behind a loud console is
+// the same feature read the other way, and it is the one that fails if the
+// fan-out forwards without consulting each child.
+func TestAQuieterFileBehindALouderConsole(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelDebug, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	warn := slog.LevelWarn
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText, Level: &warn})
+	log := logging.Get("split")
+	log.Debug("a_debug_line")
+	log.Error("an_error_line")
+	logging.SetFile(logging.FileSink{})
+
+	if strings.Contains(file.String(), "a_debug_line") {
+		t.Errorf("the warn file took a debug line: %q", file.String())
+	}
+	if !strings.Contains(file.String(), "an_error_line") {
+		t.Errorf("the warn file dropped an error: %q", file.String())
+	}
+	if !strings.Contains(console.String(), "a_debug_line") {
+		t.Errorf("the debug console lost its debug line: %q", console.String())
+	}
+}
+
+// Enabled ANSWERS FOR THE WHOLE TREE: "will this be recorded anywhere".
+//
+// Call sites guard expensive debug work with it, and with a `debug` file
+// behind a `warn` console the honest answer is yes — the work has to happen
+// or the file the operator asked for would be empty. The fan-out's level
+// being the most verbose of its children is what makes this true, and
+// [lazy.Enabled] reads it straight off the root.
+func TestEnabledAnswersForTheLoudestDestination(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	log := logging.Get("guarded")
+	if log.Enabled(t.Context(), slog.LevelDebug) {
+		t.Fatal("debug is enabled at a warn console with no file, so this case proves nothing")
+	}
+	debug := slog.LevelDebug
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText, Level: &debug})
+	t.Cleanup(func() { logging.SetFile(logging.FileSink{}) })
+
+	if !log.Enabled(t.Context(), slog.LevelDebug) {
+		t.Error("a debug file is installed and Enabled says debug goes nowhere, " +
+			"so every guarded debug call site skips the work the file needs")
+	}
+}
+
+// A FILE WITH NO LEVEL FOLLOWS THE PROCESS, so `-debug` moves both
+// destinations at once — the same rule the format follows.
+func TestAFileWithNoLevelFollowsTheProcessLevel(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelWarn, logging.FormatText, &console)
+	t.Cleanup(func() { logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard) })
+
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
+	logging.Get("follow").Info("an_info_line")
+	if strings.Contains(file.String(), "an_info_line") {
+		t.Errorf("the file did not follow the process level: %q", file.String())
+	}
+	logging.SetVerbosity(slog.LevelDebug, logging.FormatText)
+	logging.Get("follow").Debug("a_debug_line")
+	logging.SetFile(logging.FileSink{})
+
+	if !strings.Contains(file.String(), "a_debug_line") {
+		t.Errorf("the file did not follow a verbosity change: %q", file.String())
+	}
+}
+
+// THE CONSOLE CAN BE SWITCHED OFF ONCE A FILE HAS TAKEN OVER. This is what
+// `logging.stderr: false` buys over `2>/dev/null`: the deployments that keep
+// a file AND have their stderr captured stop paying for every line twice.
+func TestTheConsoleCanBeSilencedInFavourOfTheFile(t *testing.T) {
+	var console, file bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() {
+		logging.SetConsole(true)
+		logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard)
+	})
+
+	logging.SetFile(logging.FileSink{Writer: &file, Format: logging.FormatText})
+	logging.SetConsole(false)
+	logging.Get("quiet").Info("a_line")
+
+	if strings.Contains(console.String(), "a_line") {
+		t.Errorf("the console was not silenced: %q", console.String())
+	}
+	if !strings.Contains(file.String(), "a_line") {
+		t.Errorf("the file did not get the line: %q", file.String())
+	}
+
+	// AND IT COMES BACK, which is what the CLI's teardown does before it
+	// detaches the file — a shutdown with neither destination would log
+	// its own drain nowhere.
+	logging.SetConsole(true)
+	logging.Get("quiet").Info("after_restore")
+	if !strings.Contains(console.String(), "after_restore") {
+		t.Errorf("the console did not come back: %q", console.String())
+	}
+}
+
+// SILENCING THE CONSOLE WITH NO FILE IS REFUSED, LOUDLY.
+//
+// A process with no destination logs nowhere, which is never what anybody
+// meant. Both layers that can see the combination refuse it by name — the
+// Tier A validator and `crewlet run` — and this is the backstop for the path
+// neither of them sees. It keeps the console AND says why, because a setting
+// silently overridden is one the operator cannot find.
+func TestSilencingTheConsoleWithNoFileKeepsItAndSaysSo(t *testing.T) {
+	var console bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &console)
+	t.Cleanup(func() {
+		logging.SetConsole(true)
+		logging.Configure(slog.LevelInfo, logging.FormatText, io.Discard)
+	})
+
+	logging.SetConsole(false)
+	logging.Get("nowhere").Info("a_line")
+
+	if !strings.Contains(console.String(), "console_kept_open") {
+		t.Errorf("the override was applied in silence: %q", console.String())
+	}
+	if !strings.Contains(console.String(), "a_line") {
+		t.Errorf("the process was left logging nowhere: %q", console.String())
 	}
 }

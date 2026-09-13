@@ -19,9 +19,12 @@ Crewlet splits configuration into **two tiers** so a founder can evolve their co
 logging:
   level: info           # debug, info (default), warn, error
   format: console       # console (default), text, json
+  stderr: true          # default. false hands the stream to the file below,
+                        #   and needs one — a node logging nowhere is refused
   file:                 # optional — a durable copy, IN ADDITION to stderr
     path: "/var/log/crewlet/${CREWLET_NODE_ID}.log"
     format: json        # empty follows logging.format
+    level: debug        # empty follows logging.level
     max_size_mb: 100    # rotates here; there is no "never" (default 100)
     max_backups: 5      # `.1` (newest) … `.5`; 0 keeps none (default 5)
 
@@ -127,15 +130,17 @@ The engine boots in this order:
    warnings, a refused field — come out under the flags alone, which is the
    best a process can do about a file it has not opened yet
 3. `logging.SetFile(…)` if `logging.file.path` (or `-log-file`) names one — a
-   **second** destination, never a replacement: stderr keeps every line, and
-   the file gets its own handler so it can carry `json` while the terminal
-   keeps its columns. It is opened here, before the store and the stream, so
-   the failures those can produce are in it. A path that cannot be opened
-   **stops the boot**, naming the path: every other bad logging value resolves
-   to a default, but a durable record an operator asked for and silently did
-   not get has nothing pointing at why. The same ordering has a corollary — a
-   boot that fails on the Tier A document itself never reaches this step, so
-   stderr is the only record of it
+   **second** destination by default: stderr keeps every line, and the file
+   gets its own handler, so it can carry `json` at `debug` while the terminal
+   keeps its columns at `warn`. `logging.stderr: false` hands the stream over
+   to the file instead, and is refused with no file to hand it to. It is
+   opened here, before the store and the stream, so the failures those can
+   produce are in it. A path that cannot be opened **stops the boot**, naming
+   the path: every other bad logging value resolves to a default, but a
+   durable record an operator asked for and silently did not get has nothing
+   pointing at why. The same ordering has a corollary — a boot that fails on
+   the Tier A document itself never reaches this step, so stderr is the only
+   record of it, `logging.stderr` notwithstanding
 4. Open the store file and start or dial the stream
 5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
 6. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes

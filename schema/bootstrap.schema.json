@@ -96,6 +96,16 @@
           ],
           "type": "string"
         },
+        "level": {
+          "description": "How loud the file is. Empty follows logging.level.",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "type": "string"
+        },
         "max_backups": {
           "description": "Rotated files kept beside the live one. Unset = 5; 0 keeps none.",
           "minimum": 0,
@@ -137,6 +147,10 @@
             "error"
           ],
           "type": "string"
+        },
+        "stderr": {
+          "description": "Whether the ordinary log stream reaches stderr. Unset = true. false needs logging.file.path, and never silences a boot failure or the watchdog's exit notice.",
+          "type": "boolean"
         }
       },
       "type": "object"

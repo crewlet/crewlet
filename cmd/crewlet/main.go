@@ -122,8 +122,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		// as the node it is migrating for has no other way to ask. The
 		// rotation caps are not env knobs — they belong to a deployment's
 		// file, and a one-shot command does not reach one of them.
-		detach, err := attachLogFile(
-			logging.FileOptions{Path: os.Getenv("CREWLET_LOG_FILE")}, "")
+		// STDERR STAYS ON for these: they read no `logging:` block, so
+		// nothing has told them otherwise, and a one-shot command whose
+		// output vanished into a file would be the opposite of what a
+		// person at a terminal wants.
+		detach, err := attachLogFile(config.LogFileSettings{
+			Open: logging.FileOptions{Path: os.Getenv("CREWLET_LOG_FILE")},
+		}, true)
 		if err != nil {
 			return err
 		}
@@ -793,7 +798,11 @@ func runEngine(args []string, stderr io.Writer) error {
 	// The trace flush below and the engine drain further down both log,
 	// and a file closed ahead of them would lose the shutdown it was
 	// opened to record.
-	detachLogFile, err := attachLogFile(logFileSettings(boot, fs, *logFile))
+	logFileSet, logToStderr, err := logFileSettings(boot, fs, *logFile)
+	if err != nil {
+		return err
+	}
+	detachLogFile, err := attachLogFile(logFileSet, logToStderr)
 	if err != nil {
 		return err
 	}
@@ -1673,14 +1682,27 @@ func logSettings(boot *config.Bootstrap, fs *flag.FlagSet,
 // The rotation caps stay the file's. They describe the disk this deployment
 // runs on rather than this invocation, which is the same line `-roles` and
 // `-api-host` are drawn along — see [overrideNode].
+// It also settles the one combination NEITHER the validator nor the flags can
+// see on their own: `logging.stderr: false` is checked against the file THIS
+// DOCUMENT names, so a `-log-file ""` that takes the file away afterwards
+// would leave the node writing its log nowhere. That is refused here, where
+// both halves are finally known.
 func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
-) (logging.FileOptions, logging.Format) {
+) (config.LogFileSettings, bool, error) {
 	file := boot.Logging.File
 	if isFlagSet(fs, "log-file") {
 		file.Path = logFile
 	}
-	opts, format, _ := file.Options()
-	return opts, format
+	settings, ok := file.LogFileSettings()
+	stderr := boot.Logging.StderrEnabled()
+	if !ok && !stderr {
+		return config.LogFileSettings{}, false, errors.New(
+			"-log-file \"\" removes the only destination this node has: " +
+				"logging.stderr is false in the Tier A document, so there " +
+				"would be nowhere left to write. Name a file, or set " +
+				"logging.stderr back to true")
+	}
+	return settings, stderr, nil
 }
 
 // attachLogFile installs the log file beside stderr and returns the teardown
@@ -1701,21 +1723,45 @@ func logFileSettings(boot *config.Bootstrap, fs *flag.FlagSet, logFile string,
 // A line emitted after the close would otherwise meet a closed descriptor,
 // and the sink would report the process's own shutdown as a write failure on
 // every one of them.
-func attachLogFile(opts logging.FileOptions, format logging.Format) (func(), error) {
-	if opts.Path == "" {
+// # And the console is silenced only once the file is open
+//
+// Order, not taste: switching stderr off first and then failing to open the
+// file would leave the process with no destination during the very failure
+// it has to report.
+func attachLogFile(settings config.LogFileSettings, stderr bool) (func(), error) {
+	if settings.Open.Path == "" {
+		// Nothing to attach, and nothing to silence — logFileSettings has
+		// already refused the one document where that combination could
+		// leave this node writing nowhere.
 		return func() {}, nil
 	}
-	f, err := logging.OpenFile(opts, os.Stderr)
+	f, err := logging.OpenFile(settings.Open, os.Stderr)
 	if err != nil {
 		return nil, err
 	}
-	logging.SetFile(f, format)
+	sink := settings.Sink
+	sink.Writer = f
+	logging.SetFile(sink)
 	// THE FIRST LINE IN THE FILE SAYS WHICH FILE IT IS. A log an operator
 	// has to find by guessing at a relative path is one they read the
 	// wrong copy of.
-	logging.Get("cli").Info("log_file_opened", "path", f.Path())
+	//
+	// EMITTED BEFORE THE CONSOLE IS SWITCHED OFF, so it is the last thing
+	// stderr says rather than the first thing it misses. A node started
+	// with `logging.stderr: false` otherwise leaves a terminal completely
+	// silent with nothing anywhere naming the file it went to — which is
+	// the same silence this whole feature is written against. The file is
+	// already attached, so this one line reaches both.
+	logging.Get("cli").Info("log_file_opened", "path", f.Path(), "stderr", stderr)
+	if !stderr {
+		logging.SetConsole(false)
+	}
 	return func() {
-		logging.SetFile(nil, "")
+		// THE CONSOLE COMES BACK FIRST. Detaching the file while stderr
+		// was still off would leave the teardown itself — and anything
+		// logging during it — with no destination at all.
+		logging.SetConsole(true)
+		logging.SetFile(logging.FileSink{})
 		if closeErr := f.Close(); closeErr != nil {
 			fmt.Fprintf(os.Stderr, "crewlet: closing log file %s: %v\n",
 				f.Path(), closeErr)

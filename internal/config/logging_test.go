@@ -285,15 +285,15 @@ func TestZeroBackupsIsASettingRatherThanAnAbsence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("max_backups: 0 was refused: %v", err)
 	}
-	opts, _, ok := boot.Logging.File.Options()
+	settings, ok := boot.Logging.File.LogFileSettings()
 	if !ok {
 		t.Fatal("a block with a path reported no file")
 	}
-	if opts.MaxBackups == nil {
+	if settings.Open.MaxBackups == nil {
 		t.Fatal("an explicit 0 reached the sink as \"nothing was said\"")
 	}
-	if *opts.MaxBackups != 0 {
-		t.Errorf("max_backups = %d, want 0", *opts.MaxBackups)
+	if *settings.Open.MaxBackups != 0 {
+		t.Errorf("max_backups = %d, want 0", *settings.Open.MaxBackups)
 	}
 }
 
@@ -313,7 +313,7 @@ func TestNoLogFileIsTheDefault(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected a valid document, got: %v", err)
 			}
-			if _, _, ok := boot.Logging.File.Options(); ok {
+			if _, ok := boot.Logging.File.LogFileSettings(); ok {
 				t.Error("a document that named no file asked for one")
 			}
 		})
@@ -330,21 +330,21 @@ func TestLogFileOptionsCarryTheWholeBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a valid document, got: %v", err)
 	}
-	opts, format, ok := boot.Logging.File.Options()
+	settings, ok := boot.Logging.File.LogFileSettings()
 	if !ok {
 		t.Fatal("a block with a path reported no file")
 	}
-	if opts.Path != "/var/log/crewlet/crewlet.log" {
-		t.Errorf("path = %q", opts.Path)
+	if settings.Open.Path != "/var/log/crewlet/crewlet.log" {
+		t.Errorf("path = %q", settings.Open.Path)
 	}
-	if format != logging.FormatJSON {
-		t.Errorf("format = %q, want json", format)
+	if settings.Sink.Format != logging.FormatJSON {
+		t.Errorf("format = %q, want json", settings.Sink.Format)
 	}
-	if opts.MaxSizeMB == nil || *opts.MaxSizeMB != 25 {
-		t.Errorf("max_size_mb = %v, want 25", opts.MaxSizeMB)
+	if settings.Open.MaxSizeMB == nil || *settings.Open.MaxSizeMB != 25 {
+		t.Errorf("max_size_mb = %v, want 25", settings.Open.MaxSizeMB)
 	}
-	if opts.MaxBackups == nil || *opts.MaxBackups != 3 {
-		t.Errorf("max_backups = %v, want 3", opts.MaxBackups)
+	if settings.Open.MaxBackups == nil || *settings.Open.MaxBackups != 3 {
+		t.Errorf("max_backups = %v, want 3", settings.Open.MaxBackups)
 	}
 }
 
@@ -360,8 +360,8 @@ func TestEveryDeclaredFormatIsUsableForTheFile(t *testing.T) {
 		if err := boot.Validate(); err != nil {
 			t.Errorf("file format %q is in the closed set but refused: %v", format, err)
 		}
-		if _, got, _ := boot.Logging.File.Options(); got != format {
-			t.Errorf("file format %q resolved to %v", format, got)
+		if got, _ := boot.Logging.File.LogFileSettings(); got.Sink.Format != format {
+			t.Errorf("file format %q resolved to %v", format, got.Sink.Format)
 		}
 	}
 }
@@ -375,11 +375,145 @@ func TestALogFilePathTakesAnEnvReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a valid document, got: %v", err)
 	}
-	opts, _, ok := boot.Logging.File.Options()
+	settings, ok := boot.Logging.File.LogFileSettings()
 	if !ok {
 		t.Fatal("a block with a path reported no file")
 	}
-	if opts.Path != "/var/log/crewlet/from-env.log" {
-		t.Errorf("path = %q, want the resolved value", opts.Path)
+	if settings.Open.Path != "/var/log/crewlet/from-env.log" {
+		t.Errorf("path = %q, want the resolved value", settings.Open.Path)
+	}
+}
+
+// `stderr: false` WITH NO FILE IS A NODE THAT LOGS NOWHERE, and it is
+// refused by name. The field is a statement about the file taking the stream
+// over, not a request for silence — and an operator told what is wrong with
+// their document can fix it where one whose setting was quietly overridden
+// cannot.
+func TestSilencingStderrWithNoFileIsRefused(t *testing.T) {
+	t.Parallel()
+	err := rejectsBootstrap(t, "logging:\n  stderr: false\n", "logging.stderr")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("want %v, got %v", ErrConflict, err)
+	}
+}
+
+// AND WITH A FILE IT IS ACCEPTED, because that is the deployment it exists
+// for: a durable log the platform is not also capturing twice.
+func TestSilencingStderrBesideAFileIsAccepted(t *testing.T) {
+	t.Parallel()
+	boot, err := ParseBootstrap([]byte(
+		"logging:\n  stderr: false\n  file:\n    path: /var/log/crewlet/crewlet.log\n"),
+		EnvOnly())
+	if err != nil {
+		t.Fatalf("stderr: false beside a file was refused: %v", err)
+	}
+	if boot.Logging.StderrEnabled() {
+		t.Error("an explicit `stderr: false` reached the engine as \"nothing was said\"")
+	}
+}
+
+// UNSET IS ON, which is what every deployment without a log file must have.
+// `false` is the zero value of its own type, which is why the field is a
+// pointer: read as "unset" it would silence every node that wrote it at all.
+func TestStderrDefaultsToOn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, yaml string
+		want       bool
+	}{
+		{"nothing at all", "{}\n", true},
+		{"a logging block that says nothing about it", "logging:\n  level: debug\n", true},
+		{"an explicit true", "logging:\n  stderr: true\n", true},
+		{
+			"an explicit false beside a file",
+			"logging:\n  stderr: false\n  file:\n    path: /tmp/c.log\n", false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			boot, err := ParseBootstrap([]byte(tc.yaml), EnvOnly())
+			if err != nil {
+				t.Fatalf("expected a valid document, got: %v", err)
+			}
+			if got := boot.Logging.StderrEnabled(); got != tc.want {
+				t.Errorf("StderrEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// THE FILE'S OWN LEVEL REACHES THE SINK, converted once here at the edge so
+// nothing below this package sees an operator's spelling.
+func TestTheFileLevelIsConvertedAtTheEdge(t *testing.T) {
+	t.Parallel()
+	boot, err := ParseBootstrap([]byte(
+		"logging:\n  level: warn\n  file:\n    path: /tmp/c.log\n    level: debug\n"),
+		EnvOnly())
+	if err != nil {
+		t.Fatalf("expected a valid document, got: %v", err)
+	}
+	settings, ok := boot.Logging.File.LogFileSettings()
+	if !ok {
+		t.Fatal("a block with a path reported no file")
+	}
+	if settings.Sink.Level == nil {
+		t.Fatal("an explicit file level reached the sink as \"nothing was said\"")
+	}
+	if *settings.Sink.Level != slog.LevelDebug {
+		t.Errorf("file level = %v, want debug", *settings.Sink.Level)
+	}
+	// And the process level is untouched by it: the two are separate
+	// decisions, and a file level that moved `logging.level` would make
+	// `-log-level` argue with the document.
+	if level, _ := boot.LogSettings(); level != slog.LevelWarn {
+		t.Errorf("the file's level moved the process level to %v", level)
+	}
+}
+
+// AN UNSET FILE LEVEL IS "FOLLOW THE PROCESS", carried as nil rather than as
+// a guess at what the process level happens to be right now — the flags are
+// layered on afterwards, so a value resolved here would be the file's, not
+// the invocation's.
+func TestAnUnsetFileLevelStaysUnset(t *testing.T) {
+	t.Parallel()
+	boot, err := ParseBootstrap([]byte(
+		"logging:\n  level: warn\n  file:\n    path: /tmp/c.log\n"), EnvOnly())
+	if err != nil {
+		t.Fatalf("expected a valid document, got: %v", err)
+	}
+	settings, _ := boot.Logging.File.LogFileSettings()
+	if settings.Sink.Level != nil {
+		t.Errorf("an unset file level resolved to %v instead of following the process",
+			*settings.Sink.Level)
+	}
+}
+
+// AND AN UNKNOWN FILE LEVEL IS REFUSED, like every other closed set in a
+// file — the flag path is the one that may not fail, not this one.
+func TestAnUnknownFileLevelIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, yaml string }{
+		{"a typo", "logging:\n  file:\n    path: /tmp/c.log\n    level: dbug\n"},
+		// "warning" is accepted by the flag parser and deliberately not
+		// by a file, here exactly as one block up.
+		{"the warning alias", "logging:\n  file:\n    path: /tmp/c.log\n    level: warning\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := rejectsBootstrap(t, tc.yaml, "logging.file.level")
+			if !errors.Is(err, ErrUnknownValue) {
+				t.Fatalf("want %v, got %v", ErrUnknownValue, err)
+			}
+		})
+	}
+}
+
+// A LEVEL WITH NO FILE TO WRITE IT TO is the same mistake as a shape with no
+// file, and is refused the same way.
+func TestALogFileLevelWithNoPathIsRefused(t *testing.T) {
+	t.Parallel()
+	err := rejectsBootstrap(t, "logging:\n  file:\n    level: debug\n", "logging.file.path")
+	if !errors.Is(err, ErrMissing) {
+		t.Fatalf("want %v, got %v", ErrMissing, err)
 	}
 }

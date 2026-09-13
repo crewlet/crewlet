@@ -550,10 +550,10 @@ func TestAFileSinkCarriesTheEngineLog(t *testing.T) {
 	f, _, path := sink(t, "crewlet.log", 1, 1)
 	Configure(slog.LevelInfo, FormatConsole, io.Discard)
 	t.Cleanup(func() { Configure(slog.LevelInfo, FormatConsole, io.Discard) })
-	SetFile(f, FormatJSON)
+	SetFile(FileSink{Writer: f, Format: FormatJSON})
 
 	Get("seat.host").Info("seat_claimed", "seat", "eng.alice")
-	SetFile(nil, "")
+	SetFile(FileSink{})
 
 	body, err := os.ReadFile(path)
 	if err != nil {

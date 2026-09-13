@@ -653,9 +653,11 @@ How loud a node is, in what shape, and where it writes, is Tier A:
 logging:
   level: info       # debug, info (default), warn, error
   format: console   # console (default), text, json
+  stderr: true      # default. false needs a file below — see "The log file"
   file:             # optional: a durable copy, IN ADDITION to stderr
     path: "/var/log/crewlet/crewlet.log"
     format: json    # empty follows logging.format
+    level: debug    # empty follows logging.level
     max_size_mb: 100    # rotate at this size (default 100)
     max_backups: 5      # rotated files kept beside the live one (default 5)
 ```
@@ -768,6 +770,65 @@ logging:
 
 Leave `file.format` out and the file follows `logging.format`, so a node that
 says nothing writes one log in two places.
+
+**The level splits the same way, and both directions are real.** `file.level`
+is how loud the *file* is; unset, it follows `logging.level`, so `-log-level`
+and `-debug` move both destinations at once.
+
+```yaml
+logging:
+  level: warn         # what a person watching sees
+  file:
+    path: "/var/log/crewlet/crewlet.log"
+    level: debug      # what the incident is reconstructed from
+```
+
+A `debug` file behind a `warn` console keeps the detail an incident needs
+without burying whoever is watching; a `warn` file behind a `debug` console
+keeps the durable record small while somebody works. The process admits the
+**louder** of the two and each destination filters, so `log.Enabled(…, debug)`
+answers "will this be recorded anywhere" — meaning a `debug` file costs the
+work at every debug call site whatever the console says. That is the price of
+asking for a debug file, and it is paid whichever destination reads it.
+
+#### Turning stderr off
+
+`logging.stderr: false` silences the ordinary log stream on stderr once a file
+has taken it over:
+
+```yaml
+logging:
+  stderr: false
+  file:
+    path: "/var/log/crewlet/crewlet.log"
+```
+
+Use it where the platform already captures stderr **and** you keep a file —
+journald plus a log file, or a container with a log driver plus a mounted
+volume — because there every line is otherwise stored twice. Without it the
+default stands: a file never silences stderr.
+
+**It is not `2>/dev/null`, and the difference is the point.** Three kinds of
+line reach stderr without passing through the configured handler, and this
+field keeps all three while a shell redirect throws them away:
+
+| What | Why it bypasses the handler |
+|---|---|
+| Everything before the Tier A document is read | The log file is named *by* that document, so it cannot be open yet |
+| The [seat watchdog's](../concepts/seat-ownership.md) exit notice | It writes to stderr directly and calls `os.Exit(75)`; a wedged process has not earned a configured handler |
+| "log file *X*: no space left on device" | A sink cannot report its own failure through itself |
+
+The `log_file_opened` line naming the path is also written to stderr before
+the switch takes effect, so a terminal that is about to go quiet says where
+the log went rather than simply stopping.
+
+**A node with neither destination is refused**, by name: `logging.stderr:
+false` with no `logging.file.path` fails validation and fails the boot, and
+so does a `-log-file ""` that takes the file away from a document that had
+switched stderr off. Silence is never what configuring logging meant.
+
+The other commands are unaffected — they read no `logging:` block, so their
+stderr always stays on.
 
 **Rotation is built in, and it cannot be turned off.** A log file with no
 ceiling fills the disk the store is on, and it does it on exactly the
