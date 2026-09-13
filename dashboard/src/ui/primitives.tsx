@@ -14,10 +14,12 @@ import {
   useEffect,
   useRef,
   useState,
+  type AriaAttributes,
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import { Icon, type IconName } from "./Icon.tsx";
 
@@ -79,6 +81,28 @@ export function Panel({
 // Controls
 // ---------------------------------------------------------------------------
 
+/**
+ * What a Button hands to its `<button>` beyond its own props.
+ *
+ * A menu trigger needs `aria-haspopup`, `aria-expanded`, a ref for returning
+ * focus and a `tabIndex` of -1 when the keyboard reaches its actions another
+ * way; a list's Move button needs a ref and a name longer than its tooltip.
+ * Without these, each of them hand-wrote `.btn` markup beside the primitive,
+ * and a class list spelled in two places is how the two drift apart.
+ *
+ * DELIBERATELY NOT `className` OR `style`: the variants are the vocabulary,
+ * and a caller that can restyle the recipe is a caller that will. Nor
+ * `aria-pressed`, whose one spelling is `active`.
+ */
+type ButtonPassthrough = Omit<AriaAttributes, "aria-pressed"> & {
+  ref?: Ref<HTMLButtonElement>;
+  id?: string;
+  tabIndex?: number;
+  onKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
+  /** A test hook, or a state the stylesheet reads. */
+  [data: `data-${string}`]: string | number | boolean | undefined;
+};
+
 export function Button({
   children,
   icon,
@@ -90,7 +114,8 @@ export function Button({
   type = "button",
   block,
   active,
-}: {
+  ...forwarded
+}: ButtonPassthrough & {
   children?: ReactNode;
   icon?: IconName;
   variant?: "default" | "primary" | "ghost" | "danger";
@@ -110,6 +135,7 @@ export function Button({
 }) {
   return (
     <button
+      {...forwarded}
       type={type}
       className={cx(
         "btn",
@@ -121,7 +147,10 @@ export function Button({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      aria-label={!children ? title : undefined}
+      // An icon button is named by its tooltip unless the caller names it
+      // more precisely: "Move responsibility 2 of 3 up" where the tooltip
+      // only says "Move up".
+      aria-label={forwarded["aria-label"] ?? (!children ? title : undefined)}
       aria-pressed={active}
     >
       {icon && <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />}

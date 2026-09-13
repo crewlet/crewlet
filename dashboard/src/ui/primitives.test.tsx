@@ -1,16 +1,19 @@
 /**
- * The two affordances a JSON panel is: copy it, and select it.
+ * The primitives whose contract is more than their markup: the button other
+ * controls are built from, and the two affordances a JSON panel is (copy it,
+ * and select it).
  *
- * Both are asserted here rather than on a screen because both were WRONG in
- * the same way before — silently. A copy that reached no clipboard clicked
- * exactly like one that did, and select-all took the whole document while
- * looking like it had done something. A test that only rendered the button
- * would have passed through both.
+ * The JSON affordances are asserted here rather than on a screen because both
+ * were WRONG in the same way before, and silently. A copy that reached no
+ * clipboard clicked exactly like one that did, and select-all took the whole
+ * document while looking like it had done something. A test that only
+ * rendered the button would have passed through both.
  */
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { Code, CopyButton } from "./primitives.tsx";
+import { Button, Code, CopyButton } from "./primitives.tsx";
 
 afterEach(() => {
   cleanup();
@@ -39,6 +42,58 @@ async function click(label: string) {
     fireEvent.click(screen.getByRole("button", { name: new RegExp(label, "i") }));
   });
 }
+
+describe("Button", () => {
+  // A menu trigger and a list's Move buttons are built on it, and each needs
+  // something a plain click target does not: a ref to hand focus back to, the
+  // popup state a screen reader announces, a way out of the tab order.
+  test("hands a ref, aria and data attributes, tabIndex and keys to the element it draws", () => {
+    const ref = createRef<HTMLButtonElement>();
+    const onKeyDown = vi.fn();
+    render(
+      <Button
+        ref={ref}
+        icon="more"
+        variant="ghost"
+        size="sm"
+        title="Actions"
+        aria-haspopup="menu"
+        aria-expanded={false}
+        aria-controls="actions-menu"
+        tabIndex={-1}
+        data-node="seat:ceo"
+        onKeyDown={onKeyDown}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Actions" });
+    expect(ref.current).toBe(button);
+    expect(button.getAttribute("aria-haspopup")).toBe("menu");
+    expect(button.getAttribute("aria-expanded")).toBe("false");
+    expect(button.getAttribute("aria-controls")).toBe("actions-menu");
+    expect(button.getAttribute("tabindex")).toBe("-1");
+    expect(button.getAttribute("data-node")).toBe("seat:ceo");
+    // The recipe is still the primitive's own.
+    expect(button.className).toBe("btn ghost sm icon");
+    fireEvent.keyDown(button, { key: "ArrowDown" });
+    expect(onKeyDown).toHaveBeenCalledTimes(1);
+  });
+
+  test("an icon button is named by its title unless the caller names it more precisely", () => {
+    render(
+      <>
+        <Button icon="arrowUp" title="Move up" />
+        <Button icon="arrowUp" title="Move up" aria-label="Move goal 2 of 3 up" />
+        <Button icon="plus">Add</Button>
+      </>,
+    );
+    const [plain, named, labelled] = screen.getAllByRole("button");
+    expect(plain!.getAttribute("aria-label")).toBe("Move up");
+    expect(named!.getAttribute("aria-label")).toBe("Move goal 2 of 3 up");
+    expect(named!.getAttribute("title")).toBe("Move up");
+    // A button with visible text is named by that text, not by a duplicate.
+    expect(labelled!.getAttribute("aria-label")).toBeNull();
+  });
+});
 
 describe("CopyButton", () => {
   test("puts the text on the clipboard and says it did", async () => {
