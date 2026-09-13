@@ -496,7 +496,12 @@ func SkillPages(ctx context.Context, client *Client, space string) ([]skills.Pag
 	out := make([]skills.Page, 0, len(pages))
 	for _, page := range pages {
 		out = append(out, skills.Page{
-			ID: page.ID, Title: page.Title,
+			// The VERSION travels with the id. Confluence numbers every
+			// edit, and a skill's provenance names the revision the
+			// registry holds; dropping it stamped every Confluence skill
+			// as version 0, the value reserved for a backend with no
+			// version concept.
+			ID: page.ID, Title: page.Title, Version: page.Version,
 			// The DECODED text, so the skills package stays the one
 			// place that decides what a skill is and this one stays the
 			// only place that knows how a page is shaped.
