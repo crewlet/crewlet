@@ -760,39 +760,91 @@ function offline(err) {
 * longer path can say so rather than removing the deadline.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
+/** Whether a rejection is the caller's own abort rather than a failure. */
+function isAbort(err) {
+	return typeof err === "object" && err !== null && err.name === "AbortError";
+}
+/** JSON is `application/json` and every `+json` type, merge patch included. */
+function isJson(contentType) {
+	const essence = contentType.split(";")[0].trim().toLowerCase();
+	return essence === "application/json" || essence.endsWith("+json");
+}
+/** The path with the caller's query parameters merged into its own. */
+function withQuery(path, query) {
+	if (!query) return path;
+	const at = path.indexOf("?");
+	const params = new URLSearchParams(at < 0 ? "" : path.slice(at + 1));
+	for (const [key, value] of Object.entries(query)) if (value !== void 0) params.set(key, String(value));
+	const qs = params.toString();
+	return (at < 0 ? path : path.slice(0, at)) + (qs ? `?${qs}` : "");
+}
 /**
-* The one request path. `body` is already encoded, and `type` is what it is
-* encoded as — the split exists because not every write on this API takes
-* JSON. See `putText` below.
+* The one request path, answering the status and entity-tag as well as the
+* body.
+*
+* NOT CACHED, EVER. Every answer here is either a write or a guarded read of
+* something that changes under the reader (a configuration revision, the
+* sealed store's names, an integration's requirements), and a heuristic cache
+* hit on one of those is a screen showing the company as it was. A 304 still
+* reaches the caller, when the caller sent the precondition that asks for it.
 */
-async function send(method, path, body, type, headers = {}) {
+async function request(method, path, options = {}) {
+	const { body, headers = {}, query, signal } = options;
+	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
+	let encoded;
+	if (body !== void 0) {
+		if (contentType && !isJson(contentType)) {
+			if (typeof body !== "string") throw new TypeError(`rest.request: a ${contentType} body must be a string`);
+			encoded = body;
+		} else encoded = JSON.stringify(body);
+	}
+	if (signal?.aborted) throw signal.reason;
 	const token = apiToken();
 	const init = {
 		method,
+		cache: "no-store",
 		headers: {
 			...token ? { Authorization: "Bearer " + token } : {},
-			...type ? { "Content-Type": type } : {},
+			...contentType ? { "Content-Type": contentType } : {},
 			...headers
 		},
-		...body === void 0 ? {} : { body }
+		...encoded === void 0 ? {} : { body: encoded }
 	};
-	const deadline = new AbortController();
-	const timer = setTimeout(() => deadline.abort(), REQUEST_TIMEOUT_MS);
-	let response;
-	try {
-		response = await fetch(location.origin + path, {
-			...init,
-			signal: deadline.signal
-		});
-	} catch (err) {
-		throw deadline.signal.aborted ? new RestError(0, {
+	const controller = new AbortController();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, REQUEST_TIMEOUT_MS);
+	const forward = () => controller.abort(signal?.reason);
+	signal?.addEventListener("abort", forward, { once: true });
+	const unanswered = (err) => {
+		if (signal?.aborted) return signal.reason;
+		return timedOut ? new RestError(0, {
 			error: "unreachable",
 			detail: `the engine did not answer within ${REQUEST_TIMEOUT_MS / 1e3} seconds`
 		}) : offline(err);
+	};
+	let response;
+	let text;
+	try {
+		try {
+			response = await fetch(location.origin + withQuery(path, query), {
+				...init,
+				signal: controller.signal
+			});
+		} catch (err) {
+			throw unanswered(err);
+		}
+		try {
+			text = await response.text();
+		} catch (err) {
+			throw unanswered(err);
+		}
 	} finally {
 		clearTimeout(timer);
+		signal?.removeEventListener("abort", forward);
 	}
-	const text = await response.text().catch(() => "");
 	let parsed = null;
 	if (text !== "") try {
 		parsed = JSON.parse(text);
@@ -802,21 +854,39 @@ async function send(method, path, body, type, headers = {}) {
 			detail: "the engine answered something that is not JSON"
 		});
 	}
-	if (!response.ok) {
-		const body = parsed && typeof parsed === "object" ? parsed : {};
-		throw new RestError(response.status, body);
+	if (!response.ok && response.status !== 304) {
+		const refusal = parsed && typeof parsed === "object" ? parsed : {};
+		throw new RestError(response.status, refusal);
 	}
-	return parsed;
+	return {
+		status: response.status,
+		body: parsed,
+		etag: response.headers.get("ETag")
+	};
 }
-/** JSON in, for every route that takes a document. */
-function json(method, path, body, headers) {
-	return send(method, path, JSON.stringify(body ?? {}), "application/json", headers);
+/** The body alone, for the callers that need nothing else. */
+async function bodyOf(method, path, options) {
+	return (await request(method, path, options)).body;
 }
 var rest = {
-	get: (path) => send("GET", path),
-	post: (path, body, headers) => json("POST", path, body, headers),
-	put: (path, body, headers) => json("PUT", path, body, headers),
-	patch: (path, body, headers) => json("PATCH", path, body, headers),
+	/**
+	* The whole answer: status, entity-tag and body. For a caller that sends a
+	* precondition, reads a tag, cancels, or branches on a success status.
+	*/
+	request,
+	get: (path) => bodyOf("GET", path),
+	post: (path, body, headers) => bodyOf("POST", path, {
+		body: body ?? {},
+		headers
+	}),
+	put: (path, body, headers) => bodyOf("PUT", path, {
+		body: body ?? {},
+		headers
+	}),
+	patch: (path, body, headers) => bodyOf("PATCH", path, {
+		body: body ?? {},
+		headers
+	}),
 	/**
 	* THE BODY IS THE VALUE, not a document carrying one.
 	*
@@ -826,8 +896,14 @@ var rest = {
 	* sequence the vendor compares is a 401 nobody can explain. Sending it
 	* through `put` would seal the JSON quotes into the credential.
 	*/
-	putText: (path, value) => send("PUT", path, value, "text/plain; charset=utf-8"),
-	del: (path, body, headers) => body === void 0 ? send("DELETE", path, void 0, void 0, headers) : json("DELETE", path, body, headers)
+	putText: (path, value) => bodyOf("PUT", path, {
+		body: value,
+		contentType: "text/plain; charset=utf-8"
+	}),
+	del: (path, body, headers) => bodyOf("DELETE", path, {
+		body,
+		headers
+	})
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, isAbort, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
