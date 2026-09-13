@@ -8,6 +8,8 @@ import (
 	"path"
 	"strings"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 )
 
 // contentTypes are what the dashboard's assets are served as.
@@ -92,6 +94,11 @@ func (a *assets) serve(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	etag := a.etagFor(name, data)
 
+	// BEFORE THE 304 BRANCH, which is the reason for where this sits. A
+	// header set after WriteHeader is dropped without a word, and the
+	// revalidation answer is the one a browser mostly gets: an asset served
+	// 200 once and 304 ever after would carry its policy exactly once.
+	pagepolicy.Set(w.Header(), pagepolicy.Dashboard)
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "no-cache")
 	if match := r.Header.Get("If-None-Match"); match == etag {

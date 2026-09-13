@@ -105,6 +105,40 @@ A body that does not arrive inside its deadline fails the read like any other tr
 
 Plus the three always-guarded surfaces: [`/config/*`](#config--live-config-management-auth-gated), [`/secrets/*`](#secrets--the-companys-credentials-auth-gated) and [`/setup/*`](#setting-an-integration-up). `/setup` is guarded on its READS as well, and deliberately: the list of which credentials a company has not configured yet is a map of what to attack.
 
+### Security headers on every response
+
+Every response the API writes carries four headers, set before its status line
+(so a `304` carries them as well as a `200`):
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | The policy for what the response is (below) |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` |
+
+The policy depends on what was served:
+
+| Response | `Content-Security-Policy` |
+|---|---|
+| The dashboard shell (`/dashboard`), `/favicon.ico` and every `/static/*` asset | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:` |
+| The landing pages [`/webhooks/github-app`](#get-webhooksgithub-app) and [`/webhooks/slack-oauth`](#get-webhooksslack-oauth) | `default-src 'none'; img-src 'self'`, then `style-src` and `script-src` naming the `sha256` hash of each page's own inline block (`'none'` where a page has none), then `base-uri 'none'; form-action 'none'; frame-ancestors 'none'` |
+| Everything else: JSON, plain text, the redirect from `/`, a `404` or a `401` | `default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'` |
+
+These matter because the operator token the dashboard stores lives in the
+browser's storage for this origin, and the two landing pages are unauthenticated
+pages on that same origin that render values from their query string. A policy
+is per response, so each page carries its own: the dashboard runs only the
+bundle it was built into, and a landing page runs only the style and script the
+engine wrote into it. No response may be framed by another site.
+
+`form-action` on the dashboard allows `https:` as well as `'self'` for one flow:
+creating a seat's GitHub App posts the app manifest as a form to the code host,
+which is `github.com` or the GitHub Enterprise Server base the company
+configures. A reverse proxy in front of the engine should pass these headers
+through unchanged; one that adds its own `Content-Security-Policy` produces two
+policies, and a browser enforces both.
+
 Read-side handlers live in the `internal/api` package (one module
 per domain — `agents`, `events`, `tokens`, `org`, `fleet`,
 `sandbox_runs`, `budgets`, `integrations`, `stream`, `webhooks`,
@@ -2060,7 +2094,7 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 
 ### `GET /webhooks/slack-oauth`
 
-The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md) — every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds.
+The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md). Every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/github`
 
@@ -2069,8 +2103,9 @@ Receives GitHub webhook payloads. Verifies HMAC-SHA256 over the raw body against
 ### `GET /webhooks/github-app`
 
 Where GitHub returns an operator's browser during the per-agent
-[GitHub App](../integrations/github.md#one-github-app-per-agent) flow, and the
-only `/webhooks/*` route that renders a page rather than accepting a delivery.
+[GitHub App](../integrations/github.md#one-github-app-per-agent) flow, and one
+of the two `/webhooks/*` routes that render a page rather than accept a delivery
+(the other is [`/webhooks/slack-oauth`](#get-webhooksslack-oauth)).
 Two arrivals, one route: after the app is **created**, with a one-time code to
 convert, and after it is **installed**, with nothing but `?installed=<handle>`.
 Unauthenticated, because a redirect from GitHub carries no engine credential;
@@ -2090,6 +2125,8 @@ and reissues neither. Answers `200` for a completion or an install, `400` for a
 refusal from GitHub, a missing code, or a state or code the engine will not
 accept, and `503` when this process has no setup surface. Error text is always
 the engine's own wording: GitHub's response body here carries the private key.
+The page runs only its own inline style and install countdown script, allowed
+by hash (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/gitlab`
 

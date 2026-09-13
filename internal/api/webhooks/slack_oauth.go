@@ -3,6 +3,8 @@ package webhooks
 import (
 	"html/template"
 	"net/http"
+
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 )
 
 // slackOAuthPage is the install landing page every provisioned Slack app
@@ -58,6 +60,15 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
 </html>
 `))
 
+// slackOAuthPolicy is the page's Content-Security-Policy: its one inline
+// style, by hash, and no script at all.
+//
+// Every value on this page comes from the query string, and the page shares an
+// origin with the dashboard, whose operator token is in localStorage. The
+// template's escaping is the first defence; this is the one that holds if the
+// escaping is ever wrong.
+var slackOAuthPolicy = pagepolicy.MustForTemplate(slackOAuthPage, slackOAuthView{})
+
 type slackOAuthView struct{ Heading, Error, Code, Handle string }
 
 // slackOAuthLanding serves GET /webhooks/slack-oauth.
@@ -101,6 +112,7 @@ func slackOAuthLanding(w http.ResponseWriter, r *http.Request) {
 			"flow", map[bool]string{true: "cli", false: "manual"}[view.Handle != ""])
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	pagepolicy.Set(w.Header(), slackOAuthPolicy)
 	w.WriteHeader(status)
 	// Rendered straight to the response: the template is parsed at
 	// startup, so the only way this errors is a broken connection, and

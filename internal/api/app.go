@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -287,7 +288,12 @@ func New(opts Options) *App {
 	// reads included — the list of which credentials a company has NOT
 	// configured is worth as much to an attacker as the ones it has.
 	opts.Setup.Routes(mux)
-	a.handler = a.guard.Middleware(mux)
+	// The security headers go on OUTSIDE the guard, so a refusal carries
+	// them as well as an answer, and before routing, so the responses no
+	// handler writes deliberately (the mux's own 404 and 405, the redirect
+	// from `/`, which has an HTML body) are covered without each needing to
+	// remember. A handler serving a page replaces the policy with its own.
+	a.handler = pagepolicy.Apply(a.guard.Middleware(mux))
 	return a
 }
 

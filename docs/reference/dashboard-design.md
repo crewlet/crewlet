@@ -860,3 +860,14 @@ rendered idle from the first phase to the last.
     the caption-sized register that keeps the accent.
 15. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.
+16. **Everything the page runs or loads is its own bundle.** The engine serves
+    the shell under a Content-Security-Policy that allows scripts, styles,
+    fonts, images and connections from this origin only (images also as
+    `data:`), and no inline script or `<style>` block
+    ([API endpoints](api-endpoints.md#security-headers-on-every-response)).
+    A `style` prop is fine, because React applies it through the CSSOM; a
+    `style` attribute in markup set as a string, an injected `<style>`, an
+    `eval`, or a font, image or request from another host is refused by the
+    browser with nothing on screen but a console violation. A form may post
+    to this origin or to an `https:` host, which is what the GitHub App
+    manifest flow needs.
