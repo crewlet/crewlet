@@ -14,7 +14,7 @@ import { createRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Canvas, useCanvasOverlay, type CanvasHandle } from "./Canvas.tsx";
-import { ZOOM_STEP, fit, type Rect, type View } from "./viewport.ts";
+import { VIEW_CHANGE_EVENT, ZOOM_STEP, fit, type Rect, type View } from "./viewport.ts";
 
 type Callback = (entries: { contentRect: { width: number; height: number } }[]) => void;
 
@@ -314,6 +314,45 @@ test("a data push while a requested move eases does not cut the easing short", (
   // The same bounds as a new object: what every push of a live chart sends.
   rerender(<Harness content={{ ...SMALL }} handle={handle} />);
   expect(canvas.getAttribute("data-animate")).toBe("true");
+});
+
+test("an easing ends with its transition, and a clamp after it moves at once", () => {
+  const { container, handle, rerender } = mount();
+  const canvas = container.querySelector(".canvas")!;
+  const overlay = container.querySelector(".canvas-overlay")!;
+  const told = vi.fn();
+  overlay.addEventListener(VIEW_CHANGE_EVENT, told);
+
+  act(() => handle.current!.zoomBy(ZOOM_STEP * ZOOM_STEP));
+  expect(canvas.getAttribute("data-animate")).toBe("true");
+  told.mockClear();
+
+  // A transition inside a card is not the world's.
+  const inner = document.createElement("span");
+  world(container).appendChild(inner);
+  fireEvent.transitionEnd(inner);
+  expect(canvas.getAttribute("data-animate")).toBe("true");
+
+  fireEvent.transitionEnd(world(container));
+  expect(canvas.getAttribute("data-animate")).toBe("false");
+  // The overlay hears where the content came to rest.
+  expect(told).toHaveBeenCalledTimes(1);
+
+  // Content that moved out from under the view is clamped back into reach,
+  // and that move nobody asked for does not ease.
+  const before = viewOf(container);
+  rerender(<Harness content={{ x: 2000, y: 2000, width: 10, height: 10 }} handle={handle} />);
+  expect(viewOf(container)).not.toEqual(before);
+  expect(canvas.getAttribute("data-animate")).toBe("false");
+});
+
+test("a request that moves nothing starts no easing", () => {
+  const { container, handle } = mount();
+  const canvas = container.querySelector(".canvas")!;
+  // Already fitted on mount: fitting again moves nothing, and an easing
+  // switched on with no transition to end it would ease the next clamp.
+  act(() => handle.current!.fit());
+  expect(canvas.getAttribute("data-animate")).toBe("false");
 });
 
 test("items inside reach an overlay layer that the zoom does not transform", () => {

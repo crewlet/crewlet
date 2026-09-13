@@ -41,7 +41,10 @@
  *   that first fit.
  * - MOTION ONLY ON REQUEST. A fit, a zoom button or a reveal eases; a drag, a
  *   pinch, a wheel and a relayout anchor never do, and under reduced motion
- *   nothing does.
+ *   nothing does. An easing lasts as long as its transition: a clamp that
+ *   arrives while one runs (a data push) rides along with it, and one that
+ *   arrives after it has settled moves at once, as any move nobody asked for
+ *   must. A request that moves nothing starts no easing.
  *
  * Pointer capture is used where the browser has it and the drag is tracked on
  * the window either way, so a drag that leaves the viewport keeps panning.
@@ -62,6 +65,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
+  type TransitionEvent as ReactTransitionEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -183,11 +187,13 @@ export function Canvas({
   const apply = useCallback((next: View, eased?: boolean) => {
     const bounds = contentNow.current;
     const clamped = bounds ? clampPan(next, bounds, sizeNow.current) : next;
-    if (eased !== undefined) setAnimate(eased);
     const was = viewNow.current;
     // Unchanged is not a change: a resize or a data push that leaves the view
-    // where it was must not tell the overlay that anything moved.
+    // where it was must not tell the overlay that anything moved, and a
+    // request that moves nothing must neither start an easing (no transition
+    // would ever end it) nor cut short one already running.
     if (clamped.x === was.x && clamped.y === was.y && clamped.k === was.k) return;
+    if (eased !== undefined) setAnimate(eased);
     viewNow.current = clamped;
     setView(clamped);
   }, []);
@@ -226,6 +232,16 @@ export function Canvas({
     layer?.dispatchEvent(new CustomEvent(VIEW_CHANGE_EVENT, { detail: view }));
     notify.current?.(view);
   }, [view, layer]);
+
+  // AN EASING ENDS WITH ITS TRANSITION. Only the world's own transform counts,
+  // not a transition inside a card that bubbled up. The overlay is told once
+  // more, because a popup placed from an item's rectangle while the world was
+  // easing measured the item where the move began, not where it came to rest.
+  const settled = (e: ReactTransitionEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return;
+    setAnimate(false);
+    layer?.dispatchEvent(new CustomEvent(VIEW_CHANGE_EVENT, { detail: viewNow.current }));
+  };
 
   useImperativeHandle(
     ref,
@@ -468,6 +484,7 @@ export function Canvas({
         <div
           className="canvas-world"
           style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
+          onTransitionEnd={settled}
         >
           <OverlayContext.Provider value={layer}>{children}</OverlayContext.Provider>
         </div>
