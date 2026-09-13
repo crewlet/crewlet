@@ -199,6 +199,144 @@ func TestInheritedLeadAutoManagesTheChildUnit(t *testing.T) {
 	}
 }
 
+// managementCycle returns the name of a seat that manages itself through a
+// chain of reports, or "" when the chart is acyclic. Every manages edge
+// counts, not only the primary one [Organization.Manager] reports, because a
+// cycle anywhere is a loop an escalation or a roster walk can enter.
+func managementCycle(o *Organization) string {
+	for start := range o.AllRoles() {
+		seen := map[string]struct{}{}
+		frontier := slices.Clone(start.Manages)
+		for len(frontier) > 0 {
+			name := frontier[0]
+			frontier = frontier[1:]
+			if name == start.Name {
+				return start.Name
+			}
+			if _, done := seen[name]; done {
+				continue
+			}
+			seen[name] = struct{}{}
+			if r := o.Role(name); r != nil {
+				frontier = append(frontier, r.Manages...)
+			}
+		}
+	}
+	return ""
+}
+
+// TestAUnitReferenceShieldsTheMembersItReaches is the shield probe: a direct
+// member that manages its own unit BY NAME has claimed those members as
+// surely as one that lists them. Auto-management used to read the entry as
+// written, see no member names in it, and hand the inherited lead every
+// member as well, so each developer had two managers and the primary one
+// (the first seat in walk order) was the VP rather than the tech lead the
+// chart named.
+func TestAUnitReferenceShieldsTheMembersItReaches(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "VP Eng", Roles: []*Role{{Name: "VP Eng"}},
+			Children: []*Unit{{Name: "Backend", Roles: []*Role{
+				{Name: "Tech Lead", Manages: []string{"Backend"}},
+				{Name: "Dev A"},
+				{Name: "Dev B"},
+			}}},
+		}},
+	})
+	if got, want := sortedManages(t, o, "VP Eng"), []string{"Tech Lead"}; !slices.Equal(got, want) {
+		t.Errorf("VP Eng manages %v, want %v: the unit reference shields its members", got, want)
+	}
+	if got, want := sortedManages(t, o, "Tech Lead"), []string{"Dev A", "Dev B"}; !slices.Equal(got, want) {
+		t.Errorf("Tech Lead manages %v, want %v", got, want)
+	}
+	for _, dev := range []string{"Dev A", "Dev B"} {
+		if m := o.Manager(o.Role(dev)); m == nil || m.Name != "Tech Lead" {
+			t.Errorf("Manager(%s) = %v, want Tech Lead", dev, m)
+		}
+	}
+}
+
+// A name that is both a seat and a unit is the SEAT in the shield exactly as
+// it is in the expansion, because the shield is only honest while it reads
+// manages the way the expansion will leave it.
+func TestTheShieldReadsASeatNameAsTheSeat(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name:  "T",
+		Roles: []*Role{{Name: "Backend", Goal: "Cross-cutting backend advisor"}},
+		Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			{Name: "Lead"},
+			{Name: "Mentor", Manages: []string{"Backend"}},
+			{Name: "Dev A"},
+		}}},
+	})
+	if got, want := sortedManages(t, o, "Mentor"), []string{"Backend"}; !slices.Equal(got, want) {
+		t.Errorf("Mentor manages %v, want %v (the seat, not the unit)", got, want)
+	}
+	if got, want := sortedManages(t, o, "Lead"), []string{"Dev A", "Mentor"}; !slices.Equal(got, want) {
+		t.Errorf("Lead manages %v, want %v: nothing in the unit is shielded", got, want)
+	}
+}
+
+// TestAMemberManagingItsOwnUnitIsNeverClaimedByItsLead is the cycle probe.
+// The member's unit reference reaches the lead, so the member manages the
+// lead; claiming the member back is the two-seat cycle the member-manages-
+// lead guard exists to prevent, and the guard missed it because it looked
+// for the lead's name among the entries as written.
+func TestAMemberManagingItsOwnUnitIsNeverClaimedByItsLead(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{Name: "Backend", Lead: "Backend Lead", Roles: []*Role{
+			{Name: "Backend Lead"},
+			{Name: "Engineering Manager", Manages: []string{"Backend"}},
+			{Name: "Dev A"},
+		}}},
+	})
+	if seat := managementCycle(o); seat != "" {
+		t.Fatalf("seat %q manages itself through its reports: Backend Lead manages %v, Engineering Manager manages %v",
+			seat, o.Role("Backend Lead").Manages, o.Role("Engineering Manager").Manages)
+	}
+	if got := sortedManages(t, o, "Backend Lead"); len(got) != 0 {
+		t.Errorf("Backend Lead manages %v, want nobody: every member is already managed", got)
+	}
+	if got, want := sortedManages(t, o, "Engineering Manager"), []string{"Backend Lead", "Dev A"}; !slices.Equal(got, want) {
+		t.Errorf("Engineering Manager manages %v, want %v", got, want)
+	}
+}
+
+// TestARootSeatManagingAUnitGivesItsMembersASecondManager pins a DELIBERATE
+// consequence of the shield's scope. The shield is the unit's own direct
+// members' manages, never the company's: management is stored on the
+// manager, so a CEO managing a division by name lists every seat in it, and
+// an org-wide shield would strip every lead beneath it of their roster. The
+// cost is visible and documented instead: the member has two managers, and
+// [Organization.Manager] names the root seat because root seats walk first.
+func TestARootSeatManagingAUnitGivesItsMembersASecondManager(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name:  "T",
+		Roles: []*Role{{Name: "CEO", Manages: []string{"Backend"}}},
+		Units: []*Unit{{Name: "Backend", Lead: "Lead", Roles: []*Role{
+			{Name: "Lead"}, {Name: "Dev A"},
+		}}},
+	})
+	if got, want := sortedManages(t, o, "CEO"), []string{"Dev A", "Lead"}; !slices.Equal(got, want) {
+		t.Errorf("CEO manages %v, want %v", got, want)
+	}
+	if got, want := sortedManages(t, o, "Lead"), []string{"Dev A"}; !slices.Equal(got, want) {
+		t.Errorf("Lead manages %v, want %v: an outside manager does not shield a unit's members", got, want)
+	}
+	if m := o.Manager(o.Role("Dev A")); m == nil || m.Name != "CEO" {
+		t.Errorf("Manager(Dev A) = %v, want CEO (root seats walk first)", m)
+	}
+	if seat := managementCycle(o); seat != "" {
+		t.Errorf("seat %q manages itself", seat)
+	}
+}
+
 func TestHumanLeadAutoManagesAgentMembers(t *testing.T) {
 	t.Parallel()
 	// A human manager running an AI team is a first-class shape: the seat
@@ -300,6 +438,34 @@ func TestManagesExpansion(t *testing.T) {
 			},
 			seat: "CEO", want: []string{"Dev", "Junior"},
 		},
+		{
+			// The same pair in the other order. The expansion used to
+			// deduplicate only the names a unit expanded to, so a seat
+			// entry AFTER a unit reaching it was listed twice.
+			name: "a seat listed after a unit that reaches it is not duplicated",
+			org: &Organization{
+				Name:  "T",
+				Roles: []*Role{{Name: "CEO", Manages: []string{"Backend", "Dev"}}},
+				Units: []*Unit{{Name: "Backend", Lead: "Dev", Roles: []*Role{
+					{Name: "Dev", Manages: []string{"Junior"}}, {Name: "Junior"},
+				}}},
+			},
+			seat: "CEO", want: []string{"Dev", "Junior"},
+		},
+		{
+			// Organization.Unit answers with the first unit of a name, and
+			// so must the expansion: a stored revision can still hold two.
+			name: "a duplicated unit name expands to the first unit",
+			org: &Organization{
+				Name:  "T",
+				Roles: []*Role{{Name: "CEO", Manages: []string{"Core"}}},
+				Units: []*Unit{
+					{Name: "Core", Roles: []*Role{{Name: "First"}}},
+					{Name: "Core", Roles: []*Role{{Name: "Second"}}},
+				},
+			},
+			seat: "CEO", want: []string{"First"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -363,6 +529,44 @@ func TestMCPEnvInheritanceAndOverride(t *testing.T) {
 	}
 	if got := o.Role("Dev").MCPEnv; len(got) != 0 {
 		t.Errorf("a child unit's seat inherited %v from the parent unit", got)
+	}
+}
+
+// TestHumanMembersInheritNoToolCredentials: a human seat runs no tools and is
+// refused an mcp_env of its own. Layering the unit's block under a human
+// member put that forbidden field on a seat whose author never wrote it, so a
+// human lead of a team sharing a tracker token failed validation with an
+// error about a field nobody could remove.
+func TestHumanMembersInheritNoToolCredentials(t *testing.T) {
+	t.Parallel()
+	o := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{
+			Name: "Engineering", Lead: "Sarah Chen",
+			MCPEnv: MCPEnv{"tracker": {"TOKEN": "${TRACKER_TOKEN}"}},
+			Roles:  []*Role{human(), {Name: "Dev"}},
+		}},
+	})
+	if err := o.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want nil: the human seat authored no mcp_env", err)
+	}
+	if got := o.Role("Sarah Chen").MCPEnv; len(got) != 0 {
+		t.Errorf("the human seat inherited %v", got)
+	}
+	if got := o.Role("Dev").MCPEnv["tracker"]["TOKEN"]; got != "${TRACKER_TOKEN}" {
+		t.Errorf("the agent member inherited %q, want the unit credential", got)
+	}
+
+	// What a human seat WRITES is still refused: the fix is to stop
+	// inventing the field, not to stop checking it.
+	authored := normalized(&Organization{
+		Name: "T",
+		Units: []*Unit{{Name: "Engineering", Roles: []*Role{
+			human(func(r *Role) { r.MCPEnv = MCPEnv{"tracker": {"TOKEN": "${MINE}"}} }),
+		}}},
+	})
+	if err := authored.Validate(); !errors.Is(err, ErrHumanSeatField) {
+		t.Errorf("Validate() = %v, want ErrHumanSeatField for an authored mcp_env", err)
 	}
 }
 
@@ -432,10 +636,23 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 				Name: "Engineering", Lead: "VP Eng", Channel: "C_ENG",
 				MCPEnv: MCPEnv{"atlassian": {"JIRA_API_TOKEN": "${TEAM}"}},
 				Roles:  []*Role{{Name: "VP Eng"}, {Name: "Analyst"}},
-				Children: []*Unit{{
-					Name:  "Backend",
-					Roles: []*Role{{Name: "Tech Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}},
-				}},
+				Children: []*Unit{
+					{
+						Name:  "Backend",
+						Roles: []*Role{{Name: "Tech Lead", Manages: []string{"Dev A"}}, {Name: "Dev A"}},
+					},
+					{
+						// A unit reference that shields its members: a
+						// second pass reads the expanded names and must
+						// reach the same roster.
+						Name: "Frontend", Lead: "Frontend Lead",
+						Roles: []*Role{
+							{Name: "Frontend Lead"},
+							{Name: "Frontend Manager", Manages: []string{"Frontend"}},
+							{Name: "Dev F"},
+						},
+					},
+				},
 			}},
 		}
 	}

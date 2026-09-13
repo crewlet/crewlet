@@ -639,10 +639,10 @@ type Unit struct {
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty" desc:"What this unit is for."`
 
-	// Lead names the seat that leads this unit — routing work within it,
+	// Lead names the seat that leads this unit: routing work within it,
 	// acting as its point of contact, and auto-managing any direct member
-	// nobody else manages. A unit with no lead of its own inherits its
-	// parent's, cascading to any depth.
+	// that no direct member of this unit already manages. A unit with no
+	// lead of its own inherits its parent's, cascading to any depth.
 	Lead string `yaml:"lead,omitempty" json:"lead,omitempty" desc:"Seat leading this unit; inherited from the parent when empty."`
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty" desc:"What this unit is working toward."`
@@ -661,10 +661,12 @@ type Unit struct {
 	// read scope — org-wide read scope is the knowledge block.
 	Knowledge []string `yaml:"knowledge,omitempty" json:"knowledge,omitempty" desc:"Free-text knowledge references. Not a read scope."`
 
-	// MCPEnv is the tool credentials this unit's DIRECT members share,
-	// with each member's own values winning per VARIABLE — a seat that
-	// overrides one header must not silently drop the token beside it.
-	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct members."`
+	// MCPEnv is the tool credentials this unit's DIRECT AGENT members share,
+	// with each member's own values winning per VARIABLE, because a seat
+	// that overrides one header must not silently drop the token beside it.
+	// Human members inherit none: they run no tools and may not carry an
+	// mcp_env at all.
+	MCPEnv org.MCPEnv `secret:"true" yaml:"mcp_env,omitempty" json:"mcp_env,omitempty" desc:"Credentials inherited by this unit's direct agent members."`
 
 	Integrations UnitIntegrations `yaml:"integrations,omitempty" json:"integrations,omitzero"`
 

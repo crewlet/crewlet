@@ -2084,7 +2084,7 @@
             },
             "type": "object"
           },
-          "description": "Credentials inherited by this unit's direct members.",
+          "description": "Credentials inherited by this unit's direct agent members.",
           "type": "object"
         },
         "name": {

@@ -87,6 +87,11 @@ validation time**: `llm*`, `token_budget`, `learning_enabled`,
 `schedules`, `slack` (bot credentials), `github` (token), `mcp_env`,
 `behavioral_guidelines`.
 
+A unit's `mcp_env` is shared with its direct **agent** members only. A
+human member inherits none of it, so a human seat can sit in, and lead, a
+unit whose agents share tool credentials; only an `mcp_env` written on the
+human seat itself is refused.
+
 Handles are validated for format (`[a-z0-9][a-z0-9-]*`) and org-wide
 uniqueness — they are the canonical seat identity, and an agent/human
 collision would silently misattribute the person's activity to the

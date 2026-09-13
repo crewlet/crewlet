@@ -201,13 +201,15 @@ the config — get it right and say which one you mean.
 
 **`mcp_env` is per-agent tool credentials, keyed by MCP server name** —
 env vars for `stdio` servers, HTTP headers for `http` ones. A unit's
-`mcp_env` is inherited by its direct roles, with the role's own value
-winning per key.
+`mcp_env` is inherited by its direct agent roles, with the role's own value
+winning per key. Human seats inherit none and may not declare one.
 
 **`manages` accepts unit names as well as role names.** A unit name
 expands to every role in it and its descendants. If a name matches both,
-the role wins. Unit leads auto-manage otherwise-unmanaged direct
-members, and a child unit with no `lead` inherits its parent's.
+the role wins. A unit lead auto-manages every direct member that no other
+direct member of that unit already manages (a unit name in a member's
+`manages` counts for every seat it reaches), and a child unit with no
+`lead` inherits its parent's.
 
 **Put the founder in the chart.** A human seat at the root, above the
 top agent, so escalation terminates at a person and agents recognise

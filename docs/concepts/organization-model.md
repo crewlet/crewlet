@@ -23,7 +23,9 @@ Organization
     │                                       Confluence space: where its pages live and
     │                                       where page activity routes. Does NOT scope
     │                                       knowledge reads)
-    ├── mcp_env: dict[server → env vars]  (per-agent tool creds, inherited by roles)
+    ├── mcp_env: dict[server → env vars]  (per-agent tool creds, inherited by the
+    │                                       unit's direct agent roles; human seats
+    │                                       inherit none)
     ├── roles: Role[]                      (agents directly in this unit)
     ├── children: OrgUnit[]                (nested sub-units, recursive)
     └── schedules: Schedule[]              (unit recurring work, NOT inherited;
@@ -125,9 +127,9 @@ Root-level roles differ from unit roles in a few ways:
 | Aspect | Root-level role | Unit role |
 |--------|----------------|-----------|
 | Knowledge scope | Org-wide (reads are role-independent — see [Knowledge System](knowledge-system.md)) | Org-wide (same) |
-| MCP env inheritance | No parent unit to inherit from | Inherits unit's `mcp_env` |
-| Lead auto-management | N/A (no unit lead concept) | Auto-managed by unit lead if unmanaged |
-| `org.Organization.UnitFor` | Returns `None` | Returns the containing unit |
+| MCP env inheritance | No parent unit to inherit from | An agent seat inherits its unit's `mcp_env`; a human seat inherits nothing |
+| Lead auto-management | N/A (no unit lead concept) | Auto-managed by the unit lead unless another direct member of the unit already manages it |
+| `org.Organization.UnitFor` | Returns `nil` | Returns the containing unit |
 
 ### Flat Startup (no departments)
 
@@ -340,7 +342,7 @@ You can mix role names and unit names freely:
 manages: ["CTO", "Backend"]   # CTO is a role, Backend is a unit
 ```
 
-If a name matches both a role and a unit, the **role takes priority** (no expansion happens for that entry).
+If a name matches both a role and a unit, the **role takes priority** (no expansion happens for that entry). A unit name expands to every seat in that unit's subtree **except the seat that lists it**: a lead that manages its own team by name does not manage itself. A name matching neither a role nor a unit is kept as written, so a seat that has not been added yet can already be named.
 
 ### Unit Lead
 
@@ -350,7 +352,30 @@ An OrgUnit may designate a lead via the `lead` field. The lead is responsible fo
 - Acting as the single point of contact for the unit
 - Reasoning about members' properties (backstory, skills, knowledge) to assign tasks to the right individual
 
-When a unit has direct roles and a lead is set, the lead auto-manages any role not already managed by another role in the unit.
+When a unit has direct roles and a lead is set, the lead **auto-manages** every direct member that no direct member of the same unit already manages. Three rules decide what counts as already managed, and all three read each `manages` entry the way [unit-name expansion](#managing-by-unit-name) resolves it, so a unit name counts for every seat it reaches:
+
+- **A member another direct member manages keeps that manager.** A tech lead who lists `Dev A`, or who lists the unit `Backend` that `Dev A` sits in, shields `Dev A` from the unit lead.
+- **A member the lead already manages is not listed twice.**
+- **A member that manages the lead is never claimed.** An engineering manager who manages their own unit by name reaches the unit lead too, and claiming them back would make a two-seat management cycle.
+
+```yaml
+units:
+  - name: "Engineering"
+    lead: "VP Engineering"
+    roles:
+      - name: "VP Engineering"
+    children:
+      - name: "Backend"              # inherits VP Engineering as lead
+        roles:
+          - name: "Tech Lead"
+            manages: ["Backend"]     # Dev A and Dev B, by unit name
+          - name: "Dev A"
+          - name: "Dev B"
+```
+
+Here VP Engineering auto-manages only `Tech Lead`. `Dev A` and `Dev B` report to Tech Lead alone.
+
+**Only the unit's own direct members shield.** A seat outside the unit that manages it, such as a root-level CEO with `manages: ["Backend"]`, lists every seat in `Backend` but does not stop `Backend`'s lead from auto-managing those seats as well. That scope is deliberate: management is stored on the manager, so a CEO managing a whole division by name would otherwise leave every lead inside it with an empty roster. The consequence is that such a member has **two managers**. `org.Organization.Manager` reports the first seat in walk order that lists it, and root-level seats are walked first, so the CEO is the one an identity prompt names. To keep the unit lead as the primary manager, have the outside seat manage the lead (`manages: ["Backend Lead"]`) rather than the unit.
 
 The lead can be a **human seat** — a human manager running an AI team is a first-class pattern: agents escalate to the human with their own Slack/Jira tools (an @-mention), and the human assigns work in the PM tool. See [Humans in the Org Chart](humans-in-the-org.md).
 
@@ -386,7 +411,7 @@ In this example:
 - **Backend** has no lead, so it inherits `VP Engineering`. VP Engineering auto-manages `Dev A` and `Dev B`.
 - **Frontend** has an explicit lead (`Frontend Lead`), so the parent's lead is ignored.
 
-Inherited leads work the same as explicit leads for auto-management, task routing, `org.Organization.IsUnitLead`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one — use `get_effective_lead(unit, org)` from `internal/org` to resolve the lead `Role` object in code.
+Inherited leads work the same as explicit leads for auto-management, task routing, `org.Organization.IsUnitLead`, and the Jira project-key mapping. The only difference is that the lead role lives in an ancestor unit rather than the current one. Use `org.Organization.EffectiveLead` to resolve the lead seat in code.
 
 ### Roles at Any Level
 

@@ -37,9 +37,10 @@ type Unit struct {
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 
-	// Lead names the seat that leads this unit — routing work within it,
+	// Lead names the seat that leads this unit: routing work within it,
 	// acting as its single point of contact, and auto-managing any direct
-	// member nobody else manages.
+	// member that no direct member of this unit already manages (see
+	// [Organization.Normalize] for how a unit reference counts).
 	//
 	// The name may resolve to a seat in this unit, in a descendant, or —
 	// after inheritance — in an ancestor. A unit with no lead of its own
@@ -64,9 +65,10 @@ type Unit struct {
 
 	KnowledgeRefs []string `yaml:"knowledge_refs,omitempty" json:"knowledge_refs,omitempty"`
 
-	// MCPEnv is the tool credentials this unit's DIRECT members share.
+	// MCPEnv is the tool credentials this unit's DIRECT AGENT members share.
 	// Inherited by those members with their own values winning; see
-	// [Organization.Normalize] for why it stops at one level.
+	// [Organization.Normalize] for why it stops at one level and skips
+	// human seats.
 	MCPEnv MCPEnv `yaml:"mcp_env,omitempty" json:"mcp_env,omitempty"`
 
 	Roles    []*Role `yaml:"roles,omitempty" json:"roles,omitempty"`

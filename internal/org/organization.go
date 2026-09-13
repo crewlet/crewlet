@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -179,16 +178,23 @@ func (o *Organization) AgentSeatByID(id uuid.UUID) *Role {
 //     invisible to the unit lead, so the move has to precede both.
 //  2. Lead and Slack channel CASCADE from a unit to any child that sets
 //     none, to any depth.
-//  3. A unit's MCP credentials are inherited by its DIRECT members, whose
-//     own values win per variable.
-//  4. A unit lead AUTO-MANAGES any direct member nobody else manages.
+//  3. A unit's MCP credentials are inherited by its DIRECT AGENT members,
+//     whose own values win per variable. Human seats inherit none.
+//  4. A unit lead AUTO-MANAGES any direct member that no direct member of
+//     the same unit already manages.
 //  5. A manages entry naming a UNIT expands to the seats in it.
 //
-// Steps 4 and 5 are in that order for a reason: auto-management reads
-// manages as written, so a unit reference there still shields its members
-// from being claimed by the lead as well.
+// Steps 4 and 5 both read manages through ONE resolver ([managesIndex]),
+// built once after step 1 has settled who sits where. Auto-management runs
+// before the expansion rewrites the lists, so it has to see each entry the
+// way the expansion will leave it: a direct member that manages its own unit
+// (or an ancestor) by name shields the members that reference reaches,
+// exactly as if it had listed them one by one. Reading the entry as written instead let the lead
+// claim those members too, giving each a second manager, and claim the
+// member itself when the reference reached the lead, which is a two-seat
+// management cycle.
 //
-// It is idempotent — running it twice changes nothing — because live config
+// It is idempotent (running it twice changes nothing) because live config
 // management re-applies whole revisions and a second pass must not compound
 // what the first derived.
 func (o *Organization) Normalize() {
@@ -197,8 +203,9 @@ func (o *Organization) Normalize() {
 		propagateDownward(u, "", "")
 	}
 	o.inheritMCPEnv()
-	o.autoManageByLead()
-	o.expandManages()
+	index := o.managesIndex()
+	o.autoManageByLead(index)
+	o.expandManages(index)
 	for r := range o.AllRoles() {
 		r.Contact.Normalize()
 	}
@@ -244,35 +251,140 @@ func propagateDownward(u *Unit, parentLead, parentChannel string) {
 	}
 }
 
-// inheritMCPEnv layers each unit's tool credentials under its DIRECT
+// inheritMCPEnv layers each unit's tool credentials under its DIRECT AGENT
 // members' own.
 //
 // One level, deliberately: a unit declares what its own team shares, and a
 // child unit that needs the same credentials declares them too. Cascading
 // them would hand a division's credentials to every seat beneath it, which
 // is the opposite of the per-seat identity these exist to give.
+//
+// Agents only, because a human seat runs no tools and is REFUSED an mcp_env
+// of its own. Layering the unit's block under a human member put a field on
+// that seat its author never wrote, and validation then rejected the whole
+// company with an error pointing at it: a human lead in a unit that shares a
+// tracker token could not be declared at all.
 func (o *Organization) inheritMCPEnv() {
 	for u := range o.AllUnits() {
 		if len(u.MCPEnv) == 0 {
 			continue
 		}
 		for _, r := range u.Roles {
+			if !r.IsAgent() {
+				continue
+			}
 			r.MCPEnv = r.MCPEnv.WithDefaults(u.MCPEnv)
 		}
 	}
 }
 
+// managesIndex is how a manages entry resolves to seats: the one reading
+// both [Organization.autoManageByLead] and [Organization.expandManages] use.
+//
+// Built once, after [Organization.attachRootSeats] and before either step,
+// because neither step moves a seat between units, so the membership it
+// captures is the membership both of them see.
+type managesIndex struct {
+	// seats is every seat name in the company.
+	seats map[string]struct{}
+	// unitSeats is each unit's seat names, descendants included, in
+	// [Unit.AllRoles] order. The FIRST unit carrying a name owns it, the
+	// same answer [Organization.Unit] gives: a stored revision can still
+	// hold two units of one name, and an expansion that read the last one
+	// while every lookup read the first would manage one team while
+	// reporting another.
+	unitSeats map[string][]string
+}
+
+func (o *Organization) managesIndex() managesIndex {
+	index := managesIndex{
+		seats:     make(map[string]struct{}),
+		unitSeats: make(map[string][]string),
+	}
+	for r := range o.AllRoles() {
+		index.seats[r.Name] = struct{}{}
+	}
+	for u := range o.AllUnits() {
+		if _, claimed := index.unitSeats[u.Name]; claimed {
+			continue
+		}
+		names := make([]string, 0, len(u.Roles))
+		for r := range u.AllRoles() {
+			names = append(names, r.Name)
+		}
+		index.unitSeats[u.Name] = names
+	}
+	return index
+}
+
+// resolve returns the names one manages entry of manager stands for.
+//
+// A name that is BOTH a seat and a unit stays a seat reference. The seat is
+// the more specific reading, and an operator who named a person means that
+// person; expanding it would silently hand them a whole team.
+//
+// A unit name stands for every seat in that unit's subtree except manager
+// itself: a seat inside the unit it manages does not manage itself.
+//
+// An entry matching neither stands for itself, verbatim. Live config
+// management bootstraps an org in pieces, so a manages entry naming a seat
+// that has not arrived yet is ordinary, and dropping it would quietly
+// rewrite the chart the operator wrote. [Organization.DanglingRefs] is what
+// reports it.
+func (x managesIndex) resolve(manager, entry string) []string {
+	if _, isSeat := x.seats[entry]; isSeat {
+		return []string{entry}
+	}
+	members, isUnit := x.unitSeats[entry]
+	if !isUnit {
+		return []string{entry}
+	}
+	out := make([]string, 0, len(members))
+	for _, name := range members {
+		if name != manager {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// managed is the set of names r's manages entries resolve to.
+func (x managesIndex) managed(r *Role) map[string]struct{} {
+	out := make(map[string]struct{}, len(r.Manages))
+	for _, entry := range r.Manages {
+		for _, name := range x.resolve(r.Name, entry) {
+			out[name] = struct{}{}
+		}
+	}
+	return out
+}
+
 // autoManageByLead gives a unit lead a manages entry for every direct
-// member nobody else in the unit manages.
+// member that no direct member of the same unit already manages.
 //
 // This is what makes a lead's roster complete without an operator listing
 // every report twice. Three guards keep it from claiming what it should
 // not: a member another member already manages keeps that manager, a member
 // the lead already lists is not listed twice, and a member that manages the
-// LEAD is never claimed — that one would build a two-role cycle out of a
-// perfectly reasonable chart, where a tech lead reports to a VP who leads
+// LEAD is never claimed. That last one would build a two-seat cycle out of
+// a perfectly reasonable chart, where a tech lead reports to a VP who leads
 // the unit the tech lead sits in.
-func (o *Organization) autoManageByLead() {
+//
+// Every guard reads manages RESOLVED ([managesIndex.resolve]), so an entry
+// naming a unit counts for each seat it reaches. A member that manages its
+// own unit (or an ancestor) by name shields the members that reference
+// reaches, and is itself never claimed when the reference reaches the lead.
+//
+// THE SHIELD IS THE UNIT'S OWN DIRECT MEMBERS' manages, never the whole
+// company's, and the narrow scope is the point. Management is stored on the
+// manager, so a root CEO managing a division by name lists every seat in
+// it; an org-wide shield would therefore strip every team lead beneath that
+// division of the roster auto-management exists to fill. The consequence is
+// deliberate and visible: a seat reached both by an outside manager's unit
+// reference and by its own lead's auto-management has two managers, and
+// [Organization.Manager] answers with the first in [Organization.AllRoles]
+// order, which puts a root seat first.
+func (o *Organization) autoManageByLead(index managesIndex) {
 	for u := range o.AllUnits() {
 		if u.Lead == "" || len(u.Roles) == 0 {
 			continue
@@ -282,28 +394,27 @@ func (o *Organization) autoManageByLead() {
 			continue
 		}
 
-		managed := make(map[string]struct{})
+		shielded := make(map[string]struct{})
+		managedBy := make(map[*Role]map[string]struct{}, len(u.Roles))
 		for _, r := range u.Roles {
-			for _, name := range r.Manages {
-				managed[name] = struct{}{}
+			managedBy[r] = index.managed(r)
+			for name := range managedBy[r] {
+				shielded[name] = struct{}{}
 			}
 		}
-		byLead := make(map[string]struct{}, len(lead.Manages))
-		for _, name := range lead.Manages {
-			byLead[name] = struct{}{}
-		}
+		byLead := index.managed(lead)
 
 		for _, r := range u.Roles {
 			if r.Name == u.Lead {
 				continue
 			}
-			if _, taken := managed[r.Name]; taken {
+			if _, taken := shielded[r.Name]; taken {
 				continue
 			}
 			if _, already := byLead[r.Name]; already {
 				continue
 			}
-			if slices.Contains(r.Manages, u.Lead) {
+			if _, managesLead := managedBy[r][u.Lead]; managesLead {
 				continue
 			}
 			lead.Manages = append(lead.Manages, r.Name)
@@ -312,32 +423,11 @@ func (o *Organization) autoManageByLead() {
 	}
 }
 
-// expandManages replaces a manages entry naming a UNIT with the seats in
-// that unit, descendants included, so an operator can write one team name
-// instead of five people.
-//
-// A name that is BOTH a seat and a unit stays a seat reference. The seat is
-// the more specific reading, and an operator who named a person means that
-// person; expanding it would silently hand them a whole team.
-//
-// An entry matching neither is kept verbatim. Live config management
-// bootstraps an org in pieces, so a manages entry naming a seat that has
-// not arrived yet is ordinary — dropping it would quietly rewrite the chart
-// the operator wrote.
-func (o *Organization) expandManages() {
-	seats := make(map[string]struct{})
-	for r := range o.AllRoles() {
-		seats[r.Name] = struct{}{}
-	}
-	unitSeats := make(map[string][]string)
-	for u := range o.AllUnits() {
-		names := make([]string, 0, len(u.Roles))
-		for r := range u.AllRoles() {
-			names = append(names, r.Name)
-		}
-		unitSeats[u.Name] = names
-	}
-
+// expandManages replaces each manages entry with the seats it resolves to,
+// so an operator can write one team name instead of five people. See
+// [managesIndex.resolve] for the reading, and [Organization.Normalize] for
+// why auto-management shares it.
+func (o *Organization) expandManages(index managesIndex) {
 	for r := range o.AllRoles() {
 		if len(r.Manages) == 0 {
 			continue
@@ -345,23 +435,7 @@ func (o *Organization) expandManages() {
 		expanded := make([]string, 0, len(r.Manages))
 		seen := make(map[string]struct{}, len(r.Manages))
 		for _, entry := range r.Manages {
-			if _, isSeat := seats[entry]; isSeat {
-				expanded = append(expanded, entry)
-				seen[entry] = struct{}{}
-				continue
-			}
-			members, isUnit := unitSeats[entry]
-			if !isUnit {
-				expanded = append(expanded, entry)
-				seen[entry] = struct{}{}
-				continue
-			}
-			for _, name := range members {
-				// A seat inside the unit it manages does not manage
-				// itself.
-				if name == r.Name {
-					continue
-				}
+			for _, name := range index.resolve(r.Name, entry) {
 				if _, dup := seen[name]; dup {
 					continue
 				}
