@@ -298,6 +298,8 @@ A coding agent's box needs environment wiring beyond the CLI itself: git auth, r
 
 Steps come **entirely from company config** — the engine ships none of its own, git auth included — applied in order: `providers.sandbox.setup` (engine-wide, every sandbox role) then `role.sandbox.setup` (per-role extras). Setup commands execute **with the run env**, so a recipe can read the engine's per-launch identity facts (`$CREWLET_AGENT_HANDLE`, `$CREWLET_AGENT_EMAIL`) and its own configured tokens at provisioning time. A reused box skips re-apply — its provisioning survives with its disk state.
 
+Every step has a `name`, unique within its list: it is what a setup failure points at, and because a step's `env` and `files` are credentials, it is also what a config read masks them under and what [sending the read back restores them by](configuration.md#reads-and-export). A document with two steps of one name in the same list is refused on every write; the same name in `providers.sandbox.setup` and in a seat's own `sandbox.setup` is fine. A config read shows a step's `env` and `files` values only when each is exactly one `${VAR}` reference.
+
 ### The git-auth recipe
 
 Injecting a code-host token is necessary but not sufficient: a headless `git clone https://github.com/...` has no way to *supply* it and dies with `could not read Username`. The recommended wiring is a config recipe — a credential helper plus rewrites, shipped as an ordinary engine-wide step:

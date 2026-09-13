@@ -717,9 +717,10 @@ func TestADuplicatedIdentityIsMatchedToNothing(t *testing.T) {
 
 // AN IDENTIFIED LIST INSIDE A MEMBER NEVER FALLS BACK TO POSITION EITHER.
 //
-// Sandbox setup steps are matched by name within their list, and nothing
-// refuses two steps of one name, so the ambiguity is reachable in a valid
-// document. A reorder must not trade their registry tokens.
+// Sandbox setup steps are matched by name within their list. A submitted
+// document is refused for two steps of one name, but a stored revision from
+// before that rule can still hold them, and it is the prior a write restores
+// from. A reorder must not trade their registry tokens.
 func TestDuplicateStepNamesAreMatchedToNothing(t *testing.T) {
 	t.Parallel()
 	original := credentialCompany(t)

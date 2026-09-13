@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -308,4 +309,65 @@ func reportFirstDifference(t *testing.T, want, got any) {
 		}
 	}
 	walk("", reflect.ValueOf(want), reflect.ValueOf(got))
+}
+
+// DUPLICATE SETUP STEP NAMES ARE AN ADMISSION RULE, PER LIST.
+//
+// A step's env and files are credentials restored by the step's name, so two
+// steps of one name in one list make every write that carries the list fail
+// on a mask nobody edited. A submitted document is refused for it, naming
+// every step; a stored one still runs, since its steps apply as they always
+// did. The same name in two different lists is two identities and is fine.
+func TestDuplicateSetupStepNamesAreAnAdmissionRule(t *testing.T) {
+	t.Parallel()
+	const doc = `
+name: Acme
+providers:
+  llm:
+    zulu: {type: anthropic, model: m, api_keys: ["${K}"]}
+  sandbox:
+    fake: true
+    setup:
+      - {name: registry, env: {TOKEN: "${FIRST}"}}
+      - {name: registry, env: {TOKEN: "${SECOND}"}}
+      - {name: tools, commands: ["true"]}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: zulu
+    sandbox:
+      enabled: true
+      setup:
+        - {name: registry, env: {TOKEN: "${SEAT}"}}
+`
+	if _, err := config.ParseCompany([]byte(doc)); err == nil {
+		t.Fatal("a submitted document with duplicate setup step names was accepted")
+	}
+	cfg, err := config.ParseCompanyDocument([]byte(doc))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	admission := cfg.ValidateAdmission()
+	if admission == nil {
+		t.Fatal("ValidateAdmission() accepted two steps called \"registry\" in one list")
+	}
+	faults := config.Faults(admission)
+	if len(faults) != 1 {
+		t.Fatalf("%d admission faults, want exactly one for the one duplicated name in "+
+			"one list (the seat's own list reuses the name legitimately): %v", len(faults), admission)
+	}
+	for _, want := range []string{
+		"providers.sandbox.setup", `"registry"`, "2 steps",
+		"providers.sandbox.setup[0]", "providers.sandbox.setup[1]",
+	} {
+		if !strings.Contains(admission.Error(), want) {
+			t.Errorf("the refusal does not name %s: %v", want, admission)
+		}
+	}
+	if !errors.Is(cfg.Validate(), config.ErrConflict) {
+		t.Errorf("Validate() = %v, want it to include the duplicate step name", cfg.Validate())
+	}
+	if err := cfg.ValidateRunnable(); err != nil {
+		t.Errorf("ValidateRunnable() = %v, want nil: duplicate step names are an admission rule", err)
+	}
 }

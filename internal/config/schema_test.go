@@ -544,6 +544,7 @@ units:
 		{name: "duplicate handles", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: \"Agent CEO\"}\n  - {name: \"agent ceo\"}\n"},
 		{name: "duplicate seat names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nroles:\n  - {name: Dev, handle: dev-one}\n  - {name: Dev, handle: dev-two}\n"},
 		{name: "duplicate unit names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nunits:\n  - {name: Core, children: [{name: Platform}]}\n  - {name: Edge, children: [{name: Platform}]}\n"},
+		{name: "duplicate setup step names", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nproviders:\n  sandbox:\n    fake: true\n    setup:\n      - {name: registry, commands: [\"true\"]}\n      - {name: registry, commands: [\"true\"]}\n"},
 		{name: "a ceiling below its base", tier: TierCompany, validatorOnly: true, yaml: "name: Acme\nturn_engine: {max_tool_rounds: 20, execute_max_tool_rounds_ceiling: 10}\n"},
 	}
 }

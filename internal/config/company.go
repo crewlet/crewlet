@@ -179,7 +179,7 @@ var skillVariableKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // a config that parses into a company nobody can run has not been validated.
 func (c *Company) Validate() error {
 	o := c.organization()
-	return errors.Join(c.validateRunnable(o), o.ValidateAdmission())
+	return errors.Join(c.validateRunnable(o), c.validateAdmission(o))
 }
 
 // ValidateRunnable reports only the RUNNABLE rules: everything a running
@@ -200,10 +200,80 @@ func (c *Company) ValidateRunnable() error {
 
 // ValidateAdmission reports only the ADMISSION rules: the rules a submitted
 // document is refused for and a stored revision is merely warned about.
-// Today they are the org's duplicate seat names and duplicate unit names; see
-// [org.Organization.ValidateAdmission].
+// Today they are the org's duplicate seat names and duplicate unit names (see
+// [org.Organization.ValidateAdmission]) and duplicate sandbox setup step
+// names within one list.
 func (c *Company) ValidateAdmission() error {
-	return c.organization().ValidateAdmission()
+	return c.validateAdmission(c.organization())
+}
+
+// validateAdmission is [Company.ValidateAdmission] over an organization the
+// caller already built.
+func (c *Company) validateAdmission(o *org.Organization) error {
+	return errors.Join(o.ValidateAdmission(), c.validateSetupStepNames())
+}
+
+// validateSetupStepNames refuses two sandbox setup steps of one name in the
+// same list: `providers.sandbox.setup`, or one seat's `sandbox.setup`.
+//
+// A step's name is its IDENTITY. Its env and files are credentials, and a
+// config read masks them, so sending the read back restores each step's
+// masks from the stored step of the same name. Two steps sharing a name
+// give the restore nothing to tell them apart by, and it refuses to guess:
+// every write carrying that list would then be refused with a standing mask
+// on credentials nobody edited. A name is also what a setup failure and its
+// log line point at, and a duplicate points at two steps.
+//
+// An ADMISSION rule rather than a runnable one, because a stored company can
+// hold duplicate names from before the rule and its steps still apply exactly
+// as they did. Compared as the exact string the restore matches on, and a
+// blank name is skipped: the step's own rule already refuses it.
+func (c *Company) validateSetupStepNames() error {
+	var p problems
+	if c.Providers.Sandbox != nil {
+		p.wrap(uniqueSetupStepNames(at(at("providers", "sandbox"), "setup"), c.Providers.Sandbox.Setup))
+	}
+	for role, path := range c.EachRole() {
+		if role.Sandbox != nil {
+			p.wrap(uniqueSetupStepNames(at(at(path, "sandbox"), "setup"), role.Sandbox.Setup))
+		}
+	}
+	return p.err()
+}
+
+// uniqueSetupStepNames reports each name more than one step in this list
+// carries, once per name, naming every step that carries it.
+func uniqueSetupStepNames(path string, steps []SandboxSetupStep) error {
+	var p problems
+	positions := map[string][]int{}
+	var order []string
+	for i := range steps {
+		name := steps[i].IdentityKey()
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if _, seen := positions[name]; !seen {
+			order = append(order, name)
+		}
+		positions[name] = append(positions[name], i)
+	}
+	for _, name := range order {
+		found := positions[name]
+		if len(found) < 2 {
+			continue
+		}
+		places := make([]string, len(found))
+		for i, position := range found {
+			places[i] = idx(path, position)
+		}
+		p.add(path, ErrConflict,
+			"duplicate setup step name %q: %d steps carry it (%s). A step's "+
+				"credentials are restored by its name when a config read is "+
+				"sent back, and a failure names the step, so give each of "+
+				"these steps its own name",
+			name, len(found), strings.Join(places, "; "))
+	}
+	return p.err()
 }
 
 // validateRunnable is [Company.ValidateRunnable] over an organization the
