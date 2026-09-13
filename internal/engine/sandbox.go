@@ -273,10 +273,12 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		return fmt.Errorf("%w: run %s has no suspended conversation",
 			sandbox.ErrResumeUnavailable, req.Run.TurnID)
 	}
-	// ONE EPOCH for the seat and the organization it belongs to. Read twice,
-	// a reload landing between the reads paired a seat from one revision with
-	// an organization from the next, and every walk that finds a seat by its
-	// identity (its unit, its onboarding chain) found nothing.
+	// ONE EPOCH for the whole resume: the seat checked here, the organization
+	// it belongs to, and the company the resumed turn then runs in (see
+	// [resumeInput.Company]). A second read of the engine's company is a
+	// different epoch once an apply lands in between, and a seat this check
+	// found could be gone from it, which fails the run with "not an agent seat"
+	// instead of routing the completion to a node that has the seat.
 	company := r.engine.Company()
 	seat := company.Org.AgentSeatByHandle(req.Run.AgentHandle)
 	if seat == nil {
@@ -287,8 +289,9 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Run:   req.Run,
-		State: state,
+		Company: company,
+		Run:     req.Run,
+		State:   state,
 		Turn: &turnctx.Turn{
 			ID: req.Run.TurnID, Seat: seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
@@ -303,6 +306,12 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 
 // resumeInput is one re-entry, assembled.
 type resumeInput struct {
+	// Company is the epoch the resume was admitted under: the one whose
+	// organization holds Turn's seat. The resumed turn runs in it rather than
+	// reading the engine's company again, because that read is the NEXT epoch
+	// once an apply lands between the two, and the seat the admission found
+	// may not be in it.
+	Company *Company
 	Run     sandbox.PendingRun
 	State   execstate.State
 	Turn    *turnctx.Turn
@@ -350,7 +359,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.turn_id", in.Run.TurnID))
 	defer span.End()
 
-	company := e.Company()
+	company := in.Company
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
 		in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply))
