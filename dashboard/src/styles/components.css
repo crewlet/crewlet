@@ -544,10 +544,13 @@ a.brand:hover {
     border-color var(--dur-fast) var(--ease),
     background var(--dur-fast) var(--ease);
 }
+/* The multiline field (`Field kind="multiline"`): prose a person writes, such
+   as a goal or a mission, so it wears the page's own face. It was a code face
+   when this rule was written for a raw JSON editor that no longer exists. */
 .textarea {
   height: auto;
   padding: var(--space-2) var(--space-3);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   line-height: var(--lh-normal);
   resize: vertical;
 }

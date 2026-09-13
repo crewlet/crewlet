@@ -341,3 +341,50 @@ test("no list where there is nothing to offer", () => {
   fireEvent.keyUp(live, { key: "Z" });
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+
+/**
+ * A multiline field is prose: a goal, a backstory, a mission.
+ */
+
+// THE SAME FIELD, A DIFFERENT CONTROL. Label, help and error bind exactly as
+// they do for a one-line field, so a refusal beside a goal is announced the
+// same way as a refusal beside a name.
+test("a multiline field is a labelled textarea bound to its help and error", () => {
+  render(
+    <Field
+      label="Goal"
+      kind="multiline"
+      value=""
+      onChange={() => {}}
+      help="What this seat is for."
+      error="roles[0].goal: must not be empty"
+      rows={5}
+    />,
+  );
+  const box = screen.getByLabelText("Goal") as HTMLTextAreaElement;
+  expect(box.tagName).toBe("TEXTAREA");
+  expect(box.rows).toBe(5);
+  expect(box.getAttribute("aria-invalid")).toBe("true");
+  const described = (box.getAttribute("aria-describedby") ?? "").split(" ");
+  expect(described).toHaveLength(2);
+  for (const id of described) expect(document.getElementById(id)).not.toBeNull();
+});
+
+// PROSE KEEPS WHAT IT IS GIVEN. The single-token kinds strip whitespace; a
+// backstory with a paragraph break must not lose it, and nor may its spaces.
+test("a multiline field keeps newlines and spaces, and offers no reference completion", () => {
+  function Prose() {
+    const [value, setValue] = useState("");
+    return (
+      <Field label="Backstory" kind="multiline" value={value} onChange={setValue} secrets={held} />
+    );
+  }
+  render(<Prose />);
+  const box = screen.getByLabelText("Backstory") as HTMLTextAreaElement;
+  const text = "Joined in the first week.\n\n  Owns the  release train.  $";
+  fireEvent.change(box, { target: { value: text } });
+  fireEvent.keyUp(box, { key: "$" });
+  expect(box.value).toBe(text);
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(box.getAttribute("spellcheck")).toBe("true");
+});

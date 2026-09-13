@@ -33,6 +33,15 @@
  * validation, and nothing on screen to say which of the two was wrong. The
  * affix makes the requirement visible and satisfies it. See [schemeOf] for
  * what happens to a value that brings its own.
+ *
+ * A MULTILINE FIELD IS PROSE. A goal, a backstory or a mission is several
+ * sentences a person writes and rereads, so `kind="multiline"` is a textarea
+ * that keeps every space and newline it is given, grows by rows rather than
+ * scrolling a single line sideways, and leaves the browser's spell check on:
+ * the one field kind where a misspelling is a defect in what ships to a
+ * model's prompt rather than an identifier the check would only mark wrong.
+ * It offers no `${NAME}` completion, because a reference is a whole value and
+ * prose is never one.
  */
 
 import { useId, useRef, useState, type ReactNode } from "react";
@@ -41,7 +50,8 @@ import { Problems } from "./Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "./secretref.ts";
 import { useListbox } from "./useListbox.ts";
 
-export type FieldKind = "text" | "secret" | "url" | "id" | "choice" | "handle" | "email";
+export type FieldKind =
+  "text" | "multiline" | "secret" | "url" | "id" | "choice" | "handle" | "email";
 
 /** One option of a choice field. */
 export interface FieldChoice {
@@ -65,6 +75,7 @@ export function Field({
   autoFocus,
   secrets,
   onSecretsNeeded,
+  rows = 3,
 }: {
   label: string;
   kind?: FieldKind;
@@ -106,6 +117,8 @@ export function Field({
    * that is worth spending.
    */
   onSecretsNeeded?: () => void;
+  /** How many lines a `multiline` field shows before it scrolls; ignored otherwise. */
+  rows?: number;
 }) {
   const id = useId();
   const helpID = `${id}-help`;
@@ -288,6 +301,22 @@ export function Field({
             </option>
           ))}
         </select>
+      ) : kind === "multiline" ? (
+        <textarea
+          id={id}
+          className="textarea"
+          rows={rows}
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          autoComplete="off"
+          // ON, unlike every other kind: see the module doc.
+          spellCheck
+          autoFocus={autoFocus}
+          aria-describedby={describedBy || undefined}
+          aria-invalid={error ? true : undefined}
+          onChange={(e) => onChange(e.target.value)}
+        />
       ) : affix ? (
         <div className="input-affixed">
           <span className="input-affix" id={affixID} aria-hidden="true">
