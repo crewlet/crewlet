@@ -142,6 +142,14 @@
      screen (1280px, less the rail) most of the thing being edited stays in
      view beside it. Below the shell's breakpoint the sheet is full width. */
   --drawer-w: 560px;
+  /* An organization chart card's width, and the one size its layout does not
+     measure (heights are measured: see ui/useMeasuredSizes.ts). Room for a
+     seat name of about twenty-four characters at body size beside its kind
+     badge; any wider and a chart, whose width grows with its number of leaf
+     units, gets wider by that much per leaf. In rem, so a reader who enlarges
+     the browser's font widens the card with its text instead of cutting the
+     name shorter. */
+  --org-card-w: 15rem;
 
   /* ---- Motion -----------------------------------------------------------
      Short, and only ever on entrance or on a control's own state. Nothing in
