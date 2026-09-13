@@ -226,11 +226,14 @@ The steps below are the same thing done by hand.
 For each agent that will use Slack, create a dedicated Slack app:
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) and click **Create New App**
-2. Choose **From an app manifest**, and paste that agent's manifest from the Integrations screen. Steps 2 and 3 are then already done, and you can skip to installing it. Choosing **From scratch** instead leaves the scopes, the events and the request URL for you to set by hand, which is the rest of this section.
-3. Name it after the agent (e.g., "Crewlet Engineer", "Crewlet Designer")
-4. Select your workspace and click **Create App**
+2. Choose **From an app manifest**, and paste that agent's manifest from the Integrations screen. Steps 2 and 3 below are then already done. The wizard installs it for you: select your Slack workspace > **Next** > **Create and Install** > **Allow**, and it finishes on the page holding the app's credentials — copy the **Bot token** value from **Your app credentials** there, and the **Signing Secret** from **Basic Information** > **App Credentials**. That is the whole of Step 2 for a manifest app.
+3. Choosing **From scratch** instead leaves the scopes, the events and the request URL for you to set by hand, which is the rest of this section. Name it after the agent (e.g., "Crewlet Engineer", "Crewlet Designer"), select your workspace and click **Create App**.
 
 ### Step 2: Configure Each App's Tokens
+
+**Only for an app built from scratch.** A manifest app already carries its
+scopes, and Step 1 says where its tokens are — following the walk below
+would send you to a page that is not where the wizard left you.
 
 For each app:
 

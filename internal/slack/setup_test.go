@@ -81,13 +81,28 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 	if !strings.Contains(bot, "`Create New App > From an app manifest`") {
 		t.Errorf("the bot token does not say to create the app from its manifest: %q", bot)
 	}
-	// AND THE PAGE IT IS DISPLAYED ON. Install to Workspace lives there
-	// too, but the value is what the operator came for: creating the app
-	// from a manifest leaves them on Basic Information, and installing it
-	// redirects the browser away from Slack entirely, so a line that names
-	// no page leaves them hunting through four of them.
-	if !strings.Contains(bot, "`OAuth & Permissions > Install to Workspace`") {
-		t.Errorf("the bot token does not name the page it is displayed on: %q", bot)
+	// AND IT WALKS THE WIZARD THIS FORM'S OWN MANIFEST OPENS.
+	//
+	// It named `OAuth & Permissions > Install to Workspace`, which is where
+	// an app built FROM SCRATCH adds its scopes and installs. An app created
+	// from a manifest is installed by the wizard — workspace, Next, Create
+	// and Install, Allow — and ends on the page holding the token. Naming
+	// the other path is worse than naming none: the pages are real, so
+	// somebody follows it and concludes the value is missing rather than
+	// that they are somewhere else.
+	for _, step := range []string{
+		"`Create New App > From an app manifest`",
+		"`Create and Install`",
+		"`Allow`",
+		"`Your app credentials`",
+	} {
+		if !strings.Contains(bot, step) {
+			t.Errorf("the bot token's directions skip %s: %q", step, bot)
+		}
+	}
+	if strings.Contains(bot, "Install to Workspace") {
+		t.Errorf("the bot token sends an operator down the from-scratch "+
+			"path, which this form's manifest does not take: %q", bot)
 	}
 	if !strings.Contains(secret, "`Basic Information > App Credentials`") {
 		t.Errorf("the signing secret does not name the page it is on: %q", secret)
