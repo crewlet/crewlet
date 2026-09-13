@@ -8,12 +8,17 @@ import (
 	"testing"
 )
 
-// moduleDir lays out a module root holding the named files.
+// moduleDir lays out a component root holding the named files, which may sit
+// in subdirectories.
 func moduleDir(t *testing.T, files map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
 	for name, text := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o600); err != nil {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -27,18 +32,20 @@ func moduleDir(t *testing.T, files map[string]string) string {
 // complete and not be.
 func TestTheDocumentCarriesEachModulesOwnNotices(t *testing.T) {
 	t.Parallel()
-	toolchain := module{Path: "Go toolchain", Version: "go1.99", Dir: moduleDir(t, map[string]string{
+	toolchain := component{Path: "Go toolchain", Version: "go1.99", Dir: moduleDir(t, map[string]string{
 		"LICENSE": "Go license text", "PATENTS": "Go patent grant", "README.md": "not a notice",
 	})}
-	server := module{Path: "example.com/server", Version: "v2.0.0", Dir: moduleDir(t, map[string]string{
+	server := component{Path: "example.com/server", Version: "v2.0.0", Dir: moduleDir(t, map[string]string{
 		"LICENSE": "Apache License 2.0 text\n\n", "NOTICE": "Copyright the server authors", "main.go": "package x",
+		// Source files whose names the notice pattern would otherwise take.
+		"license.go": "package licensecode", "notice_amd64.s": "TEXT noticeasm",
 	})}
-	lib := module{Path: "example.com/lib", Version: "v1.0.0", Dir: moduleDir(t, map[string]string{
+	lib := component{Path: "example.com/lib", Version: "v1.0.0", Dir: moduleDir(t, map[string]string{
 		"COPYING.txt": "BSD text", "LICENSE-MIT": "MIT text",
 	})}
 
 	var out bytes.Buffer
-	if err := render(&out, toolchain, merge([]module{server, lib})); err != nil {
+	if err := render(&out, toolchain, merge([]component{server, lib})); err != nil {
 		t.Fatalf("render: %v", err)
 	}
 	doc := out.String()
@@ -51,7 +58,7 @@ func TestTheDocumentCarriesEachModulesOwnNotices(t *testing.T) {
 			t.Errorf("the document is missing %q:\n%s", want, doc)
 		}
 	}
-	for _, unwanted := range []string{"not a notice", "package x"} {
+	for _, unwanted := range []string{"not a notice", "package x", "licensecode", "noticeasm"} {
 		if strings.Contains(doc, unwanted) {
 			t.Errorf("the document carries %q, which is not a notice file", unwanted)
 		}
@@ -66,11 +73,70 @@ func TestTheDocumentCarriesEachModulesOwnNotices(t *testing.T) {
 	}
 }
 
+// A LICENSE BESIDE A LINKED PACKAGE IS REPRODUCED, and one beside code the
+// binary does not link is not.
+//
+// The case is real: the NATS server's internal/fastrand carries the LevelDB-Go
+// authors' BSD license, which its root Apache license does not reproduce and
+// which a binary redistribution has to carry. A generator that read module
+// roots only shipped without it.
+func TestANoticeBesideALinkedPackageIsCarried(t *testing.T) {
+	t.Parallel()
+	root := moduleDir(t, map[string]string{
+		"LICENSE":                       "Apache text for the server",
+		"internal/fastrand/LICENSE":     "BSD text for the borrowed hash",
+		"internal/fastrand/fastrand.go": "package fastrand",
+		"internal/unused/LICENSE":       "text for code nobody links",
+		"internal/unused/unused.go":     "package unused",
+		// The same text again under a vendored directory is written once.
+		"vendor/golang.org/x/LICENSE":    "Apache text for the server",
+		"vendor/golang.org/x/net/net.go": "package net",
+	})
+	server := component{
+		Path: "example.com/server", Version: "v2.14.6", Dir: root,
+		Packages: []string{
+			filepath.Join(root, "internal", "fastrand"),
+			filepath.Join(root, "vendor", "golang.org", "x", "net"),
+		},
+	}
+	toolchain := component{Path: "Go toolchain", Version: "go1.99", Dir: moduleDir(t, map[string]string{"LICENSE": "Go"})}
+
+	var out bytes.Buffer
+	if err := render(&out, toolchain, merge([]component{server})); err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	doc := out.String()
+	if !strings.Contains(doc, "--- internal/fastrand/LICENSE ---\n\nBSD text for the borrowed hash") {
+		t.Errorf("the linked package's own license is missing or unlabelled:\n%s", doc)
+	}
+	if strings.Contains(doc, "code nobody links") {
+		t.Errorf("a license beside a package the binary does not link was carried:\n%s", doc)
+	}
+	if n := strings.Count(doc, "Apache text for the server"); n != 1 {
+		t.Errorf("identical text appears %d times, want once:\n%s", n, doc)
+	}
+	if strings.Index(doc, "--- LICENSE ---") > strings.Index(doc, "--- internal/fastrand/LICENSE ---") {
+		t.Errorf("the root license does not come first:\n%s", doc)
+	}
+}
+
+// A PACKAGE OUTSIDE ITS ROOT is an inconsistency to stop on, never a walk
+// that wanders up the file system collecting whatever it finds.
+func TestAPackageOutsideItsRootIsRefused(t *testing.T) {
+	t.Parallel()
+	root := moduleDir(t, map[string]string{"LICENSE": "x"})
+	elsewhere := t.TempDir()
+	_, err := noticesOf(component{Path: "example.com/m", Version: "v1.0.0", Dir: root, Packages: []string{elsewhere}})
+	if err == nil || !strings.Contains(err.Error(), "not inside its root") {
+		t.Errorf("err = %v, want a refusal naming the package outside the root", err)
+	}
+}
+
 // A MODULE WITH NO NOTICE STOPS THE RELEASE, naming every one of them.
 func TestAModuleWithNoLicenseIsRefusedByName(t *testing.T) {
 	t.Parallel()
-	toolchain := module{Path: "Go toolchain", Version: "go1.99", Dir: moduleDir(t, map[string]string{"LICENSE": "x"})}
-	bare := []module{
+	toolchain := component{Path: "Go toolchain", Version: "go1.99", Dir: moduleDir(t, map[string]string{"LICENSE": "x"})}
+	bare := []component{
 		{Path: "example.com/one", Version: "v1.0.0", Dir: moduleDir(t, map[string]string{"README": "no license"})},
 		{Path: "example.com/two", Version: "v1.0.0", Dir: moduleDir(t, nil)},
 	}
@@ -85,33 +151,40 @@ func TestAModuleWithNoLicenseIsRefusedByName(t *testing.T) {
 	}
 }
 
-// THE LIST IS WHAT IS LINKED: the main module and the standard library are
-// not third-party modules, a replacement is read from where it was linked, and
-// a module listed for several targets appears once.
+// THE LIST IS WHAT IS LINKED: the main module is not a third-party module, the
+// standard library's packages belong to the toolchain, a replacement is read
+// from where it was linked, and a module listed for several packages or
+// targets appears once with every package directory.
 func TestTheListIsTheLinkedThirdPartyModules(t *testing.T) {
 	t.Parallel()
 	stream := `
-{"ImportPath": "fmt", "Standard": true}
-{"ImportPath": "github.com/crewlet/crewlet/cmd/crewlet", "Module": {"Path": "github.com/crewlet/crewlet", "Main": true, "Dir": "/src"}}
-{"ImportPath": "example.com/a/pkg", "Module": {"Path": "example.com/a", "Version": "v1.2.0", "Dir": "/cache/a@v1.2.0"}}
-{"ImportPath": "example.com/a/other", "Module": {"Path": "example.com/a", "Version": "v1.2.0", "Dir": "/cache/a@v1.2.0"}}
-{"ImportPath": "example.com/b", "Module": {"Path": "example.com/b", "Version": "v1.0.0", "Dir": "/cache/b@v1.0.0",
+{"ImportPath": "fmt", "Dir": "/goroot/src/fmt", "Standard": true}
+{"ImportPath": "github.com/crewlet/crewlet/cmd/crewlet", "Dir": "/src/cmd/crewlet", "Module": {"Path": "github.com/crewlet/crewlet", "Main": true, "Dir": "/src"}}
+{"ImportPath": "example.com/a/pkg", "Dir": "/cache/a@v1.2.0/pkg", "Module": {"Path": "example.com/a", "Version": "v1.2.0", "Dir": "/cache/a@v1.2.0"}}
+{"ImportPath": "example.com/a/other", "Dir": "/cache/a@v1.2.0/other", "Module": {"Path": "example.com/a", "Version": "v1.2.0", "Dir": "/cache/a@v1.2.0"}}
+{"ImportPath": "example.com/b", "Dir": "/cache/fork/b@v1.0.1", "Module": {"Path": "example.com/b", "Version": "v1.0.0", "Dir": "/cache/b@v1.0.0",
   "Replace": {"Path": "example.com/fork/b", "Version": "v1.0.1", "Dir": "/cache/fork/b@v1.0.1"}}}
 `
-	listed, err := parseList(strings.NewReader(stream))
+	listed, std, err := parseList(strings.NewReader(stream))
 	if err != nil {
 		t.Fatalf("parseList: %v", err)
 	}
+	if len(std) != 1 || std[0] != "/goroot/src/fmt" {
+		t.Errorf("standard package directories = %v, want the one fmt lives in", std)
+	}
 	got := merge(listed, listed[:1])
-	want := []module{
-		{Path: "example.com/a", Version: "v1.2.0", Dir: "/cache/a@v1.2.0"},
-		{Path: "example.com/b", Version: "v1.0.1", Dir: "/cache/fork/b@v1.0.1"},
+	want := []component{
+		{Path: "example.com/a", Version: "v1.2.0", Dir: "/cache/a@v1.2.0",
+			Packages: []string{"/cache/a@v1.2.0/other", "/cache/a@v1.2.0/pkg"}},
+		{Path: "example.com/b", Version: "v1.0.1", Dir: "/cache/fork/b@v1.0.1",
+			Packages: []string{"/cache/fork/b@v1.0.1"}},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("modules = %+v, want %+v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if got[i].Path != want[i].Path || got[i].Version != want[i].Version || got[i].Dir != want[i].Dir ||
+			strings.Join(got[i].Packages, ",") != strings.Join(want[i].Packages, ",") {
 			t.Errorf("module %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
@@ -122,7 +195,7 @@ func TestTheListIsTheLinkedThirdPartyModules(t *testing.T) {
 func TestAModuleWithNoSourceDirectoryIsAnError(t *testing.T) {
 	t.Parallel()
 	stream := `{"ImportPath": "example.com/a", "Module": {"Path": "example.com/a", "Version": "v1.0.0"}}`
-	if _, err := parseList(strings.NewReader(stream)); err == nil || !strings.Contains(err.Error(), "go mod download") {
+	if _, _, err := parseList(strings.NewReader(stream)); err == nil || !strings.Contains(err.Error(), "go mod download") {
 		t.Errorf("err = %v, want a refusal naming go mod download", err)
 	}
 }

@@ -23,7 +23,24 @@
 // .goreleaser.yaml names them beside the build matrix they have to match: a
 // package imported on one platform only still ships in that platform's archive.
 //
-// # A module with no license file stops the release
+// # Every directory between a linked package and its root, not the root alone
+//
+// A module's root license is not always the whole story. A module that carries
+// code from elsewhere keeps that code's license beside it: the NATS server's
+// internal/fastrand is the LevelDB-Go authors' BSD code under its own LICENSE,
+// which the server's root Apache license does not reproduce, and a BSD license
+// obliges a binary redistribution to carry that copyright notice. So the
+// notices of a component are the files in its root AND in every directory on
+// the path from each package the binary links up to that root. A directory the
+// binary links nothing from contributes nothing, so a module's tests, examples
+// and unused subpackages add no text for code that is not in the archive.
+//
+// The standard library is walked the same way, from the linked packages up to
+// GOROOT, so the toolchain follows the one rule too. A nested file whose text
+// is byte-identical to one already reproduced for the same component (the Go
+// license again under GOROOT/src/vendor/golang.org/x) is written once.
+//
+// # A component with no license file stops the release
 //
 // Its notice cannot be reproduced, and shipping without it is the defect this
 // command exists to remove. The error names every such module so the decision
@@ -68,18 +85,20 @@ func run(ctx context.Context, out, pkg, targetList string) error {
 		return err
 	}
 
-	lists := make([][]module, 0, len(targets))
-	for _, t := range targets {
-		listed, listErr := goList(ctx, pkg, t)
-		if listErr != nil {
-			return listErr
-		}
-		lists = append(lists, listed)
-	}
 	toolchain, err := goToolchain(ctx)
 	if err != nil {
 		return err
 	}
+	lists := make([][]component, 0, len(targets))
+	for _, t := range targets {
+		listed, std, listErr := goList(ctx, pkg, t)
+		if listErr != nil {
+			return listErr
+		}
+		lists = append(lists, listed)
+		toolchain.Packages = append(toolchain.Packages, std...)
+	}
+	toolchain.Packages = sortedUnique(toolchain.Packages)
 
 	var buf bytes.Buffer
 	if err = render(&buf, toolchain, merge(lists...)); err != nil {
@@ -110,16 +129,23 @@ func parseTargets(list string) ([]target, error) {
 	return out, nil
 }
 
-// module is one linked module and where its source is on disk.
-type module struct {
+// component is one body of third-party code the binary links: a module, or the
+// Go toolchain's standard library and runtime.
+type component struct {
 	Path    string
 	Version string
-	Dir     string
+	// Dir is the component's root on disk: the module directory, or GOROOT.
+	Dir string
+	// Packages is the directory of every package the binary links from the
+	// component, each inside Dir, sorted and unique.
+	Packages []string
 }
 
 // listedPackage is the part of `go list -json` output this reads.
 type listedPackage struct {
 	ImportPath string
+	Dir        string
+	Standard   bool
 	Module     *listedModule
 }
 
@@ -135,107 +161,188 @@ type listedModule struct {
 //
 // CGO_ENABLED=0 because that is how every release target is built, and cgo
 // changes which files, and so which imports, a package has.
-func goList(ctx context.Context, pkg string, t target) ([]module, error) {
+func goList(ctx context.Context, pkg string, t target) ([]component, []string, error) {
 	cmd := exec.CommandContext(ctx, "go", "list", "-deps", "-json", pkg)
 	cmd.Env = append(os.Environ(), "GOOS="+t.goos, "GOARCH="+t.goarch, "CGO_ENABLED=0")
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("go list -deps %s for %s/%s: %w: %s", pkg, t.goos, t.goarch, err, stderr.String())
+		return nil, nil, fmt.Errorf("go list -deps %s for %s/%s: %w: %s", pkg, t.goos, t.goarch, err, stderr.String())
 	}
-	listed, err := parseList(bytes.NewReader(stdout))
+	listed, std, err := parseList(bytes.NewReader(stdout))
 	if err != nil {
-		return nil, fmt.Errorf("go list -deps %s for %s/%s: %w", pkg, t.goos, t.goarch, err)
+		return nil, nil, fmt.Errorf("go list -deps %s for %s/%s: %w", pkg, t.goos, t.goarch, err)
 	}
-	return listed, nil
+	return listed, std, nil
 }
 
 // parseList reads a `go list -json` stream and returns the modules its
-// packages belong to, excluding the main module and the standard library.
+// packages belong to (one entry per package, which merge folds together) and
+// the directories of the standard library packages, excluding the main module.
 //
 // A replaced module is reported under its original path, since that is the
 // name the code imports, with the version and directory of the replacement,
 // since that is the source that was linked.
-func parseList(r io.Reader) ([]module, error) {
+func parseList(r io.Reader) ([]component, []string, error) {
 	dec := json.NewDecoder(r)
-	var out []module
+	var (
+		out []component
+		std []string
+	)
 	for {
 		var p listedPackage
 		err := dec.Decode(&p)
 		if errors.Is(err, io.EOF) {
-			return out, nil
+			return out, std, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("decoding the package list: %w", err)
+			return nil, nil, fmt.Errorf("decoding the package list: %w", err)
+		}
+		if p.Standard {
+			if p.Dir == "" {
+				return nil, nil, fmt.Errorf("standard package %s has no source directory; the toolchain's "+
+					"GOROOT/src is incomplete, so reinstall the toolchain and retry", p.ImportPath)
+			}
+			std = append(std, p.Dir)
+			continue
 		}
 		if p.Module == nil || p.Module.Main {
 			continue
 		}
-		m := module{Path: p.Module.Path, Version: p.Module.Version, Dir: p.Module.Dir}
+		m := component{Path: p.Module.Path, Version: p.Module.Version, Dir: p.Module.Dir}
 		if rep := p.Module.Replace; rep != nil {
 			m.Version, m.Dir = rep.Version, rep.Dir
 			if rep.Version == "" {
 				m.Version = "(replaced by " + rep.Path + ")"
 			}
 		}
-		if m.Dir == "" {
-			return nil, fmt.Errorf("package %s: module %s %s has no source directory; run `go mod download` and retry",
+		if m.Dir == "" || p.Dir == "" {
+			return nil, nil, fmt.Errorf("package %s: module %s %s has no source directory; run `go mod download` and retry",
 				p.ImportPath, m.Path, m.Version)
 		}
+		m.Packages = []string{p.Dir}
 		out = append(out, m)
 	}
 }
 
-// merge unions the per-target lists, sorted by path, one entry per module.
-func merge(lists ...[]module) []module {
-	seen := map[string]module{}
+// merge unions the per-target lists, sorted by path, one entry per module
+// carrying every package directory any target links from it.
+func merge(lists ...[]component) []component {
+	seen := map[string]component{}
 	for _, list := range lists {
 		for _, m := range list {
-			seen[m.Path+"@"+m.Version] = m
+			key := m.Path + "@" + m.Version
+			if prior, ok := seen[key]; ok {
+				m.Packages = append(prior.Packages, m.Packages...)
+			}
+			seen[key] = m
 		}
 	}
-	out := make([]module, 0, len(seen))
+	out := make([]component, 0, len(seen))
 	for _, m := range seen {
+		m.Packages = sortedUnique(m.Packages)
 		out = append(out, m)
 	}
-	slices.SortFunc(out, func(a, b module) int {
+	slices.SortFunc(out, func(a, b component) int {
 		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Version, b.Version))
 	})
 	return out
 }
 
+func sortedUnique(values []string) []string {
+	out := slices.Clone(values)
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
 // goToolchain locates the toolchain the build runs on, whose runtime and
 // standard library are linked into every binary it produces.
-func goToolchain(ctx context.Context) (module, error) {
+func goToolchain(ctx context.Context) (component, error) {
 	raw, err := exec.CommandContext(ctx, "go", "env", "-json", "GOROOT", "GOVERSION").Output()
 	if err != nil {
-		return module{}, fmt.Errorf("go env GOROOT GOVERSION: %w", err)
+		return component{}, fmt.Errorf("go env GOROOT GOVERSION: %w", err)
 	}
 	var env struct{ GOROOT, GOVERSION string }
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return module{}, fmt.Errorf("decoding go env: %w", err)
+		return component{}, fmt.Errorf("decoding go env: %w", err)
 	}
-	return module{Path: "Go toolchain (standard library and runtime)", Version: env.GOVERSION, Dir: env.GOROOT}, nil
+	return component{Path: "Go toolchain (standard library and runtime)", Version: env.GOVERSION, Dir: env.GOROOT}, nil
 }
 
-// noticeFile matches the files a module's own notices live in: its license,
-// a NOTICE (which Apache-2.0 requires to be passed on), and a patent grant.
-var noticeFile = regexp.MustCompile(`(?i)^(licen[cs]e|copying|notice|patents)([-._][^/]*)?$`)
+// noticeName matches the files a component's own notices live in: its
+// license, a NOTICE (which Apache-2.0 requires to be passed on), and a patent
+// grant, bare or with a suffix such as LICENSE.txt, LICENSE-MIT or
+// COPYING.LESSER.
+var noticeName = regexp.MustCompile(`(?i)^(licen[cs]e|copying|notice|patents)([-._][^/]*)?$`)
 
-// noticesIn returns the notice files at the root of a module, sorted by name.
-func noticesIn(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, e := range entries {
-		if e.Type().IsRegular() && noticeFile.MatchString(e.Name()) {
-			out = append(out, e.Name())
+// sourceExtensions are the files the go command compiles or links into a
+// package. The pattern above accepts any suffix, and the walk reads package
+// directories, so a package that happens to hold a license.go or a
+// notice_linux.s would otherwise have its code pasted into the notices.
+var sourceExtensions = map[string]bool{
+	".go": true, ".s": true, ".S": true, ".sx": true, ".c": true, ".cc": true,
+	".cpp": true, ".cxx": true, ".h": true, ".hh": true, ".hpp": true, ".hxx": true,
+	".m": true, ".f": true, ".F": true, ".for": true, ".f90": true,
+	".swig": true, ".swigcxx": true, ".syso": true,
+}
+
+func isNotice(name string) bool {
+	return noticeName.MatchString(name) && !sourceExtensions[filepath.Ext(name)]
+}
+
+// notice is one notice file of a component, named relative to its root.
+type notice struct {
+	name string
+	text string
+}
+
+// noticesOf collects a component's notice files: its root first, then every
+// directory on the way from each linked package up to the root, in path order.
+// A file whose text was already collected for this component is skipped.
+func noticesOf(c component) ([]notice, error) {
+	var nested []string
+	for _, pkg := range c.Packages {
+		rel, err := filepath.Rel(c.Dir, pkg)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return nil, fmt.Errorf("%s %s: the linked package directory %s is not inside its root %s; "+
+				"the go list output is inconsistent, so rerun the release from a clean module cache",
+				c.Path, c.Version, pkg, c.Dir)
+		}
+		for ; rel != "."; rel = filepath.Dir(rel) {
+			nested = append(nested, rel)
 		}
 	}
-	slices.Sort(out)
+	// The root first, because it is the license a reader looks for, then the
+	// nested directories in path order so the output is byte-stable.
+	ordered := append([]string{"."}, sortedUnique(nested)...)
+
+	var out []notice
+	seen := map[string]bool{}
+	for _, dir := range ordered {
+		entries, err := os.ReadDir(filepath.Join(c.Dir, dir))
+		if err != nil {
+			return nil, fmt.Errorf("reading %s %s at %s: %w", c.Path, c.Version, filepath.Join(c.Dir, dir), err)
+		}
+		for _, e := range entries {
+			if !e.Type().IsRegular() || !isNotice(e.Name()) {
+				continue
+			}
+			name := filepath.ToSlash(filepath.Join(dir, e.Name()))
+			raw, err := os.ReadFile(filepath.Join(c.Dir, dir, e.Name()))
+			if err != nil {
+				return nil, fmt.Errorf("reading %s of %s %s: %w", name, c.Path, c.Version, err)
+			}
+			// Trailing whitespace only decides how the sections are spaced,
+			// so it neither counts toward a duplicate nor reaches the file.
+			text := strings.TrimRight(string(raw), "\n\r\t ")
+			if seen[text] {
+				continue
+			}
+			seen[text] = true
+			out = append(out, notice{name: name, text: text})
+		}
+	}
 	return out, nil
 }
 
@@ -243,47 +350,35 @@ const rule = "==================================================================
 
 // render writes the notices document. The output depends only on its inputs,
 // so two runs over one checkout produce identical bytes.
-func render(w io.Writer, toolchain module, modules []module) error {
+func render(w io.Writer, toolchain component, modules []component) error {
 	var missing []string
 	fmt.Fprintf(w, "Third-party notices for the crewlet binary\n\n"+
 		"The crewlet binary is built with the Go toolchain and links the Go modules\n"+
 		"listed below. Each section reproduces that component's own license and\n"+
-		"notice files, unmodified. Crewlet itself is licensed under the MIT License\n"+
+		"notice files, unmodified, including those kept beside the packages the\n"+
+		"binary links from it. Crewlet itself is licensed under the MIT License\n"+
 		"in LICENSE. The dashboard the binary embeds lists its own bundled\n"+
 		"dependencies and fonts in dashboard/THIRD_PARTY_NOTICES.txt beside this\n"+
 		"file, and a running engine serves the same file at\n"+
 		"/static/dashboard/THIRD_PARTY_NOTICES.txt.\n")
-	for _, m := range append([]module{toolchain}, modules...) {
-		files, err := noticesIn(m.Dir)
+	for _, c := range append([]component{toolchain}, modules...) {
+		notices, err := noticesOf(c)
 		if err != nil {
-			return fmt.Errorf("reading %s %s at %s: %w", m.Path, m.Version, m.Dir, err)
+			return err
 		}
-		if len(files) == 0 {
-			missing = append(missing, m.Path+" "+m.Version)
+		if len(notices) == 0 {
+			missing = append(missing, c.Path+" "+c.Version)
 			continue
 		}
-		fmt.Fprintf(w, "\n%s\n%s %s\n%s\n", rule, m.Path, m.Version, rule)
-		for _, name := range files {
-			if err = writeFile(w, m, name); err != nil {
-				return err
-			}
+		fmt.Fprintf(w, "\n%s\n%s %s\n%s\n", rule, c.Path, c.Version, rule)
+		for _, n := range notices {
+			fmt.Fprintf(w, "\n--- %s ---\n\n%s\n", n.name, n.text)
 		}
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("no license or notice file at the root of %s; the release cannot "+
+		return fmt.Errorf("no license or notice file in %s; the release cannot "+
 			"reproduce their notices, so decide how each is attributed before releasing",
 			strings.Join(missing, ", "))
 	}
-	return nil
-}
-
-// writeFile copies one notice file into the document, verbatim apart from
-// trailing whitespace, which only decides how the sections are spaced.
-func writeFile(w io.Writer, m module, name string) error {
-	text, err := os.ReadFile(filepath.Join(m.Dir, name))
-	if err != nil {
-		return fmt.Errorf("reading %s of %s %s: %w", name, m.Path, m.Version, err)
-	}
-	fmt.Fprintf(w, "\n--- %s ---\n\n%s\n", name, strings.TrimRight(string(text), "\n\r\t "))
 	return nil
 }
