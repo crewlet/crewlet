@@ -8,6 +8,11 @@
  *
  * It is a LAUNCHER, not a settings panel: it closes on every action, including
  * the ones that only change a filter.
+ *
+ * It is a modal on the layer stack (`useModal`), so Escape, the veil, the Tab
+ * trap and the return of focus to whatever opened it behave exactly as they
+ * do for every dialog and drawer. It used to close on its own Escape and on a
+ * second, window-level one in the shell, and returned focus to nothing.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -15,7 +20,9 @@ import { ALL_NAV } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
+import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
+import { useModal } from "~/ui/useModal.ts";
 
 interface Hit {
   id: string;
@@ -47,12 +54,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const tools = useTools();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  const modal = useModal({ onClose });
 
   const index = useMemo(() => indexOrg(org), [org]);
 
@@ -238,24 +241,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       e.preventDefault();
       hits[cursor]?.go();
       onClose();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
     }
   }
 
   let flat = -1;
   return (
-    <div className="veil" onMouseDown={onClose} role="presentation">
-      <div
-        className="palette"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+    <div className="veil" ref={modal.veilRef} role="presentation">
+      <ModalPanel className="palette" title="Search" panelRef={modal.panelRef}>
         <input
-          ref={inputRef}
           className="palette-input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
@@ -309,7 +302,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             <kbd>esc</kbd> close
           </span>
         </div>
-      </div>
+      </ModalPanel>
     </div>
   );
 }

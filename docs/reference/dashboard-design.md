@@ -893,11 +893,14 @@ rendered idle from the first phase to the last.
   would weld a screen's data model into it.
 - **One stack decides which surface a key belongs to.** Dialogs, drawers,
   menus and listbox popups register on the stack in `ui/useModal.ts`, in the
-  order they opened. Only the topmost handles Escape or a press outside, so a
-  prompt over the node editor closes on its own Escape and leaves the editor
-  open, and an open menu closes before the dialog it sits in. A modal traps
-  Tab, moves focus in when it opens (honouring a field's `autoFocus`) and
-  returns it to whatever opened it. When that control has gone with a modal
+  order they opened, and so do the shell's own token dialog, search and
+  engine panel: no modal hand-rolls its veil or listens for Escape beside the
+  stack. Only the topmost handles Escape or a press outside, so a prompt over
+  the node editor closes on its own Escape and leaves the editor open, a
+  token dialog raised by a refused request over that editor does the same,
+  and an open menu closes before the dialog it sits in. A modal traps Tab,
+  moves focus in when it opens (honouring a field's `autoFocus`) and returns
+  it to whatever opened it. When that control has gone with a modal
   that closed as this one opened (a panel's "Set token" handing over to the
   token dialog), focus goes back where that modal would have sent it; when it
   has gone from a modal that is still open, to that modal rather than behind

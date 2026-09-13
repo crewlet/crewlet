@@ -20,8 +20,11 @@
  *   register first and end up beneath the drawer it sits on.
  * - A MODAL TRAPS TAB. Focus cycles inside the topmost modal, and Tab from
  *   anywhere outside it (focus can leave through a toast's close button) comes
- *   back in. The one exception is focus inside a modal the stack does not
- *   know, such as the shell's token dialog: that surface owns its own keys.
+ *   back in. There is no exception for a modal the stack does not know: a
+ *   hand-rolled one raised over a drawer would have its Tab pulled back into
+ *   the drawer and its Escape taken by the drawer beneath it, which is why
+ *   every modal in the dashboard is on the stack, the shell's token dialog,
+ *   search and engine panel included.
  * - FOCUS GOES IN ON OPEN, unless something inside already took it (a field
  *   with `autoFocus`), and GOES BACK ON CLOSE to whatever held it when the
  *   modal first rendered. That is captured during render on purpose: by the
@@ -109,22 +112,7 @@ export function focusables(root: HTMLElement): HTMLElement[] {
   );
 }
 
-/**
- * Whether focus is inside a modal this stack does not know about.
- *
- * The shell still hand-rolls two (the token dialog and the command palette),
- * and the token dialog is raised by a refused request, which can happen while
- * a drawer is open. That surface owns its keys: trapping Tab back into the
- * drawer, or closing the drawer on its Escape, would make it unusable.
- */
-function inForeignModal(): boolean {
-  const active = document.activeElement;
-  const host = active instanceof Element ? active.closest("[aria-modal='true']") : null;
-  return host !== null && !stack.some((entry) => entry.panel() === host);
-}
-
 function onKeyDown(e: KeyboardEvent): void {
-  if (inForeignModal()) return;
   if (e.key === "Escape") {
     if (e.defaultPrevented) return;
     const entry = top();

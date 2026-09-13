@@ -394,24 +394,3 @@ test("a control that consumes Escape keeps it", () => {
   fireEvent.keyDown(screen.getByLabelText("value"), { key: "Escape" });
   expect(closed).toBe(0);
 });
-
-test("a modal the stack does not know about keeps its own keys", () => {
-  let closed = 0;
-  render(
-    <>
-      <Dialog title="Drawer-like" onClose={() => closed++}>
-        <button>inside</button>
-      </Dialog>
-      {/* The shell's hand-rolled token dialog, raised over it. */}
-      <div role="dialog" aria-modal="true" aria-label="API token">
-        <input aria-label="Token" />
-      </div>
-    </>,
-  );
-  const token = screen.getByLabelText("Token");
-  token.focus();
-  press("Escape");
-  press("Tab");
-  expect(closed).toBe(0);
-  expect(document.activeElement).toBe(token);
-});

@@ -58,15 +58,14 @@ export function Shell({ children }: { children: ReactNode }) {
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
+  // The shortcuts that OPEN a surface. Closing one belongs to the layer stack
+  // (`ui/useModal.ts`): an Escape handled here as well closed the palette and
+  // the engine panel along with whatever sat above or beneath them.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
-      }
-      if (e.key === "Escape") {
-        setPaletteOpen(false);
-        setEnginePanel(false);
       }
       // A bare "/" opens search the way every list-shaped tool does — but not
       // while somebody is typing into a field.
@@ -284,17 +283,13 @@ export function Shell({ children }: { children: ReactNode }) {
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
       {enginePanel && (
-        <div className="veil" onMouseDown={() => setEnginePanel(false)} role="presentation">
-          <div onMouseDown={(e) => e.stopPropagation()}>
-            <EnginePanel
-              onClose={() => setEnginePanel(false)}
-              onSetToken={() => {
-                setEnginePanel(false);
-                setTokenOpen(true);
-              }}
-            />
-          </div>
-        </div>
+        <EnginePanel
+          onClose={() => setEnginePanel(false)}
+          onSetToken={() => {
+            setEnginePanel(false);
+            setTokenOpen(true);
+          }}
+        />
       )}
       {tokenOpen && (
         <TokenDialog
