@@ -106,6 +106,10 @@
 // overlap is bounded by one tick of the duty. A downgrade across this layout
 // needs a full drain, for the reason coord.ProtocolVersion gives.
 //
+// The wait is logged when it starts (coord_kv_duties_wait_for_older_build) and
+// when it ends (coord_kv_duties_resumed), because to the duty helpers above
+// this store a refusal is indistinguishable from a peer holding the duty.
+//
 // Reads follow the same rule rather than hiding the older build: Get,
 // ListLive and ListOwned report a duty an older node holds in the seat lease
 // bucket, so the fleet view shows who is actually running it during the
@@ -150,6 +154,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -311,6 +316,11 @@ type Store struct {
 	epochs jetstream.KeyValue
 
 	ttl time.Duration
+
+	// dutiesWaiting is whether this store's last layout check found a node of
+	// an older build live, so the wait is reported when it starts and when it
+	// ends rather than on every claim. See olderLayoutHolds.
+	dutiesWaiting atomic.Bool
 }
 
 var _ coord.Backend = (*Store)(nil)
@@ -536,9 +546,6 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				return nil, layoutErr
 			}
 			if waiting {
-				log.DebugContext(ctx, "coord_kv_duty_waits_for_older_build", "resource", resource,
-					"owner", opts.Owner, "detail", "a node of a build that keeps duties in the "+
-						"seat lease bucket is still live; the duty stays with it until it lapses")
 				return nil, nil
 			}
 		}
@@ -1166,7 +1173,37 @@ func (s *Store) readForClaim(ctx context.Context, l *lane, resource string, unga
 // olderLayoutHolds reports whether a record written by a build that predates
 // the duty bucket is live in the seat lease bucket, which is the rolling-
 // upgrade rule in the package doc.
+//
+// THE WAIT IS REPORTED, once when it starts and once when it ends. To a duty
+// helper a refusal reads exactly like a peer holding the duty, so without this
+// a rollout left with one older node running would have every newer node run
+// no scheduler tick, no retention sweep, no integration pass and no curator
+// pass, and say nothing. The seat host's
+// seat_claims_blocked_by_older_protocol is the same warning for seats, and it
+// repeats on every placement sweep. A duty cannot afford that: it is claimed
+// per tick, and the integration loop claims once per surface.
 func (s *Store) olderLayoutHolds(ctx context.Context, snap snapshot) (bool, error) {
+	waiting, err := s.scanForOlderLayout(ctx, snap)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case waiting && s.dutiesWaiting.CompareAndSwap(false, true):
+		log.WarnContext(ctx, "coord_kv_duties_wait_for_older_build",
+			"detail", "a node of a build that keeps fleet duties in the seat lease bucket is still "+
+				"live, so this node runs no fleet duty (scheduler, sandbox waiter, maintenance, "+
+				"integration reconcile, skill curator) until that node stops and its leases lapse. "+
+				"Finish the rolling upgrade; do not roll back without stopping every newer node first.")
+	case !waiting && s.dutiesWaiting.CompareAndSwap(true, false):
+		log.InfoContext(ctx, "coord_kv_duties_resumed",
+			"detail", "no node of an older build is live any more; fleet duties are claimed in the "+
+				"duty bucket again")
+	}
+	return waiting, nil
+}
+
+// scanForOlderLayout is olderLayoutHolds's read, without the reporting.
+func (s *Store) scanForOlderLayout(ctx context.Context, snap snapshot) (bool, error) {
 	entries := snap.all
 	if !snap.scannedLeases {
 		scanned, err := s.scan(ctx, s.leases)

@@ -294,6 +294,13 @@ Two consequences worth stating plainly:
 - **Rolling *back* across a protocol bump needs a full stop.** An older
   build has no protocol check at all, so it will happily take over a
   newer node's expired leases. Nothing in the table can stop it.
+- **A stalled rollout stalls the fleet duties too, on upgrades that move
+  them.** Upgrading from a build that kept the `worker:` leases beside the
+  seat leases, newer nodes run no scheduler tick, retention sweep,
+  integration reconcile or curator pass while any older node is live, and
+  say so once with `coord_kv_duties_wait_for_older_build` (and
+  `coord_kv_duties_resumed` when it ends). See
+  [Coordination](../concepts/coordination.md#the-rolling-upgrade-across-the-duty-bucket).
 
 ## Watching a fleet
 

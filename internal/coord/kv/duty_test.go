@@ -194,6 +194,11 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	if kve, err := s.duties.kv.Get(ctx, encodeKey(duty)); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Fatalf("a refused duty claim wrote the duty bucket: (%v, %v)", kve, err)
 	}
+	// VISIBLY: to a duty helper the refusal reads like a peer holding the
+	// duty, so the store itself has to say the node is waiting.
+	if !s.dutiesWaiting.Load() {
+		t.Fatal("the store refused duties for an older build and did not report that it is waiting")
+	}
 	if seat, err := s.TryAcquire(ctx, coord.SeatResource("ceo"), coord.AcquireOptions{
 		Owner: "new:1", TTL: time.Minute,
 	}); err != nil || seat == nil {
@@ -221,6 +226,9 @@ func TestADutyWaitsWhileANodeOfAnOlderBuildIsLive(t *testing.T) {
 	}
 	if got := rawLease(ctx, t, s.duties, duty); got.Layout != layoutDutyLane || got.Owner != "new:1" {
 		t.Fatalf("the duty record is %+v, want this build's, in the duty bucket", got)
+	}
+	if s.dutiesWaiting.Load() {
+		t.Fatal("duties resumed and the store still reports waiting for an older build")
 	}
 }
 

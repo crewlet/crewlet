@@ -378,6 +378,8 @@ Two consequences worth stating plainly:
 - **A downgrade across a protocol bump needs a full drain.** An older build has no protocol check at all, so it will happily take over a newer node's expired leases. Stop the whole fleet before rolling back.
 - **The wait is an outage window, and it is the point.** New nodes claim *nothing* until the last old lease lapses or is released — at the shipped 45-second TTL plus however long the old nodes take to drain. Plan the rollout for it rather than being surprised by it: the alternative is two builds disagreeing about what a lease obliges them to do, which is silent and unbounded rather than visible and finite.
 
+**Duties have a second, narrower rule.** Fleet duties moved out of the seat lease bucket into a [bucket of their own](coordination.md#duties-have-a-bucket-of-their-own), which an older build cannot see. So while any node of a build that still keeps duties with the seat leases is live, newer nodes claim no duty at all (seats are unaffected), logging `coord_kv_duties_wait_for_older_build` once when the wait starts and `coord_kv_duties_resumed` when it ends. The older nodes run the duties they can until they stop. Rolling back across that change needs every newer node stopped first.
+
 The current protocol is **3**, and it has moved twice — each time because holding a lease came to *mean* something a previous build could not honour:
 
 - **v2 — the completion ledger.** Holding a seat lease now means consulting and settling the completion ledger. A v1 node cannot: it takes a seat over, never reads the record, and re-runs a turn whose effects already shipped.
