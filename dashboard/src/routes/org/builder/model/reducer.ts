@@ -40,6 +40,7 @@ import { COMPANY_KEY, type NodeKey } from "./keys.ts";
 import {
   apply,
   describeOperation,
+  evaluate,
   record,
   touchedKeys,
   type ApplyReport,
@@ -127,7 +128,7 @@ export interface BuilderState {
   readonly last: LastChange | null;
   /** Why the last dispatched intent was not recorded. */
   readonly refusal: {
-    readonly reason: RecordRefusal | "mode" | "not_keyed";
+    readonly reason: RecordRefusal | "mode" | "not_keyed" | "has_changes";
     readonly message: string;
   } | null;
 }
@@ -509,6 +510,16 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
 
     case "restore": {
       const { kept } = action;
+      if (state.log.ops.length > 0 || state.log.undone.length > 0) {
+        // A restore replaces the log, so over work in progress it would drop
+        // that work without a word. The offer to restore comes before editing;
+        // after it the operator discards first.
+        return refused(
+          state,
+          "has_changes",
+          "This draft already has changes. Discard them before restoring the kept draft.",
+        );
+      }
       if (kept.mode !== state.mode) {
         return refused(
           state,
@@ -543,11 +554,13 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       const clean = result.entries.every((e) => e.outcome === "applies");
       if (clean && kept.baseRevision === state.base.revision) {
         // Recorded on this very revision and every operation still applies:
-        // the draft is the one the operator left, redo stack included.
+        // the draft is the one the operator left, redo stack included, as
+        // long as that stack redoes. It was read from storage like the rest,
+        // and a redo that does not apply would throw in this reducer.
         return {
           ...state,
           draft: result.draft,
-          log: { ops: result.ops, undone: kept.undone },
+          log: { ops: result.ops, undone: redoes(result.draft, kept.undone) ? kept.undone : [] },
           reports: result.reports,
           generation: state.generation + 1,
           keep: true,
@@ -570,6 +583,20 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
       };
     }
   }
+}
+
+/**
+ * Whether a redo stack redoes from `draft`: each operation, most recent undo
+ * first, applies to the draft the ones redone before it produce.
+ */
+function redoes(draft: Draft, undone: readonly Operation[]): boolean {
+  let at = draft;
+  for (let i = undone.length - 1; i >= 0; i--) {
+    const op = undone[i]!;
+    if (evaluate(at, op).kind !== "applies") return false;
+    at = apply(at, op).draft;
+  }
+  return true;
 }
 
 /** The recording context of a base: the handles its derivation reports. */

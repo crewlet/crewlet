@@ -566,6 +566,50 @@ describe("restoring a kept draft", () => {
     expect(theirsKept.log.ops).toEqual([]);
   });
 
+  test("never replaces work in progress, which the operator discards first", () => {
+    const keptDraft = kept(
+      run(keyedEdit(), { type: "record", intent: { type: "remove", target: "seat:dev" } }),
+    );
+    const editing = run(keyedEdit(), {
+      type: "record",
+      intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" },
+    });
+    const refused = run(editing, { type: "restore", kept: keptDraft });
+    expect(refused.refusal).toMatchObject({ reason: "has_changes" });
+    expect(refused.log).toBe(editing.log);
+    expect(refused.draft).toBe(editing.draft);
+
+    // An undo still leaves work to redo, and that is work in progress too.
+    const undone = run(editing, { type: "undo" });
+    expect(run(undone, { type: "restore", kept: keptDraft }).refusal).toMatchObject({
+      reason: "has_changes",
+    });
+    const discarded = run(editing, { type: "discard" });
+    expect(run(discarded, { type: "restore", kept: keptDraft }).log.ops).toHaveLength(1);
+  });
+
+  test("drops a kept redo stack that does not redo, rather than leaving a redo that throws", () => {
+    const left = run(
+      keyedEdit(),
+      { type: "record", intent: { type: "remove", target: "seat:dev" } },
+      { type: "record", intent: { type: "renameUnit", target: "unit:Sales", name: "Revenue" } },
+      { type: "undo" },
+    );
+    // Storage handed back an undone operation that names the removed seat,
+    // which no draft this log produces still holds.
+    const stale = run(keyedEdit(), {
+      type: "record",
+      intent: { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "x" }] },
+    }).log.ops[0]!;
+    const restored = run(keyedEdit(), {
+      type: "restore",
+      kept: { ...kept(left), undone: [stale] },
+    });
+    expect(restored.log.ops).toEqual(left.log.ops);
+    expect(restored.log.undone).toEqual([]);
+    expect(() => run(restored, { type: "redo" })).not.toThrow();
+  });
+
   test("made for another mode is refused", () => {
     const create = run(INITIAL_BUILDER, {
       type: "load",
