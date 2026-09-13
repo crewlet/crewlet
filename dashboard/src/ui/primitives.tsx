@@ -690,6 +690,158 @@ export function Code({ children, plain, selectable, label }: CodeProps) {
 }
 
 /**
+ * How long a confirmation holds before the control offers its action again.
+ *
+ * Long enough to be read at a glance, short enough that a reader who wants it
+ * twice is not waiting on it. A REFUSAL is not on this clock — see the click
+ * handler below.
+ */
+const CONFIRMED_HOLD_MS = 2000;
+
+/**
+ * The half a Copy and a Download button are the same: do a thing that either
+ * lands or does not, say which, and settle back so the label is never a stale
+ * claim.
+ *
+ * Extracted rather than written twice. The two controls sit SIDE BY SIDE in
+ * the same header, so any difference between them — how long the
+ * confirmation holds, whether a refusal is announced at all, whether the
+ * status text leaks into the accessible name — is a visible inconsistency
+ * rather than a private detail, and a second copy is exactly how one of them
+ * acquires it. The engine has the same lesson written down twice, in
+ * `internal/textcut` and `internal/api/httpjson`.
+ *
+ * `run` returns whether it landed. It may be async — the Clipboard API is —
+ * and it must not throw: a refusal is a `false`, because the caller is the
+ * only frame that knows what a refusal MEANS to say about.
+ */
+function FeedbackButton({
+  run,
+  icon,
+  label,
+  doneLabel,
+  failedLabel,
+  doneSaid,
+  failedSaid,
+  title,
+  variant,
+  size = "sm",
+}: {
+  run: () => boolean | Promise<boolean>;
+  icon: IconName;
+  /** What the control offers, at rest. */
+  label: string;
+  /** The same control once it worked — short, because it is a button. */
+  doneLabel: string;
+  /** …and once it did not. */
+  failedLabel: string;
+  /** What a screen reader is told on success. Specific, because the icon
+   *  swap is the only signal a sighted reader gets and a screen reader gets
+   *  none of it. */
+  doneSaid: string;
+  /** What a screen reader is told on failure, and the button's `title` while
+   *  it is in that state: the reason replaces the offer, since the offer is
+   *  the thing that just did not happen. */
+  failedSaid: string;
+  title?: string;
+  variant?: "default" | "ghost";
+  size?: "md" | "sm";
+}) {
+  // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
+  // running is not a DOM change and a live region announces changes only. A
+  // second refusal left a reader who cannot see the button with silence — and
+  // a refusal now holds rather than settling back, so there is no reset to
+  // make the third one audible either. Keyed on the count, the status node is
+  // REPLACED rather than re-rendered, which is a change.
+  const [{ state, attempt }, setOutcome] = useState<{
+    state: "idle" | "done" | "failed";
+    attempt: number;
+  }>({ state: "idle", attempt: 0 });
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const live = useRef(true);
+
+  // The timeout outlives the component otherwise, and a screen left during
+  // the seconds after a click sets state on something unmounted. Set on the
+  // way IN as well as cleared on the way out, because StrictMode mounts,
+  // unmounts and mounts again, and a flag only ever cleared stays cleared.
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
+
+  const onClick = useCallback(() => {
+    void Promise.resolve(run()).then((ok) => {
+      // The answer can arrive after the screen is gone: a clipboard write
+      // waits on a permission prompt the reader may never answer. The
+      // cleanup above has already run by then, so arming a timer here would
+      // arm the one thing nothing clears.
+      if (!live.current) return;
+      setOutcome((prior) => ({ state: ok ? "done" : "failed", attempt: prior.attempt + 1 }));
+      clearTimeout(timer.current);
+      // A CONFIRMATION SETTLES BACK. A REFUSAL DOES NOT.
+      //
+      // Both used to, on one constant, and that put the failure back into the
+      // state this control exists to leave: three seconds after a download
+      // the reader is looking at the browser's shelf and not at the button,
+      // and a button that has reverted to offering its action is
+      // indistinguishable from one that was never pressed. So a refusal holds
+      // until the next click — which is the gesture a reader who wants to
+      // retry makes anyway — and only the confirmation is on a clock.
+      if (ok) {
+        timer.current = setTimeout(
+          () => setOutcome((prior) => ({ ...prior, state: "idle" })),
+          CONFIRMED_HOLD_MS,
+        );
+      }
+    });
+  }, [run]);
+
+  const said = state === "done" ? doneSaid : state === "failed" ? failedSaid : "";
+
+  return (
+    <span className="row gap-1">
+      <Button
+        size={size}
+        variant={variant}
+        icon={state === "done" ? "check" : state === "failed" ? "alert" : icon}
+        onClick={onClick}
+        title={state === "failed" ? failedSaid : title}
+      >
+        {state === "done" ? doneLabel : state === "failed" ? failedLabel : label}
+      </Button>
+      {/* Announced, not just drawn: the icon swap is the only signal a
+          sighted reader gets, and a screen reader gets none of it.
+
+          A SIBLING of the button, never a child. A button's accessible name
+          is computed from its contents, so inside it this named the control
+          "Copied copied to the clipboard" — the status text becoming part of
+          what the button claims to be. */}
+      <span className="sr-only" role="status">
+        <span key={attempt}>{said}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The text, or a THUNK that produces it.
+ *
+ * The thunk is not a convenience: on a live turn the thing worth copying is
+ * assembled from every phase and every streamed frame, and `agents` is pushed
+ * twice per tool round — so a string prop means a full `JSON.stringify` of
+ * the whole turn on every push, for a button nobody has clicked. Resolved on
+ * click, it costs nothing until it is asked for.
+ */
+type Text = string | (() => string);
+
+function resolve(text: Text): string {
+  return typeof text === "function" ? text() : text;
+}
+
+/**
  * Put text on the clipboard, and SAY WHETHER IT LANDED.
  *
  * Two things a bare `navigator.clipboard.writeText(x)` gets wrong, and both
@@ -714,65 +866,92 @@ export function CopyButton({
   variant,
   size = "sm",
 }: {
-  /**
-   * The text, or a THUNK that produces it.
-   *
-   * The thunk is not a convenience: on a live turn the thing worth copying is
-   * assembled from every phase and every streamed frame, and `agents` is
-   * pushed twice per tool round — so a string prop means a full
-   * `JSON.stringify` of the whole turn on every push, for a button nobody has
-   * clicked. Resolved on click, it costs nothing until it is asked for.
-   */
-  text: string | (() => string);
+  text: Text;
   label?: string;
   title?: string;
   variant?: "default" | "ghost";
   size?: "md" | "sm";
 }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  // The timeout outlives the component otherwise, and a screen left during
-  // the two seconds after a copy sets state on something unmounted.
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const onClick = useCallback(() => {
-    void copyToClipboard(typeof text === "function" ? text() : text).then((ok) => {
-      setState(ok ? "copied" : "failed");
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setState("idle"), 2000);
-    });
-  }, [text]);
-
-  const said =
-    state === "copied"
-      ? "copied to the clipboard"
-      : state === "failed"
-        ? "the browser refused the clipboard"
-        : "";
-
+  const run = useCallback(() => copyToClipboard(resolve(text)), [text]);
   return (
-    <span className="row gap-1">
-      <Button
-        size={size}
-        variant={variant}
-        icon={state === "copied" ? "check" : state === "failed" ? "alert" : "copy"}
-        onClick={onClick}
-        title={state === "failed" ? "the browser refused the clipboard" : title}
-      >
-        {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
-      </Button>
-      {/* Announced, not just drawn: the icon swap is the only signal a
-          sighted reader gets, and a screen reader gets none of it.
+    <FeedbackButton
+      run={run}
+      icon="copy"
+      label={label}
+      doneLabel="Copied"
+      failedLabel="Copy failed"
+      doneSaid="copied to the clipboard"
+      failedSaid="the browser refused the clipboard"
+      title={title}
+      variant={variant}
+      size={size}
+    />
+  );
+}
 
-          A SIBLING of the button, never a child. A button's accessible name
-          is computed from its contents, so inside it this named the control
-          "Copied copied to the clipboard" — the status text becoming part of
-          what the button claims to be. */}
-      <span className="sr-only" role="status">
-        {said}
-      </span>
-    </span>
+/**
+ * Hand the same text to the reader as a FILE, and say whether it landed.
+ *
+ * The sibling of [CopyButton], over the same bytes, because the two things an
+ * operator does with a turn are different: one is pasted into a message, the
+ * other is attached to a bug report or kept beside the incident. A clipboard
+ * also holds exactly one thing, so copying two turns to compare them is not a
+ * gesture that exists.
+ *
+ * Its failure modes are not the clipboard's, and one of them is worse than a
+ * dead button:
+ *
+ *  1. **No `URL.createObjectURL`** — nothing to point a saveable link at, and
+ *     nothing to fall back to. A `data:` URL is the usual answer and it is
+ *     the wrong one here: several engines cap it around two megabytes and a
+ *     self-iterating turn's JSON goes past that, so the fallback would work
+ *     on the small turns nobody needs it for and fail silently on the large
+ *     ones.
+ *  2. **No `download` attribute** — the click then NAVIGATES to the JSON
+ *     instead of saving it, which looks enough like something happening that
+ *     nobody checks. Refusing is the honest answer; both are checked up front
+ *     rather than assumed.
+ */
+export function DownloadButton({
+  text,
+  filename,
+  mime = "application/json;charset=utf-8",
+  label = "Download",
+  title,
+  variant,
+  size = "sm",
+}: {
+  text: Text;
+  /** The name to offer it under. Sanitised here — see [safeFilename]. */
+  filename: string;
+  mime?: string;
+  label?: string;
+  title?: string;
+  variant?: "default" | "ghost";
+  size?: "md" | "sm";
+}) {
+  const name = safeFilename(filename);
+  const run = useCallback(() => saveTextFile(resolve(text), name, mime), [text, name, mime]);
+  return (
+    <FeedbackButton
+      run={run}
+      icon="download"
+      label={label}
+      // WHAT WAS OBSERVED, which is a HAND-OFF. There is no completion event
+      // on an `<a download>`: `saveTextFile` returns true because the click
+      // did not throw, and Chrome's automatic-multiple-download gate can stop
+      // it silently after that. "Saved" claimed a file on a disk nothing here
+      // can see. The NAME is the half that is true and the half worth saying,
+      // since a reader who cannot see the download shelf has nothing else to
+      // tell them what to go and open.
+      doneLabel="Downloading"
+      failedLabel="Download failed"
+      doneSaid={`download started — ${name}`}
+      failedSaid="the browser refused the download"
+      title={title}
+      variant={variant}
+      size={size}
+    />
   );
 }
 
@@ -810,4 +989,87 @@ function execCommandCopy(text: string): boolean {
   } finally {
     field.remove();
   }
+}
+
+/**
+ * Save `text` to the reader's machine as `filename`, and report whether the
+ * browser took it.
+ *
+ * The blob URL is revoked on the NEXT macrotask rather than here: the click
+ * only QUEUES the download, and freeing the entry inside the same task races
+ * the fetch that is about to read it. Not revoking at all is the other
+ * failure — the blob is a second copy of the whole turn, held for the life
+ * of the tab, and a reader comparing turns clicks this several times.
+ */
+function saveTextFile(text: string, filename: string, mime: string): boolean {
+  if (typeof URL.createObjectURL !== "function" || !("download" in HTMLAnchorElement.prototype)) {
+    return false;
+  }
+  let url = "";
+  try {
+    url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    // In the document for the one synchronous call: not every engine
+    // dispatches an activation behaviour on a node that is in no document,
+    // and there is no state to leave behind either way.
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+/** Longer than any extension in use, so a `.` deep inside a name is not read
+ *  as one when a long name has to be cut. */
+const MAX_EXTENSION = 12;
+/**
+ * Every filesystem a reader of this dashboard is on allows at least 255
+ * BYTES, and the browser appends its own " (1)" to deduplicate against what
+ * is already in the folder; eCryptfs stops at 143. 120 clears all three with
+ * room to spare.
+ */
+const MAX_FILENAME = 120;
+
+/**
+ * A filename the reader will actually get, out of whatever the caller had.
+ *
+ * The name is composed from data — a turn id comes off the URL — and the
+ * `download` attribute is only a SUGGESTION: the browser sanitises it its own
+ * way, stripping path separators and whatever else each engine dislikes.
+ * Deciding it here means every caller gets one predictable answer rather than
+ * three, and a name that arrived as `../etc/passwd` or with a newline in it
+ * never reaches that guess.
+ */
+function safeFilename(name: string): string {
+  // UNICODE-AWARE, and that is not a nicety. `\w` is ASCII-only, so an
+  // ASCII-only class collapsed a whole non-Latin stem to a single `-` and the
+  // leading-strip below then took that hyphen AND the extension's own
+  // separator with it: `日本語.json` came out as a file called `json`, and
+  // `résumé.json` as `r-sum-.json`. What has to be excluded here is the
+  // separators and the invisibles — `/`, `\`, `:`, the fullwidth solidus, an
+  // RTL override — and not one of those is a letter, a mark or a number in
+  // any script.
+  const cleaned = name.replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, "-").replace(/-{2,}/g, "-");
+  // An extension is a dot with SOMETHING after it and not much: a `.` deep
+  // inside a long name is part of the name, and a trailing one is not an
+  // extension at all — it is also illegal on Windows.
+  const dot = cleaned.lastIndexOf(".");
+  const tail = cleaned.length - dot;
+  const ext = dot >= 0 && tail >= 2 && tail <= MAX_EXTENSION ? cleaned.slice(dot) : "";
+  // THE STEM IS WHAT GETS STRIPPED AND WHAT GETS CUT, never the extension: a
+  // name that loses its `.json` opens in the wrong application on every
+  // desktop there is. Leading dots are what make `..` a traversal and `.turn`
+  // a hidden file, and they can only ever be in the stem.
+  const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
+  if (!stem) return `download${ext}`;
+  return stem.slice(0, MAX_FILENAME - ext.length) + ext;
 }

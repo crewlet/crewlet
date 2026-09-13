@@ -184,7 +184,7 @@ meets their company first and the engine last.
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |
+| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` and `Download turn` in the header assemble the record, the phases and the rest as one JSON object — the same bytes, for pasting into a thread and for attaching to a bug report — and the Turn record panel copies itself and owns ⌘A |
 | — | Event | `#/events/{id}` | `event` |
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
@@ -473,7 +473,7 @@ What replaced it:
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
 
-Three more controls that looked like something they were not:
+Four more controls that looked like something they were not:
 
 - **A copy button says whether it copied.** The clipboard is invisible, so a
   control that writes to it and reports nothing is indistinguishable from a
@@ -484,6 +484,24 @@ Three more controls that looked like something they were not:
   `CopyButton` primitive falls back to the deprecated `execCommand` path,
   which is the only one that works there, and then says `Copied` or
   `Copy failed` — announced as well as drawn.
+- **A download button says whether it downloaded, and refuses rather than
+  navigating.** The same invisible outcome with a worse failure available to
+  it: an `<a>` whose `download` attribute the browser ignores does not save
+  the JSON, it OPENS it, and a tab full of text looks enough like something
+  happening that nobody checks. `DownloadButton` tests for both halves —
+  `URL.createObjectURL` and `download` — before it builds anything, says
+  `Download failed` when either is missing. What it says on success is
+  `Downloading`, not `Saved`: there is no completion event on an
+  `<a download>`, so the only thing observed is the hand-off, and a browser
+  can still stop it afterwards. It names the file
+  (`download started — turn-….json`) because a reader who cannot see the
+  download shelf has nothing else to tell them what to go and open. It shares
+  the confirmation machinery with `CopyButton` rather than reimplementing it:
+  the two sit side by side in the Turn header, so a difference in how long
+  either holds its answer is a visible inconsistency rather than a private
+  detail. A `data:` URL is deliberately NOT the fallback — several engines cap
+  one around two megabytes, so it would work on the small turns nobody needs
+  it for and fail silently on the large ones.
 - **A caption-sized link is still a link.** `.t-caption` on an `<a>` sets the
   muted colour, which wins over the anchor rule, so four real navigations —
   a phase's own event, a turn card's id, a seat's last error, the spend
@@ -880,8 +898,12 @@ rendered idle from the first phase to the last.
 12. **Numbers are tabular**, and an absent number is an em dash rather than a
     zero — zero is a measurement.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
-    a write, a revoke — if the reader cannot see the result, the control says
-    it, in text a screen reader reaches as well as an icon.
+    a download, a write, a revoke — if the reader cannot see the result, the
+    control says it, in text a screen reader reaches as well as an icon. A
+    refusal is reported too, and it OUTLASTS the confirmation: a reader who
+    looked away for three seconds must still be able to learn it did not
+    land, so a failed state holds until the next click while a successful one
+    settles back.
 14. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.

@@ -57,6 +57,7 @@ import {
   Code,
   CopyButton,
   Disclosure,
+  DownloadButton,
   KeyValue,
   Panel,
   Skeleton,
@@ -560,6 +561,17 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               text={turnJSON}
               label="Copy turn"
               title="the whole turn as JSON — its record, its phases and everything else it published"
+            />
+            {/* THE SAME BYTES, out of the same thunk. A turn is pasted into a
+                thread and ATTACHED to a bug report, and the second one is not
+                a clipboard gesture: an incident is read weeks later, a
+                clipboard holds exactly one thing, and a self-iterating turn's
+                JSON is past what anyone wants inline. */}
+            <DownloadButton
+              text={turnJSON}
+              filename={`turn-${turnId}.json`}
+              label="Download turn"
+              title="the same JSON, saved as a file"
             />
           </>
         }
