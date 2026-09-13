@@ -1,6 +1,7 @@
 package atlassian
 
 import (
+	"encoding/base64"
 	"fmt"
 	"slices"
 	"strings"
@@ -213,25 +214,99 @@ func CredentialAt(
 			if raw == "" {
 				continue
 			}
-			// A `Bearer <pat>` carries the credential behind a scheme, and
-			// stripping it is what lets one config shape serve both an HTTP
-			// MCP server and this lookup. A Basic header is left alone: its
-			// payload is already email:token, and re-encoding it would
-			// produce a credential that authenticates as nobody.
-			cred := Credential{Token: strings.TrimSpace(strings.TrimPrefix(raw, "Bearer "))}
-			// THE ADDRESS COMES FROM THE SAME BLOCK the token did. A seat
-			// with a Data Center PAT under `jira` and a Cloud address under
-			// `atlassian` holds two credentials, not one.
-			for _, ek := range p.emailKeys() {
-				if address := strings.TrimSpace(value(block[ek])); address != "" {
-					cred.Email = address
-					break
+			cred, paired := credentialOfHeader(raw)
+			if !paired {
+				// THE ADDRESS COMES FROM THE SAME BLOCK the token did. A
+				// seat with a Data Center PAT under `jira` and a Cloud
+				// address under `atlassian` holds two credentials, not one.
+				//
+				// Skipped for a Basic header, which carried its own: the
+				// payload IS the pair, and pairing that secret with a
+				// different address makes a third credential that
+				// authenticates as nobody.
+				for _, ek := range p.emailKeys() {
+					if address := strings.TrimSpace(value(block[ek])); address != "" {
+						cred.Email = address
+						break
+					}
 				}
 			}
 			return cred, fmt.Sprintf("%s.%s", server, key)
 		}
 	}
 	return Credential{}, ""
+}
+
+// credentialOfHeader reads a value that may be a whole `Authorization` header,
+// reporting whether it carried an address of its own.
+//
+// # A scheme is a wrapper, and both clients put one back
+//
+// [jira.Client] and [confluence.Client] build their own header from the pair
+// they are given: an empty address selects `Bearer <token>` and a present one
+// selects `Basic base64(address:token)`. So this function's job is not to
+// preserve what was typed — it is to produce the PAIR that rebuilds it.
+//
+// A `Bearer <pat>` needed only its scheme stripped, and that much was already
+// done. A `Basic <payload>` was stored whole, in the token, with no address —
+// which is precisely the shape that selects the bearer scheme, so every one of
+// those seats sent `Authorization: Bearer Basic <payload>`, was refused by both
+// products, and reported an identity failure over a credential that was
+// perfectly good. Decoded into its two halves it re-encodes byte for byte,
+// because [base64.StdEncoding] is what wrote it and what reads it back.
+//
+// THE SCHEME IS MATCHED WITHOUT REGARD TO CASE, which HTTP requires of a
+// reader and which this did not do: a seat that wrote `bearer <pat>` — the
+// spelling curl prints — kept the word in its token and sent
+// `Authorization: Bearer bearer <pat>`, the same failure by the other route.
+//
+// A payload that is not base64, or that carries no colon, is not a Basic
+// credential this can take apart. It is returned as it came rather than
+// guessed at: an invented address would authenticate as somebody else, and the
+// refusal an unusable credential earns is already reported per seat.
+func credentialOfHeader(raw string) (cred Credential, paired bool) {
+	if rest, ok := cutScheme(raw, "Bearer"); ok {
+		return Credential{Token: rest}, false
+	}
+	rest, ok := cutScheme(raw, "Basic")
+	if !ok {
+		return Credential{Token: raw}, false
+	}
+	payload, err := decodeBase64(rest)
+	if err != nil {
+		return Credential{Token: raw}, false
+	}
+	address, secret, found := strings.Cut(payload, ":")
+	if !found {
+		return Credential{Token: raw}, false
+	}
+	return Credential{Email: strings.TrimSpace(address), Token: secret}, true
+}
+
+// cutScheme removes one HTTP auth scheme and the space after it, matching the
+// scheme case-insensitively as a reader must.
+func cutScheme(raw, scheme string) (string, bool) {
+	if len(raw) <= len(scheme) || !strings.EqualFold(raw[:len(scheme)], scheme) {
+		return "", false
+	}
+	rest, cut := strings.CutPrefix(raw[len(scheme):], " ")
+	if !cut {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// decodeBase64 reads a Basic payload written either with padding or without.
+//
+// BOTH, because the header is typed by a person as often as it is copied from
+// a tool, and a padded value rejected as malformed is a working credential
+// reported as broken.
+func decodeBase64(in string) (string, error) {
+	if out, err := base64.StdEncoding.DecodeString(in); err == nil {
+		return string(out), nil
+	}
+	out, err := base64.RawStdEncoding.DecodeString(in)
+	return string(out), err
 }
 
 // SeatEmail is the Atlassian account one seat authenticates as, or empty.
