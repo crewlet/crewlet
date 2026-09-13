@@ -257,3 +257,73 @@ func TestTheWindowReopensForALaterSeal(t *testing.T) {
 		t.Errorf("calls = %v, want a seal past the window to run at once", got)
 	}
 }
+
+// STOP WAITS FOR A RE-ACTIVATION THAT HAS ALREADY BEGUN, AND CANCELS IT.
+//
+// Disarming the timers covers a run that has not started. It does nothing at
+// all about one that HAS: a fired timer's callback is already past the
+// `stopped` check, and Timer.Stop on it reports false and changes nothing. So
+// stop returned while a config revision was still being written — by a node
+// whose seats were being released, with [Engine.Stop] closing the store and
+// the broker underneath it. That is the exact write stop exists to prevent,
+// reached through the one window it did not cover.
+//
+// Both halves are asserted, because either alone leaves the defect reachable:
+// the run's context must be CANCELLED, so an apply in flight gives up rather
+// than finishing, and stop must not RETURN until the run has unwound, so a
+// caller can treat it as "nothing is writing any more".
+func TestStoppingWaitsForARepublishAlreadyRunning(t *testing.T) {
+	t.Parallel()
+	var (
+		entered   = make(chan struct{})
+		release   = make(chan struct{})
+		returned  = make(chan struct{})
+		cancelled bool
+	)
+	r := &republisher{now: func() time.Time { return time.Unix(0, 0) }}
+
+	r.request("founder@example.com", func(ctx context.Context, _ string) {
+		close(entered)
+		// HELD INSIDE THE RUN, which is the window: stop is called while
+		// this goroutine is between its own guard and its return.
+		<-release
+		cancelled = ctx.Err() != nil
+		close(returned)
+	})
+
+	// The run is in flight and past every check it makes.
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the immediate re-activation never started")
+	}
+
+	stopped := make(chan struct{})
+	go func() { r.stop(); close(stopped) }()
+
+	// STOP MUST NOT HAVE RETURNED, because the run has not.
+	select {
+	case <-stopped:
+		t.Fatal("stop returned while a re-activation was still writing: a " +
+			"caller reads that as nothing is writing any more, and closes " +
+			"the store underneath it")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the run never returned")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop never returned after the run finished")
+	}
+	if !cancelled {
+		t.Error("the run's context was not cancelled, so an apply in flight " +
+			"finishes rather than giving up: a leaving node still writes a " +
+			"revision and wakes every peer")
+	}
+}

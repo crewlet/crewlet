@@ -76,6 +76,25 @@ type republisher struct {
 	// shutdown does not re-activate a revision on a node that is leaving.
 	stopped bool
 
+	// runs counts the re-activations that have STARTED and not yet
+	// returned, and cancelRuns cancels the context every one of them was
+	// given.
+	//
+	// DISARMING THE TIMERS IS NOT ENOUGH, which is the half [republisher.stop]
+	// was missing. A timer that has already fired is past every check its
+	// callback makes: it has seen `stopped` false, cleared its field, and is
+	// about to call `run`. Stop then found nothing to cancel and returned —
+	// so the reload it exists to prevent went on writing a config revision,
+	// crediting an operator and waking every peer, while [Engine.Stop] was
+	// closing the backends underneath it.
+	//
+	// Both halves are needed. The cancel is what makes an apply already in
+	// flight give up rather than finish; the wait is what makes stop mean
+	// "nothing is writing any more" rather than "nothing NEW will start".
+	runs       sync.WaitGroup
+	cancelRuns context.CancelFunc
+	runCtx     context.Context
+
 	// now and window are injectable so the cases can drive the clock
 	// rather than sleep through it. Nil and zero take the real ones.
 	now    func() time.Time
@@ -97,6 +116,25 @@ type republisher struct {
 // value: the two bounds are a human's patience and a dialog's write pattern,
 // and neither varies by where the engine runs.
 const republishWindow = 15 * time.Second
+
+// begin registers a run that is about to start, and hands it the context
+// [republisher.stop] cancels. It reports false when shutdown has overtaken it.
+//
+// THE CALLER HOLDS r.mu, which is what makes the registration safe: stop sets
+// `stopped` under the same lock before it waits, so a run that gets a yes here
+// is counted before any wait can begin, and one that arrives after gets a no.
+func (r *republisher) begin() (context.Context, bool) {
+	if r.stopped {
+		return nil, false
+	}
+	if r.runCtx == nil {
+		// LAZILY, because the zero value of this type has to work: it is a
+		// field on the engine rather than something constructed.
+		r.runCtx, r.cancelRuns = context.WithCancel(context.Background())
+	}
+	r.runs.Add(1)
+	return r.runCtx, true
+}
 
 func (r *republisher) clock() time.Time {
 	if r.now != nil {
@@ -185,16 +223,18 @@ func (r *republisher) startNow(run func(context.Context, string), operator strin
 	}
 	r.inflight = time.AfterFunc(0, func() {
 		r.mu.Lock()
-		if r.stopped {
-			r.mu.Unlock()
+		r.inflight = nil
+		ctx, ok := r.begin()
+		r.mu.Unlock()
+		if !ok {
 			return
 		}
-		r.inflight = nil
-		r.mu.Unlock()
-		// DETACHED, like [republisher.fire]: there is no caller's context
-		// here at all, and [Engine.rebuildForSealedSecrets] gives it the
-		// deadline.
-		run(context.Background(), operator)
+		defer r.runs.Done()
+		// DETACHED FROM THE CALLER, like [republisher.fire]: there is no
+		// caller's context here at all, and [Engine.rebuildForSealedSecrets]
+		// gives it the deadline. Not detached from SHUTDOWN, which is a
+		// different question and the one this context answers.
+		run(ctx, operator)
 	})
 	r.mu.Unlock()
 }
@@ -210,21 +250,42 @@ func (r *republisher) fire(run func(context.Context, string)) {
 	r.last = r.clock()
 	operator := r.operator
 	r.operator = ""
+	ctx, ok := r.begin()
 	r.mu.Unlock()
-	// DETACHED, like the inline path: there is no caller's context here at
-	// all, and [Engine.rebuildForSealedSecrets] gives it the deadline.
-	run(context.Background(), operator)
+	if !ok {
+		return
+	}
+	defer r.runs.Done()
+	// DETACHED FROM THE CALLER, like the inline path, and bound to shutdown
+	// by the context begin hands over.
+	run(ctx, operator)
 }
 
-// stop disarms a pending re-activation.
+// stop ends every re-activation this type owns and returns once none is
+// running.
 //
 // A TIMER IS A GOROUTINE'S LIFETIME and this one belongs to the engine. Left
 // armed through a shutdown it would write a config revision from a node that
 // has already released its seats — crediting an operator, waking every peer,
 // on behalf of a process that is leaving.
+//
+// DISARMING WAS ONLY THE FIRST HALF. A timer stopped before it fires is
+// cancelled; one that has already fired is a goroutine already past the
+// `stopped` check, and Stop on it reports false and changes nothing. So a
+// reload that had just begun ran to completion beside [Engine.Stop] closing
+// the store and the broker under it — the exact write this function exists to
+// prevent, reached through the one window it did not cover.
+//
+// Cancel, then WAIT. The cancel makes an apply already in flight give up at
+// its next context check instead of finishing; the wait is what lets a caller
+// treat this returning as "nothing is writing any more". Neither is enough
+// alone: a cancelled apply still needs a moment to unwind, and a wait with no
+// cancel would sit out a full config write.
+//
+// THE WAIT IS OUTSIDE THE LOCK, because a run takes it when it finishes.
+// Holding it here would deadlock against the goroutine being waited for.
 func (r *republisher) stop() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.stopped = true
 	if r.pending != nil {
 		r.pending.Stop()
@@ -234,4 +295,11 @@ func (r *republisher) stop() {
 		r.inflight.Stop()
 		r.inflight = nil
 	}
+	cancel := r.cancelRuns
+	r.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	r.runs.Wait()
 }
