@@ -158,7 +158,13 @@ export function Work() {
   // AND THE PROJECT'S OWN OVERVIEW, only while one is selected: its sprint,
   // its lead and the unit that owns it are what a board scoped to a project
   // cannot say from its rows.
+  // ENABLED ON THE SELECTION, not just parameterised by it. The engine
+  // refuses this question without a key — correctly, since there is no
+  // default project — so passing no params is not "ask for everything", it is
+  // a query that fails every poll: a warning a minute in the operator's log,
+  // and a screen holding an error for a question nobody asked.
   const overview = useQuery("work_project", project ? { key: project } : undefined, {
+    enabled: project !== "",
     pollMs: 60_000,
   });
   // AND WHAT HAPPENED, which is a different question from what is there: the

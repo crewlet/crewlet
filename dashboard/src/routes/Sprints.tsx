@@ -54,7 +54,13 @@ export function Sprints() {
   const keys = (projects.data?.projects ?? []).map((p) => p.key);
   const chosen = project || keys[0] || "";
 
+  // NOT UNTIL ONE IS CHOSEN — see the same guard on the board's project
+  // overview. `chosen` is empty while the catalogue is still loading and stays
+  // empty for a company with no projects, and the engine refuses the question
+  // without one, so the screen's own empty state is the honest rendering
+  // rather than a `query_failed` for a project nobody named.
   const report = useQuery("work_sprints", chosen ? { project: chosen } : undefined, {
+    enabled: chosen !== "",
     pollMs: 60_000,
   });
   const sprints = report.data?.sprints ?? [];

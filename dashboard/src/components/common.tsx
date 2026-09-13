@@ -291,6 +291,18 @@ export function QueryState({
       </div>
     );
   }
+  if (error === "bad_params") {
+    return (
+      <div className="banner caution">
+        <Icon name="alert" size="sm" />
+        <span>
+          The engine refused this request: something it needs was missing or not a value it accepts.
+          Retrying sends the same request — this is the screen's bug to fix, not a fault on the
+          node.
+        </span>
+      </div>
+    );
+  }
   if (error === "unavailable") {
     return (
       <div className="banner neutral">

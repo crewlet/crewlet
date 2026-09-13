@@ -2249,6 +2249,10 @@ export type QueryErrorCode =
   | "unknown_query"
   | "unauthorized"
   | "query_failed"
+  /** This node understood the question and REFUSED it: a parameter missing,
+   *  malformed, or outside the set the field accepts. The caller's fault, not
+   *  the engine's — retrying sends the same bad request again. */
+  | "bad_params"
   | "not_found"
   /** This node understood the question and cannot answer it YET — a
    *  projection still catching up after a restart or a fresh join. A screen
