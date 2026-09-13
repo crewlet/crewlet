@@ -340,7 +340,12 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		s.domains[domain.Name()] = running
 		s.order = append(s.order, domain.Name())
 	}
-	s.launchAppliers()
+	// THE STATE LOG'S OWN CONTEXT, never the boot call's: an applier is
+	// joined by [stateLog.Stop], which ends that one.
+	//nolint:contextcheck // s.run is [context.WithoutCancel] of the boot
+	// context: an applier started under the CALLER's would stop the moment
+	// start returned, and every read of that domain would go stale.
+	s.launchAppliers(s.run)
 	// A NODE THAT FALLS BELOW THE FLOOR WHILE RUNNING adopts the same way
 	// it would at boot. The heartbeat is what notices, and this is what it
 	// calls: the appliers are ended, the artefact installed, the appliers
@@ -367,18 +372,25 @@ func (s *stateLog) Stop() {
 	s.done.Wait()
 }
 
-// launchAppliers starts every domain's apply loop under a fresh context.
+// launchAppliers starts every domain's apply loop under a fresh context
+// derived from base.
 //
 // Called once at boot and again after every adoption, over the same runners:
 // every subsystem that holds one keeps holding it, and [statelog.Runner.Run]
 // resumes from the checkpoint the file now keeps.
-func (s *stateLog) launchAppliers() {
+//
+// THE BASE IS THE STATE LOG'S OWN LIFETIME ([stateLog.run]), never the
+// caller's: an applier outlives the boot call that started it and the
+// heartbeat tick that relaunched it after an adoption, and one derived from
+// either would stop the moment that call returned. Passed rather than read
+// off the struct so the call site says whose lifetime it is.
+func (s *stateLog) launchAppliers(base context.Context) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	if s.applyStop != nil {
 		return
 	}
-	ctx, cancel := context.WithCancel(s.run)
+	ctx, cancel := context.WithCancel(base)
 	s.applyStop = cancel
 	for _, name := range s.order {
 		running := s.domains[name]
@@ -1282,7 +1294,10 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 		"detail", "this node is below the log's floor while running; its "+
 			"appliers pause while it asks the fleet for a snapshot")
 	s.haltAppliers()
-	defer s.launchAppliers()
+	// ctx IS the state log's own run context here — [requestRejoin]
+	// starts this under it — so the relaunched appliers get the lifetime
+	// the boot launch gave them rather than a heartbeat tick's.
+	defer s.launchAppliers(ctx)
 
 	logs := make(map[string]*jetstream.DomainLog, len(s.domains))
 	for name, running := range s.domains {
