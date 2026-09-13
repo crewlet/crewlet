@@ -137,14 +137,16 @@ type Engine struct {
 	sandboxWaiter      *sandbox.Waiter
 	sandboxPending     sandbox.PendingStore
 
-	// leaseTTL is the coordination bucket's own age, resolved once from
-	// Tier A.
+	// leaseTTL is the seat lease TTL, which is also the seat lease bucket's
+	// own age, resolved once from Tier A.
 	//
-	// Held because it is a CEILING, not just this node's seat setting: the
-	// KV's expiry is bucket-wide, so it refuses any lease asked to outlive
-	// it, and a worker duty derived from its own cadence has to be clamped
-	// against it rather than hope the two numbers agree. They did agree,
-	// by one strictly-greater comparison, until somebody lowered this.
+	// Held because it is a CEILING for every SEAT claim this engine makes
+	// outside the seat host: the KV's expiry is bucket-wide, so it refuses a
+	// seat lease asked to outlive it, and the mailbox retirement claims a
+	// removed seat's lease with exactly this TTL. Duties are NOT bounded by
+	// it: they live in a bucket of their own whose ceiling is
+	// coord.MaxDutyTTL, and a duty clamped to this value lapsed between two
+	// of its own ticks.
 	leaseTTL time.Duration
 
 	// memory carries a seat's memory between the nodes that run it.

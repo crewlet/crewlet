@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -399,40 +400,53 @@ func TestAnUnrecordableSuspensionFailsTheRun(t *testing.T) {
 	}
 }
 
-// The waiter duty must survive three of its OWN ticks and must never outlive
-// the lease bucket it is written into.
+// The waiter duty must survive three of its OWN ticks, whatever the seat lease
+// TTL is.
 //
-// It was `3 * sandbox.DefaultPollInterval` — a constant that ignored the
-// configured interval, so its own "three poll intervals" was true of exactly
-// one deployment. That constant was 45s, which is also the default lease TTL,
-// and the KV refuses a lease STRICTLY longer than its bucket's age: the two
-// agreed by one comparison. Lower coordination.lease_ttl_seconds below 45 and
-// every claim errors — and mayTick fails closed, so the waiter stops ticking
-// altogether and every detached run hangs forever.
-func TestTheWaiterDutyTTLFollowsItsCadenceAndItsBucket(t *testing.T) {
+// It was `3 * sandbox.DefaultPollInterval`, a constant that ignored the
+// configured interval, and then it was capped at the seat lease TTL because
+// duties shared the seat lease bucket. That cap handed a 60 s poll a 45 s duty,
+// which lapsed between two of its own ticks. Duties have their own bucket now,
+// so the only ceiling is coord.MaxDutyTTL, and an interval that would need more
+// is refused when the waiter starts rather than on every tick.
+func TestTheWaiterDutyTTLFollowsItsCadence(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		interval time.Duration
-		lease    time.Duration
 		want     time.Duration
 	}{
-		{"the default cadence", sandbox.DefaultPollInterval, 45 * time.Second, 45 * time.Second},
-		{"a slower cadence scales with it", 60 * time.Second, 10 * time.Minute, 3 * time.Minute},
-		{"a fast cadence takes the floor", 100 * time.Millisecond, 45 * time.Second, 30 * time.Second},
-		{"an unset cadence takes the default", 0, 45 * time.Second, 45 * time.Second},
-		{"a short bucket is the ceiling", sandbox.DefaultPollInterval, 20 * time.Second, 20 * time.Second},
-		{"no bucket leaves the derived value", 60 * time.Second, 0, 3 * time.Minute},
+		{"the default cadence", sandbox.DefaultPollInterval, 45 * time.Second},
+		{"a cadence slower than the seat lease TTL still gets three ticks", 60 * time.Second, 3 * time.Minute},
+		{"a fast cadence takes the floor", 100 * time.Millisecond, 30 * time.Second},
+		{"an unset cadence takes the default", 0, 45 * time.Second},
+		{"the slowest cadence the duty ceiling admits", coord.MaxDutyTTL / dutyTTLTicks, coord.MaxDutyTTL},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			e := &Engine{leaseTTL: tc.lease}
-			if got := e.waiterDutyTTL(tc.interval); got != tc.want {
-				t.Fatalf("waiterDutyTTL(%s) with a %s bucket = %s, want %s",
-					tc.interval, tc.lease, got, tc.want)
+			if got := waiterDutyTTL(tc.interval); got != tc.want {
+				t.Fatalf("waiterDutyTTL(%s) = %s, want %s", tc.interval, got, tc.want)
 			}
-			if tc.lease > 0 && e.waiterDutyTTL(tc.interval) > tc.lease {
-				t.Fatal("the duty asks to outlive its bucket; the KV refuses that on every claim")
+			if got := waiterDutyTTL(tc.interval); got < dutyTTLTicks*tc.interval {
+				t.Fatalf("waiterDutyTTL(%s) = %s lapses inside three of its own ticks", tc.interval, got)
+			}
+			if _, err := (&Engine{}).waiterDuty(tc.interval); err != nil {
+				t.Fatalf("waiterDuty(%s) refused an interval the duty ceiling admits: %v", tc.interval, err)
 			}
 		})
+	}
+}
+
+// A poll interval whose duty no backend grants is refused at start, naming the
+// option, rather than failing every claim for the life of the process.
+func TestAWaiterIntervalBeyondTheDutyCeilingIsRefusedAtStart(t *testing.T) {
+	t.Parallel()
+	interval := coord.MaxDutyTTL/dutyTTLTicks + time.Second
+	duty, err := (&Engine{}).waiterDuty(interval)
+	if !errors.Is(err, coord.ErrTTLTooLong) {
+		t.Fatalf("waiterDuty(%s) = (%v, %v), want an error wrapping coord.ErrTTLTooLong", interval, duty != nil, err)
+	}
+	if !strings.Contains(err.Error(), "SandboxPollInterval") {
+		t.Fatalf("the refusal %q does not name the option to change", err)
 	}
 }
 

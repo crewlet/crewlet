@@ -924,6 +924,10 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 	if e.sandboxCoordinator == nil {
 		return nil
 	}
+	duty, err := e.waiterDuty(interval)
+	if err != nil {
+		return err
+	}
 	waiter, err := sandbox.NewWaiter(sandbox.WaiterOptions{
 		Queue: e.backends.Queue, Pending: e.sandboxPending,
 		Manager:  e.sandboxCoordinator.Manager(),
@@ -932,7 +936,7 @@ func (e *Engine) startSandboxWaiter(ctx context.Context, interval time.Duration)
 		// in the company, not just this node's seats, so N nodes running it
 		// unclaimed means N reconnects per box per tick and N racing
 		// reapers.
-		ClaimDuty: sandbox.DutyFunc(e.waiterDuty(interval)),
+		ClaimDuty: sandbox.DutyFunc(duty),
 	})
 	if err != nil {
 		return err
@@ -980,11 +984,22 @@ const waiterDutyName = "sandbox-waiter"
 // Nil where there is no coordination backend, which is the single-node case:
 // that node always holds it, and a wrapper that always said yes would make a
 // single node report itself as a fleet singleton.
-func (e *Engine) waiterDuty(interval time.Duration) schedule.DutyFunc {
-	if e.backends == nil || e.backends.Coord == nil {
-		return nil
+//
+// An interval whose duty no backend will grant is refused HERE, at start,
+// rather than on every tick: the waiter fails closed on a claim error, so a
+// refused TTL would leave it never ticking, every detached run hanging and
+// every box losing its keepalive, with one warning per tick as the only sign.
+func (e *Engine) waiterDuty(interval time.Duration) (schedule.DutyFunc, error) {
+	if err := coord.CheckDutyTTL(coord.WorkerResource(waiterDutyName), waiterDutyTTL(interval)); err != nil {
+		return nil, fmt.Errorf("engine: a sandbox poll interval of %v needs a %v waiter duty; "+
+			"lower Options.SandboxPollInterval: %w", interval, waiterDutyTTL(interval), err)
 	}
-	return e.workerDuty(waiterDutyName, e.waiterDutyTTL(interval))
+	if e.backends == nil || e.backends.Coord == nil {
+		return nil, nil
+	}
+	// The TTL expression is spelled as the duty-TTL guard test expects it;
+	// see TestEveryDutyTTLFitsTheDutyCeiling.
+	return e.workerDuty(waiterDutyName, waiterDutyTTL(interval)), nil
 }
 
 // dutyTTLTicks is how many poll intervals the waiter duty survives without a
@@ -1006,29 +1021,21 @@ const (
 
 // waiterDutyTTL is how long the waiter duty survives without a re-claim.
 //
-// DERIVED FROM THE INTERVAL IT GUARDS, and capped by the lease bucket's own
-// age. It used to be `3 * sandbox.DefaultPollInterval` — a compile-time
-// constant that ignored the configured interval entirely, so its own comment
-// ("three poll intervals") was true of exactly one deployment. That constant
-// was 45 s, which is also precisely the default lease TTL, and the KV refuses
-// a lease STRICTLY longer than its bucket's age: the two agreed by one
-// comparison. An operator lowering coordination.lease_ttl_seconds below 45
-// therefore made every waiter duty claim fail — and mayTick fails closed, so
-// the waiter would never tick again. Every detached run would hang forever and
-// every box lose its keepalive, with one warning per tick as the only symptom.
-//
-// Capping rather than erroring, because a duty that is re-claimed every tick
-// loses nothing by expiring sooner: the holder renews long before either
-// deadline, and a shorter TTL only means a dead holder is replaced faster.
-func (e *Engine) waiterDutyTTL(interval time.Duration) time.Duration {
+// DERIVED FROM THE INTERVAL IT GUARDS, and from nothing else. It used to be
+// `3 * sandbox.DefaultPollInterval`, a compile-time constant that ignored the
+// configured interval entirely, and then it was capped at the seat lease TTL,
+// because duties shared the seat lease bucket and the KV refused a lease
+// longer than that bucket's age. The cap was wrong in its own right: a poll
+// interval longer than the seat lease TTL got a duty that lapsed between two
+// of its own ticks, so the waiter moved to whichever peer ticked first on
+// every tick. Duties now have a bucket of their own whose ceiling is
+// [coord.MaxDutyTTL], so the ratio holds for every interval that ceiling
+// admits, and [Engine.waiterDuty] refuses the ones it does not.
+func waiterDutyTTL(interval time.Duration) time.Duration {
 	if interval <= 0 {
 		interval = sandbox.DefaultPollInterval
 	}
-	ttl := max(dutyTTLTicks*interval, dutyTTLFloor)
-	if e.leaseTTL > 0 && ttl > e.leaseTTL {
-		return e.leaseTTL
-	}
-	return ttl
+	return max(dutyTTLTicks*interval, dutyTTLFloor)
 }
 
 // prepareSeat is the node's SeatReady hook: recover this seat's in-flight runs
