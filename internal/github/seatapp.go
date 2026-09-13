@@ -161,17 +161,28 @@ func SeatsWithNoApp(handles []string) *integration.Finding {
 	if len(handles) == 0 {
 		return nil
 	}
-	detail, all := integration.Listed(
-		fmt.Sprintf("%d agent(s) have no GitHub App of their own, so nothing "+
-			"they do on GitHub is theirs", len(handles)),
-		handles,
-		"Create one per agent from the Integrations screen — GitHub offers no "+
-			"API for it, so it is a click there and nothing else can do it.")
+	seat := handles[0]
+	// THE ONE CASE NAMES ITS AGENT AND THE MANY CASE COUNTS THEM, because
+	// "1 agent(s) have no GitHub App" is wrong in three ways at once: the
+	// parenthesis reads as machine output where a person is being asked to
+	// act, the verb does not agree, and the handle it is about is a metre
+	// further down the card when there is room for it right here.
+	detail := seat + " has no GitHub App of its own, so nothing it does on " +
+		"GitHub is its own"
+	if len(handles) > 1 {
+		detail = integration.Count(len(handles), "agent") +
+			" have no GitHub App of their own, so nothing they do on GitHub " +
+			"is theirs"
+	}
 	return &integration.Finding{
-		Kind:     integration.FindingApprovalRequired,
-		Subject:  "agents without an app",
-		Detail:   detail,
-		Subjects: all,
+		Kind:    integration.FindingApprovalRequired,
+		Subject: "agents without an app",
+		Detail:  detail,
+		// NOT "from the Integrations screen", which is the screen this is
+		// rendered on, beside that agent's own Create button.
+		Remedy: "Create one per agent — GitHub offers no API for it, so a " +
+			"person clicking is the only thing that can.",
+		Subjects: handles,
 	}
 }
 

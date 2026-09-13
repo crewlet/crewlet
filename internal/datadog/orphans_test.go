@@ -81,25 +81,34 @@ func TestServiceAccountsNoSeatClaimsAreReported(t *testing.T) {
 		t.Fatalf("findings = %v, none of them naming the accounts no seat "+
 			"claims: 36 of them read as a healthy organization", res.Findings())
 	}
-	if !strings.Contains(f.Detail, "agent-cs-old@agents.test.invalid") {
-		t.Errorf("the finding does not name the account to act on:\n%s", f.Detail)
+	// THE LIST IS THE SUBJECTS, and the sentence carries only the count —
+	// so a card laying both out does not show a short list twice.
+	if !slices.Contains(f.Subjects, "agent-cs-old@agents.test.invalid") {
+		t.Errorf("the finding does not name the account to act on: %v", f.Subjects)
 	}
 	// NOT THE SEAT'S OWN, which is the working agent.
-	if strings.Contains(f.Detail, "crewlet-sre@agents.test.invalid") {
+	if slices.Contains(f.Subjects, "crewlet-sre@agents.test.invalid") {
 		t.Errorf("the finding names a seat's own account, so an operator is "+
-			"told to clean up the identity of a working agent:\n%s", f.Detail)
+			"told to clean up the identity of a working agent: %v", f.Subjects)
 	}
 	// AND NOT A PERSON. ListServiceAccounts already drops them, and this is
 	// the clause that keeps it true here.
-	if strings.Contains(f.Detail, "jane@acme.example") {
-		t.Errorf("the finding names a person's account:\n%s", f.Detail)
+	if slices.Contains(f.Subjects, "jane@acme.example") {
+		t.Errorf("the finding names a person's account: %v", f.Subjects)
 	}
 	// AND NOT A DISABLED ONE, which is already where the note is asking it
 	// to get to. See [TestADisabledOrphanIsAlreadyWhereTheNoteAsks].
-	if strings.Contains(f.Detail, "agent-cs-off@agents.test.invalid") ||
-		slices.Contains(f.Subjects, "agent-cs-off@agents.test.invalid") {
-		t.Errorf("the finding names an account that is already disabled:\n%s",
-			f.Detail)
+	if slices.Contains(f.Subjects, "agent-cs-off@agents.test.invalid") {
+		t.Errorf("the finding names an account that is already disabled: %v",
+			f.Subjects)
+	}
+	if strings.Contains(f.Detail, "@") {
+		t.Errorf("the sentence splices an address into itself, so a card "+
+			"rendering it beside the list shows it twice:\n%s", f.Detail)
+	}
+	// AND WHAT TO DO IS ITS OWN FIELD.
+	if f.Remedy == "" {
+		t.Error("the advisory says what is there and not what to do about it")
 	}
 	// AN ADVISORY, so the surface is not held out of Ready by it.
 	if phase, _ := f.Kind.Verdict(); phase != integration.PhaseReady {
@@ -198,9 +207,12 @@ func TestADisabledOrphanIsAlreadyWhereTheNoteAsks(t *testing.T) {
 	// THE SENTENCE SAYS SO, because a count that silently means something
 	// narrower than it reads is how an operator concludes the card is wrong
 	// about their organization.
-	if !strings.Contains(f.Detail, "1 enabled service account") {
-		t.Errorf("the detail does not say the count is of enabled accounts:\n%s",
-			f.Detail)
+	if !strings.Contains(f.Detail, "1 enabled service account ") {
+		t.Errorf("the detail does not say the count is of enabled accounts, "+
+			"in the singular:\n%s", f.Detail)
+	}
+	if strings.Contains(f.Detail, "(s)") {
+		t.Errorf("the count wears a parenthetical plural:\n%s", f.Detail)
 	}
 }
 
@@ -250,12 +262,13 @@ func TestARealDomainNeedsTheCrewletPrefix(t *testing.T) {
 	if !found {
 		t.Fatalf("findings = %v, none naming the orphan", res.Findings())
 	}
-	if !strings.Contains(f.Detail, "crewlet-gone@acme.example") {
-		t.Errorf("the finding does not name this engine's own leftover:\n%s", f.Detail)
+	if !slices.Contains(f.Subjects, "crewlet-gone@acme.example") {
+		t.Errorf("the finding does not name this engine's own leftover: %v",
+			f.Subjects)
 	}
-	if strings.Contains(f.Detail, "build-robot@acme.example") {
+	if slices.Contains(f.Subjects, "build-robot@acme.example") {
 		t.Errorf("the finding names a service account somebody else made at a "+
-			"domain this company owns:\n%s", f.Detail)
+			"domain this company owns: %v", f.Subjects)
 	}
 }
 

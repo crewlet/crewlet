@@ -1995,3 +1995,102 @@ test("a finding with no verdict still un-readies the agent", () => {
   fireEvent.click(screen.getByRole("button", { name: /Show Atlassian details/ }));
   expect(screen.getByText("not ready")).toBeTruthy();
 });
+
+// THE HEADLINE FINDING IS LAID OUT IN FOUR SLOTS, not rendered as one
+// paragraph carrying all of them.
+//
+// Measured on a live card, as one unbroken line: "1 agent(s) have no GitHub
+// App of their own, so nothing they do on GitHub is theirs: sre-lead. Create
+// one per agent from the Integrations screen — GitHub offers no API for it,
+// so it is a click there and nothing else can do it.all 1 agents without an
+// app". A problem, a name, an instruction and a disclosure summary, at one
+// weight, with the last running into the sentence before it.
+test("a finding renders its problem, subjects and remedy as separate parts", () => {
+  render(
+    <Reconcile
+      appName="GitHub"
+      status={{
+        phase: "awaiting_admin",
+        actor: "admin",
+        detail: "4 agents have no GitHub App of their own",
+        findings: [
+          {
+            kind: "approval_required",
+            subject: "agents without an app",
+            detail: "4 agents have no GitHub App of their own",
+            remedy: "Create one per agent — GitHub offers no API for it.",
+            subjects: ["sre-lead", "cs-lead", "swe", "pm"],
+          },
+        ],
+      }}
+    />,
+  );
+  // EVERY SUBJECT IS A THING ON SCREEN, scannable, rather than prose inside
+  // the sentence.
+  for (const handle of ["sre-lead", "cs-lead", "swe", "pm"]) {
+    expect(screen.getByText(handle)).toBeTruthy();
+  }
+  // AND THE REMEDY IS ITS OWN ELEMENT, so it can be laid out under the
+  // problem at a quieter weight rather than appended to the sentence.
+  const remedy = screen.getByText(/Create one per agent/);
+  expect(remedy.className).toContain("int-note-remedy");
+  expect(remedy.textContent).not.toContain("no GitHub App of their own");
+});
+
+// A LIST LONGER THAN THE CARD EXPANDS IN PLACE.
+//
+// The reason the rest are folded is width rather than secrecy, and the
+// measured long case — thirty-six Datadog service accounts — is a list
+// somebody is working through, so it must not send them elsewhere to read it.
+test("a long subject list folds to a count that expands", () => {
+  const many = Array.from({ length: 12 }, (_, i) => `agent-${i}@agents.test.invalid`);
+  render(
+    <Reconcile
+      appName="Datadog"
+      status={{
+        phase: "ready",
+        detail: "Crewlet made 12 enabled service accounts matching no seat",
+        findings: [
+          {
+            kind: "registration_orphaned",
+            subject: "datadog service accounts",
+            detail: "Crewlet made 12 enabled service accounts matching no seat",
+            subjects: many,
+          },
+        ],
+      }}
+    />,
+  );
+  const last = "agent-11@agents.test.invalid";
+  expect(screen.queryByText(last)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /\+6 more/ }));
+  expect(screen.getByText(last)).toBeTruthy();
+});
+
+// AND ONE SUBJECT IS NOT A DISCLOSURE SAYING "all 1 agents".
+//
+// The summary was built as `all {n} {subject}s`, so a finding about one thing
+// read "all 1 agents without an app" — ungrammatical twice — under a sentence
+// that had already named the agent, and needed a click to reveal what it had
+// just repeated.
+test("one subject is shown, not hidden behind a count", () => {
+  render(
+    <Reconcile
+      appName="GitHub"
+      status={{
+        phase: "awaiting_admin",
+        detail: "sre-lead has no GitHub App of its own",
+        findings: [
+          {
+            kind: "approval_required",
+            subject: "agents without an app",
+            detail: "sre-lead has no GitHub App of its own",
+            subjects: ["sre-lead"],
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.queryByText(/all 1/)).toBeNull();
+  expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+});

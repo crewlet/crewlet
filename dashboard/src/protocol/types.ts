@@ -524,7 +524,18 @@ export interface FleetAnswer {
 export interface ReconcileFinding {
   kind: string;
   subject?: string;
+  /**
+   * What is wrong, in one sentence — and only that.
+   *
+   * What to do about it is `remedy` and which things it is about is
+   * `subjects`. Three fields because a reader wants them in three different
+   * moments and one string cannot be laid out: glued, they arrived as one
+   * unbroken paragraph carrying a problem, a name and an instruction, with
+   * the disclosure summary running straight into its last word.
+   */
   detail?: string;
+  /** What to do about it, rendered as its own line at a quieter weight. */
+  remedy?: string;
   action_url?: string;
   /**
    * What this finding MEANS, from the engine's own per-kind verdict table
@@ -547,9 +558,11 @@ export interface ReconcileFinding {
    * `detail` is the card's status line and the engine caps it, so a finding
    * that listed its subjects inline arrived as a wall cut off mid-item —
    * thirty-six Datadog service accounts ending `…@agents.cr…`. The engine
-   * now puts the count and three examples in `detail` and the whole list
-   * here, so a reader with room can show all of them and one without is
-   * still correct.
+   * now puts the COUNT in `detail` and the whole list here, so a reader with
+   * room lays them out and one without is still correct.
+   *
+   * It named three of them in the sentence too, which put every short list
+   * on screen twice: once as prose and once as the list, a centimetre apart.
    *
    * Absent on the ordinary finding about one thing.
    */

@@ -819,25 +819,27 @@ func (r *Result) Findings() []integration.Finding {
 		for _, user := range r.Orphaned {
 			addresses = append(addresses, user.Email)
 		}
-		// THROUGH [integration.Listed], because the detail is the card's
-		// one-line status and it is capped: written inline, thirty-six
-		// addresses were a 500-character wall cut off mid-address. The
-		// sentence names the count and three examples; the whole list
-		// travels beside it.
-		detail, all := integration.Listed(
-			fmt.Sprintf("%d enabled service account(s) at this company's own "+
-				"email domain match no seat this engine provisions for — a "+
-				"renamed seat, a changed handle, or an older naming scheme",
-				len(addresses)),
-			addresses,
-			"Nothing here removes them: an account is a colleague at Datadog "+
-				"with history attached. Disable or delete the ones you do not "+
-				"want, at Datadog.")
+		// THE COUNT IN THE SENTENCE AND THE ADDRESSES IN THE LIST. The
+		// detail is the card's one-line status and it is capped: written
+		// inline, thirty-six addresses were a 500-character wall cut off
+		// mid-address. [integration.Count] takes the number from the same
+		// slice the list is, so the two cannot disagree.
 		out = append(out, integration.Finding{
-			Kind:     integration.FindingRegistrationOrphaned,
-			Subject:  "datadog service accounts",
-			Detail:   detail,
-			Subjects: all,
+			Kind:    integration.FindingRegistrationOrphaned,
+			Subject: "datadog service accounts",
+			// "…matching no seat", a PARTICIPLE, so the sentence reads
+			// correctly at one account and at thirty-six. A relative
+			// clause needs "matches" or "match" and would put a second
+			// number agreement in a sentence that already has one.
+			Detail: "Crewlet made " +
+				integration.Count(len(addresses), "enabled service account") +
+				" at this company's own email domain matching no seat it " +
+				"provisions for — a renamed seat, a changed handle, or an " +
+				"older naming scheme",
+			Remedy: "Disable or delete the ones you do not want, at Datadog. " +
+				"Nothing here removes them: an account is a colleague there, " +
+				"with history attached.",
+			Subjects: addresses,
 		})
 	}
 	return out

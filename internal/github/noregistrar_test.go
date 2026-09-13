@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -192,18 +193,33 @@ func TestAgentsWithNoAppAreReportedAsNeedingAPerson(t *testing.T) {
 		actor == integration.ActorEngine {
 		t.Errorf("verdict is %s/%s, which reads as nothing to do", phase, actor)
 	}
+	// ONE AGENT IS NAMED AND NOT COUNTED. "1 agent(s) have no GitHub App"
+	// was wrong in three ways at once: the parenthesis reads as machine
+	// output in the one place a person is being asked to act, the verb does
+	// not agree, and the handle it is about was a metre further down the
+	// card when there was room for it right here.
 	if !strings.Contains(f.Detail, "sre-lead") {
 		t.Errorf("the finding does not name the agent:\n%s", f.Detail)
 	}
+	if strings.Contains(f.Detail, "(s)") || strings.Contains(f.Detail, "1 agent") {
+		t.Errorf("one agent is counted rather than named:\n%s", f.Detail)
+	}
+	if strings.Contains(f.Detail, " have ") {
+		t.Errorf("the verb does not agree with one agent:\n%s", f.Detail)
+	}
 }
 
-// AND MANY OF THEM ARE ONE FINDING, WITH THE WHOLE LIST REACHABLE.
+// AND MANY OF THEM ARE ONE FINDING, WITH THE WHOLE LIST BESIDE IT.
 //
 // Creating an app is the same act for every seat that has none, so N of them
-// is one sentence rather than N rows on the card. The sentence names three,
-// because `detail` is the card's status line and the engine caps it — a
-// fifty-agent company would otherwise be a wall cut off mid-handle — and the
-// rest travels in Subjects.
+// is one sentence rather than N rows on the card. The sentence carries the
+// COUNT and nothing else — `detail` is the card's status line and the engine
+// caps it, so a fifty-agent company would be a wall cut off mid-handle — and
+// every handle travels in Subjects, where a card lays them out.
+//
+// It used to name three of them inline as well, and that is what this now
+// pins the absence of: a renderer showing both put every short list on
+// screen twice, a centimetre apart, once as prose and once as the list.
 func TestManyAgentsWithNoAppAreOneReadableFinding(t *testing.T) {
 	t.Parallel()
 	handles := []string{"a", "b", "c", "d", "e", "f"}
@@ -215,29 +231,34 @@ func TestManyAgentsWithNoAppAreOneReadableFinding(t *testing.T) {
 		t.Errorf("the sentence is %d characters, over the cap that would cut "+
 			"it mid-handle", len(f.Detail))
 	}
-	// COUNTED OVER THE SUBJECTS THEMSELVES, not over the separators: the
-	// closing instruction has commas of its own.
-	named := 0
+	// THE SENTENCE NAMES NONE OF THEM, and says how many.
 	for _, handle := range handles {
 		if strings.Contains(f.Detail, " "+handle+",") ||
 			strings.Contains(f.Detail, " "+handle+" ") {
-			named++
+			t.Errorf("the sentence splices %q into itself, so a card "+
+				"rendering the sentence and the list shows it twice:\n%s",
+				handle, f.Detail)
 		}
 	}
-	if named > integration.ListedExamples {
-		t.Errorf("the sentence names %d of the %d handles, so it is becoming "+
-			"the list rather than naming examples of it:\n%s",
-			named, len(handles), f.Detail)
+	if !strings.Contains(f.Detail, "6 agents") {
+		t.Errorf("the sentence does not say how many, so a reader with only "+
+			"a string learns nothing about the size of it:\n%s", f.Detail)
 	}
-	if named == 0 {
-		t.Errorf("the sentence names none of them, so a reader cannot tell "+
-			"which agents it is about:\n%s", f.Detail)
+	// AND THE LIST IS ALL OF THEM, in the order it was given.
+	if !slices.Equal(f.Subjects, handles) {
+		t.Errorf("subjects = %v, want every handle", f.Subjects)
 	}
-	if !strings.Contains(f.Detail, "3 more") {
-		t.Errorf("the sentence does not say how many it left out:\n%s", f.Detail)
+	// AND WHAT TO DO IS ITS OWN FIELD, so a card can lay it out under the
+	// problem rather than render one paragraph carrying both.
+	if f.Remedy == "" {
+		t.Error("the finding says what is wrong and not what to do about it")
 	}
-	if len(f.Subjects) != len(handles) {
-		t.Errorf("Subjects = %v, want every handle: the ones the sentence "+
-			"leaves out are then unreachable from any screen", f.Subjects)
+	if strings.Contains(f.Detail, f.Remedy) {
+		t.Error("the remedy is glued into the sentence as well as carried " +
+			"beside it")
+	}
+	// AND IT DOES NOT SEND A READER TO THE SCREEN THEY ARE ON.
+	if strings.Contains(f.Remedy, "Integrations screen") {
+		t.Errorf("the remedy names the screen it is rendered on: %q", f.Remedy)
 	}
 }

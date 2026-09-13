@@ -1405,12 +1405,50 @@
 }
 .int-row-note-text {
   min-width: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  /* THE GAP IS THE STRUCTURE. Its four slots — what is wrong, which things,
+     what to do, and the rest — used to sit at 2px, which is closer than the
+     line spacing inside any one of them, so a paragraph and the disclosure
+     summary beneath it read as one run-on line: `…nothing else can do it.`
+     followed immediately by `1 more finding`. */
+  gap: var(--space-2);
 }
 .int-row-note-when {
   color: var(--text-faint);
+}
+
+/* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
+   while everything around it is quieter. */
+.int-note-problem {
+  margin: 0;
+  color: var(--text);
+}
+
+/* WHAT TO DO: one step down, because it is read second and only once. It is
+   a separate line rather than another clause because an instruction buried
+   mid-paragraph is one a reader has to find. */
+.int-note-remedy {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--text-muted);
+}
+
+/* THE OTHER FINDINGS, ruled off. A disclosure that opens into more sentences
+   needs to be visibly not part of the sentence above it. */
+.int-more {
+  margin: 0;
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+.int-more .int-findings > li {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 /* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
@@ -1444,16 +1482,45 @@ details > summary.int-summary::-webkit-details-marker {
   padding-left: var(--space-4);
 }
 
-/* THE FULL SUBJECT LIST of a finding whose own sentence names three of them.
-   Scrolls rather than growing: thirty-six addresses is the measured case and
-   a card is not a page. */
+/* WHICH THINGS A FINDING IS ABOUT, as chips.
+
+   A handle or an address is a thing a reader SCANS FOR, not a sentence they
+   read: wrapped in prose inside the finding's own sentence, picking one out
+   meant reading the whole line. Laid out, the same six are one glance.
+
+   Scrolls past a point rather than growing, because thirty-six service
+   accounts is the measured case and a card is not a page. */
 .int-subjects {
-  display: block;
-  margin-top: var(--space-1);
-}
-.int-subjects > ul {
-  max-height: 12rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 9rem;
   overflow-y: auto;
+}
+.int-subject {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
   /* The addresses and URLs this carries have no spaces to break at. */
   overflow-wrap: anywhere;
+}
+
+/* THE OVERFLOW COUNT EXPANDS IN PLACE. The reason the rest are folded is
+   width rather than secrecy, and the long case is a list somebody is working
+   through — so it must not send them somewhere to read it. */
+.int-subject-more {
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-2xs);
+}
+.int-subject-more:hover {
+  color: var(--text);
+  border-color: var(--text-faint);
 }

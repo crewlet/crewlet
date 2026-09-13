@@ -458,10 +458,17 @@ export function rollUp(
  * findings can legitimately render the same sentence for different seats, and
  * the report stands for exactly one of them.
  */
-export function withoutHeadline(
-  findings: { kind: string; subject?: string; detail?: string }[],
+/*
+ * GENERIC, because it is a filter: it returns the findings it was handed and
+ * has no business narrowing them. Typed to a literal shape it silently
+ * DROPPED every field that shape did not list — so the caller got back
+ * findings with no `remedy`, `subjects` or `action_url` on them, and the
+ * renderer could not lay out what the engine had sent.
+ */
+export function withoutHeadline<T extends { kind: string; subject?: string; detail?: string }>(
+  findings: T[],
   detail: string,
-): { kind: string; subject?: string; detail?: string }[] {
+): T[] {
   const headline = detail.replace(/ \(and \d+ more\)$/, "").trim();
   if (headline === "") return findings;
   let dropped = false;
@@ -547,17 +554,22 @@ export function Reconcile({
 
   return (
     <div className="int-row-note">
-      <span className="int-row-note-text">
-        {status.detail && <span>{status.detail}</span>}
-        {/* THE WHOLE LIST, for the finding the report is about. Its detail
-            names a count and three examples because the engine caps that
-            string — it is a status line — so without this the rest is
-            simply unreachable from the screen. */}
+      <div className="int-row-note-text">
+        {/* THE HEADLINE FINDING, laid out: what is wrong, which things,
+            what to do, where to do it. Four slots at three weights, in the
+            order somebody reads them — rather than one paragraph carrying
+            all four, which is what this replaced. */}
+        {status.detail && <p className="int-note-problem">{status.detail}</p>}
         {reported && <FindingSubjects of={reported} />}
-        {where && (
-          <a href={where} target="_blank" rel="noreferrer">
-            Open {appName || "the app"}
-          </a>
+        {(reported?.remedy || where) && (
+          <p className="int-note-remedy">
+            {reported?.remedy}
+            {where && (
+              <a href={where} target="_blank" rel="noreferrer">
+                Open {appName || "the app"}
+              </a>
+            )}
+          </p>
         )}
         {actor && <span className="int-row-note-when">{actor}</span>}
 
@@ -567,55 +579,81 @@ export function Reconcile({
           </span>
         )}
 
+        {/* THE REST, behind one disclosure and RULED OFF from the headline.
+            Its summary used to butt straight against the sentence above it,
+            so `…nothing else can do it.` and `1 more finding` read as one
+            run-on line. */}
         {others.length > 0 && (
-          <details>
+          <details className="int-more">
             <summary className="int-summary">
               {others.length} more finding{others.length === 1 ? "" : "s"}
             </summary>
-            <ul className="col gap-1 int-findings">
+            <ul className="col int-findings">
               {others.map((f, i) => (
                 <li key={`${f.kind}:${f.subject ?? ""}:${i}`}>
-                  {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
+                  <span className="int-note-problem">
+                    {f.detail || `${f.kind.replace(/_/g, " ")}${f.subject ? `: ${f.subject}` : ""}`}
+                  </span>
                   <FindingSubjects of={f} />
+                  {f.remedy && <span className="int-note-remedy">{f.remedy}</span>}
                 </li>
               ))}
             </ul>
           </details>
         )}
-      </span>
+      </div>
     </div>
   );
 }
 
+/** How many subjects a finding shows before the rest go behind a count. */
+const SUBJECT_CHIPS = 6;
+
 /**
- * Everything a finding is about, when there is more than its sentence names.
+ * Everything a finding is about — as things, not as prose.
  *
  * The engine caps a finding's `detail` because that string is the card's
- * status line and an oversized status row is refused by its store outright —
- * so a finding about thirty-six things arrived as a wall cut off mid-item.
- * It now sends the count and three examples in the sentence and the whole
- * list separately, and this is where the rest of it goes: folded away, so a
- * card with one healthy surface is not a page of addresses, and reachable,
- * which it was not.
+ * status line and an oversized status row is refused by its store outright,
+ * so a finding about thirty-six things arrived as a wall cut off mid-item. It
+ * now sends the count in the sentence and the list here, and this is where
+ * the list is laid out.
+ *
+ * CHIPS RATHER THAN A DISCLOSURE. What was here was a `<details>` whose
+ * summary read `all {n} {subject}s` — which produced "all 1 agents without an
+ * app", ungrammatical twice, sitting under a sentence that had ALREADY named
+ * the one agent, and needing a click to reveal what it had just repeated. A
+ * handle or an address is a thing a reader scans for, not a sentence they
+ * read: laid out, six of them are legible at a glance and the seventh is a
+ * count.
+ *
+ * The count EXPANDS rather than links away, because the reason a list is
+ * folded here is width, not secrecy — and the measured case, thirty-six
+ * service accounts, is a list somebody is working through.
  *
  * Renders nothing for the ordinary finding about one thing, which sends no
  * list at all.
  */
 function FindingSubjects({ of }: { of: ReconcileFinding }) {
   const all = of.subjects ?? [];
+  const [open, setOpen] = useState(false);
   if (all.length === 0) return null;
+  const shown = open ? all : all.slice(0, SUBJECT_CHIPS);
+  const hidden = all.length - shown.length;
   return (
-    <details className="int-subjects">
-      <summary className="int-summary">
-        all {all.length} {of.subject || "item"}
-        {all.length === 1 ? "" : "s"}
-      </summary>
-      <ul className="col gap-1 int-findings">
-        {all.map((one) => (
-          <li key={one}>{one}</li>
-        ))}
-      </ul>
-    </details>
+    <ul className="int-subjects" aria-label={`what this is about, ${all.length}`}>
+      {shown.map((one) => (
+        <li key={one} className="int-subject">
+          {one}
+        </li>
+      ))}
+      {hidden > 0 && (
+        <li>
+          <button type="button" className="int-subject int-subject-more" onClick={() => setOpen(true)}>
+            +{hidden} more
+          </button>
+        </li>
+      )}
+    </ul>
   );
 }
 

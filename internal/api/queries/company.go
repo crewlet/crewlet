@@ -860,8 +860,14 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 			"phase":      string(phase),
 			"actor":      string(actor),
 		}
+		// WHAT TO DO, SEPARATE FROM WHAT IS WRONG, so a card can lay the
+		// two out rather than render one paragraph carrying both. Absent
+		// where a surface honestly has no instruction to give.
+		if f.Remedy != "" {
+			row["remedy"] = f.Remedy
+		}
 		// THE WHOLE LIST, where a finding is about many things and its own
-		// sentence names only a few. See [integration.Finding.Subjects]:
+		// sentence gives only the count. See [integration.Finding.Subjects]:
 		// the detail is the card's status line and is capped, so a finding
 		// that listed thirty-six addresses inline was a wall cut off
 		// mid-address. Absent rather than an empty array for the ordinary
