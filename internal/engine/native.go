@@ -141,21 +141,51 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 	e.warnIfEphemeral(ctx, boot, runTracker, wiki)
 
-	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	// THE RESOLVED ID, not the raw field. `node.id` may be absent, a
 	// `${VAR}` reference, or come from the environment — and the value
 	// three durable things are named after (this node's own consumer, the
 	// writer stamped on its records, the eviction gate's key) must be the
 	// same one the broker's server name and the presence row already use.
+	//
+	// READ BEFORE the context below rather than after, so the one failure
+	// in this function that has started nothing has nothing to unwind.
 	nodeID, err := config.ResolveNodeID(boot, config.EnvOnly())
 	if err != nil {
-		cancel()
 		return err
 	}
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	n := &native{
 		run: runCtx, stop: cancel, nodeID: nodeID,
 		skillNudge: make(chan struct{}, 1),
 	}
+	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
+	// that outlives this call and stood down only once the runtime is the
+	// engine's.
+	//
+	// Everything below either starts a goroutine or registers this node
+	// somewhere, and both DETACH from runCtx deliberately: the state log's
+	// apply loops, its position heartbeat and its snapshot donor run under
+	// a context of the log's own, and a slice answerer's registration is
+	// copied with [context.WithoutCancel] inside the queue, because a
+	// registration scope is not a process one. So a bare `cancel()` on the
+	// way out reaches NEITHER — it ends this node's own loops, which at
+	// that point have not started — and a return that left them behind
+	// hands [Engine.New]'s failure path a store that an applier is still
+	// committing into, which is the mid-batch write [Engine.Stop] orders
+	// itself to avoid. A caller that retried would then be running two
+	// appliers on one node's durable consumer, each deriving the same rows
+	// into the same replicated database, and two answerers scanning an
+	// index only one of them maintains.
+	//
+	// Deferred rather than written at each return: the list of things to
+	// unwind grows down the function, and the two returns that did unwind
+	// had already stopped matching the four that did not.
+	started := false
+	defer func() {
+		if !started {
+			n.shutdown(ctx)
+		}
+	}()
 
 	// THE LOG COMES UP BEFORE ANYTHING READS IT, and its own context
 	// outlives this call: an apply loop started under the caller's context
@@ -168,7 +198,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// that is merely behind.
 	sl, err := e.startStateLog(ctx, boot, nodeID, c.Epoch())
 	if err != nil {
-		cancel()
 		return err
 	}
 	n.log = sl
@@ -214,8 +243,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			Metrics: e.metrics,
 		})
 		if err != nil {
-			sl.Stop()
-			cancel()
 			return fmt.Errorf("engine: tracker writer: %w", err)
 		}
 		n.writer = writer
@@ -226,8 +253,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// is the same one seat admission reads.
 		if n.trackerReader, err = tracker.NewReader(
 			e.backends.Store, running.reader); err != nil {
-			sl.Stop()
-			cancel()
 			return fmt.Errorf("engine: tracker reader: %w", err)
 		}
 	}
@@ -268,7 +293,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		stop, err := search.ServeSlices(runCtx, e.backends.Queue, nodeID,
 			search.NodeScanner{Index: n.indexer})
 		if err != nil {
-			cancel()
 			return fmt.Errorf("engine: serve search slices: %w", err)
 		}
 		n.stopSlices = stop
@@ -277,7 +301,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if wiki {
 		running := sl.Domain(pages.Domain{}.Name())
 		if running == nil {
-			cancel()
 			return fmt.Errorf("engine: this node runs no pages domain, so the " +
 				"knowledge base has nowhere to write — the domain is in the " +
 				"register and its stream failed to come up")
@@ -286,14 +309,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		if n.pages, err = pages.NewStore(pages.Options{
 			Publisher: running.publisher, DB: e.backends.Store,
 		}); err != nil {
-			cancel()
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = pages.NewReader(pages.ReaderOptions{
 			DB: e.backends.Store, Log: running.reader,
 			Committed: running.runner.Committed,
 		}); err != nil {
-			cancel()
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
 		// LIVE off the epoch, not off the company this node booted
@@ -328,6 +349,12 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	}
 
 	e.native = n
+	// THE RUNTIME IS THE ENGINE'S FROM HERE, so the cleanup above stands
+	// down and [Engine.stopNative] — the same shutdown — is what ends it.
+	// Set before the two calls below because both reach through e.native:
+	// a failure cleanup that ran after they had started would stop loops
+	// the engine is about to be asked to stop again.
+	started = true
 	// AFTER e.native is set, because the worker reads through it.
 	e.startNativeSkills()
 	// AND THE CHART, so the projects this company's units name are objects
@@ -343,12 +370,38 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	return nil
 }
 
-// stopNative ends this node's native backends.
-func (e *Engine) stopNative() {
-	if e.native == nil {
+// stopNative ends this node's native backends. Nil-safe, which is the node
+// that runs none.
+func (e *Engine) stopNative(ctx context.Context) { e.native.shutdown(ctx) }
+
+// shutdown ends everything this runtime started and WAITS for it.
+//
+// ONE IMPLEMENTATION FOR TWO CALLERS — [Engine.stopNative] and the failure
+// path in [Engine.startNative] — because a half-built runtime leaks precisely
+// what a built one does: the log's apply loops do not know their node never
+// finished booting, and an answerer registered on the broker is a claim on
+// buckets a peer is counting on whether or not the node that made it went on
+// to serve a seat. A second copy of this order is how one of them stops
+// matching the other.
+//
+// Nil-safe throughout, because the failure path can reach it with the log not
+// yet built, no answerer registered and nothing in the wait group.
+//
+// # Why it takes a context it then strips
+//
+// The withdrawal below is a call to the broker, so it needs a context that is
+// not already cancelled — and BOTH of the contexts in reach routinely are. The
+// caller's is a shutdown signal or a failed boot; this runtime's own is
+// cancelled by the [native.stop] two lines further down, which is what makes a
+// second shutdown a no-op rather than a hang. So the caller's travels here for
+// its VALUES — the trace the teardown belongs to — and [context.WithoutCancel]
+// is what makes it usable, which is the rule this tree states once: a cleanup
+// that inherits a dead context does nothing at all.
+func (n *native) shutdown(ctx context.Context) {
+	if n == nil {
 		return
 	}
-	if e.native.stopSlices != nil {
+	if n.stopSlices != nil {
 		// FIRST, and before the context that would cancel an answerer
 		// mid-scan: a node that has decided to go away must stop
 		// claiming buckets its peers are counting on before it stops
@@ -356,15 +409,15 @@ func (e *Engine) stopNative() {
 		// missing assignment on its next search, where a registration
 		// that outlived the scan costs it a silent empty slice it
 		// counts as answered.
-		_ = e.native.stopSlices(context.WithoutCancel(e.native.run))
+		_ = n.stopSlices(context.WithoutCancel(ctx))
 	}
-	e.native.stop()
-	e.native.done.Wait()
+	n.stop()
+	n.done.Wait()
 	// THE APPLY LOOPS LAST, after the feeds and the projector that read
 	// what they write. A loop stopped first leaves a feed consuming a log
 	// nothing is applying, which is not wrong so much as a shutdown that
 	// looks like a stall in every log line it produces on the way out.
-	e.native.log.Stop()
+	n.log.Stop()
 }
 
 // NativeHydrated reports whether every native projection this node runs has

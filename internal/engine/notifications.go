@@ -683,7 +683,7 @@ func chatFingerprint(url, team, status string, seats []mattermost.SeatConfig) st
 	}
 	write(url, team, status)
 	for _, seat := range seats {
-		write(seat.Handle, seat.Token, seat.Username, seat.Channel)
+		write(seat.Handle, seat.Token, seat.Username)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

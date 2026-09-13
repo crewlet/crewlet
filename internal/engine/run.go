@@ -454,19 +454,16 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("engine: %w", err)
 	}
 
-	backends := opts.Backends
-	ownsBackends := false
-	if backends == nil {
-		opened, err := OpenBackends(ctx, opts.Bootstrap, opts.Company)
-		if err != nil {
-			return nil, err
-		}
-		backends = opened
-		ownsBackends = true
-	}
-	// Only what this engine OPENED does it close. A caller that supplied
-	// backends keeps their lifetime — the merged API process outlives the
-	// engine's own shutdown and still needs its broker.
+	// EVERYTHING THAT CAN FAIL WITH NOTHING OPEN COMES FIRST, which is why
+	// the telemetry receiver, the bridge and this node's identity are
+	// resolved above the backends rather than below them. It is the same
+	// ordering [Engine.startNative] uses on its own node-id read, for the
+	// same reason: a failure that has opened nothing has nothing to unwind.
+	// Placed below the backends, each of these returned past an ALREADY
+	// OPEN store and broker and closed neither — and the store is
+	// exclusive to one process, so the next attempt in the same process
+	// contended with the corpse of this one.
+	//
 	// BUILT BEFORE THE SANDBOX RUNTIME, because the manager takes it: a
 	// receiver constructed after the first apply would leave every run
 	// launched in between exporting nowhere, silently.
@@ -497,15 +494,38 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// maintenance gets; the incarnation is minted here rather than at the
 	// lease, because the capacity barrier compares it and a second mint
 	// would be a second identity for one process.
+	//
+	// AND THE NODE ID ONCE TOO. It was resolved here and then AGAIN a
+	// hundred lines below, from the same bootstrap through the same
+	// resolver, with the second copy handed to the node while the first
+	// stayed on the engine — two constructions of the one value the
+	// comment beside the second forbids, and two chances to disagree about
+	// what this node is called if either ever learns a new source.
 	mode := opts.Mode
 	if mode == "" {
 		mode = statelog.ModeNormal
 	}
-	nodeIdentity, err := config.ResolveNodeID(opts.Bootstrap, nil)
+	nodeID, err := config.ResolveNodeID(opts.Bootstrap, nil)
 	if err != nil {
 		return nil, err
 	}
-	incarnation := config.NewIncarnation(nodeIdentity)
+	incarnation := config.NewIncarnation(nodeID)
+
+	// Only what this engine OPENED does it close. A caller that supplied
+	// backends keeps their lifetime — the merged API process outlives the
+	// engine's own shutdown and still needs its broker.
+	backends := opts.Backends
+	ownsBackends := false
+	if backends == nil {
+		// ASSIGNED, not declared through a temporary: `opened, err :=`
+		// shadows the err the node-id read above already declared, which is
+		// the one shape govet cannot tell from the bug that check is on for.
+		backends, err = OpenBackends(ctx, opts.Bootstrap, opts.Company)
+		if err != nil {
+			return nil, err
+		}
+		ownsBackends = true
+	}
 
 	e := &Engine{
 		backends: backends, ownsBackends: ownsBackends,
@@ -516,7 +536,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		metrics:     opts.Metrics,
 		mode:        mode,
 		incarnation: incarnation,
-		id:          nodeIdentity,
+		id:          nodeID,
 		startedAt:   time.Now().UTC(),
 		// Built before equip, which is what writes the company's own
 		// numbers into it, and before node.New, which hands the same
@@ -528,12 +548,43 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// A runner per caller would give the loop, the API and a disconnect a
 	// claim map each, which guards nothing.
 	e.setupRunner = sync.OnceValue(e.newSetupRunner)
-	fail := func(err error) (*Engine, error) {
-		if ownsBackends {
-			backends.Close(ctx)
+
+	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
+	// that outlives this call and stood down only once the engine is the
+	// caller's.
+	//
+	// Every return below this line used to unwind by closing the backends
+	// and nothing else. By the last of them this node had brought up a
+	// state log, spawned the company's shared MCP process trees, told the
+	// fleet it was about to publish, and armed a dozen duty loops — none
+	// of which the discarded engine could ever be asked to stop again,
+	// because nothing else holds a reference to it. Closing the store and
+	// the broker underneath them is exactly the mid-batch write
+	// [Engine.Stop] orders itself to avoid; and where the CALLER supplied
+	// the backends — the merged API process, an embedded engine, every
+	// test — nothing was closed at all and the loops simply ran on, in a
+	// process whose boot had failed.
+	//
+	// Deferred rather than written at each return, for the reason
+	// [Engine.startNative]'s own guard is: the list of things to unwind
+	// grows down the function, and a per-return list stops matching it at
+	// the first loop somebody adds.
+	//
+	// [context.WithoutCancel] because this is a teardown. The failure
+	// being unwound is routinely the caller's own cancellation, and a
+	// cleanup that inherited a dead context does nothing at all.
+	booted := false
+	defer func() {
+		if booted {
+			return
 		}
-		return nil, err
-	}
+		e.teardown(context.WithoutCancel(ctx))
+		log.InfoContext(ctx, "engine_boot_abandoned", "node", nodeID,
+			"detail", "this boot left nothing running: the state log, the "+
+				"shared MCP children, every duty loop and this node's "+
+				"admission are stopped, and any backends this engine opened "+
+				"itself are closed")
+	}()
 
 	// THE KEYRING AND THE SNAPSHOT BEFORE THE FIRST EPOCH, because the
 	// epoch resolves every ${VAR} it holds as it is built — the provider
@@ -546,7 +597,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// resolving everything from the environment and looking healthy.
 	cipher, err := openCipher(opts.Bootstrap)
 	if err != nil {
-		return fail(err)
+		return nil, err
 	}
 	e.cipher = cipher
 
@@ -559,7 +610,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// is not admitting itself to publish, it is offering the evidence the
 	// capacity barrier is established from. See maintenance_mode.go.
 	if err := e.admit(ctx, maintenanceStreams()); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	e.acknowledge(ctx, maintenanceStreams())
 
@@ -581,7 +632,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if opts.Company != nil {
 		company, err = NewCompanyWith(opts.Company, e.resolver())
 		if err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
 	// SKIPPED ENTIRELY WHEN THERE IS NO EPOCH. Both of these are derived
@@ -597,7 +648,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// whose seats have no code tool and plan around one anyway.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.buildSandboxRuntime(company); err != nil {
-			return fail(fmt.Errorf("engine: sandbox: %w", err))
+			return nil, fmt.Errorf("engine: sandbox: %w", err)
 		}
 		// BEFORE equip too, and for exactly the same reason: the ten
 		// native tracker and knowledge tools are registered only where
@@ -611,7 +662,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// what waits; see [Engine.NativeHydrated].
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.startNative(ctx, opts.Bootstrap, company); err != nil {
-			return fail(err)
+			return nil, err
 		}
 		// EQUIPPED BEFORE PUBLISHED. A turn can start the instant the
 		// epoch is current, and one that found an empty registry would run
@@ -619,15 +670,11 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		// can do nothing.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := e.equip(ctx, company); err != nil {
-			return fail(err)
+			return nil, err
 		}
 	}
 	e.installEpoch(company)
 
-	nodeID, err := config.ResolveNodeID(opts.Bootstrap, nil)
-	if err != nil {
-		return fail(fmt.Errorf("engine: node identity: %w", err))
-	}
 	// SET BEFORE the node, because the node is handed this exact value —
 	// two constructions of it would be two places to disagree about what
 	// this node does.
@@ -694,7 +741,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		BatchOptions: e.batch,
 	})
 	if err != nil {
-		return fail(fmt.Errorf("engine: node: %w", err))
+		return nil, fmt.Errorf("engine: node: %w", err)
 	}
 	// BEFORE THE NODE RUNS, because the first seat it acquires hydrates
 	// through this. A nil syncer is the honest shape for a node with no
@@ -715,7 +762,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			}
 			return id.String()
 		}); err != nil {
-		return fail(fmt.Errorf("engine: seat memory: %w", err))
+		return nil, fmt.Errorf("engine: seat memory: %w", err)
 	}
 	// ARMED HERE, STARTED IN Start. The watchdog stands down permanently
 	// the first time no watched duty is live, and the host is not live
@@ -744,13 +791,19 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 			"detail", "the broker and the coordination estate are up and no "+
 				"publisher is: no seats, no duties, no scheduler, no change "+
 				"feed and no write routes")
+		// THE ENGINE IS THE CALLER'S FROM HERE, so the guard above stands
+		// down and [Engine.Stop] — the same teardown — is what ends it.
+		// This return is a success like the last one, and a maintenance
+		// node that unwound itself on the way out would take down the one
+		// posture the capacity barrier is waiting to read.
+		booted = true
 		return e, nil
 	}
 
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx, opts.SandboxPollInterval); err != nil {
-		return fail(fmt.Errorf("engine: sandbox waiter: %w", err))
+		return nil, fmt.Errorf("engine: sandbox waiter: %w", err)
 	}
 	e.startMaintenance(ctx)
 	// THE LOG'S OWN TRIM, beside the sweep and after the node exists for
@@ -788,7 +841,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// write side, and a company that boots without it learns nothing at
 	// all while looking entirely healthy.
 	if err := e.startReflection(ctx); err != nil {
-		return fail(err)
+		return nil, err
 	}
 	// The two background passes, after the node exists: both are fleet
 	// singletons claimed under its own incarnation.
@@ -798,8 +851,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the window between would reach the record and wake nobody.
 	e.startNativeFeeds(ctx)
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
-		return fail(fmt.Errorf("engine: %w", err))
+		return nil, fmt.Errorf("engine: %w", err)
 	}
+	booted = true
 	return e, nil
 }
 
@@ -991,6 +1045,31 @@ func (e *Engine) Stop(ctx context.Context) {
 			types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
 	}
 	e.node.Drain(ctx)
+	e.teardown(ctx)
+	log.InfoContext(ctx, "engine_stopped")
+}
+
+// teardown stops everything a node started, in the one order that is correct.
+//
+// ONE IMPLEMENTATION FOR TWO CALLERS — [Engine.Stop] and [New]'s failure path
+// — for the reason [native.shutdown] gives about its own two: a half-built
+// engine leaks precisely what a built one does. The apply loops do not know
+// their node never finished booting, a shared MCP server is a process tree
+// holding the company's credentials whether or not a seat ever used it, and an
+// admission left behind says "this process may be publishing" to a coordinator
+// that is about to take a capacity exclusion. A second copy of this order is
+// how one of them stops matching the other.
+//
+// What is NOT here is what only a RUNNING engine has to do: disarm the
+// watchdog, announce its stop into the audit log, and drain. A boot that
+// failed has no seats to hand back, published no start to pair a stop with,
+// and never armed the timer.
+//
+// Nil-safe and never-started-safe throughout, because the boot path reaches it
+// with any suffix of this list undone — each stop is a no-op where the thing
+// it stops was never started, and the node is absent entirely where the
+// failure came before [node.New].
+func (e *Engine) teardown(ctx context.Context) {
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on
 	// every in-flight run while turns are still finishing.
@@ -1031,8 +1110,10 @@ func (e *Engine) Stop(ctx context.Context) {
 	// the projectors and the indexer both write, and an apply landing
 	// after the close would fail its transaction mid-batch and leave the
 	// cursor ahead of the rows it claims to describe.
-	e.stopNative()
-	e.node.Stop(ctx)
+	e.stopNative(ctx)
+	if e.node != nil {
+		e.node.Stop(ctx)
+	}
 	// AFTER the seats are released, so a per-role child is normally
 	// already gone with its seat. This is the backstop for the ones that
 	// were not: a stdio server is a process TREE holding a seat's
@@ -1042,7 +1123,6 @@ func (e *Engine) Stop(ctx context.Context) {
 	if e.ownsBackends {
 		e.backends.Close(ctx)
 	}
-	log.InfoContext(ctx, "engine_stopped")
 }
 
 // StallLag is how far behind the worst live watched duty is.

@@ -149,6 +149,18 @@ The engine boots in this order:
    - **Row present**: apply the payload, which spawns the full company
    - **No row**: engine stays in the **unconfigured** state — the API keeps serving so an operator can push the first revision via `PUT /config` or `crewlet config import`
 
+**A boot that fails leaves nothing running.** Any step above can fail — an
+unreachable broker, a keyring the node cannot open, a provider whose model is a
+`${VAR}` nothing sets — and when one does the node unwinds everything the steps
+before it started, in the order a shutdown uses: the state log's apply loops and
+its snapshot donor, the shared MCP child processes, every duty loop, this node's
+publish admission, and the store file and stream it opened itself. So a
+supervised `crewlet run` retries onto a clean host rather than contending with
+its own previous attempt — which matters most for the store, since one process
+owns that file exclusively and a second open behind a leaked handle fails with
+a message about locking that names neither the original failure nor the file.
+The `engine_boot_abandoned` line is what says the unwind finished.
+
 ### Two equivalent bootstrap entry points
 
 **Option 1 — bootstrap before run (CLI):**
