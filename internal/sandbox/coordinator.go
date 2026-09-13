@@ -715,7 +715,7 @@ func (c *Coordinator) announceFailure(ctx context.Context, run PendingRun, reaso
 func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 	killCtx, cancel := detached(ctx)
 	defer cancel()
-	c.reclaimBox(ctx, killCtx, run)
+	_ = c.reclaimBox(ctx, killCtx, run)
 	if run.SandboxID == "" {
 		return
 	}
@@ -735,6 +735,11 @@ func (c *Coordinator) teardown(ctx context.Context, run PendingRun) {
 // logged rather than retried here: it is still an active record of its seat,
 // so the seat's next recovery pass reaps it, and the ending still counts as
 // this call's, because the box is reclaimed and the turn is over.
+//
+// A kill that fails does not keep the record, unlike in [Coordinator.RetireSeat]:
+// nothing retries a settle, and a record left claimed or launching would park
+// its seat on the next busy count for as long as this node keeps the seat. The
+// failure is logged, and a remote box runs out its TTL.
 func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) bool {
 	if outranked(run, fence) {
 		// A newer lease owns the run; its box is that owner's to reclaim.
@@ -744,7 +749,7 @@ func (c *Coordinator) finish(ctx context.Context, run PendingRun, fence Fence) b
 	}
 	killCtx, cancel := detached(ctx)
 	defer cancel()
-	c.reclaimBox(ctx, killCtx, run)
+	_ = c.reclaimBox(ctx, killCtx, run)
 	ended, err := c.pending.Finish(killCtx, run.TurnID, fence)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_finish_failed", "turn_id", run.TurnID, "error", err.Error(),
@@ -775,7 +780,11 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 
 // reclaimBox kills a run's box under killCtx and closes the run's credentials,
 // logging under ctx.
-func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) {
+//
+// The error is a kill that failed, the one outcome a retry can change. A run
+// with no box, and a box whose placement this company no longer configures,
+// report nil: there is nothing any later attempt could reach either.
+func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) error {
 	// BEFORE THE BOX CHECK, because a run that never got one still ended —
 	// a launch that failed at create is exactly the case where a bridge
 	// session was opened and nothing else will ever close it.
@@ -783,7 +792,7 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) {
 		c.ended(run.TurnID)
 	}
 	if run.SandboxID == "" {
-		return
+		return nil
 	}
 	provider, err := c.mgr().Provider(Placement(run.Placement))
 	if err != nil {
@@ -793,12 +802,14 @@ func (c *Coordinator) reclaimBox(ctx, killCtx context.Context, run PendingRun) {
 		// busy count forever over a box that will expire on its own TTL.
 		log.WarnContext(ctx, "sandbox_teardown_no_backend",
 			"turn_id", run.TurnID, "placement", run.Placement, "error", err.Error())
-		return
+		return nil
 	}
 	if err := provider.Kill(killCtx, run.SandboxID); err != nil {
 		log.WarnContext(ctx, "sandbox_teardown_failed",
 			"turn_id", run.TurnID, "sandbox_id", run.SandboxID, "error", err.Error())
+		return fmt.Errorf("sandbox: reclaiming box %s of run %s: %w", run.SandboxID, run.TurnID, err)
 	}
+	return nil
 }
 
 // RecoverSeat re-attaches to a seat's still-active runs as this node claims it.
@@ -912,7 +923,16 @@ func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoc
 				"lease (epoch %d) than the retirement's (%d)", run.TurnID, handle, run.OwnerEpoch, epoch))
 			continue
 		}
-		c.reclaimBox(ctx, ctx, run)
+		// A box that could not be reclaimed keeps its record, so the
+		// retry the caller makes on its next tick still knows the box
+		// exists. Deleting the record anyway would leave a billed box
+		// named by nothing, which a settle accepts only because nothing
+		// retries it.
+		if err := c.reclaimBox(ctx, ctx, run); err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q was not ended: %w",
+				run.TurnID, handle, err))
+			continue
+		}
 		ended, err := c.pending.Finish(ctx, run.TurnID, fence)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",

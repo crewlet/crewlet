@@ -185,6 +185,9 @@ type FakeProvider struct {
 	Vanished map[string]bool
 	// Killed records every Kill, in order — the pause reaper's assertion.
 	Killed []string
+	// KillErr, when set, fails every Kill after recording it, standing in
+	// for a provider that could not be reached to reclaim a box.
+	KillErr error
 }
 
 var _ Provider = (*FakeProvider)(nil)
@@ -242,6 +245,9 @@ func (p *FakeProvider) Kill(ctx context.Context, sandboxID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.Killed = append(p.Killed, sandboxID)
+	if p.KillErr != nil {
+		return p.KillErr
+	}
 	delete(p.boxes, sandboxID)
 	return nil
 }

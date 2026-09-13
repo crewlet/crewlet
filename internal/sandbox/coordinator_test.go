@@ -1294,6 +1294,35 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 	}
 }
 
+// A BOX THAT COULD NOT BE RECLAIMED KEEPS ITS RECORD. The retirement is
+// retried on the next tick, and only the record tells that retry the box
+// exists: deleted anyway, the box would be billed with nothing naming it. The
+// retry that can reach the provider then ends the run once.
+func TestRetiringASeatKeepsARunWhoseBoxCouldNotBeReclaimed(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.provider.KillErr = errors.New("the provider is unreachable")
+
+	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
+		t.Fatal("a retirement that could not reclaim a box reported the run ended")
+	}
+	if got := rig.get("t1"); got.SandboxID != run.SandboxID {
+		t.Fatalf("the record no longer names box %q: %+v", run.SandboxID, got)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v for a run that was not ended", failed)
+	}
+
+	rig.provider.KillErr = nil
+	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	rig.finished("t1")
+	if failed := rig.failures(); len(failed) != 1 || failed[0].Reason != types.SandboxFailureSeatRemoved {
+		t.Fatalf("failures = %+v, want the run announced once as %q", failed, types.SandboxFailureSeatRemoved)
+	}
+}
+
 // THE BOX GOES BEFORE THE RECORD. A record that outlives its box is reaped by
 // the seat's next recovery, and a kill of a box that is gone costs nothing; a
 // box that outlives its record is named by nothing and billed until its
