@@ -211,27 +211,44 @@ export const TYPE_AHEAD_RESET_MS = 500;
 /** Keys a type-ahead word never starts with: a canvas's zoom and fit keys. */
 const RESERVED = new Set(["+", "-", "0"]);
 
-/** Whether a key press is a type-ahead character rather than a command. */
-export function isTypeAheadKey(
-  e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean },
-  buffer = "",
-): boolean {
-  if (e.ctrlKey || e.metaKey || e.altKey) return false;
-  if ([...e.key].length !== 1) return false;
-  if (buffer !== "") return true;
-  // A leading space is activation (Space on a row), not the start of a word.
-  return e.key !== " " && !RESERVED.has(e.key);
-}
-
+/**
+ * The word typed so far, and when its last key was pressed (milliseconds).
+ * A view starts from `{ text: "", at: 0 }` and keeps what `typeAheadBuffer`
+ * returns.
+ */
 export interface TypeAheadState {
   text: string;
   at: number;
 }
 
-/** The buffer after a type-ahead key at time `now` (milliseconds). */
+/**
+ * The word still being typed at `now`: empty once a pause has ended it.
+ *
+ * The ONE place the pause is measured. Whether a key may start a word and what
+ * the word becomes both depend on it, and a caller left to pass "the buffer"
+ * would pass the stale one, after which a `0` pressed seconds later counted as
+ * the middle of a word and started one with a reserved key.
+ */
+function liveWord(state: TypeAheadState, now: number): string {
+  return now - state.at > TYPE_AHEAD_RESET_MS ? "" : state.text;
+}
+
+/** Whether a key press at `now` is a type-ahead character rather than a command. */
+export function isTypeAheadKey(
+  e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean },
+  state: TypeAheadState,
+  now: number,
+): boolean {
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  if ([...e.key].length !== 1) return false;
+  if (liveWord(state, now) !== "") return true;
+  // A leading space is activation (Space on a row), not the start of a word.
+  return e.key !== " " && !RESERVED.has(e.key);
+}
+
+/** The buffer after a type-ahead key at `now`. */
 export function typeAheadBuffer(state: TypeAheadState, key: string, now: number): TypeAheadState {
-  const fresh = now - state.at > TYPE_AHEAD_RESET_MS;
-  return { text: (fresh ? "" : state.text) + key, at: now };
+  return { text: liveWord(state, now) + key, at: now };
 }
 
 /** The visible node whose label starts with `text`, searching after `from` and wrapping. */

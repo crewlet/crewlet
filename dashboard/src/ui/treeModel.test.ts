@@ -161,15 +161,27 @@ describe("type-ahead", () => {
   });
 
   test("never starts a word with a zoom or fit key, a modified key or a space", () => {
-    for (const key of ["+", "-", "0"]) expect(isTypeAheadKey({ key })).toBe(false);
-    expect(isTypeAheadKey({ key: "z", ctrlKey: true })).toBe(false);
-    expect(isTypeAheadKey({ key: "ArrowDown" })).toBe(false);
-    expect(isTypeAheadKey({ key: " " })).toBe(false);
-    expect(isTypeAheadKey({ key: " " }, "go")).toBe(true);
-    expect(isTypeAheadKey({ key: "1" })).toBe(true);
+    const none = { text: "", at: 0 };
+    const now = 10_000;
+    for (const key of ["+", "-", "0"]) expect(isTypeAheadKey({ key }, none, now)).toBe(false);
+    expect(isTypeAheadKey({ key: "z", ctrlKey: true }, none, now)).toBe(false);
+    expect(isTypeAheadKey({ key: "ArrowDown" }, none, now)).toBe(false);
+    expect(isTypeAheadKey({ key: " " }, none, now)).toBe(false);
+    expect(isTypeAheadKey({ key: " " }, { text: "go", at: now - 100 }, now)).toBe(true);
+    expect(isTypeAheadKey({ key: "1" }, none, now)).toBe(true);
     // Inside a word they are ordinary characters: "Q3 2026" is typed whole.
-    expect(isTypeAheadKey({ key: "0" }, "q3 2")).toBe(true);
-    expect(isTypeAheadKey({ key: "-" }, "on")).toBe(true);
+    expect(isTypeAheadKey({ key: "0" }, { text: "q3 2", at: now - 100 }, now)).toBe(true);
+    expect(isTypeAheadKey({ key: "-" }, { text: "on", at: now - 100 }, now)).toBe(true);
+  });
+
+  test("a word a pause has ended does not make a reserved key the middle of one", () => {
+    const stale = { text: "q", at: 1000 };
+    const later = 1000 + TYPE_AHEAD_RESET_MS + 1;
+    for (const key of ["+", "-", "0", " "]) {
+      expect(isTypeAheadKey({ key }, stale, later)).toBe(false);
+    }
+    // Still within the pause, the same key continues the word.
+    expect(isTypeAheadKey({ key: "0" }, stale, 1000 + TYPE_AHEAD_RESET_MS)).toBe(true);
   });
 
   test("a pause longer than the reset starts a new word", () => {
