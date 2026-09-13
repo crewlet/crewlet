@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -40,18 +39,6 @@ const controlTimeout = 120 * time.Second
 // termGrace is how long a direct box's process group gets between SIGTERM and
 // SIGKILL.
 const termGrace = 5 * time.Second
-
-// pidReuseGrace is the slack allowed when comparing a process's start time
-// against the box's creation time.
-//
-// A box's own job cannot predate the box, so a pid whose process started
-// EARLIER is a recycled one pointing at some unrelated long-lived process —
-// which, without this, would keep a dead box's directory alive forever. The
-// grace absorbs only clock and filesystem timestamp granularity between the
-// two readings (the directory's mtime versus /proc/<pid>'s), which is
-// sub-second; a second is ample and far below any interval over which a pid
-// could wrap.
-const pidReuseGrace = time.Second
 
 // minReapAge floors the orphan reaper's cutoff regardless of the TTL it is
 // handed. A spec with a tiny (or zero) timeout would otherwise make every box
@@ -102,8 +89,13 @@ type boxLayout struct {
 func (l boxLayout) workspace() string { return filepath.Join(l.root, WorkspaceSubdir) }
 func (l boxLayout) meta() string      { return filepath.Join(l.root, ".crewlet") }
 
-// pidFile records the detached job's pid so teardown can reach its group even
-// in a fresh engine that never held the handle.
+// pidFile records the detached job's process group so teardown can reach it
+// even in a fresh engine that never held the handle.
+//
+// It holds a [procgroup.Leader], the pid AND its leader's start time, never a
+// bare pid: the file is read back by a later process, possibly hours on, and a
+// pid alone may by then lead a stranger's group. Signalling that would reach
+// somebody else's processes, and probing it would keep a dead box alive.
 func (l boxLayout) pidFile() string { return filepath.Join(l.meta(), "box.pid") }
 
 // aliveFile is the keepalive stamp — the local counterpart of a remote box's
@@ -243,17 +235,68 @@ func touchAlive(l boxLayout) {
 	}
 }
 
-// readPID is the detached job's pid, or 0.
-func readPID(l boxLayout) int {
+// recordLeader writes the detached job's group identity into the box.
+func recordLeader(l boxLayout, leader procgroup.Leader) error {
+	if err := os.MkdirAll(l.meta(), hostbox.DirMode); err != nil {
+		return err
+	}
+	return os.WriteFile(l.pidFile(), []byte(leader.String()), hostbox.FileMode)
+}
+
+// jobGroup is the box's recorded job group when that group is still the job,
+// and false when there is none to act on.
+//
+// THREE ANSWERS, and the caller decides which way the third fails. False with
+// a nil error is definitive: no job was recorded, the record is not one this
+// engine wrote, or the group it names has ended or now belongs to a later
+// process. An error means the kernel could not be asked, which neither proves
+// the job alive nor licenses a signal: the orphan reaper keeps the directory on
+// it, and every signalling path withholds its signal.
+//
+// A record that does not parse is logged and read as no job. The file lives
+// inside the box, where the job itself can write, so its content is input
+// rather than a fact; and a bare pid from a build that recorded only that is
+// exactly the identity with no start time [procgroup.ParseLeader] refuses.
+func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 	raw, err := os.ReadFile(l.pidFile())
 	if err != nil {
-		return 0
+		return procgroup.Leader{}, false, nil
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	leader, err := procgroup.ParseLeader(strings.TrimSpace(string(raw)))
 	if err != nil {
-		return 0
+		localLog.Warn("local_sandbox_job_record_unreadable", "sandbox_id", l.id,
+			"path", l.pidFile(), "error", err.Error(),
+			"detail", "the box's job record is not a process group identity, so no signal "+
+				"is sent through it and the box counts as having no running job")
+		return procgroup.Leader{}, false, nil
 	}
-	return pid
+	current, err := leader.Current()
+	if err != nil {
+		return leader, false, err
+	}
+	return leader, current, nil
+}
+
+// signalJob sends one signal to the box's job group, but only to a group that
+// is still the job.
+//
+// Every signal a box sends goes through here, so none of them can reach a
+// recycled pid. Reports whether the group was current, which is what tells a
+// teardown whether there is anything to wait for.
+func signalJob(l boxLayout, what string, send func(pid int) error) bool {
+	leader, current, err := jobGroup(l)
+	if err != nil {
+		localLog.Warn("local_sandbox_signal_withheld", "sandbox_id", l.id, "signal", what,
+			"pgid", leader.PID, "error", err.Error(),
+			"detail", "the kernel's record of the job's process group could not be read, so "+
+				"the signal is not sent: it may no longer be this box's job")
+		return false
+	}
+	if !current {
+		return false
+	}
+	logSignal(what, leader.PID, send(leader.PID))
+	return true
 }
 
 // ---------------------------------------------------------------------
@@ -524,7 +567,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 	}
 	if l.opts.Placement == Container {
 		_, _ = runHost(ctx, hostCommand{argv: []string{l.runtime, "rm", "-f", l.containerName(sandboxID)}})
-	} else if pid := readPID(layout); pid > 0 {
+	} else if signalJob(layout, "kill", procgroup.Kill) {
 		// SIGKILL alone, with NO SIGCONT first. A stopped process is killed
 		// by SIGKILL directly — the signal cannot be caught, blocked or
 		// ignored, so it needs no scheduling to take effect. Waking the
@@ -533,7 +576,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		// pause is never resumed, and the SIGCONT that Close needs (a
 		// stopped process really does never run to handle SIGTERM) would
 		// quietly defeat that here.
-		logSignal("kill", pid, procgroup.Kill(pid))
+		//
 		// And WAIT for it to actually go. SIGKILL is delivered, not
 		// applied: the kernel takes the process down some moments later,
 		// and until it does the coding agent's wrapper is still writing
@@ -541,7 +584,7 @@ func (l *Local) Kill(ctx context.Context, sandboxID string) error {
 		// those writes fails with the directory non-empty — a failure the
 		// removal below would report and nothing could act on, leaving a
 		// box for the orphan reaper to find hours later.
-		awaitGroupExit(ctx, pid)
+		awaitJobExit(ctx, layout)
 	}
 	// Kill is a teardown like any other, and the box on disk may hold a login
 	// the run refreshed before it was reclaimed. The files are already there
@@ -566,15 +609,16 @@ func removeBox(l boxLayout) {
 	}
 }
 
-// awaitGroupExit waits for a signalled process group to actually be gone.
+// awaitJobExit waits for a signalled job group to actually be gone.
 //
 // Bounded by [termGrace] and by the caller's context: a group that will not go
 // is not a reason to hold a teardown open forever, and the caller proceeds
-// either way.
-func awaitGroupExit(ctx context.Context, pid int) {
+// either way. A record the kernel will not give counts as still there, so the
+// wait runs its course rather than racing a removal against a live tree.
+func awaitJobExit(ctx context.Context, l boxLayout) {
 	deadline := time.Now().Add(termGrace)
 	for time.Now().Before(deadline) {
-		if !procgroup.Exists(pid) {
+		if _, current, err := jobGroup(l); err == nil && !current {
 			return
 		}
 		select {
@@ -611,12 +655,12 @@ const exitPollInterval = 20 * time.Millisecond
 // could ever kill it, so the job became an unkillable orphan writing into a
 // directory that no longer existed.
 //
-// So the two questions are asked separately. IS IT IN USE? — a live process
-// group (direct) or an existing container, checked against the OS rather than
-// inferred. HAS IT BEEN ABANDONED? — the keepalive stamp the waiter refreshes
-// on every poll, which is what SetTimeout means on this backend. A box is
-// reaped only when it fails BOTH: nothing running, and nothing has touched it
-// for a whole TTL.
+// So the two questions are asked separately. IS IT IN USE? A live process
+// group that is still the box's own job (direct) or an existing container,
+// checked against the OS rather than inferred. HAS IT BEEN ABANDONED? The
+// keepalive stamp the waiter refreshes on every poll, which is what SetTimeout
+// means on this backend. A box is reaped only when it fails BOTH: nothing
+// running, and nothing has touched it for a whole TTL.
 //
 // A paused box is deliberately covered by the first: SIGSTOPped processes stop
 // being heart-beaten but stay alive, and bounding THAT wait belongs to the
@@ -683,15 +727,15 @@ func (l *Local) boxIsAlive(layout boxLayout, live map[string]bool) bool {
 	if l.opts.Placement == Container {
 		return live[l.containerName(layout.id)]
 	}
-	pid := readPID(layout)
-	if pid <= 0 {
-		return false
-	}
-	info, err := os.Stat(layout.root)
+	_, current, err := jobGroup(layout)
 	if err != nil {
-		return false
+		// Cannot tell, so keep it: deleting a live box's checkout is
+		// unrecoverable, a lingering directory is not.
+		localLog.Warn("local_sandbox_reap_liveness_unknown", "sandbox_id", layout.id,
+			"error", err.Error())
+		return true
 	}
-	return processGroupAlive(pid, info.ModTime())
+	return current
 }
 
 // liveContainers names every crewlet container this runtime still has.

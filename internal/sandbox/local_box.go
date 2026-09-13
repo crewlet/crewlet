@@ -82,7 +82,7 @@ func flattenEnv(env map[string]string) []string {
 // IT HOLDS NO HANDLE ON THE JOB IT STARTED, and that is the design rather
 // than an omission: a detached run outlives the turn that started it and is
 // torn down by a LATER process, possibly after a restart, so the only
-// addressable thing is the pid file. Close reads it (see [readPID]); an
+// addressable thing is the job record. Close reads it (see [jobGroup]); an
 // *exec.Cmd on the struct could only ever be right in the one process that
 // happened to start the job.
 type directBox struct {
@@ -154,7 +154,10 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 //
 // Spawned directly rather than backgrounded inside a throwaway shell, because
 // the pid has to be usable for three different things and only a direct spawn
-// gives all three — see [detachAttr].
+// gives all three: it leads its own session ([procgroup.Detach]), so one signal
+// reaches the tree, no terminal's Ctrl-C reaches it, and it survives the
+// engine; and the engine holds it unreaped, so its identity can be read before
+// the pid could belong to anybody else.
 //
 // The Wait goroutine is the fourth, and it is the one with no POSIX
 // equivalent: Go will not reap a child until something calls Wait on it, and
@@ -185,29 +188,39 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	if err := proc.Start(); err != nil {
 		return "", localErrorf("local sandbox %s could not start a background job: %v", b.layout.id, err)
 	}
-	// Reaped in the background so the detached job does not become a
-	// zombie. Its exit status is deliberately discarded: the runner reads
-	// the job's OUTCOME from the marker and result files it wrote, and a
-	// non-zero exit is one of the outcomes those already describe.
-	go func() { _ = proc.Wait() }()
-
 	pid := proc.Process.Pid
-	if err := os.MkdirAll(b.layout.meta(), hostbox.DirMode); err == nil {
-		err = os.WriteFile(b.layout.pidFile(), []byte(strconv.Itoa(pid)), hostbox.FileMode)
-		if err != nil {
-			// Without the pid file nothing in a later process can ever
-			// reach this job's group — it would run to completion
-			// unkillable. Kill it now rather than leak it.
-			logSignal("kill", pid, procgroup.Kill(pid))
-			return "", localErrorf("local sandbox %s could not record its job's pid: %v", b.layout.id, err)
-		}
-	} else {
-		logSignal("kill", pid, procgroup.Kill(pid))
-		return "", localErrorf("local sandbox %s could not record its job's pid: %v", b.layout.id, err)
+
+	// IDENTIFIED BEFORE ANYTHING CAN REAP IT. Until Wait runs the leader
+	// keeps its kernel record even if it has already exited, and its pid
+	// cannot belong to anybody else, so this is the one moment its start
+	// time is certainly this job's. Read once the reaping goroutine has
+	// started, a job that exits at once could be reaped first and its pid
+	// reissued.
+	leader, err := procgroup.Identify(pid)
+	if err == nil {
+		err = recordLeader(b.layout, leader)
 	}
+	if err != nil {
+		// Without the record nothing in a later process can ever reach
+		// this job's group: it would run to completion unkillable. Kill it
+		// now rather than leak it, while this process still holds the
+		// unreaped leader and so knows the group is the job's.
+		logSignal("kill", pid, procgroup.Kill(pid))
+		go reap(proc)
+		return "", localErrorf("local sandbox %s could not record its job's process group: %v", b.layout.id, err)
+	}
+	go reap(proc)
 	localLog.Info("local_sandbox_job_started", "sandbox_id", b.layout.id, "pid", pid)
 	return strconv.Itoa(pid), nil
 }
+
+// reap waits on a detached job so it does not linger as a zombie once it
+// exits.
+//
+// Its exit status is deliberately discarded: the runner reads the job's OUTCOME
+// from the marker and result files it wrote, and a non-zero exit is one of the
+// outcomes those already describe.
+func reap(proc *exec.Cmd) { _ = proc.Wait() }
 
 // resolve maps an in-box path onto the host, refusing escapes.
 //
@@ -302,38 +315,37 @@ func (b *directBox) SetTimeout(ctx context.Context, seconds float64) error {
 // holds RAM, which is why the waiter's pause reaper bounds it exactly as it
 // bounds a billed snapshot.
 func (b *directBox) Pause(ctx context.Context) error {
-	pid := readPID(b.layout)
-	if pid <= 0 {
-		return nil
+	if signalJob(b.layout, "stop", procgroup.Stop) {
+		localLog.Debug("local_sandbox_paused", "sandbox_id", b.layout.id)
 	}
-	logSignal("stop", pid, procgroup.Stop(pid))
-	localLog.Debug("local_sandbox_paused", "sandbox_id", b.layout.id, "pid", pid)
 	return nil
 }
 
 // resume SIGCONTs a paused box — the Connect auto-resume.
 func (b *directBox) resume() {
-	if pid := readPID(b.layout); pid > 0 {
-		logSignal("continue", pid, procgroup.Continue(pid))
-	}
+	signalJob(b.layout, "continue", procgroup.Continue)
 }
 
 // Close kills the job's process group, syncs credentials, and removes the box.
+//
+// Each signal re-reads the job's identity rather than reusing one reading: the
+// group may end between two of them, and its pid is then free to be reissued
+// to a stranger before the next.
 func (b *directBox) Close(ctx context.Context) error {
-	if pid := readPID(b.layout); pid > 0 {
-		// SIGCONT first: a stopped process never runs again to handle
-		// SIGTERM, so tearing down a paused box without it would leave the
-		// tree alive and the directory in use.
-		logSignal("continue", pid, procgroup.Continue(pid))
-		logSignal("terminate", pid, procgroup.Terminate(pid))
-		awaitGroupExit(ctx, pid)
-		// Whether or not it went: SIGKILL costs nothing on a group that is
-		// already gone, and the alternative is a tree left running because
-		// the grace expired.
-		logSignal("kill", pid, procgroup.Kill(pid))
-		// Waited for again, because the removal below races the dying
-		// wrapper's last writes exactly as Kill's does.
-		awaitGroupExit(ctx, pid)
+	// SIGCONT first: a stopped process never runs again to handle SIGTERM,
+	// so tearing down a paused box without it would leave the tree alive
+	// and the directory in use.
+	if signalJob(b.layout, "continue", procgroup.Continue) {
+		signalJob(b.layout, "terminate", procgroup.Terminate)
+		awaitJobExit(ctx, b.layout)
+		// Whether or not it went: SIGKILL reaches nothing on a group that
+		// is already gone, and the alternative is a tree left running
+		// because the grace expired.
+		if signalJob(b.layout, "kill", procgroup.Kill) {
+			// Waited for again, because the removal below races the dying
+			// wrapper's last writes exactly as Kill's does.
+			awaitJobExit(ctx, b.layout)
+		}
 	}
 	collectCredentials(b.layout, b.credentials)
 	removeBox(b.layout)
