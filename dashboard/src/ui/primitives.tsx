@@ -103,6 +103,35 @@ type ButtonPassthrough = Omit<AriaAttributes, "aria-pressed"> & {
   [data: `data-${string}`]: string | number | boolean | undefined;
 };
 
+type ButtonVariant = "default" | "primary" | "ghost" | "danger";
+type ButtonSize = "md" | "sm";
+
+/**
+ * The `.btn` recipe, spelled once for every element drawn as a button.
+ *
+ * An icon-only control takes the square `icon` shape, so it is decided from
+ * whether there is anything to read beside the glyph.
+ */
+function buttonClass({
+  variant,
+  size,
+  iconOnly,
+  block,
+}: {
+  variant: ButtonVariant;
+  size: ButtonSize;
+  iconOnly: boolean;
+  block?: boolean;
+}): string {
+  return cx(
+    "btn",
+    variant !== "default" && variant,
+    size === "sm" && "sm",
+    iconOnly && "icon",
+    block && "block",
+  );
+}
+
 export function Button({
   children,
   icon,
@@ -118,8 +147,8 @@ export function Button({
 }: ButtonPassthrough & {
   children?: ReactNode;
   icon?: IconName;
-  variant?: "default" | "primary" | "ghost" | "danger";
-  size?: "md" | "sm";
+  variant?: ButtonVariant;
+  size?: ButtonSize;
   /**
    * The event is passed through, so a button inside an element with a
    * default action of its own can stop it. A Copy button in a `<summary>`
@@ -137,13 +166,7 @@ export function Button({
     <button
       {...forwarded}
       type={type}
-      className={cx(
-        "btn",
-        variant !== "default" && variant,
-        size === "sm" && "sm",
-        !children && "icon",
-        block && "block",
-      )}
+      className={buttonClass({ variant, size, iconOnly: !children, block })}
       onClick={onClick}
       disabled={disabled}
       title={title}
@@ -156,6 +179,50 @@ export function Button({
       {icon && <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />}
       {children}
     </button>
+  );
+}
+
+/**
+ * A link drawn as a button: it goes somewhere rather than doing something.
+ *
+ * An action that navigates has to be a real anchor, so it can be opened in a
+ * tab, copied and read as a link by a screen reader. It used to be a
+ * hand-written `<a className="btn ...">` at each such place, which is the
+ * recipe spelled beside the primitive that owns it. `external` opens it in a
+ * new tab and withholds the referrer and the opener, which a link to a
+ * vendor's site must never be without.
+ */
+export function ButtonLink({
+  href,
+  children,
+  icon,
+  variant = "default",
+  size = "md",
+  block,
+  title,
+  external,
+}: {
+  href: string;
+  children?: ReactNode;
+  icon?: IconName;
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  block?: boolean;
+  title?: string;
+  external?: boolean;
+}) {
+  return (
+    <a
+      className={buttonClass({ variant, size, iconOnly: !children, block })}
+      href={href}
+      title={title}
+      aria-label={!children ? title : undefined}
+      target={external ? "_blank" : undefined}
+      rel={external ? "noreferrer" : undefined}
+    >
+      {icon && <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />}
+      {children}
+    </a>
   );
 }
 

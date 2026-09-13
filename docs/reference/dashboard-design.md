@@ -922,6 +922,14 @@ rendered idle from the first phase to the last.
   What happens inside an open menu stays there: its keys, presses and clicks
   do not reach the card or row it was opened from, so Enter on "Delete" is
   never also the card's Enter.
+- **Anything drawn as a button is `Button` or `ButtonLink`, never a
+  hand-written `.btn` class list.** `Button` passes a ref, aria and data
+  attributes, `id`, `tabIndex` and `onKeyDown` through, so a menu trigger or
+  a list's Move control is built on it rather than beside it; it refuses
+  `className` and `style`, so the variants stay the only way to style it.
+  `ButtonLink` is the same recipe on an anchor, for an action that goes
+  somewhere, and its `external` form opens a new tab without the referrer or
+  the opener.
 - **A shortcut hint is `ui/Kbd.tsx`, never a hand-written `<kbd>`.** The
   command key is Command on Apple platforms and Control everywhere else, so a
   literal "⌘K" tells most readers to press a key they do not have. The glyphs

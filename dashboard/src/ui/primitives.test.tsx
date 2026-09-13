@@ -13,7 +13,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { Button, Code, CopyButton } from "./primitives.tsx";
+import { Button, ButtonLink, Code, CopyButton } from "./primitives.tsx";
 
 afterEach(() => {
   cleanup();
@@ -92,6 +92,44 @@ describe("Button", () => {
     expect(named!.getAttribute("title")).toBe("Move up");
     // A button with visible text is named by that text, not by a duplicate.
     expect(labelled!.getAttribute("aria-label")).toBeNull();
+  });
+});
+
+describe("ButtonLink", () => {
+  // A control that goes somewhere is a real link, drawn by the same recipe as
+  // the button beside it rather than a class list spelled at the call site.
+  test("is an anchor wearing exactly the class list the matching Button wears", () => {
+    render(
+      <>
+        <Button variant="primary" size="sm" icon="plus">
+          Create
+        </Button>
+        <ButtonLink variant="primary" size="sm" icon="plus" href="#/org?lens=builder">
+          Create
+        </ButtonLink>
+        <ButtonLink variant="ghost" icon="more" title="Open" href="#/org" />
+      </>,
+    );
+    const button = screen.getByRole("button", { name: "Create" });
+    const link = screen.getByRole("link", { name: "Create" });
+    expect(link.className).toBe(button.className);
+    expect(link.getAttribute("href")).toBe("#/org?lens=builder");
+    // In the app's own hash routes, it stays in this tab.
+    expect(link.getAttribute("target")).toBeNull();
+
+    const iconOnly = screen.getByRole("link", { name: "Open" });
+    expect(iconOnly.className).toBe("btn ghost icon");
+  });
+
+  test("an external link opens a new tab without handing over the referrer or the opener", () => {
+    render(
+      <ButtonLink external href="https://example.com/install">
+        Install
+      </ButtonLink>,
+    );
+    const link = screen.getByRole("link", { name: "Install" });
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
   });
 });
 

@@ -27,7 +27,7 @@ import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Badge, Button, Segmented, cx } from "~/ui/primitives.tsx";
+import { Badge, Button, ButtonLink, Segmented, cx } from "~/ui/primitives.tsx";
 import { focusables, useModal } from "~/ui/useModal.ts";
 import {
   useAgents,
@@ -313,9 +313,9 @@ export function Shell({ children }: { children: ReactNode }) {
                 Configuration screen, which reads and cannot write, so the
                 banner reporting the problem sent the reader somewhere that
                 could not fix it. */}
-            <a className="btn sm" href={href(["org"], { lens: "builder" })}>
+            <ButtonLink size="sm" href={href(["org"], { lens: "builder" })}>
               Create the company
-            </a>
+            </ButtonLink>
           </div>
         ) : null}
 
