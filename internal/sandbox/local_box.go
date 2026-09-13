@@ -185,7 +185,7 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 	// these, and a pipe nobody drains would block the agent on a full buffer.
 	proc.Stdin, proc.Stdout, proc.Stderr = nil, nil, nil
 
-	if err := proc.Start(); err != nil {
+	if err = proc.Start(); err != nil {
 		return "", localErrorf("local sandbox %s could not start a background job: %v", b.layout.id, err)
 	}
 	pid := proc.Process.Pid

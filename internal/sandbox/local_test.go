@@ -752,6 +752,30 @@ func assertUntouched(t *testing.T, stranger procgroup.Leader, when string) {
 	}
 }
 
+// A job record that exists and cannot be read is the unknown answer, not an
+// absent one. Deleting a live box's checkout is unrecoverable and a lingering
+// directory is not, so the reaper keeps a box whose record it cannot read.
+func TestAnUnreadableJobRecordKeepsTheBox(t *testing.T) {
+	local := newDirect(t)
+	box, err := local.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	home := box.Home()
+	// A directory where the record belongs reads as an error for any user,
+	// root included, which a permission bit would not.
+	if err := os.MkdirAll(filepath.Join(home, ".crewlet", "box.pid"), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	ageBox(t, home, 2*time.Hour)
+
+	local.reapOrphans(t.Context(), time.Minute)
+
+	if _, err := os.Stat(home); err != nil {
+		t.Fatalf("the reaper deleted a box whose job record it could not read: %v", err)
+	}
+}
+
 // A record that is not a process group identity names no job. The file lives
 // inside the box, where the job can write, and a bare pid is exactly the
 // identity with no start time: acting on it would reach whatever holds that pid
@@ -1075,23 +1099,6 @@ func fileSize(path string) int64 {
 		return 0
 	}
 	return info.Size()
-}
-
-// ageKeepalive backdates only the "has it been abandoned?" stamp, leaving the
-// box's birth time alone.
-func ageKeepalive(t *testing.T, home string, by time.Duration) {
-	t.Helper()
-	when := time.Now().Add(-by)
-	alive := filepath.Join(home, ".crewlet", "alive")
-	if err := os.MkdirAll(filepath.Dir(alive), 0o700); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if f, err := os.OpenFile(alive, os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-		f.Close()
-	}
-	if err := os.Chtimes(alive, when, when); err != nil {
-		t.Fatalf("chtimes: %v", err)
-	}
 }
 
 // ageBox backdates a box's creation and keepalive stamps, standing in for time

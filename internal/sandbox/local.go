@@ -3,7 +3,9 @@ package sandbox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,14 +255,20 @@ func recordLeader(l boxLayout, leader procgroup.Leader) error {
 // the job alive nor licenses a signal: the orphan reaper keeps the directory on
 // it, and every signalling path withholds its signal.
 //
+// A box with no record started no job. A record that exists and cannot be
+// read is the unknown answer, like a kernel record that cannot be read.
+//
 // A record that does not parse is logged and read as no job. The file lives
 // inside the box, where the job itself can write, so its content is input
 // rather than a fact; and a bare pid from a build that recorded only that is
 // exactly the identity with no start time [procgroup.ParseLeader] refuses.
 func jobGroup(l boxLayout) (procgroup.Leader, bool, error) {
 	raw, err := os.ReadFile(l.pidFile())
-	if err != nil {
+	if errors.Is(err, fs.ErrNotExist) {
 		return procgroup.Leader{}, false, nil
+	}
+	if err != nil {
+		return procgroup.Leader{}, false, fmt.Errorf("reading the job record %s: %w", l.pidFile(), err)
 	}
 	leader, err := procgroup.ParseLeader(strings.TrimSpace(string(raw)))
 	if err != nil {
