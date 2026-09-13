@@ -69,20 +69,43 @@ func (e *Engine) RecheckGitHub() {
 // because state set in one and forgotten in the other fails silently and only
 // on the path nobody exercised.
 //
-// Today that is one thing: a store opened with NO width, which is a node that
-// booted with no active revision. It holds no rows, and its first epoch is
-// what tells it how wide its vectors will be. A store that already has a width
-// keeps it — [store.DB.LearnEmbeddingDim] only ever raises from 0 — because
-// the width belongs to the rows in the file rather than to the current
-// config, and [Engine.buildEmbedder] has already refused any revision that
-// would change it.
+// Today that is two things.
+//
+// THE PARTY REGISTRY, indexed BEFORE the epoch is stored, so no reader can
+// find a company through [Engine.Company] whose parties are not in
+// [Engine.Registry]. An apply indexes earlier still, before it rebuilds the
+// vendor wiring that registers into the new registry, and that index is kept
+// rather than rebuilt here. Boot has nothing to rebuild in between, and indexed
+// only at the end of construction, after every fleet duty was already armed;
+// see [Engine.Registry] for what that window did.
+//
+// And a store opened with NO width, which is a node that booted with no active
+// revision. It holds no rows, and its first epoch is what tells it how wide
+// its vectors will be. A store that already has a width keeps it
+// ([store.DB.LearnEmbeddingDim] only ever raises from 0), because the width
+// belongs to the rows in the file rather than to the current config, and
+// [Engine.buildEmbedder] has already refused any revision that would change
+// it.
 func (e *Engine) installEpoch(c *Company) {
+	if c != nil && !e.indexes(c) {
+		e.refreshParties(c)
+	}
 	e.epoch.current.Store(c)
 	// Backends are always present on a running engine; a `crewlet validate`
 	// engine applies to nothing and has no store to tell.
 	if e.backends != nil && e.backends.Store != nil {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
+}
+
+// indexes reports whether the live party registry was built from exactly this
+// company. By identity, because an epoch is published rather than mutated: a
+// revision equal in every field is still a different epoch, with a registry of
+// its own.
+func (e *Engine) indexes(c *Company) bool {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return e.notify.registry != nil && e.notify.indexed == c
 }
 
 // embeddingWidth is the vector width an epoch's embeddings provider produces,

@@ -35,7 +35,11 @@ import (
 type notifications struct {
 	mu       sync.Mutex
 	registry *notify.Registry
-	admits   notify.Admitter
+	// indexed is the company registry was built from. [Engine.installEpoch]
+	// reads it to publish no epoch the registry does not index; see
+	// [Engine.Registry].
+	indexed *Company
+	admits  notify.Admitter
 
 	service    *notify.Service
 	mattermost *mattermost.Transport
@@ -81,10 +85,18 @@ type notifications struct {
 
 // Registry is the live party registry.
 //
-// NEVER NIL, and structurally so rather than by a guard here: the engine
-// indexes its first company during construction, before it returns and so
-// before anything can ask. A check on the read would suggest a window that
-// does not exist.
+// NEVER NIL WHILE AN EPOCH IS CURRENT, and structurally so rather than by a
+// guard here: [Engine.installEpoch], the one function that makes a company
+// current, indexes it first unless the caller already has. A reader that found
+// a company through [Engine.Company] therefore always finds a registry, and a
+// check on the read would suggest a window that does not exist.
+//
+// The window did exist while the boot path indexed its company in
+// startNotifications, the last step of construction. Every fleet duty is armed
+// before that step, and the integration reconcile loop runs a pass the moment
+// it starts: a pass that re-resolved a code host's or a tracker's seat
+// identities read this as nil and panicked, taking the whole process down on a
+// node that happened to win the duty during boot.
 func (e *Engine) Registry() *notify.Registry {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()
@@ -178,6 +190,7 @@ func (e *Engine) refreshParties(c *Company) {
 
 	e.notify.mu.Lock()
 	e.notify.registry = reg
+	e.notify.indexed = c
 	chat := e.notify.mattermost
 	hosted := e.notify.slack
 	e.notify.mu.Unlock()
@@ -201,12 +214,13 @@ func (e *Engine) refreshParties(c *Company) {
 // startNotifications brings up the inbound edge for the applied company.
 //
 // It runs after the node, because the service subscribes to a fleet-wide
-// group and a transport publishes onto this node's queue.
+// group and a transport publishes onto this node's queue. The party registry
+// it registers identities into was built when the company was published (see
+// [Engine.Registry]), not here.
 func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if c == nil {
 		return nil
 	}
-	e.refreshParties(c)
 
 	var (
 		parsers []notify.Parser
