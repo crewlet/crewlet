@@ -1,13 +1,17 @@
 /**
  * The icon set.
  *
- * Inline paths rather than a sprite or a package: there are ~50 of them, they
- * are two lines of markup each, and a dependency for that would be a
- * dependency to watch, bump and attribute for something the tree can hold
- * outright. The union type is the point — a typo in an icon name is a compile
+ * Inline paths rather than a sprite or a package: there are over eighty of
+ * them, they are two lines of markup each, and a dependency for that would be
+ * a dependency to watch, bump and attribute for something the tree can hold
+ * outright. The union type is the point: a typo in an icon name is a compile
  * error rather than an empty square nobody notices.
  *
- * Paths adapted from Feather Icons (https://feathericons.com) —
+ * A new glyph is one path string on the 24-unit Feather grid, drawn as a
+ * stroke. `Icon.test.tsx` refuses anything that is not path data, because a
+ * pasted `<path>` element renders as nothing and raises no error.
+ *
+ * Paths adapted from Feather Icons (https://feathericons.com).
  * MIT License, Copyright (c) 2013-2023 Cole Bemis.
  */
 
@@ -101,9 +105,39 @@ const P = {
   send: "m22 2-7 20-4-9-9-4z",
   bell: "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0",
   power: "M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10",
+
+  // Editing a structure: the organization builder's verbs.
+  trash:
+    "M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6",
+  undo: "M1 4v6h6M3.51 15a9 9 0 1 0 2.13-9.36L1 10",
+  redo: "M23 4v6h-6M20.49 15a9 9 0 1 1-2.12-9.36L23 10",
+  move: "m5 9-3 3 3 3M9 5l3-3 3 3M15 19l-3 3-3-3M19 9l3 3-3 3M2 12h20M12 2v20",
+  userPlus:
+    "M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M8.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM20 8v6M23 11h-6",
+  folderPlus:
+    "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2zM12 11v6M9 14h6",
+  cornerDownRight: "m15 10 5 5-5 5M4 4v7a4 4 0 0 0 4 4h12",
+  arrowUp: "M12 19V5M5 12l7-7 7 7",
+  arrowDown: "M12 5v14M19 12l-7 7-7-7",
+  chevronsDown: "m7 13 5 5 5-5M7 6l5 5 5-5",
+  chevronsUp: "m17 11-5-5-5 5M17 18l-5-5-5 5",
+  list: "M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  save: "M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
+
+  // Moving around a canvas. The lens is the search glyph's own circle, so
+  // zooming and searching read as the same instrument.
+  zoomIn: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21M11 8v6M8 11h6",
+  zoomOut: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM16.5 16.5 21 21M8 11h6",
+  maximize:
+    "M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3",
+  minimize:
+    "M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3",
 } as const;
 
 export type IconName = keyof typeof P;
+
+/** Every glyph, in declaration order: what a catalogue or a suite iterates. */
+export const ICON_NAMES = Object.keys(P) as IconName[];
 
 const SIZES = { xs: 12, sm: 14, md: 16, lg: 20, xl: 28 } as const;
 
