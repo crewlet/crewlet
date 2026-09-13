@@ -443,10 +443,20 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 	// where a provider is CONSTRUCTED, which is what makes re-activating an
 	// unchanged revision pick up a rotated credential rather than rebuild
 	// the same values.
+	//
+	// The decode holds the revision to no rule, so it is validated HERE,
+	// before [Engine.Apply] is reached. Apply refreshes the secret snapshot
+	// before it builds anything, so a revision refused inside it has already
+	// mutated this node; refused here, it has touched nothing and the node
+	// is serving its previous epoch exactly as it was.
 	cfg, err := config.DecodeCompany(document)
 	if err != nil {
 		return configplane.StatusError, nil, fmt.Errorf("engine: parse revision %s: %w",
 			target.RevisionID, err)
+	}
+	if invalid := cfg.Validate(); invalid != nil {
+		return configplane.StatusError, nil, fmt.Errorf("engine: revision %s is not a "+
+			"runnable company; activate a corrected revision: %w", target.RevisionID, invalid)
 	}
 	return r.engine.Apply(ctx, cfg)
 }

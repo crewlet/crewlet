@@ -150,23 +150,34 @@ func TestAnUnknownFieldInAStoredRevisionIsToleratedNotFatal(t *testing.T) {
 	}
 }
 
-func TestAStoredRevisionIsStillValidated(t *testing.T) {
+// A STORED REVISION DECODES WHATEVER IT BREAKS, AND VALIDATION IS SEPARATE.
+//
+// A revision was valid under the build that wrote it, and a later build (or
+// an older peer still activating) can hold one this build refuses. When the
+// decode validated, such a revision was unreadable to every reader at once:
+// GET /config, export, and the prior of the very write that would correct it.
+// So the decode answers the document, and the refusal belongs to whoever is
+// about to RUN it.
+//
+// The provider block has to be non-empty for the refusal to be the fault
+// under test: a company with NO models at all is a documented authoring
+// state, and validation deliberately skips the key check there.
+func TestAStoredRevisionDecodesAndIsValidatedSeparately(t *testing.T) {
 	t.Parallel()
-	// Lenient about UNKNOWN fields is not lenient about a broken company.
-	// A seat naming a provider the document does not configure is
-	// well-formed JSON and fails at the first turn, which is the worst
-	// place to learn it.
-	//
-	// The provider block has to be non-empty for this to be the fault under
-	// test: a company with NO models at all is a documented authoring state
-	// — an org chart written before the credentials exist — and validation
-	// deliberately skips the key check there rather than answering with a
-	// wall of errors about models the author has not added yet.
-	_, err := config.DecodeCompany([]byte(
+	cfg, err := config.DecodeCompany([]byte(
 		`{"name":"Acme","providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},` +
 			`"roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`))
-	if err == nil {
-		t.Fatal("a seat naming an unconfigured provider decoded")
+	if err != nil {
+		t.Fatalf("a stored revision this build would refuse did not decode: %v", err)
+	}
+	if cfg.Name != "Acme" || len(cfg.Roles) != 1 {
+		t.Fatalf("the decode lost the document: %+v", cfg)
+	}
+	// Lenient about the READ is not lenient about running it: a seat naming
+	// a provider the document does not configure fails at the first turn,
+	// which is the worst place to learn it.
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("a seat naming an unconfigured provider validated")
 	}
 }
 

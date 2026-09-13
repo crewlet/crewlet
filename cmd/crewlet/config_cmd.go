@@ -327,17 +327,9 @@ const publishNote = "This node will publish it to the fleet at its next start. "
 func exportConfig(ctx context.Context, cs *configStore, revisionID string,
 	redact bool, stdout io.Writer,
 ) error {
-	rev, err := revisionOrActive(ctx, cs, revisionID)
+	rev, company, err := storedCompany(ctx, cs, revisionID)
 	if err != nil {
 		return err
-	}
-	document, err := secrets.Open(cs.cipher, rev.Payload)
-	if err != nil {
-		return fmt.Errorf("open revision %s: %w", rev.ID, err)
-	}
-	company, err := config.DecodeCompany(document)
-	if err != nil {
-		return fmt.Errorf("parse revision %s: %w", rev.ID, err)
 	}
 	if redact {
 		// STRUCTURAL, not a regex over the text: it masks the fields the
@@ -484,19 +476,36 @@ func renderValue(v any) string {
 
 // redactedCompany opens a revision and redacts it, for comparison.
 func redactedCompany(ctx context.Context, cs *configStore, revisionID string) (*config.Company, error) {
-	rev, err := revisionOrActive(ctx, cs, revisionID)
-	if err != nil {
-		return nil, err
-	}
-	document, err := secrets.Open(cs.cipher, rev.Payload)
-	if err != nil {
-		return nil, err
-	}
-	company, err := config.ParseCompanyDocument(document)
+	_, company, err := storedCompany(ctx, cs, revisionID)
 	if err != nil {
 		return nil, err
 	}
 	return company.Redact(), nil
+}
+
+// storedCompany opens one revision, or the active one, as the stored form.
+//
+// THE STORED-FORM READER, never the authored one. A revision is JSON a build
+// marshalled, possibly a NEWER build whose fields this one does not know, and
+// the authored reader refuses an unknown key: `crewlet config diff` used to
+// read revisions that way and failed on any revision a newer peer had
+// written. It holds the revision to no rule either, because showing,
+// exporting and comparing a document never runs it, and a revision this build
+// would refuse is exactly the one an operator needs to look at.
+func storedCompany(ctx context.Context, cs *configStore, revisionID string) (store.Revision, *config.Company, error) {
+	rev, err := revisionOrActive(ctx, cs, revisionID)
+	if err != nil {
+		return store.Revision{}, nil, err
+	}
+	document, err := secrets.Open(cs.cipher, rev.Payload)
+	if err != nil {
+		return store.Revision{}, nil, fmt.Errorf("open revision %s: %w", rev.ID, err)
+	}
+	company, err := config.DecodeCompany(document)
+	if err != nil {
+		return store.Revision{}, nil, fmt.Errorf("parse revision %s: %w", rev.ID, err)
+	}
+	return rev, company, nil
 }
 
 func activateRevision(ctx context.Context, cs *configStore, revisionID string, stdout io.Writer) error {

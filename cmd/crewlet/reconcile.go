@@ -302,5 +302,15 @@ func companyFromStore(ctx context.Context, bootstrapPath string) (*config.Compan
 	if err != nil {
 		return nil, fmt.Errorf("parse the active revision %s: %w", active.ID, err)
 	}
+	// VALIDATED HERE, naming the revision, because booting is applying and
+	// the stored-form decode holds a revision to no rule. The engine checks
+	// the same rules again as it builds the epoch, but only this frame knows
+	// which revision it is and that an offline import is the way out: the
+	// node is not serving its API yet.
+	if err := company.Validate(); err != nil {
+		return nil, fmt.Errorf("the active revision %s cannot run on this build; "+
+			"import a corrected document with `crewlet config import` and start "+
+			"again: %w", active.ID, err)
+	}
 	return company, nil
 }

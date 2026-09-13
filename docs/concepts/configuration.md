@@ -397,6 +397,14 @@ retired and the types are unchanged, because they were never the narrow part.
 
 A revert creates a *new* revision whose payload equals a prior one — the audit chain stays intact via `parent_revision_id`.
 
+### What a stored revision is held to
+
+A stored revision is not a document somebody just submitted. It passed the validation of the build that wrote it, which is not necessarily the build reading it: a later build can add a rule, and during a rolling upgrade an older peer keeps activating documents that break it. So reading a revision and running one are held to different standards.
+
+- **Reading holds a revision to no rule.** `GET /config`, a revision read, the diff, the reference index, the entity reads, `crewlet config show`, `export` and `diff`, and the prior a write restores its masks from or merges onto all decode the stored document as it is. A revision this build would refuse is exactly the one an operator needs to see and replace, so none of these may refuse it.
+- **Applying validates.** A node's reconcile tick validates a revision before anything on the node changes, so a refused revision leaves the previous epoch serving untouched. Booting from the store validates the active revision and names it when it cannot run, with `crewlet config import` as the way out because the node's API is not up yet. `POST /config/reload` and a revert validate what they re-activate.
+- **A written document is validated whole.** `PUT`, `PATCH`, a per-entity write, `/setup`, `crewlet config import` and `crewlet validate` validate the entire document the write produces, after its masks are restored. A write over a revision this build refuses therefore succeeds exactly when it corrects it.
+
 ---
 
 ## Auth

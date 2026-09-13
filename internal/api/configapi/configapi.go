@@ -591,9 +591,9 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	case errors.As(err, &invalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error": "validation_error", "detail": invalid.Err.Error(),
-			"hint": "a patch is validated as the WHOLE document it produces, " +
-				"so a section that is fine on its own is still refused when " +
-				"it leaves the company invalid",
+			"hint": "the WHOLE document a write produces is validated, not only " +
+				"the part it changed, so a section that is fine on its own is " +
+				"still refused when the company it leaves is invalid",
 		})
 	default:
 		s.fail(w, "apply the config", err)
@@ -639,6 +639,19 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 			"error": "unreadable_revision", "detail": err.Error(),
 			"hint": "the target revision is sealed under a key that is no longer " +
 				"in the keyring; restore it to the node's secrets.keys first",
+		})
+		return
+	}
+	// VALIDATED SEPARATELY from the open, so each refusal says what is true.
+	// Opening holds a stored revision to no rule, and a revert is an apply:
+	// an old revision this build can no longer run is refused naming the
+	// field, where the open used to fold it into the keyring hint above.
+	if invalid := company.Validate(); invalid != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "validation_error", "detail": invalid.Error(),
+			"hint": "revision " + target.ID + " does not pass this build's " +
+				"validation, so it cannot be re-activated as it stands; send a " +
+				"corrected document with PUT /config instead",
 		})
 		return
 	}
@@ -775,7 +788,14 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 
 // --- plumbing --------------------------------------------------------------
 
-// open decrypts a stored revision into a config.
+// open decrypts a stored revision into a config, holding it to NO rule.
+//
+// Every reader on this surface goes through here: GET /config, a revision
+// read, a diff, and the prior a write restores masks from or splices into. A
+// revision that fails validation must stay readable to all of them, or the
+// document an operator needs to see and replace is the one thing the surface
+// refuses to serve. A caller that ACTIVATES what it opened (reload, revert)
+// validates it itself; see [config.DecodeCompany].
 func (s *Service) open(revision store.Revision) (*config.Company, error) {
 	document, err := secrets.Open(s.cipher, revision.Payload)
 	if err != nil {

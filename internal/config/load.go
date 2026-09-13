@@ -207,6 +207,26 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 // ${VAR} references stay VERBATIM here as everywhere else: they are resolved
 // where a provider, transport or MCP server is constructed, which is what
 // makes re-activating an unchanged revision pick up a rotated credential.
+//
+// # It does not validate, and every caller decides what to hold it to
+//
+// A stored revision was valid under the rules of the build that WROTE it,
+// which is not necessarily this one: a later build adds a rule, and a peer on
+// an older build keeps activating documents that break it. A reader that
+// validated here made such a revision unreadable to every caller at once,
+// including the ones that could repair it. GET /config answered 500, a PUT
+// and a PATCH failed opening their own merge base, and export refused, so the
+// only way out was stopping the engine.
+//
+// So the decode is only a decode, and the rules live with the question being
+// asked:
+//
+//   - Reading, exporting, diffing, and using a revision as the prior a write
+//     restores its masks from or merges onto: no rules at all. Those readers
+//     never run the company, and refusing them is what locks it out.
+//   - Applying a revision (engine apply, boot, reload, revert): the rules a
+//     running company depends on, before anything is built.
+//   - A document a person submits: every rule, after its masks are restored.
 func DecodeCompany(payload []byte) (*Company, error) {
 	// Onto the DEFAULTS, not onto a zero value. A field the payload omits
 	// must land on the same default the authored path gives it, or the
@@ -215,9 +235,6 @@ func DecodeCompany(payload []byte) (*Company, error) {
 	cfg := DefaultCompany()
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrShape, err)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
 	}
 	return &cfg, nil
 }

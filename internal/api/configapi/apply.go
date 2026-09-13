@@ -159,6 +159,9 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: open the active revision: %w", err)
 	}
+	// The PRIOR is held to no rule: it is only where the masks come from.
+	// A stored revision this build would refuse must still be replaceable by
+	// the write that corrects it.
 	prior, err := config.DecodeCompany(document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: decode the active revision: %w", err)
@@ -230,6 +233,12 @@ func readPatched(patch, merged []byte) (*config.Company, error) {
 	if patchErr := onlyUnknownField(parseDocument(patch)); patchErr != nil {
 		return nil, patchErr
 	}
+	// The stored-form reader, which holds the merged document to NO rule.
+	// Validation happens exactly once, in Apply, after the masks are
+	// restored. This line used to validate here as well, before the
+	// restore, so on a document a newer peer had extended every PATCH that
+	// carried a masked credential (any roles or units array read from GET
+	// /config) was refused as an invalid patch naming the masks.
 	return config.DecodeCompany(merged)
 }
 
@@ -347,6 +356,14 @@ func (s *Service) Reload(ctx context.Context, summary, operator string) (Applied
 	company, err := s.open(active)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: open the active revision: %w", err)
+	}
+	// VALIDATED, because a reload is an apply: every node rebuilds its epoch
+	// from what this activates. Opening a stored revision holds it to no
+	// rule (see [config.DecodeCompany]), and re-publishing one this build
+	// cannot run would move every node onto a refusal. The answer names the
+	// field, and PUT or PATCH is how it is corrected.
+	if invalid := company.Validate(); invalid != nil {
+		return Applied{}, &ValidationError{Err: invalid}
 	}
 	if summary == "" {
 		summary = "reload configuration"

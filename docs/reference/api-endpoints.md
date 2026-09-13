@@ -384,7 +384,26 @@ at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
 Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
-is configured, and `503 no_control_plane` on a process that cannot activate.
+is configured, `400 validation_error` when the active document does not pass
+this build's validation (a reload is an apply, so it re-publishes only a
+company every node can run; correct it with `PUT` or `PATCH`), and
+`503 no_control_plane` on a process that cannot activate.
+
+#### Stored revisions are read as they are
+
+A read never validates what it reads. `GET /config`, a revision read, a diff,
+the reference index, the entity reads and the prior a write restores its masks
+from all open a stored revision as it is, even one this build's validator would
+refuse: a revision is valid under the build that wrote it, and a later build
+(or an older peer still activating during a rolling upgrade) can leave one in
+the store that this build refuses. What validates is whatever would RUN a
+document: every write validates the whole document it produces, and a reload
+or a revert validates what it re-activates. So a revision this build refuses is
+always readable, and a corrected `PUT` or `PATCH` always replaces it, while a
+write that leaves it uncorrected is refused with `400 validation_error`.
+A revert to such a revision answers `400 validation_error` naming the field; a
+revert to one sealed under a key this node does not hold answers
+`409 unreadable_revision`.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.
