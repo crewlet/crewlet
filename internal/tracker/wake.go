@@ -3,7 +3,9 @@ package tracker
 import (
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -379,6 +381,18 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	add("project", before.Project, after.Project)
 	add("type", before.Type, after.Type)
 	add("tags", strings.Join(before.Tags, ", "), strings.Join(after.Tags, ", "))
+	// THE SCHEDULE MOVES TOO, and until a tool could set any of these
+	// nothing here could observe it: a due date, an estimate, a size and a
+	// sprint had no producer in the tree, so their absence from this list
+	// was invisible. With one, a sprint move or a re-estimate wrote a
+	// history row and a notification card carrying NO deltas at all —
+	// which renders as the bare kind, and reads as a change that lost what
+	// it changed.
+	add("sprint", sprintText(before.Sprint), sprintText(after.Sprint))
+	add("due", dayText(before.DueAt), dayText(after.DueAt))
+	add("start", dayText(before.StartAt), dayText(after.StartAt))
+	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
+	add("points", pointsText(before.Points), pointsText(after.Points))
 	if len(moved) == 0 {
 		return nil
 	}
@@ -432,4 +446,50 @@ func without(all, muted []string) []string {
 		}
 	}
 	return out
+}
+
+// The four schedule values, as the TEXT a delta carries.
+//
+// AN ABSENT VALUE IS THE EMPTY STRING, which every renderer of a delta already
+// draws as an em-dash — so "no due date → 16 Apr" reads the way "— → jun"
+// already does for an assignee. A zero is NOT absent for an estimate or a
+// size: unestimated and estimated-at-nothing are different facts everywhere
+// else in this package, and a delta that folded them would report a size
+// being cleared as no change at all.
+
+// sprintText is the number, or empty for the backlog.
+func sprintText(n *int) string {
+	if n == nil || *n == 0 {
+		return ""
+	}
+	return strconv.Itoa(*n)
+}
+
+// dayText is the CALENDAR DAY, in UTC.
+//
+// The day rather than the instant, because that is the granularity a due date
+// is set at and a delta reading "2031-04-16T00:00:00Z → 2031-04-17T00:00:00Z"
+// asks a person to diff two timestamps to see that something moved by a day.
+func dayText(at *time.Time) string {
+	if at == nil || at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.DateOnly)
+}
+
+// minutesText is the estimate in minutes, or empty when there is none.
+func minutesText(minutes int) string {
+	if minutes == 0 {
+		return ""
+	}
+	return strconv.Itoa(minutes) + "m"
+}
+
+// pointsText is the size, trimmed of a trailing zero so a half point still
+// prints as one: a scale with halves in it is a scale somebody chose.
+func pointsText(points float64) string {
+	if points == 0 {
+		return ""
+	}
+	return strconv.FormatFloat(points, 'f', -1, 64)
 }
