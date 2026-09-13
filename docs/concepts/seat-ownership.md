@@ -18,7 +18,7 @@ So attachment has to be exclusive, and exclusivity has to be provable across pro
 
 ## The lease
 
-Ownership is a row in the `leases` table (`internal/coord`) with a TTL and a monotonic `epoch`:
+Ownership is a lease in the fleet's coordination store (`internal/coord`): a record with a TTL and a monotonic `epoch`. On a fleet (`coordination.type: embedded-kv`) the record lives in the `crewlet_leases` KV bucket, whose age limit is the lease TTL, and the epoch counter in the untimed `crewlet_epochs` bucket; a single node runs the in-memory twin of the same contract.
 
 ```
 seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=node-a
@@ -27,7 +27,7 @@ seat:{handle}   owner=node-a:9f3c1e70   epoch=7   expires_at=…   preferred=nod
 Three properties carry everything above it:
 
 - **The owner is a process incarnation, not a machine.** `{node_id}:{random}`, minted fresh at boot. A live lease is renewable by its own owner string, so two processes sharing an identity would both hold the seat at the same epoch — and the default node id is the shared constant `node-0`. The *stable* node id goes in `preferred`, where restart-stability is what you actually want.
-- **The epoch is a fencing token, monotonic for the resource's lifetime.** Releasing expires the row in place rather than deleting it: a deleted row would restart the counter at 1 and hand the next owner a token its predecessor is still using.
+- **The epoch is a fencing token, monotonic for the resource's lifetime.** It is kept apart from the lease record, in a bucket with no age limit, because a KV deletes a key when it expires: a counter stored on the lease would restart at 1 and hand the next owner a token its predecessor is still using.
 - **A lapsed lease cannot be renewed, only re-acquired** — and re-acquiring bumps the epoch even for the same owner, because during the gap that owner's in-flight work was unprotected and must be fenced against its own past self.
 
 ## Placement
@@ -35,8 +35,8 @@ Three properties carry everything above it:
 Placement is deliberately dumb, and lives in `internal/seat`:
 
 - Every node holds a `node:{id}` presence lease, renewed on the same heartbeat as its seats. Counting the live ones is how a node learns the fleet size. It cannot be inferred from seat ownership: a fleet where nobody has claimed anything yet would read as zero nodes, and every node would then take every seat.
-- A node claims up to `ceil(seats / live nodes)` — its **fair share** — trying `preferred`-hinted seats first for stickiness, and never more than `SEAT_CLAIM_LIMIT_PER_SWEEP` per pass, because each takeover costs an MCP spawn.
-- A node holding **more** than its share hands the excess back, at most `SEAT_RELEASE_LIMIT_PER_SWEEP` per pass. Claiming alone converges only for a fleet that shrinks: a node that booted alone holds every seat, and a peer joining later computes a share it can never reach. Without the give-back, scaling out does nothing until something dies.
+- A node claims up to `ceil(seats / live nodes)`, its **fair share**, trying `preferred`-hinted seats first for stickiness, and never more than `seat.ClaimLimitPerSweep` (4) per pass, because each takeover costs an MCP spawn.
+- A node holding **more** than its share hands the excess back, at most `seat.ReleaseLimitPerSweep` (2) per pass. Claiming alone converges only for a fleet that shrinks: a node that booted alone holds every seat, and a peer joining later computes a share it can never reach. Without the give-back, scaling out does nothing until something dies.
 
 The share is a ceiling, so shares sum to at least the seat count and a node at its share has no room to re-claim what it just released. Rebalancing converges rather than oscillating.
 
@@ -49,7 +49,7 @@ sequenceDiagram
     A->>L: acquire seat:ceo, seat:eng, seat:ops
     Note over A: alone — share is 3
     B->>L: acquire node:node-b
-    A->>L: list_live("node:") → 2
+    A->>L: ListLive("node:") → 2
     Note over A: share is now 2
     A->>A: release seat:ceo (voluntary)
     A->>L: expire seat:ceo in place
@@ -59,18 +59,18 @@ sequenceDiagram
 
 ## Establishing a seat, and giving it back
 
-The acquire hook establishes the seat in a known state and attaches the consumer **last**: agent instance, budget cap, per-role MCP children, interrupted sandbox-run recovery, *then* the inbox and control subscriptions. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
+The acquire hook (`node.Node.OnAcquire`, preparing the seat through `Engine.prepareSeat`) establishes the seat in a known state and attaches the inbox consumer **last**: the per-role MCP children, the seat's memory hydrated from the changelog, the sandbox control subscription and the interrupted sandbox-run recovery, *then* the inbox. A seat that starts receiving work before its MCP children are up runs its first turn with an empty tool surface. The release hook is the mirror: the seat's children die with its lease, because the credentials in one *are* that seat's identity and a child left running would let this node keep acting as an agent a peer now serves. See [Tools & MCP](../guides/tools-and-mcp.md#shared-vs-per-role-servers).
 
 Releasing has **two modes**, because losing a lease and choosing to let go are opposites:
 
 | Mode | When | What happens |
 |---|---|---|
 | **Voluntary** | drain, capacity rebalance, role decommissioned | quiesce → let the in-flight handler finish under a bounded wait → detach → release the lease |
-| **Fenced** | renew returned `False`, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
+| **Fenced** | renew returned false, the TTL grace expired, an acquire hook failed, config posture went `shed`/`stuck` | **detach first**, abandon in-flight work, republish nothing |
 
 Fenced release never republishes. A peer may already be running the seat, and a republished event is a **new message**: a second copy of work the successor is already doing, carrying none of the identity the completion ledger's idempotency and the batch layer's aging both key on — so nothing downstream can collapse the two. Handing the delivery back unacked keeps that identity, and the successor gets exactly what this node never finished.
 
-**A teardown that cannot be proven does not release the lease.** A lease held too long costs latency; one released too early costs correctness. So a seat whose `on_release` hook raises goes *undead*: out of the held set, so this node starts nothing new on it, and still renewed, so no peer can take a seat this process may still be consuming.
+**A teardown that cannot be proven does not release the lease.** A lease held too long costs latency; one released too early costs correctness. So a seat whose release hook fails (`on_release` returns an error or panics) goes *undead*: out of the held set, so this node starts nothing new on it, and still renewed, so no peer can take a seat this process may still be consuming.
 
 Undead is a state, not a grave. The teardown is retried on **every heartbeat**, and the lease is released the instant one succeeds — the usual causes are transient (a consumer mid-delivery, an MCP child that has not finished dying), and the retry is what returns the seat to the fleet. A retry that keeps failing keeps the seat, and re-raises its alarm every twenty heartbeats with the elapsed time, because the failure itself is not news but *still failing* is.
 
@@ -78,7 +78,7 @@ Only a restart of that process can free a seat whose teardown never succeeds —
 
 ## Deferring a delivery
 
-A handler has two ordinary outcomes: return (ack) or raise (negative-ack, which asks for the message back and goes on consuming). Seat handoff needs a third, so the queue protocol has one:
+A handler has two ordinary outcomes: `queue.Ack` or `queue.Nak` (which asks for the message back and goes on consuming). Seat handoff needs a third, so the queue protocol has one:
 
 ```go
 return queue.Defer(fmt.Sprintf("seat %q is not owned here", handle))
@@ -92,7 +92,7 @@ Three paths use it, and they are the three ways this node can be the wrong one t
 
 "Do I hold this seat?" is a question about a local snapshot refreshed on a 15-second heartbeat against a 45-second TTL, so the honest answer can be a full TTL stale — precisely the window an ownership check exists to close. A membership check cannot meet its own exit criterion.
 
-What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `seat.Host.MayStart` returns the epoch only when the last successful renew is inside one heartbeat interval, and `None` otherwise. Every turn that starts is then certified owned for at least `ttl - heartbeat`.
+What *is* provable is that a successful renew at time *t* bought exclusivity through *t + ttl*. So `seat.Host.MayStart` returns the epoch only when the last successful renew is inside one heartbeat interval, and reports false otherwise (`seat_admission_stale`). Every turn that starts is then certified owned for at least `ttl - heartbeat`.
 
 That also gives the right answer during a database blip. The lease row is untouched by an unreachable store, so the seat is **kept** — shedding on a two-second outage would tear a healthy company down — but new turns stop at the first failed renew. The consumer is quiesced, and un-quiesced when a renew succeeds again. Both edges matter: without the second one the node comes back healthy, still owning the seat, still attached to it, and never reads from it again.
 
@@ -106,7 +106,7 @@ It is **not** on every seat-scoped write, and the honest inventory is narrower t
 |---|---|
 | `episodes` | **Collapsed** against the reader that matters. One row per unit of work in the node's own store, which is the only one its recall reads — see [Keying a write on the work](#keying-a-write-on-the-work) below |
 | `counterparty_profiles.interaction_count` | **Collapsed.** The increment is skipped when the last counted work key repeats |
-| `agent_onboarding_markers` | Upsert *plus* `try_claim_pass`, a cross-process single-flight claim: already exclusive |
+| `agent_onboarding_markers` | Upsert *plus* `learning.Onboarding.Claim`, a cross-process single-flight claim: already exclusive |
 | `agent_diary` | Byte-identical content collapses on write. Two turns that word the same fact differently still land twice |
 
 The last one is deliberate. Nothing can key a *differently worded* diary entry to its twin — that needs the duplicate turn not to happen, which is the completion ledger's job, not a write guard's.
@@ -156,10 +156,10 @@ value for a subject is by construction the value its current owner wrote.
 
 A row can also collide with one this node already has under a *different*
 name — two episodes for one work key, written under two ids on two nodes.
-That is skipped rather than raised, and the distinction matters more than one
-row: hydration runs inside seat acquisition, so a raise refuses the seat, and
-a single duplicated episode would make a seat unplaceable across the whole
-fleet.
+That is skipped rather than returned as an error, and the distinction matters
+more than one row: hydration runs inside seat acquisition, so an error refuses
+the seat, and a single duplicated episode would make a seat unplaceable across
+the whole fleet.
 
 **Deletes are deliberately not replicated.** The learning lifecycle drops rows
 constantly, and carrying a tombstone for each would double the protocol to
@@ -328,9 +328,9 @@ Single node or fleet, it is armed the same way. With one node no peer is waiting
 
 A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
 
-It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused, and a completion riding it would queue behind the very pause it exists to lift.
+It cannot ride the inbox itself: while a run holds the seat, every inbox delivery is parked (requeued and acked), and a completion riding the inbox would be parked behind the very busy state it exists to clear.
 
-The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
+The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside the acquire hook. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 
 ## Routing is org-derived, never instance-derived
 
@@ -390,20 +390,15 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 ## What ownership looks like from outside
 
-`GET /health` reports a `seats` block per node: seats held, the computed capacity, the live node count, the last claim, the last loss, and the protocol floor when an older peer is blocking claims. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
+`GET /health` lists the seats this node holds (`seats`). The **Fleet** screen and the `fleet` query (`GET /query/fleet`) show every live node with the seats it holds, its roles and labels, its lease protocol and when its presence expires. The log carries the rest: `seat_sweep` reports each pass's held count against the computed capacity, `seat_claimed` and `seat_attached` / `seat_detached` carry the seat and the epoch (a detach also carries its reason), `seats_unplaceable` names seats no live node can run, and `seat_claims_blocked_by_older_protocol` names the protocol floor an older peer is imposing.
 
-`unproven_seconds` is the number to watch — a map of seat to how long its teardown has been failing. Alert on the **duration**, not on `unproven` itself: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running.
+`seat_still_unproven` is the line to alert on: it names a seat whose teardown keeps failing, with `stranded_seconds` and the attempt count, and repeats every twenty heartbeats while the seat stays stranded. Alert on the **duration**, not on the first `seat_release_unproven`: a teardown that fails once and succeeds on the next heartbeat retry is a working system (`seat_release_recovered`), while a seat still stranded minutes later is a seat nothing in the fleet is running.
 
 ## Single node
 
-Everything above runs unchanged on one node — it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, so the engine says so at boot:
+Everything above runs unchanged on one node: it is the degenerate case, not a second code path. On the default `coordination.type: local` the leases never leave the process, which means it believes it owns the whole company. That is correct for one node and catastrophic for two, which is why the Tier A file refuses the combination at load: `local` coordination beside a clustered embedded stream or an external NATS stream fails validation on `coordination.type`, naming `embedded-kv` as the fix.
 
-```
-seat_placement_is_process_local  node=node-0
-  hint=coordination.type is local, so seat leases are held in this process only…
-```
-
-A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share — a clustered embedded server or an external NATS. The two go together by construction: the coordination KV rides the stream's own connection, and Tier A refuses `local` coordination beside a clustered or external stream rather than letting the halves drift apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
+A fleet sets `coordination.type: embedded-kv` and gives the nodes one stream to share, either a clustered embedded server or an external NATS. The two go together by construction: the coordination KV rides the stream's own connection, so refusing the mixed pairing keeps the halves from drifting apart. See [Running a Fleet](../guides/fleet.md#what-a-fleet-needs).
 
 ---
 
