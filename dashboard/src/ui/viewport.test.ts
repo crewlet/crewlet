@@ -262,4 +262,17 @@ describe("placePopup", () => {
   test("slid back inside the bounds at the right edge", () => {
     expect(placePopup({ x: 780, y: 100, width: 20, height: 24 }, size, bounds, 4).x).toBe(600);
   });
+
+  test("slid back inside the bounds vertically when neither side has room for all of it", () => {
+    const short = { x: 0, y: 0, width: 800, height: 200 };
+    // 76 pixels above, 76 below, 160 needed: it overlaps its anchor, whole.
+    const spot = placePopup({ x: 100, y: 80, width: 32, height: 24 }, size, short, 4);
+    expect(spot.y).toBeGreaterThanOrEqual(0);
+    expect(spot.y + size.height).toBeLessThanOrEqual(short.height);
+  });
+
+  test("a popup taller than the bounds keeps its first item in view", () => {
+    const tiny = { x: 0, y: 10, width: 800, height: 100 };
+    expect(placePopup({ x: 100, y: 60, width: 32, height: 24 }, size, tiny, 4).y).toBe(10);
+  });
 });

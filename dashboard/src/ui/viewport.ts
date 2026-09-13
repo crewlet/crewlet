@@ -283,15 +283,20 @@ export function beyondSlop(a: Point, b: Point, pointerType: string): boolean {
  *
  * Below the anchor and aligned to its start by default; above it when there is
  * not room below and there is more room above; and slid back inside the bounds
- * horizontally, so a menu opened from a card at the edge of a canvas is never
- * cut off by the edge it opened near.
+ * on both axes, so a menu opened from a card at the edge of a canvas is never
+ * cut off by the edge it opened near. Where neither side has room for the
+ * whole popup it overlaps its anchor rather than losing its last items past
+ * an edge nobody can scroll; one larger than the bounds keeps its start in
+ * view, which is where its first item is.
  */
 export function placePopup(anchorRect: Rect, size: Size, bounds: Rect, gap: number): Point {
   const below = anchorRect.y + anchorRect.height + gap;
   const above = anchorRect.y - gap - size.height;
   const roomBelow = bounds.y + bounds.height - below;
   const roomAbove = anchorRect.y - gap - bounds.y;
-  const y = roomBelow >= size.height || roomBelow >= roomAbove ? below : above;
+  const side = roomBelow >= size.height || roomBelow >= roomAbove ? below : above;
+  const maxY = bounds.y + bounds.height - size.height;
+  const y = Math.max(bounds.y, Math.min(side, maxY));
   const maxX = bounds.x + bounds.width - size.width;
   const x = Math.max(bounds.x, Math.min(anchorRect.x, maxX));
   return { x, y };
