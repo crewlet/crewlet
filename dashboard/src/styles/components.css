@@ -691,6 +691,50 @@ a.brand:hover {
   color: var(--text-muted);
 }
 
+/* An ordered list field (`ui/ListField.tsx`): a fieldset whose legend wears
+   the field label's register, so a list reads as one field among the others. */
+fieldset.field {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+.field > legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.list-field-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.list-field-item,
+.list-field-add {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.list-field-item > .input,
+.list-field-item > .textarea,
+.list-field-add > .input,
+.list-field-add > .textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* No gap of its own: an icon button's padding already separates the three. */
+.list-field-actions {
+  display: flex;
+  flex: none;
+}
+
 .search-input {
   position: relative;
   display: flex;
