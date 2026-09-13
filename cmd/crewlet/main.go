@@ -1257,6 +1257,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Publisher: e.Backends().Queue,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   appFlow,
+			Recheck:   e,
 		},
 	})
 	// NOT SET HERE ANY MORE. This used to be an unconditional

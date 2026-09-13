@@ -5,6 +5,7 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Where GitHub returns a browser after an operator creates or installs one
@@ -220,6 +221,54 @@ type AppCompleter interface {
 	InstallURL(seat string) string
 }
 
+// GitHubRechecker asks the reconcile loop to look at GitHub NOW.
+//
+// One method, named for the one thing this package wants, so the receiver
+// does not import the reconcile vocabulary to say it. The engine knows which
+// surface that is.
+type GitHubRechecker interface{ RecheckGitHub() }
+
+// recheckEvery is the floor between two rechecks this route will ask for.
+//
+// # It is bounding an UNAUTHENTICATED caller, and it is the third bound
+//
+// A recheck is not a write and believes nothing (see
+// [integration.Worker.Refresh]), so the exposure is not trust but WORK: an
+// engine made to run GitHub passes back to back spends a company's GitHub
+// rate limit. Two bounds already sit under this one — the loop coalesces
+// asks that arrive before its tick, and a pass takes the surface lease, so
+// requests landing during one collapse into at most one more. Measured
+// against those alone an attacker could still drive passes continuously,
+// at roughly one per pass duration.
+//
+// FIVE SECONDS, from the two flows it has to separate. The real one is a
+// person redirected back from GitHub, and a GitHub install round trip
+// cannot complete in under five seconds — so consecutive installs, which a
+// multi-agent company does back to back, each get their recheck. Sustained
+// abuse drops to twelve passes a minute.
+//
+// Losing a recheck is not losing the work: the surface falls back to its
+// cadence, which is what it did before this existed.
+const recheckEvery = 5 * time.Second
+
+// askRecheck asks the loop to look at GitHub, at most once per
+// [recheckEvery]. It reports whether it asked.
+func (r *Receiver) askRecheck() bool {
+	if r.recheck == nil {
+		return false
+	}
+	now := r.now()
+	r.recheckMu.Lock()
+	if !r.recheckedAt.IsZero() && now.Sub(r.recheckedAt) < recheckEvery {
+		r.recheckMu.Unlock()
+		return false
+	}
+	r.recheckedAt = now
+	r.recheckMu.Unlock()
+	r.recheck.RecheckGitHub()
+	return true
+}
+
 // githubAppLanding serves GET /webhooks/github-app.
 func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
@@ -263,20 +312,35 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 		view.Heading = "App installed for"
 		view.Seat = strings.TrimSpace(q.Get("installed"))
 		view.Done = true
-		// THE WAIT SAID HONESTLY. "usually within a minute" is true only
-		// for the first few ticks: the admin cadence is a BACKOFF
-		// ([integration.Schedule.Next]) from fifteen seconds to ten
-		// minutes, so a seat that has been waiting on this click for an
-		// hour is polled every ten — and an operator who installed the app
-		// and watched a card for a minute read the silence as the install
-		// not having taken. It was measured exactly that way.
+		// AND THE LOOP IS ASKED TO LOOK NOW, which is the half that makes
+		// the sentence below true.
 		//
-		// And it names the control that makes it immediate, because there
-		// is one: Recheck runs the same pass on demand.
-		view.Message = "Crewlet picks the installation up on its next reconcile " +
-			"pass — within a minute if this agent was set up just now, and up " +
-			"to ten minutes on a surface that has been waiting a while. " +
-			"Press Recheck on the Integrations screen to look immediately."
+		// Nothing here is believed — see the note above, and
+		// [integration.Worker.Refresh]: the ask carries no installation
+		// id and makes no claim, so the pass that follows is the same
+		// verified one, listing the app's own installations. What the
+		// arrival supplies is the TIMING, and the timing is the whole
+		// problem: an admin-owed surface backs off from fifteen seconds
+		// to ten minutes, so the instant a person finishes the thing the
+		// card is asking for is the instant the wait is longest. Measured:
+		// an install done in about eight seconds, then several minutes of
+		// a card still asking for it, reloaded repeatedly, read as the
+		// install not having worked.
+		//
+		// The page says so either way. A refused ask — the rate limit, or
+		// a build with no loop wired — is a fall back to the cadence
+		// rather than a failure, and the operator is told which they are
+		// waiting on rather than a number that is right in one case.
+		if r.askRecheck() {
+			view.Message = "Crewlet is looking at GitHub now. The Integrations " +
+				"screen shows this agent ready in a moment."
+		} else {
+			view.Message = "Crewlet picks the installation up on its next " +
+				"reconcile pass — within a minute if this agent was set up " +
+				"just now, and up to ten minutes on a surface that has been " +
+				"waiting a while. Press Recheck on the Integrations screen " +
+				"to look immediately."
+		}
 
 	case r.appFlow == nil:
 		view.Heading, status = "App not created", http.StatusServiceUnavailable

@@ -297,8 +297,12 @@ roles:
 	}
 	var got *integration.Finding
 	for i, f := range findings {
+		// MATCHED ON THE STABLE HALF. "of their own" is the plural form
+		// and this company has one such seat, which now names the agent
+		// rather than counting it — so the clause the two share is what
+		// picks the finding out.
 		if f.Kind == integration.FindingApprovalRequired &&
-			strings.Contains(f.Detail, "no GitHub App of their own") {
+			strings.Contains(f.Detail, "no GitHub App of it") {
 			got = &findings[i]
 		}
 	}

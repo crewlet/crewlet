@@ -1468,3 +1468,101 @@ func TestAnUnsetCheckIntervalTakesTheDefault(t *testing.T) {
 			row.NextAttemptAt)
 	}
 }
+
+// A PERSON WHO JUST DID THE THING THE CARD ASKED FOR OUTRANKS THE BACKOFF.
+//
+// The admin cadence is a backoff from fifteen seconds to ten minutes, and
+// what it is backing off from is asking somebody to act at their third-party
+// app. So the instant they DO it is the instant the wait is longest and least
+// deserved: measured at a GitHub App installed in about eight seconds,
+// followed by several minutes of a card still asking for the install,
+// reloaded by hand, read as the install not having worked.
+//
+// Refresh says LOOK NOW and nothing else. It carries no installation id and
+// makes no claim, so the pass that follows is the ordinary verified one —
+// which is what makes it safe to reach from an unauthenticated redirect.
+func TestARefreshedSurfaceIgnoresItsBackoff(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab}
+	store := newStore(State{Kind: KindGitLab, NextAttemptAt: now.Add(10 * time.Minute)})
+	w := at(t, now, store, nil, Registration{Reconciler: r})
+
+	w.Tick(context.Background())
+	if r.count() != 0 {
+		t.Fatalf("a surface due in ten minutes ran %d passes", r.count())
+	}
+
+	w.Refresh(KindGitLab)
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("the surface stayed on its backoff after somebody acted at "+
+			"the third-party app: %d passes", r.count())
+	}
+
+	// AND ONE ASK IS ONE PASS. Left set, every later tick would ignore this
+	// surface's cadence for ever — the cadence deleted rather than brought
+	// forward, which is the hammering the wait exists to prevent.
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("the loop kept ignoring the cadence after one ask: %d passes",
+			r.count())
+	}
+}
+
+// AND IT IS NARROWER THAN AN APPLY, which is the whole reason it is not one.
+//
+// A config apply changes the answer for every surface; a person finishing
+// something at ONE third-party app changes it for one. Sweeping all of them on
+// a redirect from GitHub spends every other vendor's rate limit on a click
+// that said nothing about them.
+func TestARefreshWakesOnlyItsOwnSurface(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	lab := &fakeReconciler{kind: KindGitLab}
+	dog := &fakeReconciler{kind: KindDatadog}
+	store := newStore(
+		State{Kind: KindGitLab, NextAttemptAt: now.Add(10 * time.Minute)},
+		State{Kind: KindDatadog, NextAttemptAt: now.Add(10 * time.Minute)},
+	)
+	w := at(t, now, store, nil,
+		Registration{Reconciler: lab}, Registration{Reconciler: dog})
+
+	w.Refresh(KindGitLab)
+	w.Tick(context.Background())
+	if lab.count() != 1 {
+		t.Errorf("the refreshed surface ran %d passes", lab.count())
+	}
+	if dog.count() != 0 {
+		t.Errorf("a surface nobody asked about ran %d passes, spending its "+
+			"vendor's rate limit on a click about another one", dog.count())
+	}
+}
+
+// AN ASK ARRIVING ON A TICK THAT WAS ALREADY SWEEPING IS SPENT THERE.
+//
+// Taken before the due filter and unconditionally, so a refresh that lands
+// alongside a config apply is consumed by the sweep that apply causes rather
+// than left set to force a second one.
+func TestARefreshIsSpentByTheSweepItLandsIn(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	r := &fakeReconciler{kind: KindGitLab}
+	store := newStore(State{Kind: KindGitLab, NextAttemptAt: now.Add(10 * time.Minute)})
+	w := at(t, now, store, nil, Registration{Reconciler: r})
+
+	w.Refresh(KindGitLab)
+	w.MarkStale()
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("passes = %d, want the two asks folded into one", r.count())
+	}
+	w.Tick(context.Background())
+	if r.count() != 1 {
+		t.Fatalf("the ask outlived the sweep it arrived in: %d passes", r.count())
+	}
+}
+
+// A NIL WORKER TAKES THE ASK AND DOES NOTHING, like MarkStale beside it: a
+// build with no loop wired must not panic an HTTP handler that offers it one.
+func TestRefreshingANilWorkerIsSafe(t *testing.T) {
+	var w *Worker
+	w.Refresh(KindGitHub)
+}

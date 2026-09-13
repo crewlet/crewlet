@@ -466,6 +466,17 @@ type Worker struct {
 	// whatever its cadence says. See [Worker.MarkStale].
 	stale atomic.Bool
 
+	// refreshing holds the surfaces something has said to look at NOW,
+	// whatever their cadence. See [Worker.Refresh].
+	//
+	// A SET RATHER THAN A SECOND BOOL, because the reason it exists is that
+	// it is narrower than [Worker.stale]: a config apply changes the answer
+	// for every surface, while a person finishing something at ONE
+	// third-party app changes it for one. Sweeping all eight on a redirect
+	// from GitHub spends seven other vendors' rate limit on a click that
+	// said nothing about them.
+	refreshing sync.Map
+
 	// shed remembers that the last tick was declined on posture, so the
 	// refusal is logged on the TRANSITION rather than every fifteen seconds
 	// for as long as a node stays behind. A silent refusal is what makes a
@@ -513,6 +524,58 @@ func (w *Worker) MarkStale() {
 	case w.wake <- struct{}{}:
 	default:
 	}
+}
+
+// Refresh says ONE surface's state AT THE THIRD-PARTY APP may have changed,
+// so the next tick asks it again rather than waiting out its cadence.
+//
+// # What this is for, and why it is not a write
+//
+// The cadence is a BACKOFF — [Schedule.Next] takes an admin-owed surface from
+// fifteen seconds to ten minutes — and the thing it is backing off from is
+// asking a person to do something at their third-party app. So the moment
+// that person DOES it is exactly the moment the backoff is longest and most
+// wrong. Measured: an operator finished installing an agent's GitHub App in
+// about eight seconds and then watched the card ask them to install it for
+// several minutes, reloading the page, reasonably concluding the install had
+// not worked.
+//
+// Nothing about the caller is believed. A refresh does not say what changed
+// or that anything did; it says LOOK NOW, and the pass that follows is the
+// ordinary verified one — it lists the app's own installations and believes
+// GitHub. That is what makes this safe to reach from an unauthenticated
+// redirect, where adopting the id off the query would not be: the worst a
+// caller can do is make the engine ask a question it was going to ask
+// anyway, which is a rate concern for the caller to bound and not a trust
+// one.
+//
+// An unknown kind is kept rather than refused. The set is read by kind on
+// the way past and a name this build does not serve is simply never taken
+// out — cheaper than the lookup, and there is nothing for a caller to do
+// about a refusal here anyway.
+func (w *Worker) Refresh(kind Kind) {
+	if w == nil {
+		return
+	}
+	w.refreshing.Store(kind, struct{}{})
+	// Same non-blocking wake as [Worker.MarkStale], for the same reason:
+	// the flag alone only promises that the NEXT tick reconsiders, and the
+	// next tick is the interval this exists to not wait for.
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
+}
+
+// takeRefresh reports whether this surface was asked to look now, and clears
+// the ask.
+//
+// CLEARED AS IT IS READ, so one redirect costs one pass: left set, every
+// later tick would ignore the cadence for that surface for ever, which is
+// the cadence deleted rather than brought forward.
+func (w *Worker) takeRefresh(kind Kind) bool {
+	_, found := w.refreshing.LoadAndDelete(kind)
+	return found
 }
 
 // New builds the worker, refusing a registration set it could not run.
@@ -754,11 +817,16 @@ func (w *Worker) Tick(ctx context.Context) {
 			// the zero value already means.
 			state = State{Kind: kind}
 		}
+		// TAKEN BEFORE THE FILTER, AND ALWAYS, so an ask that arrives on a
+		// tick already sweeping for a config apply is spent rather than
+		// left to force a second one. `||` is short-circuit and this is
+		// its left operand for exactly that reason.
+		forced := w.takeRefresh(kind) || stale
 		// A CHEAP FILTER ON A ROW THAT MAY BE SECONDS OLD, which is all this
 		// has to be: it decides whether taking the guard is worth a round
 		// trip. The row the WORK is decided on is re-read inside — see
 		// [Worker.visit].
-		if !stale && !state.Due(now) {
+		if !forced && !state.Due(now) {
 			continue
 		}
 		// STILL OURS? The duty was claimed once, before this loop, and its
@@ -776,7 +844,7 @@ func (w *Worker) Tick(ctx context.Context) {
 		if !w.stillHoldsDuty(ctx) {
 			return
 		}
-		w.visit(ctx, kind, stale, now)
+		w.visit(ctx, kind, forced, now)
 	}
 
 	w.forgetDeparted(ctx, states)
@@ -806,7 +874,7 @@ func (w *Worker) Tick(ctx context.Context) {
 // ahead of this one has already moved NextAttemptAt, and re-reading is what
 // lets the loop notice rather than spend a third-party app's rate limit
 // re-asking what somebody just asked.
-func (w *Worker) visit(ctx context.Context, kind Kind, stale bool, now time.Time) {
+func (w *Worker) visit(ctx context.Context, kind Kind, forced bool, now time.Time) {
 	bounded, release, held, err := w.hold(ctx, kind)
 	switch {
 	case err != nil:
@@ -842,7 +910,7 @@ func (w *Worker) visit(ctx context.Context, kind Kind, stale bool, now time.Time
 	if !found {
 		state = State{Kind: kind}
 	}
-	if !stale && !state.Due(now) {
+	if !forced && !state.Due(now) {
 		return
 	}
 	if state.TearingDown() {

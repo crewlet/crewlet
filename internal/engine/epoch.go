@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // The epoch and how a new one replaces it.
@@ -40,6 +41,26 @@ type epoch struct {
 // running a company that never existed. That is the whole hazard this design
 // exists to remove, and it is removable only at the call site.
 func (e *Engine) Company() *Company { return e.epoch.current.Load() }
+
+// RecheckGitHub asks the reconcile loop to look at GitHub now rather than
+// waiting out its cadence.
+//
+// FOR THE MOMENT A PERSON FINISHES SOMETHING THERE. Installing an agent's App
+// is a click at GitHub that this engine cannot perform and cannot be told
+// about — an agent's App is private, so it sends no webhook here — so the
+// card asking for it is owed to an admin, and an admin-owed surface backs off
+// from fifteen seconds to ten minutes ([integration.Schedule]). The instant
+// somebody DOES it is therefore the instant the wait is longest and least
+// deserved: measured at an install completed in about eight seconds, followed
+// by minutes of a card still asking for it.
+//
+// What the redirect supplies is only the timing. Nothing about it is
+// believed and no installation id travels with the ask — see
+// [integration.Worker.Refresh] — so the pass that follows is the ordinary
+// verified one.
+func (e *Engine) RecheckGitHub() {
+	e.integrations.Refresh(integration.KindGitHub)
+}
 
 // installEpoch publishes an epoch and tells the store anything derived from it
 // that the store cannot work out for itself.
