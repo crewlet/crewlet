@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -280,7 +279,7 @@ func (t *ToolAnnotations) UnmarshalYAML(node *yaml.Node) error {
 		return nil
 	}
 	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("line %d: %w: tool annotations must be a mapping of hints", node.Line, ErrShape)
+		return nodeFault(node, "tool annotations must be a mapping of hints")
 	}
 	// Rewriting the aliased keys in a COPY keeps the strict decode: an
 	// unknown key still reaches decodeKnown and is still rejected.

@@ -3,7 +3,6 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 
 	"gopkg.in/yaml.v3"
 
@@ -95,8 +94,8 @@ func (p *PhaseLLM) UnmarshalYAML(node *yaml.Node) error {
 		*p = PhaseLLM(fields)
 		return nil
 	default:
-		return fmt.Errorf("line %d: %w: llm must be a provider key, a list of "+
-			"keys, or a per-phase mapping", node.Line, ErrShape)
+		return nodeFault(node, "llm must be a provider key, a list of "+
+			"keys, or a per-phase mapping")
 	}
 }
 

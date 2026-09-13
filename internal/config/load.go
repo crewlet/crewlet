@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -40,7 +39,7 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrShape, err)
+		return nil, syntaxFault(err)
 	}
 	if empty(&doc) {
 		// An empty Tier A file is legitimate: every field defaults, and a
@@ -56,7 +55,7 @@ func ParseBootstrap(data []byte, r *Resolver) (*Bootstrap, error) {
 	LogUnresolved("bootstrap", missing)
 
 	cfg := DefaultBootstrap()
-	if err := decodeKnown(&doc, &cfg); err != nil {
+	if err := decodeDocument(&doc, &cfg); err != nil {
 		return nil, err
 	}
 	if err := cfg.Validate(); err != nil {
@@ -180,7 +179,7 @@ func ParseCompany(data []byte) (*Company, error) {
 func ParseCompanyDocument(data []byte) (*Company, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrShape, err)
+		return nil, syntaxFault(err)
 	}
 	if empty(&doc) {
 		return nil, fault(nil, ErrMissing, "the company config is empty; it needs at least a name")
@@ -190,7 +189,7 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 	}
 
 	cfg := DefaultCompany()
-	if err := decodeKnown(&doc, &cfg); err != nil {
+	if err := decodeDocument(&doc, &cfg); err != nil {
 		return nil, err
 	}
 	// The declaration order of providers.llm exists only in the document —
@@ -262,7 +261,7 @@ func DecodeCompany(payload []byte) (*Company, error) {
 	// through.
 	cfg := DefaultCompany()
 	if err := json.Unmarshal(payload, &cfg); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrShape, err)
+		return nil, &Fault{Kind: ErrShape, Detail: err.Error()}
 	}
 	return &cfg, nil
 }
@@ -288,30 +287,52 @@ func requireMapping(doc *yaml.Node) error {
 	return nil
 }
 
-// decodeKnown decodes a node into out with unknown fields rejected.
+// decodeKnown decodes a node into out with unknown fields rejected, for a
+// custom UnmarshalYAML decoding a struct out of the node it was given.
 //
 // yaml.v3 only offers KnownFields on a Decoder, and a custom UnmarshalYAML
 // that reaches for node.Decode gets a fresh decoder without it — which is a
 // hole a typo can hide in. Every decoder in this package that has to decode
-// a STRUCT out of a node re-enters through here, so there is exactly one
-// strict path and no shape that escapes it.
+// a STRUCT out of a node re-enters through here or through [decodeDocument],
+// so there is exactly one strict path and no shape that escapes it.
 //
-// Round-tripping through the encoder is the price. It buys a guarantee that
-// holds for shapes this package has not been written yet, on sub-documents
-// that are a handful of keys wide.
+// Its failures go back to the calling decoder as a TypeError it keeps
+// collecting after, placed in that decoder's text (see [carryFaults]).
 func decodeKnown(node *yaml.Node, out any) error {
+	return carryFaults(decodeNode(node, out))
+}
+
+// decodeDocument decodes a whole parsed document into out with unknown
+// fields rejected, and gives every failure its authored path and its line in
+// the text doc was parsed from.
+func decodeDocument(doc *yaml.Node, out any) error {
+	if err := decodeNode(doc, out); err != nil {
+		return placeInDocument(doc, err)
+	}
+	return nil
+}
+
+// decodeNode is the strict decode both of those share, with its failures as
+// faults on the nodes of the input they are about.
+//
+// Round-tripping through the encoder is the price of the strictness. It buys
+// a guarantee that holds for shapes this package has not been written yet, on
+// sub-documents that are a handful of keys wide. What it costs a failure is
+// its line, which is a line of the encoded buffer: every failure is moved
+// back onto the node it came from before it is returned (see position.go).
+func decodeNode(node *yaml.Node, out any) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
-	if err := enc.Encode(node); err != nil {
-		return fmt.Errorf("%w: %w", ErrShape, err)
+	if err := enc.Encode(blockStyle(node)); err != nil {
+		return &Fault{Kind: ErrShape, Detail: err.Error()}
 	}
 	if err := enc.Close(); err != nil {
-		return fmt.Errorf("%w: %w", ErrShape, err)
+		return &Fault{Kind: ErrShape, Detail: err.Error()}
 	}
-	dec := yaml.NewDecoder(&buf)
+	dec := yaml.NewDecoder(bytes.NewReader(buf.Bytes()))
 	dec.KnownFields(true)
 	if err := dec.Decode(out); err != nil && !errors.Is(err, io.EOF) {
-		return decodeError(err, retiredFor(out))
+		return decodeError(err, retiredFor(out), indexBuffer(buf.Bytes(), node))
 	}
 	return nil
 }
@@ -331,13 +352,6 @@ func retiredFor(out any) map[string]string {
 	}
 	return nil
 }
-
-// unknownFieldRE matches yaml.v3's own phrasing for a key the struct does
-// not define. The Go type name in it is meaningless to an operator, so the
-// message is rewritten around the KEY, which is what they can search their
-// file for — but the type is captured all the same, because it is what
-// distinguishes one block's retired key from another's. See retiredKey.
-var unknownFieldRE = regexp.MustCompile(`^line (\d+): field (\S+) not found in type (\S+)$`)
 
 // retiredKey is how a retired-field table is addressed: the block the key
 // belonged to, then the key. yaml.v3 names the Go type it was decoding
@@ -385,39 +399,24 @@ var retiredBootstrapFields = map[string]string{
 		"SQLite file format",
 }
 
-// decodeError translates yaml's decode failures into this package's
-// sentinels, so a caller can tell a typo from a wrong shape.
-func decodeError(err error, retired map[string]string) error {
-	// An error from a custom unmarshaler has already been translated —
-	// including by a nested decodeKnown, which is how a typo inside the
-	// per-phase llm mapping or a tool-annotation block gets here. Wrapping
-	// it again would bury the sentinel a caller branches on under a
-	// generic one.
-	for _, sentinel := range []error{ErrUnknownField, ErrShape, ErrMissing, ErrUnknownValue, ErrConflict, ErrOutOfRange} {
-		if errors.Is(err, sentinel) {
-			return err
-		}
-	}
+// decodeError translates yaml's decode failures into faults on the nodes of
+// the input they are about, so a caller can tell a typo from a wrong shape
+// and find either.
+//
+// A yaml.TypeError is every failure the decoder collected, one line each. Any
+// other error stopped the decode inside a custom unmarshaler: a fault that a
+// nested decodeKnown or a custom decoder already built, still placed in this
+// buffer, which is moved onto the input without being wrapped again, since a
+// second wrap would bury the sentinel a caller branches on.
+func decodeError(err error, retired map[string]string, idx *bufferIndex) error {
+	claimed := map[*yaml.Node]bool{}
 	var typeErr *yaml.TypeError
 	if !errors.As(err, &typeErr) {
-		return fmt.Errorf("%w: %w", ErrShape, err)
+		return idx.relocate(err, claimed)
 	}
 	var out problems
 	for _, line := range typeErr.Errors {
-		if m := unknownFieldRE.FindStringSubmatch(line); m != nil {
-			// A key that was REMOVED needs its own message. "debug is not
-			// a setting" is true and useless to someone reading a file the
-			// quickstart told them to write: they need the line that
-			// replaced it, not a spelling check.
-			if replacement, gone := retired[retiredKey(m[3], m[2])]; gone {
-				out.add(Path{"line " + m[1]}, ErrUnknownField, "%s", replacement)
-				continue
-			}
-			out.add(Path{"line " + m[1]}, ErrUnknownField,
-				"%q is not a setting: check the spelling, or the block it belongs under", m[2])
-			continue
-		}
-		out.add(nil, ErrShape, "%s", strings.TrimSpace(line))
+		out = append(out, idx.typeFault(line, retired, claimed))
 	}
 	return out.err()
 }

@@ -134,13 +134,31 @@ type Fault struct {
 	Kind error
 	// Detail says what to do about it.
 	Detail string
+	// Line is the 1-based line, in the text that was parsed, of a failure
+	// the PARSER found: a syntax error, an unknown key, a value of the wrong
+	// type. Zero for every rule checked after decoding, which is located by
+	// Path alone, and for a parse failure yaml gives no line for.
+	Line int
+
+	// pos is where a parser failure sits while it is still being moved out
+	// of a decoder's buffer; see position.go. Resolved into Path and Line
+	// before the fault leaves the package.
+	pos position
 }
 
 func (f *Fault) Error() string {
-	if len(f.Path) == 0 {
-		return f.Kind.Error() + ": " + f.Detail
+	text := f.Kind.Error() + ": " + f.Detail
+	if len(f.Path) > 0 {
+		text = f.Path.String() + ": " + text
+		// THE LINE TRAILS, when the parser found one: the path is what
+		// opens every line of a refusal, and what a reader and a renderer
+		// both look for there. A failure with no path is a document yaml
+		// could not parse, and yaml's own detail already names its line.
+		if f.Line > 0 {
+			text += " (line " + strconv.Itoa(f.Line) + ")"
+		}
 	}
-	return f.Path.String() + ": " + f.Kind.Error() + ": " + f.Detail
+	return text
 }
 
 // Unwrap exposes the sentinel, so errors.Is(err, ErrMissing) keeps working.
@@ -149,38 +167,54 @@ func (f *Fault) Unwrap() error { return f.Kind }
 // Faults flattens a validation error into its parts, in the order they were
 // reported.
 //
-// An error that is NOT a fault — a file that could not be read, a YAML
-// document that would not parse — comes back as one Fault with an empty path
-// and [ErrShape], because a caller rendering machine-readable output needs
-// every failure in one shape or it has to grow a second branch for the ones
-// that arrive differently.
+// A JOIN is split into its parts, and nothing else is: an error built with
+// several %w verbs renders as one line and is one failure (see
+// [joinedParts]). A wrap that only adds context around failures that are
+// faults, such as the file name `crewlet validate` puts in front of a
+// company's problems, is seen through, because stopping at it reported the
+// first of a file's problems and dropped the rest.
+//
+// An error that is NOT a fault (a file that could not be read) comes back as
+// one Fault with an empty path and [ErrShape], because a caller rendering
+// machine-readable output needs every failure in one shape or it has to grow
+// a second branch for the ones that arrive differently.
 func Faults(err error) []Fault {
-	if err == nil {
-		return nil
-	}
 	var out []Fault
 	var walk func(error)
 	walk = func(e error) {
 		if e == nil {
 			return
 		}
-		// JOINED ERRORS FIRST, because a *Fault never wraps a join and a
-		// join is how every validator reports more than one problem.
-		if joined, ok := e.(interface{ Unwrap() []error }); ok {
-			for _, inner := range joined.Unwrap() {
-				walk(inner)
+		if f, ok := leafFault(e); ok {
+			out = append(out, *f)
+			return
+		}
+		if parts, ok := joinedParts(e); ok {
+			for _, part := range parts {
+				walk(part)
 			}
 			return
 		}
-		var f *Fault
-		if errors.As(e, &f) {
-			out = append(out, *f)
+		var inner *Fault
+		if wrapped := errors.Unwrap(e); wrapped != nil && errors.As(wrapped, &inner) {
+			walk(wrapped)
 			return
 		}
 		out = append(out, Fault{Kind: ErrShape, Detail: e.Error()})
 	}
 	walk(err)
 	return out
+}
+
+// leafFault reports whether err IS a fault, not merely wraps one.
+//
+// errors.As would answer for a wrap too, and a wrap adds text of its own
+// ("company config x.yaml: ..."): taken for the fault inside it, one line of
+// a refusal would render as another. A walk that needs the fault behind a
+// wrap sees through the wrap first, deliberately, as [Faults] does.
+func leafFault(err error) (*Fault, bool) {
+	f, ok := err.(*Fault) //nolint:errorlint // Deliberate: see the paragraph above.
+	return f, ok
 }
 
 // KindName is the machine-readable name of a fault's kind.
@@ -190,22 +224,27 @@ func Faults(err error) []Fault {
 // rather than as an empty string, which would look like a field the consumer
 // forgot to read.
 func (f Fault) KindName() string {
-	switch {
-	case errors.Is(f.Kind, ErrMissing):
-		return "missing"
-	case errors.Is(f.Kind, ErrOutOfRange):
-		return "out_of_range"
-	case errors.Is(f.Kind, ErrConflict):
-		return "conflict"
-	case errors.Is(f.Kind, ErrShape):
-		return "shape"
-	case errors.Is(f.Kind, ErrUnknownField):
-		return "unknown_field"
-	case errors.Is(f.Kind, ErrUnknownValue):
-		return "unknown_value"
-	default:
-		return "invalid"
+	for _, k := range faultKinds {
+		if errors.Is(f.Kind, k.sentinel) {
+			return k.name
+		}
 	}
+	return "invalid"
+}
+
+// faultKinds is every sentinel a fault carries, with its machine-readable
+// name: the one table [Fault.KindName] renders from and the parser's faults
+// are read back through (see position.go), so the two cannot disagree.
+var faultKinds = []struct {
+	name     string
+	sentinel error
+}{
+	{"missing", ErrMissing},
+	{"out_of_range", ErrOutOfRange},
+	{"conflict", ErrConflict},
+	{"shape", ErrShape},
+	{"unknown_field", ErrUnknownField},
+	{"unknown_value", ErrUnknownValue},
 }
 
 // Path is a place in an authored document, held as its SEGMENTS: a string
