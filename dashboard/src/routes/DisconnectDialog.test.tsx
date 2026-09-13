@@ -187,8 +187,13 @@ test("an integration with nothing to hand over renders no roster", () => {
 /**
  * Names a response carries, so a test can drive the list this dialog was
  * throwing away.
+ *
+ * `queued` is which of the route's two answers to give, because they are not
+ * the same event: 202 with `disconnecting: true` records the intent and leaves
+ * the teardown to the reconcile loop, while 200 with `removed: true` is the
+ * forced path, where the block is already gone and nothing else will run.
  */
-function stubFetchWithOrphans(sent: Sent[], byKind: Record<string, string[]>) {
+function stubFetchWithOrphans(sent: Sent[], byKind: Record<string, string[]>, queued = true) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -200,8 +205,12 @@ function stubFetchWithOrphans(sent: Sent[], byKind: Record<string, string[]>) {
       });
       const kind = path.split("/").pop() ?? "";
       return new Response(
-        JSON.stringify({ key: kind, disconnecting: true, orphaned_secrets: byKind[kind] ?? [] }),
-        { status: 202 },
+        JSON.stringify(
+          queued
+            ? { key: kind, disconnecting: true, orphaned_secrets: byKind[kind] ?? [] }
+            : { key: kind, removed: true, orphaned_secrets: byKind[kind] ?? [] },
+        ),
+        { status: queued ? 202 : 200 },
       );
     }),
   );
@@ -243,6 +252,69 @@ test("the credentials left in the store are named on screen", async () => {
   expect(screen.getByText(/crewlet secrets unset/)).toBeTruthy();
   // HELD OPEN. Closing is what lost this in the first place.
   expect(closed).not.toHaveBeenCalled();
+});
+
+/*
+ * A QUEUED DISCONNECT DOES NOT TELL ANYBODY TO REVOKE ANYTHING YET.
+ *
+ * The ordinary path answers 202: the intent is recorded and the reconcile loop
+ * performs the teardown afterwards, authenticating with the very credentials
+ * this dialog lists. Read as completion, it put those names under the word
+ * "disconnected" and said to revoke each one — and an operator who does leaves
+ * the teardown unable to sign in. It retries, so the card sits in
+ * Disconnecting for ever over accounts that are still live and hooks that
+ * still deliver.
+ */
+test("a queued disconnect says to wait before revoking anything", async () => {
+  const sent: Sent[] = [];
+  stubFetchWithOrphans(sent, { atlassian: ["ORG_KEY"] });
+  render(
+    <DisconnectDialog
+      name="Atlassian"
+      kinds={["atlassian"]}
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+
+  await waitFor(() => expect(screen.getByText("ORG_KEY")).toBeTruthy());
+  // NOT "disconnected", because it is not: the teardown has not run.
+  expect(screen.queryByText("Atlassian disconnected")).toBeNull();
+  expect(screen.getByText("Disconnecting Atlassian")).toBeTruthy();
+  // AND THE ORDER IS STATED, which is the part that keeps the teardown able
+  // to authenticate.
+  expect(screen.getByText(/Wait until the card stops reporting Disconnecting/)).toBeTruthy();
+});
+
+/*
+ * AND A FORCED ONE SAYS TO GET ON WITH IT.
+ *
+ * Forcing drops the block there and then and answers `removed: true`. Nothing
+ * else is going to run, so whatever the app still holds is the operator's now
+ * and there is nothing left to wait for — telling them to wait would be
+ * telling them to wait for something that will never happen.
+ */
+test("a forced disconnect says to revoke now", async () => {
+  const sent: Sent[] = [];
+  stubFetchWithOrphans(sent, { atlassian: ["ORG_KEY"] }, false);
+  render(
+    <DisconnectDialog
+      name="Atlassian"
+      kinds={["atlassian"]}
+      stuck="the teardown keeps failing"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Disconnect anyway" }));
+
+  await waitFor(() => expect(screen.getByText("ORG_KEY")).toBeTruthy());
+  expect(screen.getByText("Atlassian disconnected")).toBeTruthy();
+  expect(screen.queryByText(/Wait until the card stops reporting/)).toBeNull();
+  expect(screen.getByText(/crewlet secrets unset/)).toBeTruthy();
 });
 
 // AND A DISCONNECT THAT LEAVES NOTHING JUST CLOSES, rather than showing an

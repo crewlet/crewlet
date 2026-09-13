@@ -147,6 +147,24 @@ export function DisconnectDialog({
    * scheduled.
    */
   const [waitingOn, setWaitingOn] = useState<string | null>(null);
+  /**
+   * Whether the engine still OWES a teardown, which decides what the credential
+   * list may tell somebody to do with it.
+   *
+   * The two answers this route gives are not the same event. Forcing drops the
+   * block there and then and answers `removed: true`: nothing else is going to
+   * run, so whatever the app still holds is the operator's now. The ordinary
+   * path answers 202 and `disconnecting: true` — the intent is recorded and the
+   * reconcile loop performs the teardown afterwards, AUTHENTICATING WITH THE
+   * VERY CREDENTIALS this dialog lists.
+   *
+   * Read as completion, the second one put those names under the word
+   * "disconnected" and told an operator to revoke each one. Doing that before
+   * the loop runs leaves the teardown unable to sign in — and it retries, so
+   * the surface sits in Disconnecting with a dead credential while the accounts
+   * it was meant to remove stay live.
+   */
+  const [owed, setOwed] = useState(false);
 
   async function submit(force: boolean) {
     setBusy(true);
@@ -162,20 +180,29 @@ export function DisconnectDialog({
       // rather than skipped: carrying on past it would take the organization
       // away from a product that still needs it.
       const left = new Set<string>();
+      // ANY surface, not all of them. A card is several requests, and one
+      // still owing a teardown is enough to make revoking now unsafe: the
+      // names are unioned, so one on the list may be what THAT surface
+      // authenticates with.
+      let stillOwed = false;
       for (const kind of kinds) {
         const answer = (await disconnectOne(kind, removeSeats, force, setWaitingOn)) as
-          { orphaned_secrets?: string[] } | undefined;
+          { orphaned_secrets?: string[]; disconnecting?: boolean } | undefined;
+        if (answer?.disconnecting) stillOwed = true;
         for (const name of answer?.orphaned_secrets ?? []) left.add(name);
       }
       setWaitingOn(null);
       onDone();
       if (left.size === 0) {
+        // NOTHING TO WARN ABOUT. There is no credential to revoke early, so
+        // an owed teardown is the card's business rather than this dialog's.
         onClose();
         return;
       }
       // HELD OPEN, because closing is what lost the list. The disconnect has
       // already been asked for — onDone has run — so what is left on screen
       // is the part the operator still has to do.
+      setOwed(stillOwed);
       setOrphans([...left].sort());
     } catch (err) {
       // `message` rather than `detail || code`: those two are both empty on
@@ -195,7 +222,7 @@ export function DisconnectDialog({
   if (orphans) {
     return (
       <Dialog
-        title={`${name} disconnected`}
+        title={owed ? `Disconnecting ${name}` : `${name} disconnected`}
         icon="plug"
         onClose={onClose}
         width={520}
@@ -217,10 +244,26 @@ export function DisconnectDialog({
               </li>
             ))}
           </ul>
-          <p className="t-body secondary" style={{ margin: 0 }}>
-            Revoke each one at the app, then remove it with{" "}
-            <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
-          </p>
+          {/* THE ORDER MATTERS WHILE A TEARDOWN IS STILL OWED, and getting it
+              wrong is not cosmetic: the loop removes the webhooks and the
+              accounts AFTERWARDS, using these very credentials. Revoke one
+              first and the teardown cannot authenticate — and it retries, so
+              the card sits in Disconnecting for ever over accounts that are
+              still live. Told to wait, the operator does the same work in the
+              order that works. */}
+          {owed ? (
+            <p className="t-body secondary" style={{ margin: 0 }}>
+              <strong>Wait until the card stops reporting Disconnecting.</strong> The engine is
+              still removing what {name} holds at the app, and it signs in with these credentials to
+              do it. Once it has finished, revoke each one at the app and remove it with{" "}
+              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+            </p>
+          ) : (
+            <p className="t-body secondary" style={{ margin: 0 }}>
+              Revoke each one at the app, then remove it with{" "}
+              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+            </p>
+          )}
         </div>
       </Dialog>
     );
