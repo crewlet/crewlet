@@ -511,8 +511,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
 	e.leaseTTL = leaseTTL(opts.Bootstrap)
 	// BEFORE the node, which registers every seat's mailbox through it on
-	// its first walk.
-	if e.mailboxes, err = e.buildMailboxes(backends); err != nil {
+	// its first walk, and AFTER the lease TTL, which a retirement claims a
+	// seat for.
+	if e.mailboxes, err = e.buildMailboxes(backends, nodeID); err != nil {
 		return fail(fmt.Errorf("engine: seat mailboxes: %w", err))
 	}
 	n, err := node.New(node.Config{

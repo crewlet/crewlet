@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
@@ -117,13 +118,21 @@ func (e *Engine) ConversationRetention() time.Duration {
 // Nil, with no error, on backends without a fleet store, a queue or a lease
 // store: there is no shared record to keep and nothing to retire through, and
 // a node built that way registers nothing rather than failing every seat.
-func (e *Engine) buildMailboxes(b *Backends) (*maintenance.Mailboxes, error) {
+//
+// A retirement claims the seat's lease under an incarnation of its OWN, never
+// the node's: a claim by an owner that already holds a lease doubles as a
+// renew, so sharing the seat host's owner would let a retirement take the
+// lease of a seat this node is running. The TTL is the one the lease store was
+// opened with, which [Engine.leaseTTL] must already hold.
+func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailboxes, error) {
 	if b == nil || b.Fleet == nil || b.Queue == nil || b.Coord == nil {
 		return nil, nil
 	}
 	return maintenance.NewMailboxes(maintenance.MailboxOptions{
 		Records: b.Fleet, Queue: b.Queue, Leases: b.Coord,
-		Roster: e.activeSeatHandles,
+		Owner:    config.NewIncarnation(nodeID),
+		LeaseTTL: e.leaseTTL,
+		Roster:   e.activeSeatHandles,
 	})
 }
 

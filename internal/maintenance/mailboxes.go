@@ -51,6 +51,13 @@ import (
 //     mark is stale) and what tells a registering node not to create the
 //     subscription a retirement is still deleting (it waits instead, and takes
 //     the record over if the retirement outlives its own budget).
+//   - A RETIREMENT HOLDS THE SEAT'S LEASE WHILE IT DELETES. The mark stops a
+//     registering node, but a node's seat host claims a seat off the company
+//     it installed without ever reading the record, and attaching the seat's
+//     consumer creates the very subscriptions the retirement is about to
+//     delete. Only the lease excludes that node, so the retirement claims it
+//     under its own owner before the mark and gives it back after the record
+//     is gone. A seat whose lease somebody else holds is not retired at all.
 //
 // Memory is NOT retired. A seat's diary, episodes, counterparty profiles and
 // onboarding markers are keyed by its handle or by the agent id derived from
@@ -76,13 +83,18 @@ const MailboxRetirementGrace = 24 * time.Hour
 // mailboxRetireBudget bounds the broker and store work of one retirement, from
 // before its mark is written to the delete of its record.
 //
-// Thirty seconds: the work is two subscription deletes and two conditional
-// store writes, each a millisecond on a healthy broker and each individually
-// bounded by the client's five-second API timeout, so this covers every one of
-// them timing out with room to spare. It is load-bearing for the registering
-// side as well: a node that finds a retirement in flight waits twice this long
-// before it takes the record over, so by then the retiring sweep can no longer
-// issue a delete that lands on the subscription the node is about to create.
+// Thirty seconds: the work is a seat lease claim, two subscription deletes and
+// two conditional store writes, each a millisecond on a healthy broker and each
+// individually bounded by the client's five-second API timeout, so this covers
+// every one of them timing out with room to spare. It is load-bearing for the
+// registering side as well: a node that finds a retirement in flight waits
+// twice this long before it takes the record over, so by then the retiring
+// sweep can no longer issue a delete that lands on the subscription the node is
+// about to create.
+//
+// A retirement is also held to half the seat lease TTL when that is shorter,
+// because its deletes are only excluded from a claiming node while the lease
+// it took is live; see [Mailboxes.workLimit].
 const mailboxRetireBudget = 30 * time.Second
 
 // mailboxRetireStale is how old a retirement mark must be before a later sweep
@@ -141,9 +153,10 @@ type MailboxQueue interface {
 	DeleteSubscription(ctx context.Context, topic, group string) (bool, error)
 }
 
-// SeatLeases is the slice of the lease store a retirement consults.
+// SeatLeases is the slice of the lease store a retirement claims a seat through.
 type SeatLeases interface {
-	Get(ctx context.Context, resource string) (*coord.Lease, error)
+	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, error)
+	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 }
 
 // SeatRoster reads the agent seat handles of the revision the fleet is pointed
@@ -163,9 +176,25 @@ type MailboxOptions struct {
 	// lost race may have deleted. Required.
 	Queue MailboxQueue
 
-	// Leases answers whether anything still holds a seat whose mailbox is
-	// due for retirement. Required.
+	// Leases is the seat lease store a retirement claims a seat in before it
+	// deletes the seat's subscriptions, so no node can claim the seat and
+	// attach to them meanwhile. Required.
 	Leases SeatLeases
+
+	// Owner is the lease owner a retirement claims a seat under. Required.
+	//
+	// It must be unique to this process AND differ from the owner the node's
+	// own seat host claims under: a claim by an owner that already holds a
+	// lease doubles as a renew, so sharing the seat host's owner would let a
+	// retirement "win" the lease of a seat this very node is running.
+	Owner string
+
+	// LeaseTTL is the seat lease TTL the lease store was opened with.
+	// Required, because it has no default that could be right: a claim
+	// longer than the store's TTL is refused, and a retirement's work is
+	// only excluded from a claiming node while its claim is live, so the
+	// work is bounded by half of it (see [Mailboxes.workLimit]).
+	LeaseTTL time.Duration
 
 	// Roster reads the active revision's agent seats. Required.
 	Roster SeatRoster
@@ -185,12 +214,14 @@ type MailboxOptions struct {
 // every state of a record means, and two types would be two places to write
 // that down.
 type Mailboxes struct {
-	records MailboxRecords
-	queue   MailboxQueue
-	leases  SeatLeases
-	roster  SeatRoster
-	budget  time.Duration
-	poll    time.Duration
+	records  MailboxRecords
+	queue    MailboxQueue
+	leases   SeatLeases
+	owner    string
+	leaseTTL time.Duration
+	roster   SeatRoster
+	budget   time.Duration
+	poll     time.Duration
 }
 
 // NewMailboxes builds the registry and its sweep, refusing a missing
@@ -206,6 +237,14 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 	if opts.Leases == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Leases is required"))
 	}
+	if opts.Owner == "" {
+		missing = append(missing, errors.New("maintenance: MailboxOptions.Owner is required; "+
+			"pass an incarnation distinct from the seat host's own"))
+	}
+	if opts.LeaseTTL <= 0 {
+		missing = append(missing, errors.New("maintenance: MailboxOptions.LeaseTTL is required; "+
+			"pass the TTL the seat lease store was opened with"))
+	}
 	if opts.Roster == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Roster is required"))
 	}
@@ -213,7 +252,8 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 		return nil, err
 	}
 	m := &Mailboxes{
-		records: opts.Records, queue: opts.Queue, leases: opts.Leases, roster: opts.Roster,
+		records: opts.Records, queue: opts.Queue, leases: opts.Leases,
+		owner: opts.Owner, leaseTTL: opts.LeaseTTL, roster: opts.Roster,
 		budget: opts.RetireBudget, poll: opts.RegisterPoll,
 	}
 	if m.budget <= 0 {
@@ -432,28 +472,43 @@ func (m *Mailboxes) judge(ctx context.Context, rec coord.MailboxRecord, now, cut
 // retire deletes a removed seat's subscriptions and then its record.
 func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, now time.Time) (bool, error) {
 	handle := rec.Handle
-	// NOTHING MAY STILL HOLD THE SEAT. The seat host releases a seat whose
-	// role is gone, so a live lease here is a node still serving a revision
-	// that has it, and deleting a mailbox its consumer is attached to would
-	// pull the subscription out from under that node's turns. An unreadable
-	// lease is unknown, and unknown retires nothing.
-	lease, err := m.leases.Get(ctx, coord.SeatResource(handle))
+
+	// THE BUDGET STARTS BEFORE THE CLAIM AND THE MARK, so a registering node
+	// that waits twice the budget from the moment it first sees the mark has
+	// waited past the last instant this retirement could issue a delete, and
+	// the claim below outlives every delete by at least half its TTL.
+	work, cancel := context.WithTimeout(ctx, m.workLimit())
+	defer cancel()
+
+	// NOTHING ELSE MAY HOLD THE SEAT, AND NOTHING MAY TAKE IT WHILE THIS
+	// DELETES. The seat host releases a seat whose role is gone, so a lease
+	// somebody else holds is a node still serving a revision that has the
+	// seat, and deleting a mailbox its consumer is attached to would pull the
+	// subscription out from under that node's turns. Reading the lease is not
+	// enough: a node that installs a revision adding the seat back claims it
+	// off that company without reading the record, and attaching creates the
+	// subscriptions this is about to delete. So the retirement CLAIMS the
+	// lease, which is the one thing that node's claim loses to. A claim that
+	// cannot be answered is unknown, and unknown retires nothing.
+	lease, err := m.leases.TryAcquire(work, coord.SeatResource(handle), coord.AcquireOptions{
+		Owner: m.owner,
+		TTL:   m.leaseTTL,
+		// No Preferred: the hint records the last node that RAN the seat,
+		// and a claim that exists only to exclude one must leave it alone.
+	})
 	if err != nil {
-		return false, fmt.Errorf("read the lease of seat %q before retiring its mailbox: %w", handle, err)
+		return false, fmt.Errorf("claim the lease of seat %q before retiring its mailbox: %w", handle, err)
 	}
-	if lease != nil {
+	if lease == nil {
 		log.WarnContext(ctx, "seat_mailbox_retirement_held", "handle", handle,
-			"owner", lease.Owner, "absent_since", rec.AbsentSince,
-			"detail", "the seat is absent from the active revision but a node still holds its "+
-				"lease, so its mailbox is kept until that node lets it go")
+			"absent_since", rec.AbsentSince,
+			"detail", "the seat is absent from the active revision but its lease could not be "+
+				"claimed: a node still holds it, or a node of an older build holds a lease in "+
+				"this fleet; the mailbox is kept and the claim retried on the next tick")
 		return false, nil
 	}
+	defer m.releaseSeat(ctx, *lease)
 
-	// THE BUDGET STARTS BEFORE THE MARK, so a registering node that waits
-	// twice the budget from the moment it first sees the mark has waited
-	// past the last instant this retirement could issue a delete.
-	work, cancel := context.WithTimeout(ctx, m.budget)
-	defer cancel()
 	mark := rec
 	mark.RetiringSince = now
 	marked, ok, err := m.records.UpdateMailbox(work, mark)
@@ -497,6 +552,37 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, now tim
 		}
 	}
 	return true, nil
+}
+
+// workLimit is how long one retirement may act, from before its lease claim to
+// the delete of its record.
+//
+// [mailboxRetireBudget], or half the seat lease TTL when that is shorter. The
+// lease is what keeps a claiming node off the seat while the subscriptions are
+// deleted, so no delete may be issued after it could have lapsed. Its expiry is
+// the store's clock from the claim and this deadline is the local clock from
+// before it; the other half of the TTL is the margin between the two, and
+// covers a request sent just before the deadline landing just after it. With
+// the shipped 45-second lease TTL that is 22.5 seconds, still above the four
+// five-second client timeouts a retirement's writes can each run into.
+func (m *Mailboxes) workLimit() time.Duration {
+	return min(m.budget, m.leaseTTL/2)
+}
+
+// releaseSeat gives back the lease a retirement claimed.
+//
+// On a context of its own, as a teardown: the retirement may have ended on its
+// deadline, and a release that inherited it would leave a seat added back
+// unclaimable for a full TTL. A release that fails leaves exactly that, which
+// is logged rather than returned because the retirement itself is settled.
+func (m *Mailboxes) releaseSeat(ctx context.Context, lease coord.Lease) {
+	teardown, cancel := context.WithTimeout(context.WithoutCancel(ctx), m.budget)
+	defer cancel()
+	if _, err := m.leases.Release(teardown, lease.Resource, lease.Owner, lease.Epoch); err != nil {
+		log.WarnContext(ctx, "seat_mailbox_retirement_release_failed", "resource", lease.Resource,
+			"error", err.Error(),
+			"detail", "the seat's lease lapses on its own TTL; a node can claim the seat after that")
+	}
 }
 
 // deleteSubscriptions deletes every durable subscription a seat's mailbox

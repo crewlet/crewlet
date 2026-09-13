@@ -3,6 +3,7 @@ package maintenance_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -93,7 +94,14 @@ func (q *gatedQueue) DeleteSubscription(ctx context.Context, topic, group string
 		close(entered)
 	}
 	if gate != nil {
-		<-gate
+		// The caller's deadline still applies, as it does to a broker
+		// request, so a test can tell a retirement that gave up on time
+		// from one that waited out whatever held it.
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
 	}
 	if failure != nil {
 		return false, failure
@@ -124,7 +132,15 @@ type mailboxHarness struct {
 	leases  coord.Backend
 	roster  *roster
 	m       *maintenance.Mailboxes
+	// builds numbers every Mailboxes this harness makes, so each claims
+	// seat leases under an owner of its own, as each process does.
+	builds atomic.Int32
 }
+
+// harnessLeaseTTL is the seat lease TTL the harness's retirements claim with:
+// long enough that no test's work limit is the lease's rather than the budget's
+// unless the test says so.
+const harnessLeaseTTL = time.Hour
 
 func newMailboxHarness(t *testing.T, tune func(*maintenance.MailboxOptions)) *mailboxHarness {
 	t.Helper()
@@ -147,6 +163,8 @@ func (h *mailboxHarness) build(tune func(*maintenance.MailboxOptions)) *maintena
 	h.t.Helper()
 	opts := maintenance.MailboxOptions{
 		Records: h.records, Queue: h.queue, Leases: h.leases, Roster: h.roster.read,
+		Owner:        fmt.Sprintf("retirement-%d", h.builds.Add(1)),
+		LeaseTTL:     harnessLeaseTTL,
 		RegisterPoll: 5 * time.Millisecond,
 	}
 	if tune != nil {
@@ -527,6 +545,81 @@ func TestAMailboxAHolderStillConsumesIsKept(t *testing.T) {
 	}
 }
 
+// A node that installs a revision adding a seat back claims the seat off that
+// company without reading the mailbox record, and attaching its consumer creates
+// the subscriptions a retirement may be deleting. The retirement holds the
+// seat's lease for exactly that span, so the claim loses until the deletes are
+// done and then succeeds at once.
+func TestNoNodeCanClaimASeatWhileItsMailboxIsRetired(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+
+	release := make(chan struct{})
+	entered := h.queue.holdNextDelete(release)
+	retired := make(chan int64, 1)
+	go func() {
+		n, err := h.tick(h.m, base.Add(grace+time.Minute))
+		if err != nil {
+			t.Errorf("tick: %v", err)
+		}
+		retired <- n
+	}()
+	<-entered
+
+	claim := func() *coord.Lease {
+		t.Helper()
+		lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource("swe"),
+			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
+		if err != nil {
+			t.Fatalf("TryAcquire: %v", err)
+		}
+		return lease
+	}
+	if lease := claim(); lease != nil {
+		t.Fatalf("a node claimed seat swe (epoch %d) while its mailbox was being deleted, so its "+
+			"consumer attaches to a subscription the retirement is about to remove", lease.Epoch)
+	}
+
+	close(release)
+	if n := <-retired; n != 1 {
+		t.Fatalf("the retirement retired %d mailboxes, want 1", n)
+	}
+	if lease := claim(); lease == nil {
+		t.Fatal("the retirement kept the seat's lease after it finished, so a seat added back " +
+			"cannot be claimed until the lease lapses")
+	}
+}
+
+// The lease is what keeps a claiming node off the seat, so a retirement that is
+// still issuing deletes after it could have lapsed is not excluded from
+// anything. Its work is held to half the lease TTL, however generous the budget.
+func TestARetirementEndsWhileItsSeatLeaseIsStillLive(t *testing.T) {
+	const leaseTTL = time.Second
+	h := newMailboxHarness(t, func(o *maintenance.MailboxOptions) {
+		o.LeaseTTL = leaseTTL
+		o.RetireBudget = time.Hour
+	})
+	h.removed()
+
+	// A delete that answers only well after the lease could have lapsed, so a
+	// retirement bounded by anything longer finishes late and fails the
+	// assertions below rather than hanging the suite.
+	slow := make(chan struct{})
+	h.queue.holdNextDelete(slow)
+	defer time.AfterFunc(3*leaseTTL, func() { close(slow) }).Stop()
+	started := time.Now()
+	_, err := h.tick(h.m, base.Add(grace+time.Minute))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("tick = %v, want the retirement to stop on its own deadline", err)
+	}
+	if took := time.Since(started); took >= leaseTTL {
+		t.Fatalf("the retirement acted for %v, past the %v lease that excluded a claiming node", took, leaseTTL)
+	}
+	if rec, _ := h.record("swe"); rec.Retiring() {
+		t.Fatalf("a retirement that ran out of time left its mark: %+v", rec)
+	}
+}
+
 // A node applying a revision that adds a seat back while a sweep is deleting
 // that seat's previous mailbox must not create its inbox until the delete is
 // done, or the delete lands on the new inbox and the seat is deaf.
@@ -764,7 +857,7 @@ func TestNewMailboxesNamesEveryMissingDependency(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewMailboxes accepted no dependencies")
 	}
-	for _, field := range []string{"Records", "Queue", "Leases", "Roster"} {
+	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster"} {
 		if !strings.Contains(err.Error(), "MailboxOptions."+field) {
 			t.Errorf("the error does not name %s: %v", field, err)
 		}
