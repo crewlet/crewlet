@@ -904,8 +904,16 @@ rendered idle from the first phase to the last.
     looked away for three seconds must still be able to learn it did not
     land, so a failed state holds until the next click while a successful one
     settles back.
-14. **A link reads as a link at every size.** A text-register class on an `<a>`
+14. **Per-subject state is keyed on its subject.** A hash change re-renders
+    the route switch rather than remounting it, so `#/turns/A` → `#/turns/B`
+    reconciles and anything the screen remembers about A — a held refusal, an
+    open disclosure, a selected tab — describes B until something clears it.
+    Every id-bearing route carries `key={id}`.
+15. **A head's controls wrap.** `.row` does not on its own and every `.btn` is
+    `white-space: nowrap`, so a head with several controls overflows a phone's
+    line instead of taking a second one.
+16. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.
-15. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
+17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.

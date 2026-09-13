@@ -319,7 +319,12 @@ export function ScreenHead({
         </div>
         {sub && <span className="screen-sub">{sub}</span>}
       </div>
-      {actions && <div className="row gap-1">{actions}</div>}
+      {/* WRAPS. `.row` does not on its own, and every `.btn` is `white-space:
+          nowrap` with no `flex-shrink` of its own, so a head with several
+          controls — Turn has four — pushed past a phone's line rather than
+          taking a second one. `.screen-head`'s own wrap only moves the block
+          as a whole. */}
+      {actions && <div className="row gap-1 wrap screen-actions">{actions}</div>}
     </header>
   );
 }
