@@ -691,6 +691,53 @@ a.brand:hover {
   color: var(--text-muted);
 }
 
+/* A checkbox with its sentence (`ui/Checkbox.tsx`). The label and the box are
+   one click target; a framed one is the bordered choice row a dialog uses. */
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.checkbox.framed {
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+}
+.checkbox.framed:hover:not(.disabled) {
+  border-color: var(--border);
+}
+.checkbox.disabled {
+  cursor: default;
+}
+/* Nudged down by the difference between a line of body text and the box, so
+   the box sits on the label's first line rather than above it. */
+.checkbox > input {
+  flex: none;
+  margin: calc((var(--lh-normal) * 1em - 1em) / 2) 0 0;
+  accent-color: var(--accent);
+  cursor: inherit;
+}
+/* Ticking it destroys something, and the box itself says so. */
+.checkbox.critical > input {
+  accent-color: var(--critical);
+}
+.checkbox-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.checkbox-label {
+  color: var(--text);
+}
+.checkbox-description {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+
 /* An ordered list field (`ui/ListField.tsx`): a fieldset whose legend wears
    the field label's register, so a list reads as one field among the others. */
 fieldset.field {

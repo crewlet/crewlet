@@ -22,6 +22,7 @@
  */
 
 import { useState } from "react";
+import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -141,19 +142,18 @@ export function RemoveSecretDialog({
       )}
 
       {needsAcknowledgement && (
-        <label className="int-choice">
-          <input
-            type="checkbox"
-            checked={acknowledged}
-            disabled={busy}
-            onChange={(e) => setAcknowledged(e.target.checked)}
-          />
-          <span className="t-body">
-            {referenced
+        <Checkbox
+          framed
+          tone="critical"
+          checked={acknowledged}
+          disabled={busy}
+          onChange={setAcknowledged}
+          label={
+            referenced
               ? "Remove it anyway, and leave those fields pointing at nothing"
-              : "Remove it without knowing what points at it"}
-          </span>
-        </label>
+              : "Remove it without knowing what points at it"
+          }
+        />
       )}
 
       {error && (

@@ -17,6 +17,7 @@
  */
 
 import { useState } from "react";
+import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Avatar, Button } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -293,21 +294,15 @@ export function DisconnectDialog({
           the integration from your company configuration.
         </p>
 
-        <label className="int-choice">
-          <input
-            type="checkbox"
-            checked={removeSeats}
-            disabled={busy}
-            onChange={(e) => setRemoveSeats(e.target.checked)}
-          />
-          <span className="col" style={{ gap: 2 }}>
-            <span className="t-body">Also remove the accounts Crewlet created</span>
-            <span className="t-caption faint">
-              Each agent&apos;s account at the vendor is deleted. What those accounts wrote stays,
-              but they can do nothing more. Leave this off to keep them.
-            </span>
-          </span>
-        </label>
+        <Checkbox
+          framed
+          tone="critical"
+          checked={removeSeats}
+          disabled={busy}
+          onChange={setRemoveSeats}
+          label="Also remove the accounts Crewlet created"
+          description="Each agent's account at the vendor is deleted. What those accounts wrote stays, but they can do nothing more. Leave this off to keep them."
+        />
 
         {/* WHO IS LEFT, and where. The engine uninstalls each agent's app,
             which stops it acting at once, and cannot delete the app itself:
