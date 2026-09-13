@@ -469,6 +469,24 @@ What replaced it:
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
 
+Three rows of buttons, and a table, that behaved differently from a keyboard
+than they looked:
+
+- **A section row activates manually.** `Tabs`, and a `Segmented` with
+  `semantics="tabs"` (a lens, a window, a grouping), are one tab stop: the
+  arrow keys and Home and End move focus along the row, and Enter or Space
+  selects. A section pushes a history entry, and a row that selected as focus
+  moved left one entry per keypress for Back to walk through. Each tab names
+  the `TabPanel` it controls.
+- **A setting is a radio group.** The theme and density controls are
+  `Segmented` with `semantics="radio"`: announced as a choice rather than as
+  tabs with no panel, and the arrows select as they move, because changing a
+  setting costs nothing on every keypress. The same applies to a filter that
+  replaces the history entry.
+- **A sortable column is a button in its header.** The click used to be on the
+  `th` itself, which a keyboard cannot reach and a screen reader does not
+  announce as a control. `aria-sort` stays on the header cell.
+
 Three more controls that looked like something they were not:
 
 - **A copy button says whether it copied.** The clipboard is invisible, so a

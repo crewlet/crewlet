@@ -16,7 +16,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import { Empty } from "./primitives.tsx";
-import { Icon, type IconName } from "./Icon.tsx";
+import type { IconName } from "./Icon.tsx";
 
 export interface Column<T> {
   key: string;
@@ -114,15 +114,21 @@ export function DataTable<T>({
                     .filter(Boolean)
                     .join(" ")}
                   style={c.width ? { width: c.width } : undefined}
-                  onClick={c.sortValue ? () => toggle(c.key) : undefined}
                   aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : undefined}
                   scope="col"
                 >
-                  {c.header}
-                  {c.sortValue && (
-                    <span className="sort-mark" aria-hidden="true">
-                      {active ? (sort.dir === "asc" ? "↑" : "↓") : ""}
-                    </span>
+                  {c.sortValue ? (
+                    // A BUTTON, so the sort is reachable and announced as a
+                    // control. The cell used to carry the click itself, which
+                    // a keyboard could not reach at all.
+                    <button type="button" className="th-sort" onClick={() => toggle(c.key)}>
+                      {c.header}
+                      <span className="sort-mark" aria-hidden="true">
+                        {active ? (sort.dir === "asc" ? "↑" : "↓") : ""}
+                      </span>
+                    </button>
+                  ) : (
+                    c.header
                   )}
                 </th>
               );
@@ -178,13 +184,5 @@ export function ColHead({ children, unit }: { children: ReactNode; unit?: string
       {children}
       {unit && <span style={{ color: "var(--text-faint)" }}> {unit}</span>}
     </>
-  );
-}
-
-export function SortHint() {
-  return (
-    <span className="t-caption row" style={{ gap: 4 }}>
-      <Icon name="filter" size="xs" /> click a column to sort
-    </span>
   );
 }

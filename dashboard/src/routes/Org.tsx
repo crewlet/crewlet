@@ -20,12 +20,12 @@
  * page under a header.
  */
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { Segmented } from "~/ui/primitives.tsx";
+import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { Charter } from "./org/Charter.tsx";
 import { Chart } from "./org/Chart.tsx";
 import { Directory } from "./org/Directory.tsx";
@@ -39,6 +39,7 @@ export function OrgScreen() {
   const [param, setLens] = useParam("lens", "chart", "section");
   const lens: Lens = (LENSES as readonly string[]).includes(param) ? (param as Lens) : "chart";
   const index = useMemo(() => indexOrg(org), [org]);
+  const panel = useId();
 
   return (
     <>
@@ -48,6 +49,8 @@ export function OrgScreen() {
         actions={
           <Segmented<Lens>
             ariaLabel="Org view"
+            semantics="tabs"
+            panelId={panel}
             value={lens}
             onChange={setLens}
             options={[
@@ -58,9 +61,11 @@ export function OrgScreen() {
           />
         }
       />
-      {lens === "chart" && <Chart index={index} />}
-      {lens === "directory" && <Directory index={index} />}
-      {lens === "charter" && <Charter org={org ?? {}} index={index} />}
+      <TabPanel id={panel} value={lens}>
+        {lens === "chart" && <Chart index={index} />}
+        {lens === "directory" && <Directory index={index} />}
+        {lens === "charter" && <Charter org={org ?? {}} index={index} />}
+      </TabPanel>
     </>
   );
 }

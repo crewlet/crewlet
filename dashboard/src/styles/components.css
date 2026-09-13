@@ -436,11 +436,21 @@ a.brand:hover {
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-.table th.sortable {
-  cursor: pointer;
+/* THE SORT CONTROL IS A BUTTON INSIDE THE HEADER CELL, not a click handler on
+   the cell: a clickable th is neither focusable nor announced as a control,
+   so a keyboard reader could see which way a column sorted and could not
+   change it. The button takes the header's own register, and aria-sort stays
+   on the th, where a screen reader looks for it. */
+.table th .th-sort {
+  display: inline-flex;
+  align-items: center;
+  text-align: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  white-space: nowrap;
   user-select: none;
 }
-.table th.sortable:hover {
+.table th .th-sort:hover {
   color: var(--text);
 }
 .table th .sort-mark {
@@ -758,7 +768,8 @@ a.brand:hover {
 .segmented > button:hover {
   color: var(--text);
 }
-.segmented > button[aria-selected="true"] {
+.segmented > button[aria-selected="true"],
+.segmented > button[aria-checked="true"] {
   background: var(--surface-1);
   color: var(--text);
   box-shadow: var(--shadow-1);
@@ -804,6 +815,15 @@ a.brand:hover {
 }
 .chip[aria-pressed="true"] .chip-count {
   color: inherit;
+}
+
+/* The region a tab row controls. It keeps the gap of the layout around it, so
+   wrapping a screen's sections in one moves nothing. */
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: inherit;
+  min-width: 0;
 }
 
 /* Tabs — the in-page navigation a section owns. */

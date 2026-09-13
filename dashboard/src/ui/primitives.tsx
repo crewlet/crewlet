@@ -209,26 +209,123 @@ export function PhaseTag({ phase, children }: { phase: string; children?: ReactN
   );
 }
 
+/**
+ * The id of the tab that labels a tab panel, so a panel and the tab row that
+ * controls it agree on it without passing ids between them.
+ */
+export function tabId(panelId: string, value: string): string {
+  return `${panelId}-tab-${value}`;
+}
+
+/**
+ * Which button an arrow key moves to in a row of them, or null for a key that
+ * is not a move. Tabs are a horizontal row and move on Left and Right only; a
+ * radio group moves on all four arrows, as the platform's own does.
+ */
+function moveTo(key: string, at: number, count: number, vertical: boolean): number | null {
+  if (count === 0) return null;
+  switch (key) {
+    case "ArrowRight":
+      return (at + 1) % count;
+    case "ArrowLeft":
+      return (at - 1 + count) % count;
+    case "ArrowDown":
+      return vertical ? (at + 1) % count : null;
+    case "ArrowUp":
+      return vertical ? (at - 1 + count) % count : null;
+    case "Home":
+      return 0;
+    case "End":
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Roving focus over a row of buttons: one tab stop for the row, arrows to move
+ * within it. `select` is called on a move only when the row selects as focus
+ * moves (a radio group); a tab row leaves selection to Enter and Space, which
+ * a button already turns into its click.
+ */
+function useRoving(count: number, select: ((index: number) => void) | null) {
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>, vertical: boolean) => {
+    const at = buttons.current.findIndex((b) => b === document.activeElement);
+    if (at < 0) return;
+    const next = moveTo(e.key, at, count, vertical);
+    if (next === null) return;
+    e.preventDefault();
+    buttons.current[next]?.focus();
+    select?.(next);
+  };
+  return { buttons, onKeyDown };
+}
+
+type SegmentedSemantics =
+  /**
+   * A row of SECTIONS: a lens or a tab, which pushes a history entry. Arrows
+   * move focus and Enter or Space selects, so walking the row with the
+   * keyboard does not leave an entry per keypress for Back to walk through.
+   * `panelId` names the tab panel the row controls; render it with
+   * [TabPanel].
+   */
+  | { semantics: "tabs"; panelId: string }
+  /**
+   * A SETTING or a filter (the theme, the density): announced as a radio
+   * group with no panel, and arrows select immediately, because a choice that
+   * replaces the history entry or is not in the URL at all costs nothing to
+   * change on every keypress.
+   */
+  | { semantics: "radio"; panelId?: undefined };
+
 export function Segmented<T extends string>({
   value,
   options,
   onChange,
   size,
   ariaLabel,
+  semantics,
+  panelId,
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; title?: string }[];
   onChange: (value: T) => void;
   size?: "sm";
   ariaLabel: string;
-}) {
+} & SegmentedSemantics) {
+  const radio = semantics === "radio";
+  const { buttons, onKeyDown } = useRoving(
+    options.length,
+    radio ? (i) => onChange(options[i]!.value) : null,
+  );
+  const selected = Math.max(
+    0,
+    options.findIndex((o) => o.value === value),
+  );
   return (
-    <div className={cx("segmented", size === "sm" && "sm")} role="tablist" aria-label={ariaLabel}>
-      {options.map((o) => (
+    <div
+      className={cx("segmented", size === "sm" && "sm")}
+      role={radio ? "radiogroup" : "tablist"}
+      aria-label={ariaLabel}
+      onKeyDown={(e) => onKeyDown(e, radio)}
+    >
+      {options.map((o, i) => (
         <button
           key={o.value}
-          role="tab"
-          aria-selected={o.value === value}
+          ref={(el) => {
+            buttons.current[i] = el;
+          }}
+          type="button"
+          role={radio ? "radio" : "tab"}
+          id={radio || !panelId ? undefined : tabId(panelId, o.value)}
+          aria-checked={radio ? o.value === value : undefined}
+          aria-selected={radio ? undefined : o.value === value}
+          aria-controls={radio ? undefined : panelId}
+          // An icon-only option is named by its title, which a tooltip alone
+          // does not do for a screen reader.
+          aria-label={o.title && !o.label ? o.title : undefined}
+          tabIndex={i === selected ? 0 : -1}
           title={o.title}
           onClick={() => onChange(o.value)}
         >
@@ -240,24 +337,50 @@ export function Segmented<T extends string>({
   );
 }
 
+/**
+ * The in-page sections a screen owns, as the ARIA tabs pattern with MANUAL
+ * activation: arrows move focus along the row, Enter or Space selects. A tab
+ * is a section and pushes a history entry, and a row that selected on every
+ * arrow press pushed one per keypress. `panelId` names the [TabPanel] the row
+ * controls.
+ */
 export function Tabs<T extends string>({
   value,
   options,
   onChange,
   ariaLabel,
+  panelId,
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; count?: number | null }[];
   onChange: (value: T) => void;
   ariaLabel: string;
+  panelId: string;
 }) {
+  const { buttons, onKeyDown } = useRoving(options.length, null);
+  const selected = Math.max(
+    0,
+    options.findIndex((o) => o.value === value),
+  );
   return (
-    <div className="tabs" role="tablist" aria-label={ariaLabel}>
-      {options.map((o) => (
+    <div
+      className="tabs"
+      role="tablist"
+      aria-label={ariaLabel}
+      onKeyDown={(e) => onKeyDown(e, false)}
+    >
+      {options.map((o, i) => (
         <button
           key={o.value}
+          ref={(el) => {
+            buttons.current[i] = el;
+          }}
+          type="button"
           role="tab"
+          id={tabId(panelId, o.value)}
           aria-selected={o.value === value}
+          aria-controls={panelId}
+          tabIndex={i === selected ? 0 : -1}
           onClick={() => onChange(o.value)}
         >
           {o.icon && <Icon name={o.icon} size="sm" />}
@@ -265,6 +388,27 @@ export function Tabs<T extends string>({
           {o.count != null && <span className="count-chip">{o.count}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * The region a tab row controls, labelled by whichever tab is selected. It
+ * keeps the gap of the layout it sits in, so wrapping a screen's sections in
+ * one changes nothing a reader can see.
+ */
+export function TabPanel({
+  id,
+  value,
+  children,
+}: {
+  id: string;
+  value: string;
+  children: ReactNode;
+}) {
+  return (
+    <div role="tabpanel" id={id} aria-labelledby={tabId(id, value)} className="tab-panel">
+      {children}
     </div>
   );
 }

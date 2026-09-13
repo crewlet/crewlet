@@ -12,12 +12,12 @@
  * cursor several times a second while a turn ran.
  */
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Segmented, SearchInput } from "~/ui/primitives.tsx";
+import { Badge, Empty, Panel, Segmented, SearchInput, TabPanel } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
@@ -54,6 +54,7 @@ export function People() {
   const sandboxes = useSandboxes();
   const org = useOrg();
   const [group, setGroup] = useParam("group", "state", "section");
+  const panel = useId();
   const [q, setQ] = useParam("q", "");
 
   const index = useMemo(() => indexOrg(org), [org]);
@@ -124,6 +125,8 @@ export function People() {
         <span className="spacer" />
         <Segmented<Grouping>
           ariaLabel="Grouping"
+          semantics="tabs"
+          panelId={panel}
           value={group as Grouping}
           onChange={setGroup}
           options={[
@@ -134,35 +137,37 @@ export function People() {
         />
       </div>
 
-      {!groups.length && (
-        <Empty
-          icon="users"
-          title={q ? `No seat matches “${q}”` : "This company has no seats"}
-          hint={
-            q
-              ? "The filter matches a seat's name, handle, goal or unit."
-              : "Roles are defined in the company configuration. Import one to spawn seats."
-          }
-        />
-      )}
+      <TabPanel id={panel} value={group}>
+        {!groups.length && (
+          <Empty
+            icon="users"
+            title={q ? `No seat matches “${q}”` : "This company has no seats"}
+            hint={
+              q
+                ? "The filter matches a seat's name, handle, goal or unit."
+                : "Roles are defined in the company configuration. Import one to spawn seats."
+            }
+          />
+        )}
 
-      {groups.map((g) =>
-        g.label ? (
-          <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
-            <div className="seat-grid">
+        {groups.map((g) =>
+          g.label ? (
+            <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
+              <div className="seat-grid">
+                {g.rows.map(({ seat, agent }) => (
+                  <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
+                ))}
+              </div>
+            </Section>
+          ) : (
+            <div className="seat-grid" key={g.key}>
               {g.rows.map(({ seat, agent }) => (
                 <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
             </div>
-          </Section>
-        ) : (
-          <div className="seat-grid" key={g.key}>
-            {g.rows.map(({ seat, agent }) => (
-              <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
-            ))}
-          </div>
-        ),
-      )}
+          ),
+        )}
+      </TabPanel>
     </>
   );
 }

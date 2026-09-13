@@ -9,7 +9,7 @@
  * useful today and cannot lose anybody's work.
  */
 
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
@@ -22,6 +22,7 @@ import {
   Panel,
   Segmented,
   Skeleton,
+  TabPanel,
 } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -36,6 +37,7 @@ export function ConfigScreen() {
   const now = useNow();
   const [lens, setLens] = useParam("lens", "active", "section");
   const [revision, setRevision] = useParam("revision", "");
+  const panel = useId();
 
   const active = useQuery("config", undefined, { enabled: lens === "active" });
   const audit = useQuery("config_audit", { limit: 100 }, { enabled: lens !== "active" });
@@ -58,6 +60,8 @@ export function ConfigScreen() {
         actions={
           <Segmented<Lens>
             ariaLabel="Configuration view"
+            semantics="tabs"
+            panelId={panel}
             value={lens as Lens}
             onChange={setLens}
             options={[
@@ -69,157 +73,165 @@ export function ConfigScreen() {
         }
       />
 
-      {lens === "active" && (
-        <>
-          {active.loading && <Skeleton rows={6} />}
-          <QueryState error={active.error} loading={active.loading}>
-            {active.data ? (
-              <Panel
-                title="Active revision"
-                icon="file"
-                subtitle="as the engine resolved it"
-                actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
-              >
-                <div className="col gap-1">
-                  <Code plain selectable label="The active company configuration, as JSON">
-                    {pretty}
-                  </Code>
-                  <span className="t-caption">
-                    Click into the revision, and ⌘A / Ctrl+A selects it alone rather than the page.
-                  </span>
-                </div>
-              </Panel>
-            ) : (
-              <Empty
-                icon="sliders"
-                title="No company configuration is active"
-                hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import one with crewlet config import, or PUT /config."
-              />
-            )}
-          </QueryState>
-        </>
-      )}
-
-      {lens !== "active" && (
-        <>
-          {audit.loading && <Skeleton rows={5} />}
-          <QueryState
-            error={audit.error}
-            loading={audit.loading}
-            empty={
-              (audit.data ?? []).length
-                ? undefined
-                : {
-                    title: "No revisions recorded",
-                    hint: "The history begins with the first import.",
-                  }
-            }
-          >
-            <Panel title="Revisions" icon="clock" count={(audit.data ?? []).length} padding="none">
-              <DataTable<RevisionMeta>
-                rows={audit.data ?? []}
-                rowKey={(r) => r.revision_id}
-                defaultSort={{ key: "at", dir: "desc" }}
-                onRowClick={(r) => {
-                  setRevision(r.revision_id);
-                  setLens("diff");
-                }}
-                isSelected={(r) => r.revision_id === revision}
-                columns={[
-                  {
-                    key: "at",
-                    header: "When",
-                    shrink: true,
-                    sortValue: (r) => tsKey(r.created_at),
-                    cell: (r) => (
-                      <span className="t-caption" title={fmtDateTime(r.created_at)}>
-                        {relTime(r.created_at, now)}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: "id",
-                    header: "Revision",
-                    cell: (r) => (
-                      <span className="row gap-1">
-                        <code className="inline">{r.revision_id.slice(0, 10)}</code>
-                        {r.is_active && <Badge tone="positive">active</Badge>}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: "summary",
-                    header: "Summary",
-                    sortValue: (r) => r.summary,
-                    cell: (r) => (
-                      <span className="truncate">
-                        {r.summary || <span className="faint">—</span>}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: "author",
-                    header: "By",
-                    shrink: true,
-                    sortValue: (r) => r.created_by,
-                    cell: (r) => r.created_by || <span className="faint">—</span>,
-                  },
-                ]}
-              />
-            </Panel>
-          </QueryState>
-
-          {lens === "diff" && (
-            <Panel
-              title={revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
-              icon="gitBranch"
-              subtitle="against the active revision"
-            >
-              {!revision ? (
-                <Empty
-                  inline
-                  icon="gitBranch"
-                  title="Pick a revision above"
-                  hint="Its differences against the currently active document are shown here."
-                />
-              ) : diff.loading ? (
-                <Skeleton rows={4} />
-              ) : (
-                <QueryState
-                  error={diff.error}
-                  loading={diff.loading}
-                  empty={
-                    diff.data?.changes?.length
-                      ? undefined
-                      : {
-                          title: "No differences",
-                          hint: "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
-                        }
-                  }
+      <TabPanel id={panel} value={lens}>
+        {lens === "active" && (
+          <>
+            {active.loading && <Skeleton rows={6} />}
+            <QueryState error={active.error} loading={active.loading}>
+              {active.data ? (
+                <Panel
+                  title="Active revision"
+                  icon="file"
+                  subtitle="as the engine resolved it"
+                  actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
                 >
-                  <div className="col" style={{ gap: 2 }}>
-                    {(diff.data?.changes ?? []).map((c, i) => (
-                      <div key={i} className="diff-line" data-kind={c.kind}>
-                        <span>
-                          {c.kind === "added" ? "+" : c.kind === "removed" ? "\u2212" : "~"}
-                        </span>
-                        <span className="truncate">{c.path}</span>
-                        <span className="truncate">
-                          {c.kind === "added"
-                            ? JSON.stringify(c.to)
-                            : c.kind === "removed"
-                              ? JSON.stringify(c.from)
-                              : `${JSON.stringify(c.from)} \u2192 ${JSON.stringify(c.to)}`}
-                        </span>
-                      </div>
-                    ))}
+                  <div className="col gap-1">
+                    <Code plain selectable label="The active company configuration, as JSON">
+                      {pretty}
+                    </Code>
+                    <span className="t-caption">
+                      Click into the revision, and ⌘A / Ctrl+A selects it alone rather than the
+                      page.
+                    </span>
                   </div>
-                </QueryState>
+                </Panel>
+              ) : (
+                <Empty
+                  icon="sliders"
+                  title="No company configuration is active"
+                  hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import one with crewlet config import, or PUT /config."
+                />
               )}
-            </Panel>
-          )}
-        </>
-      )}
+            </QueryState>
+          </>
+        )}
+
+        {lens !== "active" && (
+          <>
+            {audit.loading && <Skeleton rows={5} />}
+            <QueryState
+              error={audit.error}
+              loading={audit.loading}
+              empty={
+                (audit.data ?? []).length
+                  ? undefined
+                  : {
+                      title: "No revisions recorded",
+                      hint: "The history begins with the first import.",
+                    }
+              }
+            >
+              <Panel
+                title="Revisions"
+                icon="clock"
+                count={(audit.data ?? []).length}
+                padding="none"
+              >
+                <DataTable<RevisionMeta>
+                  rows={audit.data ?? []}
+                  rowKey={(r) => r.revision_id}
+                  defaultSort={{ key: "at", dir: "desc" }}
+                  onRowClick={(r) => {
+                    setRevision(r.revision_id);
+                    setLens("diff");
+                  }}
+                  isSelected={(r) => r.revision_id === revision}
+                  columns={[
+                    {
+                      key: "at",
+                      header: "When",
+                      shrink: true,
+                      sortValue: (r) => tsKey(r.created_at),
+                      cell: (r) => (
+                        <span className="t-caption" title={fmtDateTime(r.created_at)}>
+                          {relTime(r.created_at, now)}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "id",
+                      header: "Revision",
+                      cell: (r) => (
+                        <span className="row gap-1">
+                          <code className="inline">{r.revision_id.slice(0, 10)}</code>
+                          {r.is_active && <Badge tone="positive">active</Badge>}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "summary",
+                      header: "Summary",
+                      sortValue: (r) => r.summary,
+                      cell: (r) => (
+                        <span className="truncate">
+                          {r.summary || <span className="faint">—</span>}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "author",
+                      header: "By",
+                      shrink: true,
+                      sortValue: (r) => r.created_by,
+                      cell: (r) => r.created_by || <span className="faint">—</span>,
+                    },
+                  ]}
+                />
+              </Panel>
+            </QueryState>
+
+            {lens === "diff" && (
+              <Panel
+                title={revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
+                icon="gitBranch"
+                subtitle="against the active revision"
+              >
+                {!revision ? (
+                  <Empty
+                    inline
+                    icon="gitBranch"
+                    title="Pick a revision above"
+                    hint="Its differences against the currently active document are shown here."
+                  />
+                ) : diff.loading ? (
+                  <Skeleton rows={4} />
+                ) : (
+                  <QueryState
+                    error={diff.error}
+                    loading={diff.loading}
+                    empty={
+                      diff.data?.changes?.length
+                        ? undefined
+                        : {
+                            title: "No differences",
+                            hint: "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
+                          }
+                    }
+                  >
+                    <div className="col" style={{ gap: 2 }}>
+                      {(diff.data?.changes ?? []).map((c, i) => (
+                        <div key={i} className="diff-line" data-kind={c.kind}>
+                          <span>
+                            {c.kind === "added" ? "+" : c.kind === "removed" ? "\u2212" : "~"}
+                          </span>
+                          <span className="truncate">{c.path}</span>
+                          <span className="truncate">
+                            {c.kind === "added"
+                              ? JSON.stringify(c.to)
+                              : c.kind === "removed"
+                                ? JSON.stringify(c.from)
+                                : `${JSON.stringify(c.from)} \u2192 ${JSON.stringify(c.to)}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </QueryState>
+                )}
+              </Panel>
+            )}
+          </>
+        )}
+      </TabPanel>
 
       <div className="banner neutral">
         <Icon name="info" size="sm" />

@@ -181,6 +181,7 @@ export function Shell({ children }: { children: ReactNode }) {
           <div className="row" style={{ gap: 4 }}>
             <Segmented<ThemeChoice>
               size="sm"
+              semantics="radio"
               ariaLabel="Theme"
               value={theme}
               onChange={setTheme}
@@ -193,6 +194,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <span className="spacer" />
             <Segmented
               size="sm"
+              semantics="radio"
               ariaLabel="Density"
               value={density}
               onChange={setDensity}
