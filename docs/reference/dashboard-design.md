@@ -437,8 +437,9 @@ of which is what makes them worth having at all:
   Model activity tab wrapped its turns in the query-state component, which
   renders nothing while a query is in flight and a banner *instead of* its
   children when one fails. So a turn happening right now was invisible until
-  the event store answered — and invisible for good on a node that keeps no
-  event log, where the answer is a permanent `no_event_store`. The query's
+  the event store answered, and invisible for good on a node that keeps no
+  event log, where the engine does not serve the question at all and the
+  answer is a permanent `unknown_query`. The query's
   state renders beside the turns now, never in place of them.
 
 The seat screen makes the same split, where it answers a second question:
@@ -777,8 +778,9 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" on a node with no event log are the same empty list
   and completely different problems. `QueryState` renders the engine's own code
-  — `no_event_store`, `unauthorized`, `unknown_query`, `timeout` — as a
-  sentence saying which.
+  (`unknown_query` for a question this node does not serve, such as the event
+  log on a node with none, `unauthorized`, `query_failed`) and the client's own
+  `timeout` as a sentence saying which.
 - **Zero** vs **unknown.** The integrations answer's counts are three-valued,
   and a node not serving ingress reports `unknown`, not `0`. The budgets answer
   says `durable: false` when the counter could not be READ.
