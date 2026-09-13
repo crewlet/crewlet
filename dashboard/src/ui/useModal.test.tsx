@@ -55,6 +55,22 @@ test("Escape closes only the topmost modal", () => {
   expect(screen.queryByRole("dialog", { name: "Editor" })).toBeNull();
 });
 
+test("an Escape or a Tab an input method is composing with is not the modal's", () => {
+  render(<Stacked inner={<input aria-label="name" />} />);
+  const name = screen.getByLabelText("name");
+  name.focus();
+  // Escape abandons the word being composed; the editor stays, and so does
+  // the caret, however the flag reaches the page.
+  expect(press("Escape", { isComposing: true })).toBe(true);
+  expect(press("Escape", { keyCode: 229 })).toBe(true);
+  expect(screen.getByRole("dialog", { name: "Editor" })).toBeDefined();
+  expect(press("Tab", { isComposing: true })).toBe(true);
+  expect(document.activeElement).toBe(name);
+
+  press("Escape");
+  expect(screen.queryByRole("dialog", { name: "Editor" })).toBeNull();
+});
+
 test("a modal that cannot close right now still owns Escape", () => {
   function Busy() {
     const [outer, setOuter] = useState(true);

@@ -130,6 +130,27 @@ test("Escape closes the list and leaves the dialog around it open", () => {
   expect(closed).toHaveBeenCalledTimes(1);
 });
 
+test("a key an input method is composing with moves, takes and closes nothing", () => {
+  const onCommit = vi.fn();
+  render(<Picker options={["a", "b"]} onCommit={onCommit} />);
+  const input = screen.getByLabelText("query");
+  // The arrows walk the candidates and Enter accepts one; Safari marks that
+  // Enter only by its key code, after the composition flag has cleared.
+  for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+    expect(fireEvent.keyDown(input, { key: "ArrowDown", ...init })).toBe(true);
+    expect(highlighted()).toBe("a");
+    expect(fireEvent.keyDown(input, { key: "Enter", ...init })).toBe(true);
+    expect(fireEvent.keyDown(input, { key: "Escape", ...init })).toBe(true);
+  }
+  expect(onCommit).not.toHaveBeenCalled();
+  expect(screen.getByRole("listbox")).toBeDefined();
+
+  // Once the word is written, the same keys are the list's again.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(onCommit).toHaveBeenCalledWith("b");
+});
+
 test("a press on an option takes it on mousedown, before the field can blur", () => {
   const onCommit = vi.fn();
   render(<Picker options={["a", "b"]} onCommit={onCommit} />);

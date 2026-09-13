@@ -68,6 +68,29 @@ test("Enter in the new-item box adds a trimmed item, keeps focus there, and neve
   expect(current()).toHaveLength(2);
 });
 
+test("the Enter that accepts an input method's word neither adds nor moves on", () => {
+  render(<Goals initial={["Ship the beta", "Hire two engineers"]} />);
+  const box = screen.getByLabelText("New goal") as HTMLInputElement;
+  box.focus();
+  fireEvent.change(box, { target: { value: "ベータ版" } });
+  expect(fireEvent.keyDown(box, { key: "Enter", isComposing: true })).toBe(true);
+  expect(fireEvent.keyDown(box, { key: "Enter", keyCode: 229 })).toBe(true);
+  expect(current()).toEqual(["Ship the beta", "Hire two engineers"]);
+  expect(box.value).toBe("ベータ版");
+
+  const first = screen.getByLabelText("Goal 1 of 2");
+  first.focus();
+  expect(fireEvent.keyDown(first, { key: "Enter", isComposing: true })).toBe(true);
+  expect(fireEvent.keyDown(first, { key: "ArrowDown", altKey: true, isComposing: true })).toBe(
+    true,
+  );
+  expect(current()).toEqual(["Ship the beta", "Hire two engineers"]);
+  expect(document.activeElement).toBe(first);
+
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(current()).toEqual(["Ship the beta", "Hire two engineers", "ベータ版"]);
+});
+
 test("Shift+Enter is a newline in a multiline list, and Enter still adds", () => {
   render(<Goals initial={[]} multiline />);
   const box = screen.getByLabelText("New goal") as HTMLTextAreaElement;

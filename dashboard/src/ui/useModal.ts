@@ -44,7 +44,8 @@
  *   whatever the veil was covering, such as a Delete button behind a dialog.
  * - A CONTROL THAT CONSUMES ESCAPE KEEPS IT. A completion list that closes on
  *   Escape calls `preventDefault` or stops propagation, and the stack leaves
- *   that press alone.
+ *   that press alone. So does an input method mid-composition (`ui/keys.ts`):
+ *   its Escape abandons a word, and its Tab is its own.
  *
  * WHAT IT DOES NOT OWN: markup, copy, and whether closing is allowed right now.
  * A modal mid-write passes `dismissable: false`.
@@ -54,6 +55,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isComposing } from "./keys.ts";
 
 type Kind = "modal" | "popup";
 
@@ -114,6 +116,7 @@ export function focusables(root: HTMLElement): HTMLElement[] {
 }
 
 function onKeyDown(e: KeyboardEvent): void {
+  if (isComposing(e)) return;
   if (e.key === "Escape") {
     if (e.defaultPrevented) return;
     const entry = top();

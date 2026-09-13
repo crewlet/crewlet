@@ -98,6 +98,23 @@ test("Enter toggles the highlighted option, keeps the list and the search, and s
   expect(announced()).toBe("Removed Site Reliability");
 });
 
+test("keys an input method is composing with choose, open and remove nothing", () => {
+  render(<Manages initial={["Designer"]} />);
+  box().focus();
+  expect(fireEvent.keyDown(box(), { key: "ArrowDown", isComposing: true })).toBe(true);
+  expect(box().getAttribute("aria-expanded")).toBe("false");
+
+  fireEvent.keyDown(box(), { key: "ArrowDown" });
+  expect(highlighted()).toContain("Software Engineer");
+  expect(fireEvent.keyDown(box(), { key: "Enter", keyCode: 229 })).toBe(true);
+  // Backspace mid-composition deletes from the word, not the last choice.
+  expect(fireEvent.keyDown(box(), { key: "Backspace", isComposing: true })).toBe(true);
+  expect(current()).toEqual(["Designer"]);
+
+  fireEvent.keyDown(box(), { key: "Enter" });
+  expect(current()).toEqual(["Designer", "Software Engineer"]);
+});
+
 test("a press on an option toggles it, appended in the order chosen", () => {
   render(<Manages initial={["Designer"]} />);
   fireEvent.click(box());

@@ -936,6 +936,15 @@ rendered idle from the first phase to the last.
   are hidden from assistive technology, which reads the key names instead
   ("Control plus K"), because a screen reader reads "⌘" as "place of interest
   sign". The shell's search button and the search footer use it too.
+- **A key an input method is composing with belongs to the input method.**
+  Somebody typing Japanese, Chinese or Korean walks candidates with the
+  arrows, accepts a word with Enter and abandons it with Escape, and every one
+  of those presses still reaches the page. `ui/keys.ts` decides once whether a
+  press is part of a composition, reading both the `isComposing` flag and the
+  key code Safari leaves on the Enter that ends one, and the layer stack, the
+  listbox keys, the multi-select and the list field all leave such a press
+  alone: search does not close or navigate in the middle of a word, and a list
+  field does not add half of one.
 - **A canvas never takes the page's scroll.** `ui/Canvas.tsx` fills the box
   its screen gives it and clips; `.screen` stays the only scroller. A plain
   wheel pans the canvas only while focus is inside it, and Ctrl or Command

@@ -35,6 +35,7 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Icon } from "./Icon.tsx";
 import { Problems } from "./Problems.tsx";
+import { isComposing } from "./keys.ts";
 import { cx } from "./primitives.tsx";
 import { useListbox } from "./useListbox.ts";
 
@@ -137,6 +138,9 @@ export function MultiPicker({
   });
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    // A word still being composed owns every key, Backspace included: it
+    // deletes from the composition, not the last chosen value.
+    if (isComposing(e)) return;
     if (!showing && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
       e.preventDefault();
       setOpen(true);

@@ -36,6 +36,10 @@
  *   `pointerdown`, closing search before the press's click and letting that
  *   click land on whatever the veil was covering. Such a list neither
  *   registers on the stack nor handles Escape.
+ * - NOTHING IS TAKEN MID-COMPOSITION. While an input method is composing a
+ *   word (`ui/keys.ts`), the arrows, Enter and Escape are its own, and the
+ *   handler reports them unhandled so the component around it leaves them
+ *   alone too.
  * - A PRESS ON AN OPTION IS TAKEN ON `mousedown`, with the default prevented:
  *   the field would otherwise blur first, and a list that closes on blur takes
  *   the row out from under the click that was choosing it.
@@ -45,6 +49,7 @@
  */
 
 import { useState, type KeyboardEvent, type MouseEvent } from "react";
+import { isComposing } from "./keys.ts";
 import { usePopup } from "./useModal.ts";
 
 export interface ListboxOptions {
@@ -103,7 +108,7 @@ export function useListbox({
   const layer = usePopup({ open: open && popup, onDismiss: () => onClose() });
 
   function onKeyDown(e: KeyboardEvent<HTMLElement>): boolean {
-    if (!open) return false;
+    if (!open || isComposing(e)) return false;
     if (e.key === "Escape") {
       if (!popup) return false;
       e.preventDefault();
