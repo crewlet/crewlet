@@ -29,6 +29,13 @@
  *   while the list is open closes the list and leaves the dialog. The
  *   component attaches `listRef` to the list it draws and `anchorRef` to the
  *   element around the field, whose presses are not outside.
+ * - A LIST THAT IS A MODAL'S WHOLE BODY IS NOT A POPUP (`popup: false`).
+ *   Search is a modal whose content is its results: the modal's own Escape
+ *   and veil already close it. Registered as a popup above that modal, the
+ *   list would take Escape from the stack and the veil's press on
+ *   `pointerdown`, closing search before the press's click and letting that
+ *   click land on whatever the veil was covering. Such a list neither
+ *   registers on the stack nor handles Escape.
  * - A PRESS ON AN OPTION IS TAKEN ON `mousedown`, with the default prevented:
  *   the field would otherwise blur first, and a list that closes on blur takes
  *   the row out from under the click that was choosing it.
@@ -49,8 +56,13 @@ export interface ListboxOptions {
   count: number;
   /** Taking the option at `index`. */
   onCommit: (index: number) => void;
-  /** Escape. */
+  /** Escape, or a press outside the list, while the list is a popup. */
   onClose: () => void;
+  /**
+   * Whether the list is a popup on the layer stack (the default), or the
+   * body of a modal that owns Escape and its veil itself.
+   */
+  popup?: boolean;
   /** Whether Tab takes the highlighted option (a completion) or moves focus (a form control). */
   tabCommits?: boolean;
 }
@@ -83,15 +95,17 @@ export function useListbox({
   onCommit,
   onClose,
   tabCommits = false,
+  popup = true,
 }: ListboxOptions): Listbox {
   const [at, setAt] = useState(0);
   const active = count === 0 ? -1 : Math.min(Math.max(at, 0), count - 1);
   const listId = `${id}-listbox`;
-  const popup = usePopup({ open, onDismiss: () => onClose() });
+  const layer = usePopup({ open: open && popup, onDismiss: () => onClose() });
 
   function onKeyDown(e: KeyboardEvent<HTMLElement>): boolean {
     if (!open) return false;
     if (e.key === "Escape") {
+      if (!popup) return false;
       e.preventDefault();
       e.stopPropagation();
       onClose();
@@ -125,8 +139,8 @@ export function useListbox({
     active,
     setActive: setAt,
     listId,
-    listRef: popup.panelRef,
-    anchorRef: popup.insideRef,
+    listRef: layer.panelRef,
+    anchorRef: layer.insideRef,
     optionId: (index) => `${listId}-${index}`,
     onKeyDown,
     optionHandlers: (index) => ({

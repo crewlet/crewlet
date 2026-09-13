@@ -10,8 +10,9 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useId, useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { Dialog } from "./Dialog.tsx";
+import { Dialog, ModalPanel } from "./Dialog.tsx";
 import { useListbox } from "./useListbox.ts";
+import { useModal } from "./useModal.ts";
 
 afterEach(cleanup);
 
@@ -137,4 +138,71 @@ test("a press on an option takes it on mousedown, before the field can blur", ()
   expect(onCommit).toHaveBeenCalledWith("b");
   fireEvent.mouseEnter(screen.getByRole("option", { name: "a" }));
   expect(highlighted()).toBe("a");
+});
+
+test("a list that is a modal's whole body leaves Escape and the veil to the modal", () => {
+  // Shaped the way search is: the modal first, then its list, in one
+  // component, so a list registered as a popup would sit above its modal.
+  function Search({ onClose, onListClose }: { onClose: () => void; onListClose: () => void }) {
+    const id = useId();
+    const options = ["a", "b"];
+    const modal = useModal({ onClose });
+    const listbox = useListbox({
+      id,
+      open: true,
+      count: options.length,
+      popup: false,
+      onCommit: () => {},
+      onClose: onListClose,
+    });
+    return (
+      <div className="veil" ref={modal.veilRef} role="presentation">
+        <ModalPanel className="palette" title="Search" panelRef={modal.panelRef}>
+          <input
+            aria-label="query"
+            role="combobox"
+            aria-expanded
+            aria-controls={listbox.listId}
+            aria-activedescendant={listbox.optionId(listbox.active)}
+            onKeyDown={listbox.onKeyDown}
+          />
+          <ul role="listbox" id={listbox.listId} ref={listbox.listRef} aria-label="options">
+            {options.map((o, i) => (
+              <li
+                key={o}
+                id={listbox.optionId(i)}
+                role="option"
+                aria-selected={i === listbox.active}
+              >
+                {o}
+              </li>
+            ))}
+          </ul>
+        </ModalPanel>
+      </div>
+    );
+  }
+  const closed = vi.fn();
+  const listClosed = vi.fn();
+  const { container, unmount } = render(<Search onClose={closed} onListClose={listClosed} />);
+  const input = screen.getByLabelText("query");
+  // The keys are still the list's.
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(highlighted()).toBe("b");
+
+  // A press on the veil is the modal's, closed on its click. Were the list a
+  // popup above the modal, the press itself would have closed the list.
+  const veil = container.querySelector(".veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
+  expect(listClosed).not.toHaveBeenCalled();
+  expect(closed).toHaveBeenCalledTimes(1);
+
+  // Escape reaches the modal through the stack rather than the list.
+  unmount();
+  closed.mockClear();
+  render(<Search onClose={closed} onListClose={listClosed} />);
+  expect(fireEvent.keyDown(screen.getByLabelText("query"), { key: "Escape" })).toBe(false);
+  expect(listClosed).not.toHaveBeenCalled();
+  expect(closed).toHaveBeenCalledTimes(1);
 });
