@@ -610,6 +610,11 @@ func (r *Role) Seat() *org.Role {
 // value and cannot take an address inside it.
 func (r Role) IdentityKey() string { return r.Seat().Handle() }
 
+// identityIsDocumentWide marks the handle as unique across the whole company,
+// so a seat's masked credentials follow it when it moves between the root and
+// a unit, or between units. See documentIdentified.
+func (Role) identityIsDocumentWide() {}
+
 // identities extracts the tracker project and wiki space a seat or unit
 // owns. References are left VERBATIM and resolved at use time, like every
 // other Tier B value.
@@ -675,6 +680,11 @@ type Unit struct {
 // IdentityKey is the unit's name, which is what every `manages:`, `lead:` and
 // `unit:` reference addresses it by.
 func (u Unit) IdentityKey() string { return u.Name }
+
+// identityIsDocumentWide marks the name as unique across the whole tree, so a
+// unit's masked credentials follow it when it moves under another unit. See
+// documentIdentified.
+func (Unit) identityIsDocumentWide() {}
 
 // UnitIntegrations is a unit's integration identity. Chat at the unit level
 // is the integration-neutral channel field, so it is deliberately not here.
