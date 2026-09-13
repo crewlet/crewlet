@@ -154,6 +154,12 @@ type Runner struct {
 	stopped   error
 	appliedAt time.Time
 
+	// fault is the transient error the loop is currently retrying, and
+	// faultSince when the first of the run of failures happened. Nil
+	// between faults. See [Runner.Fault] for what a reader does with it.
+	fault      error
+	faultSince time.Time
+
 	// drain is this loop's measured records per second, smoothed.
 	//
 	// # Why it is measured rather than a constant
@@ -252,10 +258,39 @@ func (r *Runner) Committed() Position {
 }
 
 // Stopped is the error that halted this applier, or nil.
+//
+// A STOP IS PERMANENT and only [ErrStopped] is one: a gate this build cannot
+// read, a hole that will not close, a recreated stream, an envelope no build
+// could decode. Every other failure is retried in place — see [Runner.Run] —
+// and is reported through [Runner.Fault] instead.
 func (r *Runner) Stopped() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopped
+}
+
+// Fault is the transient failure this applier has been retrying for longer
+// than [ApplyRetryBudget], as of now, and false when there is none or it is
+// younger than that.
+//
+// # Why a fault is reported late and a stop at once
+//
+// A stop says this node cannot run this company's records; a fault says the
+// broker or the disk did not answer just now. The first is worth moving a
+// company's work for and the second is not — a two-second store blip is the
+// incident this whole engine's three-valued discipline was learned on — so a
+// fault is retried quietly inside the budget and reported only past it, when
+// the honest reading is that this node's rows have stopped moving. Reported,
+// it takes the same path a stop does: reads refuse `stalled` naming it, and
+// the seats move. It clears the moment a retry succeeds.
+func (r *Runner) Fault(now time.Time) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fault == nil || now.Sub(r.faultSince) < ApplyRetryBudget {
+		return "", false
+	}
+	return fmt.Sprintf("%v (retried since %s)", r.fault,
+		r.faultSince.UTC().Format(time.RFC3339)), true
 }
 
 // Deferred is the earliest record this node holds and cannot decode, and false
@@ -402,25 +437,116 @@ func (r *Runner) Run(ctx context.Context) error {
 		"domain", r.domain.Name(), "stream", r.spec.Name,
 		"protocol", string(r.spec.Replay), "position", r.Committed().String())
 
+	// THE LOOP OUTLIVES A FAILURE. A fetch the broker did not answer, a
+	// transaction the disk refused, an applier that errored on a record:
+	// none of them says this node cannot run the company's records, and a
+	// loop that returned on any of them left the domain dead for the life
+	// of the process with nothing to restart it — a broker blip at the
+	// wrong moment took a node's tracker down until an operator noticed
+	// the seats had moved and restarted it. So a failure that is not a
+	// STOP is retried here, in place, on a pause that doubles to a
+	// ceiling, with the same run re-applied rather than abandoned to a
+	// thirty-second redelivery. What the outside sees is [Runner.Fault]:
+	// nothing inside the retry budget, and past it the honest report that
+	// this node's rows have stopped moving.
 	var tail []Record
 	var buffer reorderBuffer
+	var pause time.Duration
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		run, err := r.nextRun(ctx, tail, &buffer)
 		if err != nil {
-			return err
+			if stopped := r.faulted(ctx, err); stopped != nil {
+				return stopped
+			}
+			pause = r.backOff(ctx, pause)
+			continue
 		}
 		if len(run) == 0 {
+			// THE BROKER ANSWERED, with nothing: whatever was wrong
+			// is not wrong now.
+			r.recovered(ctx)
+			pause = 0
 			continue
 		}
 		consumed, err := r.applyRun(ctx, w, run)
 		if err != nil {
-			return err
+			if stopped := r.faulted(ctx, err); stopped != nil {
+				return stopped
+			}
+			// THE SAME RUN, AGAIN. Its records are delivered and
+			// unacknowledged, contiguous from the checkpoint, and
+			// nothing about them changed; dropping them here would
+			// leave the loop fetching records above a hole for the
+			// whole ack window before the broker handed these back.
+			tail = run
+			pause = r.backOff(ctx, pause)
+			continue
 		}
+		r.recovered(ctx)
+		pause = 0
 		tail = run[len(consumed):]
 	}
+}
+
+// faulted classifies a failure: a STOP is returned to end the loop, anything
+// else is recorded as the fault being retried and swallowed.
+func (r *Runner) faulted(ctx context.Context, err error) error {
+	if errors.Is(err, ErrStopped) || ctx.Err() != nil {
+		return err
+	}
+	r.mu.Lock()
+	first := r.fault == nil
+	if first {
+		r.faultSince = r.now()
+	}
+	r.fault = err
+	since := r.faultSince
+	r.mu.Unlock()
+	if first {
+		r.logger.WarnContext(ctx, "statelog_apply_retrying",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"position", r.Committed().String(), "error", err.Error(),
+			"reported_after", ApplyRetryBudget)
+	} else if r.now().Sub(since) >= ApplyRetryBudget {
+		r.logger.ErrorContext(ctx, "statelog_apply_faulted",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"position", r.Committed().String(), "error", err.Error(),
+			"since", since, "detail", "this node's rows have stopped moving; "+
+				"its reads refuse and its seats move until a retry succeeds")
+	}
+	r.count(metrics.StatelogApplyRetries)
+	return nil
+}
+
+// recovered clears the fault a retry just outlived.
+func (r *Runner) recovered(ctx context.Context) {
+	r.mu.Lock()
+	had, since := r.fault, r.faultSince
+	r.fault, r.faultSince = nil, time.Time{}
+	r.mu.Unlock()
+	if had != nil {
+		r.logger.InfoContext(ctx, "statelog_apply_recovered",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"after", r.now().Sub(since).Round(time.Millisecond), "error", had.Error())
+	}
+}
+
+// backOff waits before the next attempt and returns the pause the attempt
+// after that will take: the beat on the first retry, doubling to the ceiling.
+func (r *Runner) backOff(ctx context.Context, pause time.Duration) time.Duration {
+	if pause <= 0 {
+		pause = ApplyRetryBeat
+	}
+	t := time.NewTimer(pause)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return min(pause*2, ApplyRetryCeiling)
 }
 
 // loadCursor reads this domain's checkpoint at boot.
@@ -656,7 +782,7 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			}
 			return nil, fmt.Errorf("statelog: fetch from %s: %w", r.spec.Name, err)
 		}
-		records, err := r.decode(batch)
+		records, err := r.decode(ctx, batch)
 		if err != nil {
 			return nil, err
 		}
@@ -708,25 +834,26 @@ func (r *Runner) budgetWouldBind(run []Record) bool {
 
 // decode turns broker messages into records, with the envelope the domain can
 // always read.
-func (r *Runner) decode(batch []Message) ([]Record, error) {
+func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) {
 	out := make([]Record, 0, len(batch))
 	for _, m := range batch {
 		env, err := r.domain.Envelope(m.Payload)
 		if err != nil {
-			// AN UNREADABLE ENVELOPE IS A STOP, not a deferral. The
-			// envelope is the half every build can read, so failing
-			// on it means the record is not this domain's — and
+			// AN UNREADABLE ENVELOPE IS A STOP, not a deferral and not
+			// a retry. The envelope is the half every build can read,
+			// so failing on it means the record is not this domain's —
 			// retaining it would index nothing, because every field
-			// the index needs is inside the envelope.
-			return nil, fmt.Errorf("statelog: %s could not read the envelope at "+
-				"sequence %d, which every build must be able to: %w",
-				r.domain.Name(), m.Seq, err)
+			// the index needs is inside the envelope, and retrying it
+			// would read the same bytes the same way.
+			return nil, r.stop(ctx, fmt.Errorf("%w: %s could not read the envelope "+
+				"at sequence %d, which every build must be able to: %w",
+				ErrStopped, r.domain.Name(), m.Seq, err))
 		}
 		if env.Scope.Empty() {
-			return nil, fmt.Errorf("statelog: the record at sequence %d declares "+
-				"no scope — an empty scope claims it makes nothing stale, which "+
-				"is the one claim a record no build may be able to read cannot "+
-				"make", m.Seq)
+			return nil, r.stop(ctx, fmt.Errorf("%w: the record at sequence %d "+
+				"declares no scope — an empty scope claims it makes nothing "+
+				"stale, which is the one claim a record no build may be able to "+
+				"read cannot make", ErrStopped, m.Seq))
 		}
 		out = append(out, Record{
 			Envelope: env,

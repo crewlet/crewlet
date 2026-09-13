@@ -87,6 +87,22 @@ const (
 	FetchMessages = ApplyTxRowBudget
 	FetchBytes    = 29_360_128
 
+	// ApplyRetryBeat and ApplyRetryCeiling pace the retry of a failure
+	// that is not a stop: the first retry waits the beat, and each one
+	// after that waits twice the last, up to the ceiling.
+	//
+	// THE BEAT IS THE LINGER, because a retry inside it is
+	// indistinguishable from an ordinary partial batch closing. THE
+	// CEILING IS FIVE SECONDS, which is a broker election's own scale
+	// and the write path's resolve budget: a broker that has not
+	// answered in five seconds is one without a quorum rather than a
+	// slow one, and asking it more often than that adds load to the
+	// thing that is failing. Against [ApplyRetryBudget] the ceiling
+	// leaves a fault at least six attempts before it is reported, so a
+	// single failed call never sheds a seat.
+	ApplyRetryBeat    = ApplyLinger
+	ApplyRetryCeiling = 5 * time.Second
+
 	// FetchWait is how long a pull waits when the stream is idle.
 	//
 	// # It is a CEILING ON READ LATENCY, not just on polling

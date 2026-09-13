@@ -102,6 +102,10 @@ type probeFetch struct {
 	// consumer at its in-flight ceiling looks like from the loop: Pending
 	// says records remain and Fetch hands over none of them.
 	withhold int
+
+	// failures is how many fetches the broker answers with an error
+	// before it answers normally again — a blip, as the loop sees one.
+	failures int
 }
 
 func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
@@ -135,6 +139,11 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 	for {
 		f.mu.Lock()
 		f.fetches++
+		if f.failures > 0 {
+			f.failures--
+			f.mu.Unlock()
+			return nil, errors.New("the probe broker did not answer")
+		}
 		if deliverable := len(f.queue) - f.withhold; deliverable > 0 {
 			n := min(deliverable, maxMessages)
 			out := f.queue[:n]
@@ -158,6 +167,13 @@ func (f *probeFetch) Pending(context.Context) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return uint64(len(f.queue)), nil
+}
+
+// fetchCount is how many times the loop asked.
+func (f *probeFetch) fetchCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fetches
 }
 
 func (f *probeFetch) ackCount(seq uint64) int {
@@ -971,12 +987,18 @@ func TestAStrictLoopWaitsForAHoleRatherThanApplyingPastIt(t *testing.T) {
 	}
 }
 
-// AN APPLIER'S FAILURE ON ONE RECORD DOES NOT MOVE THE CHECKPOINT.
+// AN APPLIER'S FAILURE ON ONE RECORD DOES NOT MOVE THE CHECKPOINT, AND DOES
+// NOT END THE LOOP.
 //
 // The transaction rolls back, so the rows, the anchor, the operation id and
 // the checkpoint all go back together — which is the whole point of committing
 // them together, and the property a node "can only be behind, never
-// inconsistent" rests on.
+// inconsistent" rests on. And the loop retries the same run in place: a
+// failure that is not a stop is a disk that refused, a broker that did not
+// answer, an applier that errored — none of which says this node cannot run
+// the company's records, and a loop that returned on one of them left the
+// domain dead for the life of the process. Once the failure clears, both
+// records apply.
 func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -984,11 +1006,35 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
 	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	err := h.runner.Run(ctx)
-	if err == nil || !strings.Contains(err.Error(), "refuses sequence 2") {
-		t.Fatalf("Run = %v, want the applier's own refusal", err)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+
+	// The failure is retried, quietly: inside the budget the fault is not
+	// reported, past it the same fault is.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+			break
+		}
+		select {
+		case err := <-errs:
+			t.Fatalf("Run returned %v on a failure that is not a stop — the domain "+
+				"is dead for the life of the process", err)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	msg, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget))
+	if !faulted || !strings.Contains(msg, "refuses sequence 2") {
+		t.Fatalf("Fault past the budget = (%q, %v), want the applier's own refusal", msg, faulted)
+	}
+	if _, faulted := h.runner.Fault(time.Now()); faulted {
+		t.Fatal("the fault is reported inside the retry budget, so a single " +
+			"refused transaction would move a company's seats")
+	}
+	if err := h.runner.Stopped(); err != nil {
+		t.Fatalf("a retried failure reads as a stop: %v", err)
 	}
 	if got := h.runner.Committed().Seq; got != 0 {
 		t.Fatalf("the checkpoint is at %d after a rolled-back transaction, want "+
@@ -1013,6 +1059,83 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	if len(h.fetch.ackedAll()) != 0 {
 		t.Fatalf("%d delivery(ies) acknowledged for a transaction that rolled "+
 			"back", len(h.fetch.ackedAll()))
+	}
+
+	// THE FAILURE CLEARS, and the same run — never re-fetched, never left
+	// to a redelivery — applies whole.
+	h.applier.mu.Lock()
+	h.applier.failAt = 0
+	h.applier.mu.Unlock()
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && h.runner.Committed().Seq < 2 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := h.runner.Committed().Seq
+	cancel()
+	<-errs
+	if got != 2 {
+		t.Fatalf("the checkpoint is at %d after the failure cleared, want 2", got)
+	}
+	if _, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+		t.Fatal("the fault is still reported after a retry succeeded")
+	}
+	if h.fetch.ackCount(1) != 1 || h.fetch.ackCount(2) != 1 {
+		t.Fatalf("the records were acknowledged %d and %d time(s), want once each",
+			h.fetch.ackCount(1), h.fetch.ackCount(2))
+	}
+	if got := h.counter(metrics.StatelogApplyRetries); got == 0 {
+		t.Fatal("the retries were not counted, so an operator watching the " +
+			"instrument would see a healthy loop")
+	}
+}
+
+// A BROKER THAT DOES NOT ANSWER IS RETRIED, NOT RETURNED FROM.
+//
+// A fetch error was the loop's exit: one timeout at the wrong moment and the
+// domain's applier was gone until the process restarted, with the first
+// symptom a node that had lost its seats. A blip is waited out on a widening
+// pause and the loop carries on from where it was.
+func TestABrokerBlipDoesNotEndTheApplier(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.mu.Lock()
+	h.fetch.failures = 3
+	h.fetch.mu.Unlock()
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := h.runner.Stopped(); err != nil {
+		t.Fatalf("three failed fetches stopped the applier: %v", err)
+	}
+	if got := h.fetch.fetchCount(); got < 4 {
+		t.Fatalf("the loop asked %d time(s), so the failures were not what it "+
+			"waited out", got)
+	}
+	if _, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+		t.Fatal("a blip the loop recovered from is still reported as a fault")
+	}
+}
+
+// THE PAUSE DOUBLES TO THE CEILING and never past it, and the ceiling leaves a
+// fault several attempts before it is reported — so one failed call never
+// sheds a seat.
+func TestTheRetryPauseIsBoundedAndTheBudgetOutlastsSeveralOfIt(t *testing.T) {
+	t.Parallel()
+	if statelog.ApplyRetryBeat != statelog.ApplyLinger {
+		t.Errorf("the retry beat is %v against a linger of %v — a retry inside the "+
+			"linger is indistinguishable from an ordinary partial batch",
+			statelog.ApplyRetryBeat, statelog.ApplyLinger)
+	}
+	if statelog.ApplyRetryCeiling*6 > statelog.ApplyRetryBudget {
+		t.Errorf("the ceiling %v leaves fewer than six attempts inside the %v budget",
+			statelog.ApplyRetryCeiling, statelog.ApplyRetryBudget)
+	}
+	if statelog.ApplyRetryBudget >= statelog.StallGrace {
+		t.Errorf("the retry budget %v is not inside the stall grace %v, so a node "+
+			"could report itself healthy for longer than it made no progress",
+			statelog.ApplyRetryBudget, statelog.StallGrace)
 	}
 }
 

@@ -711,6 +711,15 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	if err := running.runner.Stopped(); err != nil && !errors.Is(err, context.Canceled) {
 		health.Err = err.Error()
 	}
+	// A FAULT PAST ITS BUDGET IS THE SAME REPORT. The applier is still
+	// retrying — it never gives up on a failure that is not a stop — but
+	// this node's rows have not moved for as long as it has been, and a
+	// read served from them is old in a way the lag cannot show. Inside
+	// the budget nothing is reported, which is what keeps a broker blip
+	// from moving a company's seats.
+	if msg, faulted := running.runner.Fault(now); faulted && health.Err == "" {
+		health.Err = msg
+	}
 	health.Stalled = running.progress.stalled(now)
 	if deferral, ok := running.runner.Deferred(); ok {
 		health.Deferred = 1

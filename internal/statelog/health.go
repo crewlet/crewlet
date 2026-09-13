@@ -87,11 +87,14 @@ func (f Floor) Age(now time.Time) time.Duration {
 }
 
 // ApplyRetryBudget is how long a transient apply error is retried in place
-// before the applier reports itself stalled.
+// before the applier reports itself faulted — which its readers treat as
+// stalled: reads refuse naming the error, and the seats move.
 //
 // HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
 // let a node report itself healthy while it made no progress, and one much
-// shorter would turn an ordinary transaction conflict into a fleet event.
+// shorter would turn an ordinary transaction conflict into a fleet event. The
+// retry itself never gives up — see [Runner.Fault]; this is the point at which
+// it stops being quiet about it.
 const ApplyRetryBudget = StallGrace / 2
 
 // Health is one registered domain's readiness.

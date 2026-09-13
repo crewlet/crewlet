@@ -26,6 +26,7 @@ const (
 	StatelogApplyLatency             = "crewlet.statelog.apply.latency"
 	StatelogApplyRecordDuration      = "crewlet.statelog.apply.record.duration"
 	StatelogApplyRecords             = "crewlet.statelog.apply.records"
+	StatelogApplyRetries             = "crewlet.statelog.apply.retries"
 	StatelogApplyTxAborts            = "crewlet.statelog.apply.tx.aborts"
 	StatelogApplyTxDuration          = "crewlet.statelog.apply.tx.duration"
 	StatelogBarrierAppends           = "crewlet.statelog.barrier.appends"
