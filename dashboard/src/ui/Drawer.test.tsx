@@ -73,7 +73,9 @@ test("a drawer mid-write refuses every way out", () => {
     </Drawer>,
   );
   press("Escape");
-  fireEvent.pointerDown(container.querySelector(".veil")!);
+  const veil = container.querySelector(".veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
   const close = screen.getByRole("button", { name: "Close" }) as HTMLButtonElement;
   expect(close.disabled).toBe(true);
   expect(closed).toBe(0);

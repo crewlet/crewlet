@@ -31,7 +31,10 @@
  * - A VEIL CLOSES ONLY ITS OWN MODAL, and only when the press lands on the
  *   veil itself. The decision is taken on `pointerdown`, before any surface
  *   closes, so the press that dismisses a menu is never also read as a press
- *   on the veil beneath it.
+ *   on the veil beneath it. The CLOSE waits for that press's `click`: a veil
+ *   removed on `pointerdown` is gone before a tap's compatibility mouse
+ *   events are hit-tested, so the click a finger ends with would land on
+ *   whatever the veil was covering, such as a Delete button behind a dialog.
  * - A CONTROL THAT CONSUMES ESCAPE KEEPS IT. A completion list that closes on
  *   Escape calls `preventDefault` or stops propagation, and the stack leaves
  *   that press alone.
@@ -160,16 +163,29 @@ function onKeyDown(e: KeyboardEvent): void {
   }
 }
 
+/** The modal whose veil the current press began on, closed by that press's click. */
+let armed: Entry | null = null;
+
 function onPointerDown(e: PointerEvent): void {
+  armed = null;
   const entry = top();
   if (!entry || !(e.target instanceof Node)) return;
   const target = e.target;
   if (entry.kind === "modal") {
-    if (target === entry.veil() && entry.dismissable()) entry.dismiss("outside");
+    if (target === entry.veil()) armed = entry;
     return;
   }
   const inside = [entry.panel(), ...entry.inside()];
   if (inside.some((el) => el?.contains(target))) return;
+  if (entry.dismissable()) entry.dismiss("outside");
+}
+
+function onClick(e: MouseEvent): void {
+  const entry = armed;
+  armed = null;
+  // Still the topmost, and still its veil that was pressed: a surface opened
+  // between the press and its click owns the press now.
+  if (!entry || entry !== top() || e.target !== entry.veil()) return;
   if (entry.dismissable()) entry.dismiss("outside");
 }
 
@@ -179,14 +195,17 @@ function register(entry: Entry): () => void {
     // CAPTURE, so the decision is made before any handler on the page reacts
     // to the press and before a surface that closes because of it unmounts.
     document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("click", onClick, true);
   }
   stack.push(entry);
   return () => {
     const at = stack.indexOf(entry);
     if (at >= 0) stack.splice(at, 1);
+    if (armed === entry) armed = null;
     if (stack.length === 0) {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("click", onClick, true);
     }
   };
 }

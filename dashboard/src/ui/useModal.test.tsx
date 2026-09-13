@@ -9,7 +9,7 @@
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState, type ReactNode } from "react";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { Dialog } from "./Dialog.tsx";
 import { usePopup } from "./useModal.ts";
 
@@ -137,11 +137,62 @@ test("a press on the veil closes the modal, and a press inside it does not", () 
     ) : null;
   }
   const { container } = render(<One />);
-  fireEvent.pointerDown(screen.getByRole("button", { name: "inside" }));
+  const inside = screen.getByRole("button", { name: "inside" });
+  fireEvent.pointerDown(inside);
+  fireEvent.click(inside);
   expect(screen.getByRole("dialog", { name: "Veiled" })).toBeDefined();
 
-  fireEvent.pointerDown(container.querySelector(".veil")!);
+  // A press that starts inside and is released on the veil (a text selection
+  // dragged past the edge) is not a press on the veil.
+  const veil = container.querySelector(".veil")!;
+  fireEvent.pointerDown(inside);
+  fireEvent.click(veil);
+  expect(screen.getByRole("dialog", { name: "Veiled" })).toBeDefined();
+
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
   expect(screen.queryByRole("dialog", { name: "Veiled" })).toBeNull();
+});
+
+test("the veil stays until its press's click, so a tap never clicks what it was covering", () => {
+  const behind = vi.fn();
+  function Covering() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button onClick={behind}>Delete</button>
+        {open && (
+          <Dialog title="Veiled" onClose={() => setOpen(false)}>
+            <button>inside</button>
+          </Dialog>
+        )}
+      </>
+    );
+  }
+  const { container } = render(<Covering />);
+  const veil = container.querySelector(".veil")!;
+  // A browser hit-tests a tap's click after the finger lifts. Were the veil
+  // gone on pointerdown, that click would reach the button beneath it.
+  fireEvent.pointerDown(veil);
+  expect(veil.isConnected).toBe(true);
+  expect(screen.getByRole("dialog", { name: "Veiled" })).toBeDefined();
+  fireEvent.click(veil);
+  expect(screen.queryByRole("dialog", { name: "Veiled" })).toBeNull();
+  expect(behind).not.toHaveBeenCalled();
+});
+
+test("a busy modal ignores its veil's click as well as its Escape", () => {
+  const onClose = vi.fn();
+  render(
+    <Dialog title="Saving" onClose={onClose} dismissable={false}>
+      <button>Saving</button>
+    </Dialog>,
+  );
+  const veil = document.querySelector(".veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
+  press("Escape");
+  expect(onClose).not.toHaveBeenCalled();
 });
 
 test("focus returns to the opener even when a field in the dialog took autoFocus", () => {
@@ -212,7 +263,9 @@ test("an open popup inside a modal closes before the modal on Escape", () => {
 test("a press on the veil dismisses the popup above the modal, not the modal", () => {
   let closed = 0;
   const { container } = render(<PopupInDialog onDialogClose={() => closed++} />);
-  fireEvent.pointerDown(container.querySelector(".veil")!);
+  const veil = container.querySelector(".veil")!;
+  fireEvent.pointerDown(veil);
+  fireEvent.click(veil);
   expect(screen.queryByRole("menu")).toBeNull();
   expect(closed).toBe(0);
 });
