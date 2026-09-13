@@ -1101,9 +1101,9 @@ completed record when the phase finishes. Progress envelopes carry
 `turn_id` / `phase` / `iteration` for this correlation; they are
 stream-only and never persisted to the event store.
 
-The **spend rollup** is maintained by the projection too, over the same
-window per-agent totals hydrate over, using the same
-`tokens.Aggregate` the REST endpoint calls. It ships in the
+The **spend rollup** is maintained by the projection too, over the last 24
+hours (`livestate.LiveSpendWindow`) of the phases this process has seen, using
+the same `tokens.Aggregate` the REST endpoint calls. It ships in the
 snapshot and is re-pushed (coalesced to at most one frame per second)
 whenever a phase completes, so the Tokens view and the overview widget
 stay live without a fetch and without a second implementation of the
@@ -1148,10 +1148,16 @@ publishes).  Deciding it once, here, is what lets a dashboard mark
 failures without re-deriving them from a type list of its own.
 
 The flag survives a restart: the event-store writer stamps a `failed` tag on
-those events, and the projection reads it back when it hydrates its feed from
-history.  The store's event listing deliberately never selects the payload
+those events, and the store's event listing (`GET /events` and the `events`
+query) reads it back. That listing deliberately never selects the payload
 column, so without the tag every historical failure would read back as a
 success.
+
+The projection itself is **not** seeded from the store when a process starts:
+its feed, its per-agent token totals and its spend rollup begin empty in each
+process and fill from the live stream. History from before the process
+started is on `GET /events`, `GET /tokens/breakdown` and the other store
+queries.
 
 ### The health envelope
 
@@ -1699,8 +1705,9 @@ mixing them can only be wrong:
   token totals, folded from the phase events it has seen since it started, so
   it resets when the process does.
 
-Only the meter and the cap share a span, which is why a seat card can draw
-a bar and this screen mostly cannot. What it could never show before is the
+Only a live figure and the cap could share a span, which is why this screen
+draws the durable counter against the cap rather than a bar from the live
+figure. What it could never show before is the
 more useful picture — "this seat has burned 94% of its cap across two
 restarts" — because the durable half was reachable only from
 `crewlet budgets show`, which is itself a client of this route.
@@ -1734,11 +1741,14 @@ seat): zero would let a client draw an empty bar and call it "nothing spent
 this run", a claim about a run this process has not seen. Human seats have
 no row, because they spend nothing.
 
-Exhaustion is `refused_at`, the moment a charge was turned away — never
-`used >= max`. `TokenBudget` refuses a charge that would exceed the cap
-and increments nothing, so a seat charged in 3k-token rounds against a
-100k cap stalls near 99k and never compares equal to its own maximum. A
-ratio test shows a permanently blocked seat at 99% and calls it healthy.
+This answer does not say whether a cap is exhausted, and `durable_used >=
+max_tokens` is the wrong test for it. The counter (`coord.Budgets.Charge`)
+refuses a charge that would exceed the cap and increments nothing, so a seat
+charged in 3k-token rounds against a 100k cap stalls near 99k and never
+compares equal to its own maximum; a ratio test shows a permanently blocked
+seat at 99% and calls it healthy. A refused charge is recorded as a
+`budget_exhausted` event, which is what the seat's `afk` state and the
+activity feed show.
 
 ### `POST /budgets/reset`
 
