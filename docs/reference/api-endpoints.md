@@ -1405,7 +1405,7 @@ push, so all three surfaces carry exactly one shape.
   "vision": "...",
   "policies": ["..."],
   "roles": [
-    {"name": "Founder", "kind": "human", "availability": "CET business hours"}
+    {"name": "Founder", "kind": "human", "manages": ["CTO"], "availability": "CET business hours"}
   ],
   "units": [
     {
@@ -1424,10 +1424,16 @@ push, so all three surfaces carry exactly one shape.
           "backstory": "...",
           "responsibilities": ["..."],
           "behavioral_guidelines": ["..."],
-          "manages": ["Engineering"]
+          "manages": ["Platform"]
         }
       ],
-      "children": []
+      "children": [
+        {
+          "name": "Platform",
+          "purpose": "...",
+          "roles": [{"name": "Platform Engineer", "goal": "..."}]
+        }
+      ]
     }
   ]
 }
@@ -1450,7 +1456,11 @@ reference, `llm` and per-phase `llm_*` chains, `workers`, `token_budget`,
 company block outside the charter (providers, MCP servers, integrations,
 knowledge, budgets). Those are read through the operator-gated `config` query
 or [`GET /config`](#config--live-config-management-auth-gated), which masks
-credentials.
+credentials. Two of them also have a read surface of their own, under the same
+posture as `/org`, and the tree does not repeat them:
+[`GET /schedules`](#routes) answers every configured schedule with its
+task and next run, and [`GET /budgets`](#get-budgets) answers each seat's token
+cap beside the counter it is enforced against.
 
 **Why an explicit shape.** `/org` is readable without a token under the
 default `api.auth.allow_anonymous_read: true`. Serialising the config's own
