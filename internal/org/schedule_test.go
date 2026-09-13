@@ -91,6 +91,50 @@ func TestDuplicateScheduleNamesRejected(t *testing.T) {
 	}
 }
 
+// A DUPLICATED SCHEDULE NAME IS ONE MESSAGE NAMING EVERY SCHEDULE, AND A BLANK
+// NAME IS NEVER A DUPLICATE.
+//
+// Pairwise reporting turned one name used three times into two collisions,
+// neither naming all three, and two schedules with no name into a
+// "duplicate schedule name" about the empty string on top of the missing
+// name each one already reported.
+func TestADuplicatedScheduleNameIsOneMessageAndABlankNameIsNot(t *testing.T) {
+	t.Parallel()
+	standup := Schedule{Name: "standup", Cron: "0 9 * * *", Task: "post"}
+	blank := Schedule{Name: " ", Cron: "0 9 * * *", Task: "post"}
+	r := &Role{Name: "Dev", Schedules: []Schedule{standup, blank, standup, blank, standup}}
+
+	var duplicates, missing []string
+	var walk func(error)
+	walk = func(err error) {
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			for _, inner := range joined.Unwrap() {
+				walk(inner)
+			}
+			return
+		}
+		switch msg := err.Error(); {
+		case strings.Contains(msg, "duplicate schedule name"):
+			duplicates = append(duplicates, msg)
+		case strings.Contains(msg, "name must not be empty"):
+			missing = append(missing, msg)
+		}
+	}
+	walk(r.Validate())
+
+	if len(duplicates) != 1 {
+		t.Fatalf("%d duplicate messages, want one for the one duplicated name: %v", len(duplicates), duplicates)
+	}
+	for _, want := range []string{`"standup"`, "3 schedules", "schedules[0], schedules[2], schedules[4]"} {
+		if !strings.Contains(duplicates[0], want) {
+			t.Errorf("the duplicate message does not name %s: %s", want, duplicates[0])
+		}
+	}
+	if len(missing) != 2 {
+		t.Errorf("%d missing-name messages, want one per blank schedule: %v", len(missing), missing)
+	}
+}
+
 // TestFanOutNeedsADirectAgentMember: `each` never reaches descendants and
 // never wakes a human, so a unit without a direct agent member has nothing
 // to fan out to — and would silently no-op every minute it was due.

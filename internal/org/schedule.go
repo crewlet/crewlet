@@ -155,17 +155,38 @@ func (s Schedule) Validate(owner string) error {
 // Names must be unique within their owner because the name is half the
 // idempotency key: two schedules sharing one would each suppress the
 // other's fire at the same minute.
+//
+// ONE MESSAGE PER DUPLICATED NAME, naming every schedule that carries it, the
+// same shape as every other duplicate rule in this package. The pairwise
+// check this replaced reported a name used three times as two collisions,
+// and counted every blank name as a duplicate of the others, repeating a
+// mistake [Schedule.Validate] had already reported once per schedule.
 func validateSchedules(owner string, schedules []Schedule) error {
 	var errs []error
-	seen := make(map[string]struct{}, len(schedules))
-	for _, s := range schedules {
+	positions := make([]int, len(schedules))
+	for i, s := range schedules {
 		if err := s.Validate(owner); err != nil {
 			errs = append(errs, err)
 		}
-		if _, dup := seen[s.Name]; dup {
-			errs = append(errs, fmt.Errorf("%s: %w: duplicate schedule name %q", owner, ErrInvalidSchedule, s.Name))
+		positions[i] = i
+	}
+	groups := groupBy(positions, func(i int) string {
+		if strings.TrimSpace(schedules[i].Name) == "" {
+			return ""
 		}
-		seen[s.Name] = struct{}{}
+		return schedules[i].Name
+	})
+	for _, g := range groups {
+		places := make([]string, len(g.members))
+		for i, position := range g.members {
+			places[i] = fmt.Sprintf("schedules[%d]", position)
+		}
+		errs = append(errs, fmt.Errorf(
+			"%s: %w: duplicate schedule name %q: %d schedules carry it (%s). The "+
+				"name is half of each fire's idempotency key, so these would "+
+				"suppress each other's fire at the same minute; give each its "+
+				"own name",
+			owner, ErrInvalidSchedule, g.key, len(g.members), strings.Join(places, ", ")))
 	}
 	return errors.Join(errs...)
 }
