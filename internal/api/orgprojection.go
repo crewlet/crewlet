@@ -18,17 +18,20 @@ import (
 // deny-by-omission: every field somebody added to a role was public the day it
 // landed. That had already happened. Contact identities (a person's Slack
 // member id, GitHub login, email), `${VAR}` names in a Mattermost username,
-// placement labels, sandbox setup commands (routinely the place a registry
-// credential is written) and every schedule's task text all reached an
-// anonymous reader, and the secret tags redaction relies on covered none of
-// them because none of them is a credential in the narrow sense.
+// placement labels and sandbox setup commands (routinely the place a registry
+// credential is written) all reached an anonymous reader, and the secret tags
+// redaction relies on covered none of them because none of them is a
+// credential in the narrow sense.
 //
 // So the public shape is spelled out here field by field, and a field reaches
 // an anonymous reader only by being written into one of these types on
 // purpose. Everything else stays behind the guarded `config` query, which is
-// where the dashboard reads it. TestEveryOrgFieldIsClassified fails the day
-// config.Role or config.Unit gains a field nobody has classified, so a new
-// field needs a decision rather than defaulting to either side.
+// where the dashboard reads it. Configured work that has a read surface of its
+// own is not repeated here either: schedules are described by /schedules and a
+// seat's token cap by /budgets, each under the same read posture as this one.
+// TestEveryOrgFieldIsClassified fails the day config.Role or config.Unit gains
+// a field nobody has classified, so a new field needs a decision rather than
+// defaulting to either side.
 //
 // # Authored values, not effective ones
 //

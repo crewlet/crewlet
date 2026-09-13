@@ -51,7 +51,7 @@ var roleFields = map[string]classified{
 	"Manages":              {exposurePublic, "the reporting structure the chart draws"},
 	"BehavioralGuidelines": {exposurePublic, "founder prose"},
 	"Workers":              {exposureGuarded, "operational configuration of the delegate surface"},
-	"TokenBudget":          {exposureGuarded, "a spend ceiling"},
+	"TokenBudget":          {exposureGuarded, "operational configuration; the enforced cap has its own surface, /budgets"},
 	"LLM":                  {exposureGuarded, "provider keys, which name the company's model accounts"},
 	"LLMReview":            {exposureGuarded, "provider keys"},
 	"LLMSubagent":          {exposureGuarded, "provider keys"},
@@ -63,7 +63,7 @@ var roleFields = map[string]classified{
 	"Sandbox":              {exposureGuarded, "setup commands and env, the usual home of a registry credential"},
 	"Placement":            {exposureGuarded, "node ids and labels describing the deployment"},
 	"Integrations":         {exposureGuarded, "vendor identities, bot tokens and signing secrets"},
-	"Schedules":            {exposureGuarded, "task text is an instruction, and schedules are authored in /config"},
+	"Schedules":            {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
 }
 
 // unitFields classifies every field of config.Unit.
@@ -79,7 +79,7 @@ var unitFields = map[string]classified{
 	"Integrations": {exposureGuarded, "tracker and wiki identities, read with the rest of the integrations"},
 	"Roles":        {exposurePublic, "the tree itself"},
 	"Children":     {exposurePublic, "the tree itself"},
-	"Schedules":    {exposureGuarded, "task text is an instruction, and schedules are authored in /config"},
+	"Schedules":    {exposureGuarded, "configured work, not structure; /schedules is the surface that describes it"},
 }
 
 // EVERY AUTHORED FIELD HAS A DECISION, and the public ones are exactly what
@@ -421,5 +421,73 @@ func (f *filler) guarded(v reflect.Value, depth int) {
 		f.guarded(value, depth+1)
 		m.SetMapIndex(key, value)
 		v.Set(m)
+	}
+}
+
+// THE PROJECTION SHARES NO MEMORY WITH THE APPLIED COMPANY.
+//
+// The company is shared by every reader of the epoch, and the projection is
+// handed to the socket hub and to REST callers. A projection that aliased the
+// company's slices would let any of those holders rewrite the applied org for
+// everyone else, so every list is copied on the way out.
+func TestTheOrgProjectionDoesNotAliasTheCompany(t *testing.T) {
+	t.Parallel()
+	fresh := func() *config.Company {
+		seat := func(name string) config.Role {
+			return config.Role{
+				Name:                 name,
+				Responsibilities:     []string{name + " responsibility"},
+				BehavioralGuidelines: []string{name + " guideline"},
+				Manages:              []string{name + " report"},
+			}
+		}
+		return &config.Company{
+			Name:     "Acme",
+			Policies: []string{"policy"},
+			Roles:    []config.Role{seat("CEO")},
+			Units: []config.Unit{{
+				Name: "Engineering", Goals: []string{"goal"}, Knowledge: []string{"reference"},
+				Roles: []config.Role{seat("CTO")},
+				Children: []config.Unit{{
+					Name: "Platform", Goals: []string{"child goal"}, Knowledge: []string{"child reference"},
+					Roles: []config.Role{seat("Engineer")},
+				}},
+			}},
+		}
+	}
+	company := fresh()
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: func() *config.Company { return company }},
+	})
+
+	projection, ok := a.Stream().Org().(api.OrgProjection)
+	if !ok {
+		t.Fatalf("the org surface answers %T, want api.OrgProjection", a.Stream().Org())
+	}
+	scribble := func(lists ...[]string) {
+		for _, list := range lists {
+			for i := range list {
+				list[i] = "rewritten through the projection"
+			}
+		}
+	}
+	scribbleSeats := func(seats []api.OrgSeat) {
+		for i := range seats {
+			scribble(seats[i].Responsibilities, seats[i].BehavioralGuidelines, seats[i].Manages)
+		}
+	}
+	scribble(projection.Policies)
+	scribbleSeats(projection.Roles)
+	for _, unit := range projection.Units {
+		scribble(unit.Goals, unit.Knowledge)
+		scribbleSeats(unit.Roles)
+		for _, child := range unit.Children {
+			scribble(child.Goals, child.Knowledge)
+			scribbleSeats(child.Roles)
+		}
+	}
+
+	if !reflect.DeepEqual(company, fresh()) {
+		t.Errorf("writing into the projection changed the applied company:\n%+v", company)
 	}
 }
