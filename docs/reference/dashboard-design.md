@@ -957,6 +957,11 @@ is one of the rules on this page applied to a tracker.
 - **Reading an item does not lose the board.** A plain click opens a PEEK
   beside the rows; ⌘-click and middle-click follow the anchor to the item's
   own page, because a card that cannot be opened in a tab is not a link.
+  Below about 1500px it becomes a DRAWER over the board rather than a third
+  column, and that threshold is measured rather than guessed: the sidebar,
+  the rail and the peek are three panes and the board is what is left, so at
+  1280 — an ordinary laptop — one board column was left beside a detail
+  panel, which is not a board.
 - **The charts answer the questions the numbers cannot.** A census bar says
   the shape of a project where three counts say only their sizes; a velocity
   bar list is read in SPRINT order, never sorted by size, because the
