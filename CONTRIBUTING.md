@@ -148,7 +148,7 @@ without it** — a green run has simply not exercised them.
   in the script instead and it becomes a fact that can only ever be corrected
   in most of the places it appears.
 
-- **`npm`** builds and tests the dashboard itself. Its ~200 assertions — the
+- **`npm`** builds and tests the dashboard itself. Its assertions — the
   wire protocol, the router's history rules, the ordering comparators, and the
   MEASURED contrast of every colour token over every surface it can land on,
   in both themes and for protan and deutan vision — run under Vitest:
