@@ -1048,8 +1048,104 @@ func TestFailingARunThatIsAlreadyGoneDoesNothing(t *testing.T) {
 	}
 }
 
-// A run a newer lease has claimed belongs to that lease's holder, and a
-// recovery under an older one may not kill its box.
+// THE REMOVED SEAT'S RUNS END WITH ITS MAILBOX. Every one of them, whatever
+// it was doing: a resume needs the seat in the company, an answer arrives on
+// an inbox that is being deleted, and a completion is routed to a control
+// topic that goes with it. Left alone they stayed in the ageless bucket for
+// good, a running job's box kept alive by the waiter on every tick.
+func TestRetiringASeatEndsEveryRunItHeld(t *testing.T) {
+	rig := newCoordRig(t)
+	running := rig.launch("running")
+	launching := rig.launching("launching")
+	parked := rig.launch("parked")
+	if err := rig.pending.MarkAwaiting(t.Context(), "parked", Clarification{Question: "which branch?"}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	if err := rig.pending.MarkBoxPaused(t.Context(), "parked", rig.now); err != nil {
+		t.Fatalf("MarkBoxPaused: %v", err)
+	}
+	claimed := rig.launch("claimed")
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "claimed"); err != nil || !won {
+		t.Fatalf("ClaimForResume = %v, %v", won, err)
+	}
+	rig.launch("reseed")
+	if err := rig.pending.MarkAwaiting(t.Context(), "reseed", Clarification{Question: "still?"}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	if won, err := rig.pending.ExpirePause(t.Context(), "reseed"); err != nil || !won {
+		t.Fatalf("ExpirePause = %v, %v", won, err)
+	}
+	// A colleague's run on another seat is none of this retirement's.
+	otherBox, err := rig.provider.Create(t.Context(), Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := rig.pending.BeginLaunch(t.Context(), PendingRun{
+		TurnID: "colleague", AgentHandle: "pm", CreatedAt: rig.now,
+	}, Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+	if err := rig.pending.AttachSandbox(t.Context(), "colleague",
+		BoxRef{SandboxID: otherBox.ID()}, Fence{}); err != nil {
+		t.Fatalf("AttachSandbox: %v", err)
+	}
+	rig.coordinator.markBusy("swe")
+
+	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err != nil {
+		t.Fatalf("RetireSeat: %v", err)
+	}
+	for _, id := range []string{"running", "launching", "parked", "claimed", "reseed"} {
+		rig.finished(id)
+	}
+	killed := rig.provider.KilledIDs()
+	for _, box := range []string{running.SandboxID, launching.SandboxID, parked.SandboxID, claimed.SandboxID} {
+		if !slices.Contains(killed, box) {
+			t.Errorf("killed %v, missing box %q", killed, box)
+		}
+	}
+	if slices.Contains(killed, otherBox.ID()) {
+		t.Fatalf("retiring one seat killed another seat's box %q", otherBox.ID())
+	}
+	if got := rig.get("colleague"); got.AgentHandle != "pm" {
+		t.Fatalf("another seat's run was disturbed: %+v", got)
+	}
+	failed := rig.failures()
+	if len(failed) != 5 {
+		t.Fatalf("announced %d lost runs, want one for each of the seat's five", len(failed))
+	}
+	for _, f := range failed {
+		if f.Reason != types.SandboxFailureSeatRemoved || f.AgentHandle != "swe" {
+			t.Errorf("announcement %+v, want reason %q for seat swe", f, types.SandboxFailureSeatRemoved)
+		}
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the retired seat is still tracked as busy")
+	}
+}
+
+// The retirement holds the seat's lease for a budget, and the lease is the
+// only thing keeping a returning seat's owner off these records. Work its
+// context no longer covers is reported rather than done, so the retirement is
+// retried instead of deleting records outside the lease that protects them.
+func TestRetiringASeatStopsWhenItsBudgetEnds(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if err := rig.coordinator.RetireSeat(ctx, "swe", "retirement:1", 12); err == nil {
+		t.Fatal("a retirement past its budget reported every run ended")
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q: a run was ended outside the retirement's lease", got.Status)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v outside the retirement's lease", killed)
+	}
+}
+
+// A run a newer lease has claimed belongs to that lease's holder, and neither
+// a recovery nor a retirement under an older one may kill its box.
 func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launching("t1")
@@ -1059,6 +1155,9 @@ func TestEndingARunNeverReachesANewerLeasesBox(t *testing.T) {
 
 	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 9); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
+	}
+	if err := rig.coordinator.RetireSeat(t.Context(), "swe", "retirement:1", 12); err == nil {
+		t.Fatal("a retirement under an older lease reported the newer lease's run ended")
 	}
 	if killed := rig.provider.KilledIDs(); slices.Contains(killed, run.SandboxID) {
 		t.Fatalf("killed %v: an older lease reclaimed the box of a run a newer one owns", killed)

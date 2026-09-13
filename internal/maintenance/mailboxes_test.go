@@ -143,12 +143,61 @@ func (q *gatedQueue) failDeletes(err error) {
 	q.failure = err
 }
 
+// runRetirements records every call a retirement makes to end a seat's coding
+// runs, what it could see at that moment, and can be made to fail.
+type runRetirements struct {
+	mu      sync.Mutex
+	calls   []runRetirement
+	failure error
+	// observe, when set, runs inside each call, so a test can read the
+	// state of the world the retirement is in the middle of.
+	observe func(handle string) runRetirement
+}
+
+type runRetirement struct {
+	handle, owner string
+	epoch         int64
+	// inboxThere and controlThere are whether the seat's subscriptions still
+	// existed when the runs were ended.
+	inboxThere, controlThere bool
+	// claimable is whether another node could claim the seat at that moment.
+	claimable bool
+}
+
+func (r *runRetirements) retire(_ context.Context, handle, owner string, epoch int64) error {
+	r.mu.Lock()
+	observe, failure := r.observe, r.failure
+	r.mu.Unlock()
+	call := runRetirement{handle: handle, owner: owner, epoch: epoch}
+	if observe != nil {
+		seen := observe(handle)
+		call.inboxThere, call.controlThere, call.claimable = seen.inboxThere, seen.controlThere, seen.claimable
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, call)
+	return failure
+}
+
+func (r *runRetirements) recorded() []runRetirement {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.calls)
+}
+
+func (r *runRetirements) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failure = err
+}
+
 type mailboxHarness struct {
 	t       *testing.T
 	records *coordmem.Fleet
 	queue   *gatedQueue
 	leases  coord.Backend
 	roster  *roster
+	runs    *runRetirements
 	m       *maintenance.Mailboxes
 	// builds numbers every Mailboxes this harness makes, so each claims
 	// seat leases under an owner of its own, as each process does.
@@ -169,7 +218,7 @@ func newMailboxHarness(t *testing.T, tune func(*maintenance.MailboxOptions)) *ma
 	t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
 	h := &mailboxHarness{
 		t: t, records: coordmem.NewFleet(), queue: &gatedQueue{Queue: q},
-		leases: &coordmem.Backend{}, roster: &roster{},
+		leases: &coordmem.Backend{}, roster: &roster{}, runs: &runRetirements{},
 	}
 	h.m = h.build(tune)
 	return h
@@ -181,6 +230,7 @@ func (h *mailboxHarness) build(tune func(*maintenance.MailboxOptions)) *maintena
 	h.t.Helper()
 	opts := maintenance.MailboxOptions{
 		Records: h.records, Queue: h.queue, Leases: h.leases, Roster: h.roster.read,
+		Runs:         h.runs.retire,
 		Owner:        fmt.Sprintf("retirement-%d", h.builds.Add(1)),
 		LeaseTTL:     harnessLeaseTTL,
 		RegisterPoll: 5 * time.Millisecond,
@@ -324,6 +374,11 @@ func TestARemovedSeatsMailboxSurvivesTheGracePeriod(t *testing.T) {
 	}
 	if got := h.queue.deletes.Load(); got != 0 {
 		t.Fatalf("%d subscriptions were deleted inside the grace period", got)
+	}
+	// Nor were the seat's coding runs ended: a seat restored within the
+	// grace comes back to its parked questions and running jobs.
+	if calls := h.runs.recorded(); len(calls) != 0 {
+		t.Fatalf("a removed seat's coding runs were ended inside the grace period: %+v", calls)
 	}
 }
 
@@ -975,6 +1030,77 @@ func TestAFailedRetirementIsRetriedOnTheNextTick(t *testing.T) {
 	}
 }
 
+// THE RUNS END FIRST, UNDER THE LEASE. A detached run's completion travels on
+// the seat's control topic and a parked question's answer on its inbox, so a
+// retirement that deleted those and left the runs behind would strand them in
+// the fleet's run records with nothing able to reach them. They are ended while
+// both subscriptions still exist and while no other node can claim the seat and
+// recover them, and exactly once, for the retired seat alone.
+func TestARetirementEndsTheSeatsCodingRunsBeforeItsSubscriptions(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.runs.observe = func(handle string) runRetirement {
+		lease, err := h.leases.TryAcquire(t.Context(), coord.SeatResource(handle),
+			coord.AcquireOptions{Owner: "returning-node", TTL: time.Minute})
+		if err != nil {
+			t.Errorf("TryAcquire: %v", err)
+		}
+		return runRetirement{
+			inboxThere: h.inboxExists(handle), controlThere: h.controlExists(handle),
+			claimable: lease != nil,
+		}
+	}
+	h.removed()
+
+	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
+		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
+	}
+	calls := h.runs.recorded()
+	if len(calls) != 1 || calls[0].handle != "swe" {
+		t.Fatalf("runs were ended for %+v, want once for the retired seat swe", calls)
+	}
+	call := calls[0]
+	if !call.inboxThere || !call.controlThere {
+		t.Fatalf("the runs were ended after the subscriptions they are reached through were deleted "+
+			"(inbox %v, control %v)", call.inboxThere, call.controlThere)
+	}
+	if call.claimable {
+		t.Fatal("another node could claim the seat while its runs were being ended, and recover them " +
+			"out from under the retirement")
+	}
+	if call.owner == "" || call.epoch <= 0 {
+		t.Fatalf("the runs were ended under owner %q epoch %d, want the retirement's own lease",
+			call.owner, call.epoch)
+	}
+}
+
+// A seat whose runs cannot all be ended keeps its mailbox: the retirement is
+// undone to an ordinary absence and retried on the next tick, exactly as one
+// whose deletes fail.
+func TestARetirementThatCannotEndTheSeatsRunsIsRetried(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	stuck := errors.New("a box could not be reached")
+	h.runs.fail(stuck)
+
+	if _, err := h.tick(h.m, base.Add(grace+time.Minute)); !errors.Is(err, stuck) {
+		t.Fatalf("tick = %v, want the runs' failure", err)
+	}
+	if got := h.queue.deletes.Load(); got != 0 {
+		t.Fatalf("%d subscriptions were deleted although the seat's runs were not ended", got)
+	}
+	if !h.inboxExists("swe") || !h.controlExists("swe") {
+		t.Fatal("the seat's subscriptions are gone although its runs were not ended")
+	}
+	if rec, _ := h.record("swe"); rec.Retiring() || !rec.AbsentSince.Equal(base) {
+		t.Fatalf("the record is %+v, want it absent since %s and unmarked", rec, base)
+	}
+
+	h.runs.fail(nil)
+	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
+		t.Fatalf("the retry retired %d mailboxes, want 1", n)
+	}
+}
+
 // A mailbox created by a node whose registration failed, or by a build that
 // predates the registry, is registered by the sweep while its seat is still in
 // the company, so it can be retired if the seat is ever removed.
@@ -1172,7 +1298,7 @@ func TestNewMailboxesNamesEveryMissingDependency(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewMailboxes accepted no dependencies")
 	}
-	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster"} {
+	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster", "Runs"} {
 		if !strings.Contains(err.Error(), "MailboxOptions."+field) {
 			t.Errorf("the error does not name %s: %v", field, err)
 		}

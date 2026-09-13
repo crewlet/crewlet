@@ -553,3 +553,48 @@ func TestACodingRunIsRefusedBelowTheBudgetFloor(t *testing.T) {
 		t.Errorf("an unset floor refused a run: %v", err)
 	}
 }
+
+// A RETIRED SEAT'S RUNS ARE ENDED BY THE NODE THAT RETIRES IT. Through the
+// coordinator where this node has one, which reclaims each box; and where it
+// has none, the retirement is refused while the fleet still records a run for
+// the seat, because a node that cannot reach a box must not delete the
+// subscriptions that run's completion and answer travel on.
+func TestRetiringASeatEndsItsRunsOrRefusesWithoutACoordinator(t *testing.T) {
+	fleet := memory.NewFleet()
+	store := sandbox.NewCoordStore(fleet)
+	if err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "t1", AgentHandle: "swe", Role: "SWE",
+	}, sandbox.Fence{}); err != nil {
+		t.Fatalf("BeginLaunch: %v", err)
+	}
+
+	bare := &Engine{backends: &Backends{Fleet: fleet}}
+	if err := bare.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err == nil {
+		t.Fatal("a node with no coordinator let the retirement proceed over a recorded run")
+	}
+	if err := bare.retireSeatRuns(t.Context(), "pm", "retirement:1", 3); err != nil {
+		t.Fatalf("a seat with no runs was refused: %v", err)
+	}
+
+	provider := sandbox.NewFakeProvider()
+	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
+		Providers: map[sandbox.Placement]sandbox.Provider{sandbox.Direct: provider},
+		Runners:   map[string]sandbox.Runner{"claude-code": sandbox.NewFakeRunner("claude-code")},
+	})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	coordinator, err := sandbox.NewCoordinator(sandbox.CoordinatorOptions{
+		Queue: &publishRecorder{}, Pending: store, Manager: manager,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	equipped := &Engine{backends: &Backends{Fleet: fleet}, sandboxCoordinator: coordinator}
+	if err := equipped.retireSeatRuns(t.Context(), "swe", "retirement:1", 3); err != nil {
+		t.Fatalf("retireSeatRuns: %v", err)
+	}
+	if _, found, err := store.Get(t.Context(), "t1"); err != nil || found {
+		t.Fatalf("the retired seat's run survived (found %v, %v)", found, err)
+	}
+}

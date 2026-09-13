@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 )
 
@@ -133,7 +134,39 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 		Owner:    config.NewIncarnation(nodeID),
 		LeaseTTL: e.leaseTTL,
 		Roster:   e.activeSeatHandles,
+		Runs:     e.retireSeatRuns,
 	})
+}
+
+// retireSeatRuns ends a retired seat's detached coding runs, for the mailbox
+// retirement that holds the seat's lease under owner and epoch.
+//
+// Through the sandbox coordinator, which reclaims each run's box, announces the
+// loss and finishes its record. A node without one (its company configured no
+// sandbox when it started) cannot reach a box, so it ends nothing, and it must
+// not let the retirement delete the subscriptions of a seat whose runs are still
+// recorded: it reads the fleet's run records itself, and refuses while the seat
+// has any. The duty's next holder, or this node once it runs a coordinator,
+// retires the seat instead.
+func (e *Engine) retireSeatRuns(ctx context.Context, handle, owner string, epoch int64) error {
+	if c := e.sandboxCoordinator; c != nil {
+		return c.RetireSeat(ctx, handle, owner, epoch)
+	}
+	if e.backends == nil || e.backends.Fleet == nil {
+		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell whether "+
+			"retired seat %q left coding runs behind", handle)
+	}
+	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return fmt.Errorf("engine: reading the coding runs of retired seat %q: %w", handle, err)
+	}
+	if len(runs) > 0 {
+		return fmt.Errorf("engine: retired seat %q still has %d coding runs and this node runs no "+
+			"sandbox coordinator to end them (providers.sandbox was not configured when it started); "+
+			"its mailbox is kept until a node that runs one holds the maintenance duty, or this "+
+			"node is restarted on a company that configures providers.sandbox", handle, len(runs))
+	}
+	return nil
 }
 
 // mailboxRegistry is the node's view of [Engine.mailboxes].

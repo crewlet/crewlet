@@ -69,6 +69,16 @@ import (
 //     under its own owner before the mark and gives it back after the record
 //     is gone. A seat whose lease somebody else holds is not retired at all.
 //
+//   - A RETIREMENT ENDS THE SEAT'S CODING RUNS FIRST. A detached run belongs to
+//     its seat, and a removed seat's runs are kept through the grace for the
+//     same reason its mail is: a seat restored within it comes back to its
+//     parked questions and running jobs. Once the grace has passed nothing can
+//     reach them (a resume needs the seat, an answer arrives on the inbox about
+//     to go, and a completion is routed to the control topic that goes with
+//     it), so while the lease is held they are ended ([SeatRunRetirer]) before
+//     a single subscription is deleted, and a retirement that cannot end them
+//     is undone and retried like one that cannot delete.
+//
 // Memory is NOT retired. A seat's diary, episodes, counterparty profiles and
 // onboarding markers are keyed by its handle or by the agent id derived from
 // it, so a seat added again under the same handle reattaches to them. That is a documented
@@ -96,7 +106,10 @@ const MailboxRetirementGrace = 24 * time.Hour
 // Thirty seconds: the work is a seat lease claim, two subscription deletes and
 // two conditional store writes, each a millisecond on a healthy broker and each
 // individually bounded by the client's five-second API timeout, so this covers
-// every one of them timing out with room to spare. It is load-bearing for the
+// every one of them timing out with room to spare. A seat that left coding runs
+// behind adds a box kill and a record delete per run; a retirement whose runs
+// do not all end inside the budget is undone and resumes on the next tick,
+// where the runs it already ended are gone. It is load-bearing for the
 // registering side as well: a node that finds a retirement in flight waits
 // twice this long before it takes the record over, so by then the retiring
 // sweep can no longer issue a delete that lands on the subscription the node is
@@ -171,6 +184,17 @@ type SeatLeases interface {
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 }
 
+// SeatRunRetirer ends every detached coding run of a seat whose mailbox is
+// being retired, while the retirement holds the seat's lease under owner and
+// epoch.
+//
+// An error means some run was not ended, including a node that cannot tell
+// whether the seat has runs at all, and the retirement is undone and retried:
+// deleting the subscriptions a run's completion and answer travel on, while
+// the run itself is left behind, would strand it in the fleet's run records
+// for good.
+type SeatRunRetirer func(ctx context.Context, handle, owner string, epoch int64) error
+
 // SeatRoster reads the agent seat handles of the revision the fleet is pointed
 // at.
 //
@@ -212,6 +236,12 @@ type MailboxOptions struct {
 	// Roster reads the active revision's agent seats. Required.
 	Roster SeatRoster
 
+	// Runs ends a retired seat's coding runs before its subscriptions are
+	// deleted. Required, because there is no value that could mean "this
+	// node has nothing to end": whether a removed seat left runs behind is
+	// a fact about the fleet's run records, not about this node.
+	Runs SeatRunRetirer
+
 	// RetireBudget overrides [mailboxRetireBudget], and RegisterPoll
 	// overrides [mailboxRegisterPoll]. Zero takes the shipped value, which
 	// is what production passes; a test shrinks them so an abandoned
@@ -233,6 +263,7 @@ type Mailboxes struct {
 	owner    string
 	leaseTTL time.Duration
 	roster   SeatRoster
+	runs     SeatRunRetirer
 	budget   time.Duration
 	poll     time.Duration
 }
@@ -261,12 +292,16 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 	if opts.Roster == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Roster is required"))
 	}
+	if opts.Runs == nil {
+		missing = append(missing, errors.New("maintenance: MailboxOptions.Runs is required"))
+	}
 	if err := errors.Join(missing...); err != nil {
 		return nil, err
 	}
 	m := &Mailboxes{
 		records: opts.Records, queue: opts.Queue, leases: opts.Leases,
 		owner: opts.Owner, leaseTTL: opts.LeaseTTL, roster: opts.Roster,
+		runs:   opts.Runs,
 		budget: opts.RetireBudget, poll: opts.RegisterPoll,
 	}
 	if m.budget <= 0 {
@@ -624,6 +659,13 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 		return false, nil
 	}
 
+	// THE RUNS BEFORE THE SUBSCRIPTIONS, under the same lease and budget: a
+	// run left behind once its control topic and inbox are gone is one no
+	// completion, answer or resume can ever reach again.
+	if runsErr := m.runs(work, handle, lease.Owner, lease.Epoch); runsErr != nil {
+		m.unmark(ctx, marked)
+		return false, fmt.Errorf("end the coding runs of retired seat %q: %w", handle, runsErr)
+	}
 	if deleteErr := m.deleteSubscriptions(work, handle); deleteErr != nil {
 		m.unmark(ctx, marked)
 		return false, deleteErr

@@ -816,6 +816,71 @@ func (c *Coordinator) RecoverSeat(ctx context.Context, handle, owner string, epo
 	return nil
 }
 
+// RetireSeat ends every run of a seat that has left the company.
+//
+// Called by the seat's mailbox retirement, which is the one moment a removed
+// seat's runs are known to be nobody's: the seat has been absent from the
+// active revision for the whole retirement grace, and the caller HOLDS ITS
+// LEASE under owner and epoch, so no node can claim the seat and recover these
+// runs while they are ended. Until then they are kept on purpose, for the
+// reason the mailbox is: a seat restored within the grace comes back to its
+// parked questions and its running jobs rather than to lost turns.
+//
+// Every run is ended whatever its status, because none can continue: a resume
+// needs the seat in the company, a parked question's answer arrives on an
+// inbox about to be deleted, and a job's completion is routed to a control
+// topic that goes with it. Each box is reclaimed, each loss announced, and
+// each record finished under the retirement's fence.
+//
+// Everything runs under ctx, NOT detached like the settle paths: the lease is
+// what keeps a returning seat's owner off these records, and it is only held
+// for as long as the caller's budget. A run this call could not end is
+// returned as an error, and the caller retries the retirement on its next
+// tick; ending the same run twice reclaims a box that is already gone and
+// finds a record that is already deleted.
+func (c *Coordinator) RetireSeat(ctx context.Context, handle, owner string, epoch int64) error {
+	runs, err := c.pending.ListActiveForSeat(ctx, handle)
+	if err != nil {
+		return fmt.Errorf("sandbox: listing the runs of retired seat %q: %w", handle, err)
+	}
+	fence := Fence{Owner: owner, Epoch: epoch}
+	var errs []error
+	for _, run := range runs {
+		if err := ctx.Err(); err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q was not ended: %w",
+				run.TurnID, handle, err))
+			break
+		}
+		if outranked(run, fence) {
+			// Claimed under a newer lease than the one this retirement
+			// holds, which a held lease rules out; left to that owner
+			// rather than killed out from under it.
+			errs = append(errs, fmt.Errorf("sandbox: run %s of retired seat %q is owned by a newer "+
+				"lease (epoch %d) than the retirement's (%d)", run.TurnID, handle, run.OwnerEpoch, epoch))
+			continue
+		}
+		c.reclaimBox(ctx, ctx, run)
+		ended, err := c.pending.Finish(ctx, run.TurnID, fence)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("sandbox: finishing run %s of retired seat %q: %w",
+				run.TurnID, handle, err))
+			continue
+		}
+		if !ended {
+			// Settled by somebody else since the listing, who announced
+			// it if it was lost.
+			continue
+		}
+		c.announceFailure(ctx, run, types.SandboxFailureSeatRemoved,
+			"the seat was removed from the company and not restored within the retirement "+
+				"grace, so its run was ended; any work it pushed is on its branch")
+		log.InfoContext(ctx, "sandbox_retired_seat_run_ended",
+			"turn_id", run.TurnID, "agent", handle, "status", run.Status, "sandbox_id", run.SandboxID)
+	}
+	c.ReleaseSeat(handle)
+	return errors.Join(errs...)
+}
+
 // ReleaseSeat stops tracking a seat's runs.
 //
 // NOTHING IS TORN DOWN. A detached run belongs to its row, not to this

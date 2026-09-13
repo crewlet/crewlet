@@ -160,8 +160,9 @@ type SandboxRunFailed struct {
 // A NAMED SET, because these are not variations of one failure: an
 // unreachable box is infrastructure, a missing conversation is a bug in this
 // engine, a suspension that could not be recorded is the coordination store or
-// this engine, and an abandoned tail is a node that died. An operator seeing
-// them merged into "the sandbox failed" would chase the wrong one.
+// this engine, an abandoned tail is a node that died, and a removed seat is an
+// operator's own change. An operator seeing them merged into "the sandbox
+// failed" would chase the wrong one.
 const (
 	// SandboxFailureCollect — the job finished but its box could not be
 	// read back, so there is no result to splice in.
@@ -181,6 +182,12 @@ const (
 	// written, or the run was no longer launching. The job was already
 	// executing, so its box is reclaimed rather than left to its TTL.
 	SandboxFailureSuspensionUnrecorded = "suspension_unrecorded"
+
+	// SandboxFailureSeatRemoved is a run of a seat that was removed from the
+	// company and not restored within the mailbox retirement grace. It is
+	// ended when the seat's mailbox is retired, because no resume, answer or
+	// completion can reach a seat that is gone.
+	SandboxFailureSeatRemoved = "seat_removed"
 )
 
 // EventType is the "sandbox_run_failed" wire type.
