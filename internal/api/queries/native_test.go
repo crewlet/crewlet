@@ -34,6 +34,8 @@ type stubWork struct {
 	project      tracker.ProjectDetail
 	sprintQuery  tracker.SprintQuery
 	sprints      tracker.SprintListing
+	burnQuery    tracker.BurndownQuery
+	burndown     tracker.Burndown
 
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
@@ -43,6 +45,7 @@ type stubWork struct {
 	catalogueQuery tracker.CatalogueQuery
 	taskLevel      statelog.ReadLevel
 	taskFresh      statelog.Freshness
+	taskWants      tracker.DetailWants
 
 	err error
 }
@@ -66,6 +69,13 @@ func (s *stubWork) Sprints(_ context.Context, q tracker.SprintQuery,
 
 	s.sprintQuery = q
 	return s.sprints, s.err
+}
+
+func (s *stubWork) Burndown(_ context.Context, q tracker.BurndownQuery,
+	_ time.Time) (tracker.Burndown, error) {
+
+	s.burnQuery = q
+	return s.burndown, s.err
 }
 
 func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,
@@ -115,10 +125,11 @@ func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (track
 	return s.answer, s.err
 }
 
-func (s *stubWork) Task(_ context.Context, _ string, _ tracker.DetailWants,
+func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 	fresh statelog.Freshness) (tracker.TaskDetail, error) {
 
 	s.taskLevel, s.taskFresh = fresh.Level, fresh
+	s.taskWants = want
 	return s.detail, s.err
 }
 
@@ -224,6 +235,77 @@ func TestAMissingRecordIsNotFound(t *testing.T) {
 	_, err = askNative(t, queries.Sources{Pages: p}, "page", map[string]any{"id": "nope"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing page answered %v, want not-found", err)
+	}
+}
+
+// THE ITEM QUERY ASKS FOR EVERY PART, the custom fields included.
+//
+// A detail read without them rendered a task filed with a severity as one that
+// carried none — confidently, in a properties panel, beside a board that had
+// just filtered on that very field. The four are asked for together because
+// one screen draws all four and a second read for the fields would be a second
+// answer that can disagree with the first.
+func TestTheItemQueryAsksForEveryPart(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_item",
+		map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
+	if w.taskWants != want {
+		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
+	}
+}
+
+// A BURNDOWN NAMES BOTH A PROJECT AND A SPRINT, and defaults neither.
+//
+// A sprint is numbered per project, so a number with no key names one sprint
+// per team — and defaulting the number to "the active one" would make a link
+// somebody bookmarked mean a different sprint every fortnight, which is the
+// one thing a chart with a URL must not do.
+func TestABurndownRefusesToGuessItsSprint(t *testing.T) {
+	for _, params := range []map[string]any{
+		{"sprint": 4},
+		{"project": "ENG"},
+		{"project": "ENG", "sprint": 0},
+	} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_burndown", params)
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("work_burndown(%v) answered %v, want a refusal naming the "+
+				"key it needs", params, err)
+		}
+	}
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
+		map[string]any{"project": "ENG", "sprint": 4}); err != nil {
+		t.Fatalf("work_burndown: %v", err)
+	}
+	// BOTH KEYS REACH THE READER. Normalising the key is the READER's —
+	// `Burndown` runs it through `ProjectKey` exactly as `Sprints` does —
+	// so a second spelling of that rule here would be the copy that stops
+	// matching. What this surface owes is that neither key is dropped.
+	if w.burnQuery.Project != "ENG" || w.burnQuery.Sprint != 4 {
+		t.Errorf("the reader was asked for %+v, want ENG sprint 4", w.burnQuery)
+	}
+	// AND THE CALLER'S OWN FRESHNESS, resolved to this surface's default
+	// like every other native question — a burndown that silently took a
+	// linearizable read would put a chart's poll on the raft log.
+	if w.burnQuery.Level != statelog.ReadStale {
+		t.Errorf("the burndown was read at %q, want the dashboard's own stale "+
+			"default", w.burnQuery.Level)
+	}
+}
+
+// A SPRINT NOBODY HAS MINTED IS NOT FOUND, never an empty series: a chart
+// drawn from an empty answer is a sprint in which nothing happened, which is
+// a different thing from a sprint that does not exist.
+func TestAnUnmintedSprintIsNotFound(t *testing.T) {
+	w := &stubWork{err: tracker.ErrNoSprint}
+	_, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
+		map[string]any{"project": "ENG", "sprint": 99})
+	if !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("an unminted sprint answered %v, want not-found", err)
 	}
 }
 

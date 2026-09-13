@@ -324,6 +324,12 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_projects", s.workProjects)
 		r.Register("work_project", s.workProject)
 		r.Register("work_sprints", s.workSprints)
+		// THE BURNDOWN IS A SERIES, and a series is a different read
+		// from a set of figures: `work_sprints` scores every sprint in
+		// the window at two instants, and this one scores ONE sprint at
+		// every day of its own window. Folding it in would make the
+		// five-sprint report pay for five series nobody asked to draw.
+		r.Register("work_burndown", s.workBurndown)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.

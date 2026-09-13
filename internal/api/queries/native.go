@@ -112,6 +112,8 @@ type WorkReader interface {
 		tracker.ProjectDetail, error)
 	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
 		tracker.SprintListing, error)
+	Burndown(ctx context.Context, q tracker.BurndownQuery, now time.Time) (
+		tracker.Burndown, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
 	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
@@ -238,8 +240,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// against — but the bound is about this node's LAG, checked before
 	// any row is read, and a detail is exactly as far behind as a board
 	// on the same node. The floor travels for the same reason.
+	//
+	// EVERY PART, the custom fields included: a screen draws a properties
+	// panel from the ANNOTATED values — each with the slug, name and type
+	// that explain it — and a detail that left them out rendered a task
+	// filed with a severity as one that carried none, beside a board that
+	// had just filtered on that very field.
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
-		Comments: true, History: true, Links: true,
+		Comments: true, History: true, Links: true, Fields: true,
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -671,6 +679,47 @@ func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
 		return nil, unavailableIfBehind(err)
 	}
 	return listing, nil
+}
+
+// workBurndown answers one sprint's day-by-day series.
+//
+// TWO REQUIRED KEYS AND NO DEFAULT FOR EITHER. A sprint is numbered per
+// project, so a number with no key names one sprint per team; and defaulting
+// the number to "the active one" would make a saved link mean a different
+// sprint every fortnight, which is the one thing a chart somebody bookmarked
+// must not do.
+func (s Sources) workBurndown(ctx context.Context, p Params) (any, error) {
+	project := strings.TrimSpace(p.String("project"))
+	if project == "" {
+		return nil, badParams("project", "", nil)
+	}
+	number := p.Int("sprint", 0)
+	if number <= 0 {
+		return nil, badParams("sprint", strings.TrimSpace(p.String("sprint")),
+			[]string{"a sprint number this project has minted"})
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.Work.Burndown(ctx, tracker.BurndownQuery{
+		Project:   project,
+		Sprint:    number,
+		Level:     fresh.Level,
+		MaxLag:    fresh.MaxLag,
+		MaxLagSeq: fresh.MaxLagSeq,
+	}, time.Now().UTC())
+	switch {
+	case errors.Is(err, tracker.ErrNoProject), errors.Is(err, tracker.ErrNoSprint):
+		// BOTH ARE NOT-FOUND and the message survives the
+		// classification, which is what tells a caller which of the two
+		// they got: a mistyped key and a sprint nobody has minted are
+		// different repairs.
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		return nil, unavailableIfBehind(err)
+	}
+	return out, nil
 }
 
 // chartUnits is the running org as the tracker's unit seam.
