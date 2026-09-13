@@ -72,6 +72,23 @@ TEST_TIMEOUT := 30m
 
 GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 
+# The packages `test` runs: everything EXCEPT internal/e2e, which has its own
+# target and its own CI job.
+#
+# NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
+# CONTENTION cut, and the measurement is unambiguous: on one commit, the
+# dedicated job (`go test ./internal/e2e/... -race`, alone on its runner)
+# passed in 5m24s, while the same cases inside `go test ./...` failed on all
+# three of their cluster-start attempts with `context deadline exceeded`
+# creating streams and KV buckets. internal/e2e stands up N engines, each
+# embedding its own NATS server, in ONE process; `./...` runs packages in
+# parallel; a two-core runner under the race detector cannot form a two-member
+# JetStream quorum inside the 30s provisioning budget while doing that.
+#
+# Running it in both places bought nothing — the same suite, twice, and only
+# the contended copy was red.
+TEST_PKGS = $(shell $(GO) list ./... | grep -v '/internal/e2e\(/\|$$\)')
+
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
 # breaks darwin reaches the tag — and a broken tag is a release to re-cut.
@@ -180,7 +197,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-e2e test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -282,8 +299,9 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # This includes ./internal/e2e/... — the end-to-end gates are ordinary Go
 # tests, so `make test-e2e` is the same suite again with -v, for when one of
 # them is what you are debugging.
-test: require-node ## the full suite under the race detector (ci: test (race))
-	$(GOTEST) ./...
+test: require-node ## the suite minus e2e, under the race detector (ci: test (race))
+	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty - go list failed" >&2; exit 1; }
+	$(GOTEST) $(TEST_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.

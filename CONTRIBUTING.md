@@ -68,7 +68,8 @@ scripts/check-signoff_test.sh  # ... and that gate's own suite
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
-go test ./... -race -count=1                                  # the full suite
+go test $(go list ./... | grep -v /internal/e2e) -race -count=1  # the suite
+go test ./internal/e2e/... -race -count=1 -v                  # ... and e2e
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 # and the dashboard, whose build output is committed:
@@ -79,10 +80,19 @@ cd dashboard && npm run typecheck && npm test                 # dashboard-test
 
 The race detector is not optional here: the engine's concurrency model is
 real parallelism, and every "atomic because it is single-threaded" assumption
-is a data race until proven otherwise — so CI runs the *whole* suite under it
-and so does `make test`. `-count=1` is the other half: without it a cached
+is a data race until proven otherwise — so every package runs under it, in
+CI and in `make check`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
+
+`internal/e2e` runs on its own, in `make test-e2e` and in CI's `end-to-end
+gates` job, and `make test` leaves it out. That is a contention split, not a
+coverage one — `make check` depends on both targets. The suite stands up N
+engines, each embedding its own NATS server, in ONE process, and packages run
+in parallel: sharing a two-core runner with everything else, its fleet cases
+could not form a two-member JetStream quorum inside the 30s stream-provisioning
+budget and failed every cluster-start attempt with `context deadline exceeded`.
+Alone on a runner the same cases pass in about five minutes.
 
 `make dashboard-check` gates the same shape of problem one level out. The
 dashboard's build output is committed — `go build ./...` and
