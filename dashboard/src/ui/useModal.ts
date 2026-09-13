@@ -33,7 +33,8 @@
  *   exists. When that element has gone because it sat in a modal that closed
  *   as this one opened, focus goes where that modal would have sent it; when
  *   it has gone from a modal that is still open, to that modal's panel, never
- *   behind its veil (`returnChain`).
+ *   behind its veil (`returnChain`). A modal that closes BENEATH another
+ *   surface still open above it returns nothing: focus is in that surface.
  * - A VEIL CLOSES ONLY ITS OWN MODAL, and only when the press lands on the
  *   veil itself. The decision is taken on `pointerdown`, before any surface
  *   closes, so the press that dismisses a menu is never also read as a press
@@ -314,6 +315,13 @@ export function useModal({ onClose, dismissable = true, initialFocus }: ModalOpt
       (start.current?.() ?? focusables(root)[0] ?? root).focus();
     }
     return () => {
+      // NEVER FROM BENEATH ANOTHER SURFACE. A modal can close while one that
+      // opened after it is still up (a route change or a shortcut closes it,
+      // not its own Escape). Focus is inside that surface, which this one has
+      // already left the stack for by now, and handing focus back here would
+      // move it behind a veil that is still up.
+      const holder = document.activeElement;
+      if (holder && stack.some((entry) => entry.panel()?.contains(holder))) return;
       const back = returnTo.find(
         (el): el is HTMLElement =>
           el instanceof HTMLElement && el.isConnected && el !== document.body,

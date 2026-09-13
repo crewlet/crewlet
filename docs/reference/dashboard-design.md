@@ -904,7 +904,8 @@ rendered idle from the first phase to the last.
   that closed as this one opened (a panel's "Set token" handing over to the
   token dialog), focus goes back where that modal would have sent it; when it
   has gone from a modal that is still open, to that modal rather than behind
-  its veil. A control that consumes Escape itself, such as a completion list,
+  its veil. A modal closed beneath a surface still open above it (by a route
+  change, a data push or a shortcut) leaves focus where it is. A control that consumes Escape itself, such as a completion list,
   keeps the key. A veil press closes its modal on the press's click rather
   than on its first contact, so the tap that dismisses a dialog never also
   lands on the control the veil was covering.

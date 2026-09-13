@@ -319,6 +319,49 @@ test("when the opener has gone from a modal that is still open, focus goes to th
   expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "Editor" }));
 });
 
+test("a modal that closes beneath another leaves focus in the one still open above it", () => {
+  // Something other than a key closes the lower surface: a route change, a
+  // data push, a shortcut. Focus is in the prompt above, and handing it back
+  // to the lower modal's opener would put it behind a veil that is still up.
+  let closeEditor = () => {};
+  function Beneath() {
+    const [editor, setEditor] = useState(false);
+    const [prompt, setPrompt] = useState(false);
+    closeEditor = () => setEditor(false);
+    return (
+      <>
+        <button onClick={() => setEditor(true)}>Edit</button>
+        {editor && (
+          <Dialog title="Editor" onClose={() => setEditor(false)}>
+            <button onClick={() => setPrompt(true)}>Ask</button>
+          </Dialog>
+        )}
+        {prompt && (
+          <Dialog title="API token" onClose={() => setPrompt(false)}>
+            <input aria-label="Token" />
+          </Dialog>
+        )}
+      </>
+    );
+  }
+  render(<Beneath />);
+  const edit = screen.getByRole("button", { name: "Edit" });
+  edit.focus();
+  fireEvent.click(edit);
+  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+  const token = screen.getByLabelText("Token");
+  expect(document.activeElement).toBe(token);
+
+  act(() => closeEditor());
+  expect(screen.queryByRole("dialog", { name: "Editor" })).toBeNull();
+  expect(document.activeElement).toBe(token);
+
+  // The prompt's own opener went with the editor, so its close hands focus
+  // on down the chain, to what opened the editor.
+  press("Escape");
+  expect(document.activeElement).toBe(edit);
+});
+
 /** A minimal popup on the stack, rendered inside a dialog the way a menu is. */
 function Popup() {
   const [open, setOpen] = useState(true);
