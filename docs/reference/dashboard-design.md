@@ -812,6 +812,15 @@ rendered idle from the first phase to the last.
   field arrives as one whole `${VAR}` reference, shown as the name it is, or
   as the engine's mask, shown as "A literal value is set (hidden)". The mask is
   never printed as if it were a value.
+- **One REST transport, one REST loader.** `protocol/rest.ts` is the only
+  path to a REST route: `rest.request(method, path, options)` answers the
+  status and the `ETag` beside the body, takes a caller's `AbortSignal`, never
+  lets the browser cache a guarded answer, and resolves a 304 rather than
+  throwing it; the body-only wrappers sit on top of it. A screen that reads a
+  REST answer uses `lib/useRest.ts`, which aborts a superseded read, re-reads
+  when the operator token changes and, where asked, when the tab comes back.
+  A refusal replaces what is on screen; a request that never reached the
+  engine keeps the last answer with the error beside it.
 - **Subscriptions are per-slice.** `agents` is pushed twice per tool-loop
   round; a store that woke every listener on every envelope would re-render the
   application several times a second for the length of a turn.

@@ -22,7 +22,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
@@ -30,9 +30,10 @@ import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useRest } from "~/lib/useRest.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
-import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
+import { requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 
@@ -1549,85 +1550,32 @@ export function useSetup(): {
    * which of the two it is: nothing is known yet.
    */
   loading: boolean;
-  reload: () => void;
+  /** Read again. `quiet` keeps the cards on screen, for a refresh nobody asked for. */
+  reload: (quiet?: boolean) => void;
 } {
-  const [listing, setListing] = useState<SetupListing | null>(null);
-  const [guarded, setGuarded] = useState(false);
-  const [loading, setLoading] = useState(true);
-
-  // `quiet` re-reads without the skeleton, for a refresh nobody asked for.
-  // Every re-read a person triggers keeps it, because the two halves of this
-  // screen disagree for a moment either side of a connect and a card drawn
-  // from one of them is wrong; a background refresh has no such moment, and
-  // blanking six cards because somebody came back to the tab would be the
-  // screen reporting an absence that is not there.
-  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST.
-  //
-  // Four things start one — mount, a token change, the tab becoming visible
-  // and useRecheck, which deliberately fires the same read twice 700 ms
-  // apart — so several can be in flight at once. Every answer was written
-  // into state unconditionally, and nothing polls this route, so whichever
-  // landed last is what the screen held until the operator changed tabs or
-  // set a token. A generation counter is what useQuery in this same tree
-  // already uses for exactly this, and it is why its doc argues against a
-  // second hand-rolled loader.
-  const generation = useRef(0);
-  useEffect(
-    () => () => {
-      // An unmounted screen has no state to write into, and a stale
-      // generation is what says so to a read still in flight.
-      generation.current++;
-    },
-    [],
-  );
-
-  const reload = useCallback((quiet = false) => {
-    generation.current++;
-    const mine = generation.current;
-    if (!quiet) setLoading(true);
-    void (async () => {
-      try {
-        const answer = (await rest.get("/setup/integrations")) as SetupListing;
-        if (generation.current !== mine) return;
-        setListing(answer);
-        setGuarded(false);
-      } catch (err) {
-        if (generation.current !== mine) return;
-        // A refusal is not an empty answer. The screen keeps every read it
-        // already has and simply offers no writes.
-        setListing(null);
-        setGuarded(err instanceof RestError && err.unauthorized);
-      } finally {
-        // ANSWERED, not answered WELL. A refusal is a state the screen can
-        // render honestly, with the banner and no buttons; waiting is not.
-        if (generation.current === mine) setLoading(false);
-      }
-    })();
-  }, []);
-
-  useEffect(reload, [reload]);
-  // A refusal here is the one the banner asks the reader to fix, so the fix
-  // has to land on this screen without a reload.
-  useEffect(() => onTokenChanged(reload), [reload]);
-  // AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
-  // listing is the only thing that carries the roster: nothing pushes it, and
-  // no answer this screen holds says when a person finished creating an app.
-  // So it is re-read when the tab comes back, which is exactly the moment a
-  // seat that offered Create needs to be offering Install instead.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible") reload(true);
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [reload]);
+  // ONE LOADER, the dashboard's: the generation counter, the abort of a
+  // superseded read, the re-read on a token change and the quiet re-read when
+  // the tab comes back are all [useRest]'s. That last one is load-bearing
+  // here: AN AGENT'S APP IS SET UP AT THE CODE HOST, IN ANOTHER TAB, and this
+  // listing is the only thing that carries the roster. Nothing pushes it, and
+  // no answer this screen holds says when a person finished creating an app,
+  // so the tab coming back is exactly the moment a seat that offered Create
+  // needs to be offering Install instead.
+  const read = useRest<SetupListing>("/setup/integrations", { refetchOnFocus: true });
+  const listing = read.data;
+  // A refusal is not an empty answer. The screen keeps every read it already
+  // has from the socket and simply offers no writes.
+  const guarded = read.error?.unauthorized ?? false;
+  const byKey = useMemo(() => new Map((listing?.tools ?? []).map((t) => [t.key, t])), [listing]);
 
   return {
-    byKey: new Map((listing?.tools ?? []).map((t) => [t.key, t])),
+    byKey,
     base: listing?.public_base_url ?? null,
     guarded,
-    loading,
-    reload,
+    // ANSWERED, not answered WELL. A refusal is a state the screen can render
+    // honestly, with the banner and no buttons; waiting is not.
+    loading: read.loading,
+    reload: read.reload,
   };
 }
 

@@ -2,14 +2,33 @@
  * The REST transport's own contract.
  */
 
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { REQUEST_TIMEOUT_MS, rest, RestError } from "./index.ts";
+import { isAbort, REQUEST_TIMEOUT_MS, rest, RestError } from "./index.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
+
+/** What a call sent, and a fetch that answers with `respond`. */
+function stub(respond: (url: string, init: RequestInit) => Response) {
+  const sent: { url: string; init: RequestInit }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init: RequestInit) => {
+      sent.push({ url, init });
+      return respond(url, init);
+    }),
+  );
+  return sent;
+}
+
+const json = (payload: unknown, status = 200, headers: Record<string, string> = {}) =>
+  new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json", ...headers },
+  });
 
 // A REQUEST THAT NEVER SETTLES IS ABANDONED.
 //
@@ -42,5 +61,124 @@ test("a request that never answers is abandoned rather than awaited", async () =
   // a request this process gave up on and one the engine never answered are
   // the same fact to somebody looking at the screen.
   expect((err as RestError).status).toBe(0);
+  expect(isAbort(err)).toBe(false);
   vi.useRealTimers();
+});
+
+describe("the whole answer", () => {
+  // THE TAG IS THE WRITE'S PRECONDITION. The config surface stamps a document
+  // with its revision as an entity-tag, and a transport that returned only
+  // bodies left every caller reading a DIFFERENT resource to learn the id an
+  // If-Match needs.
+  test("status, body and the entity-tag verbatim", async () => {
+    stub(() => json({ name: "Acme" }, 200, { ETag: '"01JREV"' }));
+    const answer = await rest.request("GET", "/config");
+    expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"01JREV"' });
+  });
+
+  test("a success status other than 200 is reported, not flattened", async () => {
+    stub(() => json({ revision_id: "01JNEW", epoch: 7 }, 201));
+    const answer = await rest.request("PUT", "/config", { body: { name: "Acme" } });
+    expect(answer.status).toBe(201);
+    expect(answer.etag).toBeNull();
+  });
+
+  // 304 IS NOT A REFUSAL. It is the engine saying the revision the caller
+  // holds is current, in answer to a precondition the caller wrote.
+  test("a 304 resolves with no body", async () => {
+    const sent = stub(() => new Response(null, { status: 304, headers: { ETag: '"01JREV"' } }));
+    const answer = await rest.request("GET", "/config", {
+      headers: { "If-None-Match": '"01JREV"' },
+    });
+    expect(answer).toEqual({ status: 304, body: null, etag: '"01JREV"' });
+    expect((sent[0]!.init.headers as Record<string, string>)["If-None-Match"]).toBe('"01JREV"');
+  });
+
+  test("a refusal still throws, with the engine's code and the whole body", async () => {
+    stub(() => json({ error: "revision_advanced", current_revision_id: "01JB" }, 409));
+    const err = await rest.request("PATCH", "/config", { body: {} }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).status).toBe(409);
+    expect((err as RestError).code).toBe("revision_advanced");
+    expect((err as RestError).body.current_revision_id).toBe("01JB");
+  });
+
+  // A GUARDED READ IS NEVER A CACHE HIT. A heuristic cache answering GET
+  // /config from memory is a screen showing the company as it was.
+  test("nothing is served from the browser's cache", async () => {
+    const sent = stub(() => json({}));
+    await rest.get("/secrets");
+    await rest.request("GET", "/config");
+    expect(sent.map((s) => s.init.cache)).toEqual(["no-store", "no-store"]);
+  });
+});
+
+describe("what a request sends", () => {
+  test("query parameters are merged into the path's own", async () => {
+    const sent = stub(() => json({}));
+    await rest.request("PUT", "/config?format=json", {
+      body: {},
+      query: { dry_run: true, skipped: undefined },
+    });
+    expect(new URL(sent[0]!.url).pathname).toBe("/config");
+    expect(new URL(sent[0]!.url).search).toBe("?format=json&dry_run=true");
+  });
+
+  test("a merge patch is JSON, sent under its own type", async () => {
+    const sent = stub(() => json({}, 201));
+    await rest.request("PATCH", "/config", {
+      body: { name: "Acme", units: null },
+      contentType: "application/merge-patch+json",
+    });
+    const headers = sent[0]!.init.headers as Record<string, string>;
+    expect(headers["Content-Type"]).toBe("application/merge-patch+json");
+    expect(sent[0]!.init.body).toBe('{"name":"Acme","units":null}');
+  });
+
+  test("a body that is not JSON is sent byte for byte", async () => {
+    const sent = stub(() => new Response(null, { status: 204 }));
+    await rest.putText("/secrets/GITHUB_TOKEN", 'line one\n"quoted"');
+    expect(sent[0]!.init.body).toBe('line one\n"quoted"');
+    // And a non-string body under a non-JSON type is a caller's bug, refused
+    // before it can seal "[object Object]" into a credential.
+    await expect(
+      rest.request("PUT", "/secrets/X", { body: { value: 1 }, contentType: "text/plain" }),
+    ).rejects.toThrow(TypeError);
+  });
+});
+
+describe("cancellation", () => {
+  // A SUPERSEDED REQUEST IS NOT AN UNREACHABLE ENGINE. A dry run aborted
+  // because the draft moved on would otherwise paint "could not reach the
+  // engine" over a screen whose only fault was being quick.
+  test("the caller's abort rejects as an abort, not as status 0", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+    const controller = new AbortController();
+    const pending = rest.request("PUT", "/config", { body: {}, signal: controller.signal });
+    controller.abort();
+    const err = await pending.catch((e: unknown) => e);
+    expect(isAbort(err)).toBe(true);
+    expect(err).not.toBeInstanceOf(RestError);
+  });
+
+  test("an already aborted signal sends nothing at all", async () => {
+    const sent = stub(() => json({}));
+    const controller = new AbortController();
+    controller.abort();
+    const err = await rest
+      .request("PATCH", "/config", { body: {}, signal: controller.signal })
+      .catch((e: unknown) => e);
+    expect(isAbort(err)).toBe(true);
+    expect(sent).toEqual([]);
+  });
 });
