@@ -170,7 +170,7 @@ export function fillTemplate(text: string, resolve: (field: string) => string): 
  * because the count came from the requirement list and the rendering from
  * this rule. Both read it now.
  */
-export function shownField(r: SetupRequirement, answered?: Answered): boolean {
+export function shownField(r: SetupRequirement, answered: Answered): boolean {
   if (r.hidden || (r.kind === "secret" && r.mintable)) return false;
   return gateOpen(r, answered);
 }
@@ -194,18 +194,23 @@ export type Answered = (field: string) => string;
  * just moved away from. (The server checks the same condition against the
  * submission, for the same reason — see refuseUngated.)
  *
- * With no resolver — a caller that only wants the hidden/mintable rule — a
- * gate reads as CLOSED, which keeps a gated field out of counts and folds
- * rather than showing one nobody has opened.
+ * THE RESOLVER IS NOT OPTIONAL, and it was. A default of "no answers, so the
+ * gate is shut" looks harmless and is the bug it caused: one render site
+ * asked whether to draw a field WITHOUT passing answers, read its own gate as
+ * closed, and the organization token never appeared however the choice beside
+ * it was set — while the list that decides the fold, a metre away, had the
+ * answers and said show it. Two rules for one question, disagreeing silently.
+ *
+ * Required, every caller is a compile error until it says what the form
+ * holds, which is the only way this question has an answer at all.
  */
-export function gateOpen(r: SetupRequirement, answered?: Answered): boolean {
+export function gateOpen(r: SetupRequirement, answered: Answered): boolean {
   if (!r.required_when) return true;
-  if (!answered) return false;
   return answered(r.required_when.field) === r.required_when.equals;
 }
 
 /** Whether a requirement must be answered, given what the form now holds. */
-export function neededField(r: SetupRequirement, answered?: Answered): boolean {
+export function neededField(r: SetupRequirement, answered: Answered): boolean {
   if (!r.required_when) return r.required;
   return gateOpen(r, answered);
 }
@@ -226,7 +231,7 @@ export function neededField(r: SetupRequirement, answered?: Answered): boolean {
  */
 export function splitFields(
   reqs: SetupRequirement[],
-  answered?: Answered,
+  answered: Answered,
 ): {
   connect: SetupRequirement[];
   more: SetupRequirement[];
@@ -668,7 +673,21 @@ export function SetupDialog({
   // not the rendering.
   // Both are still SUBMITTED, because payloadFor reads the requirement list
   // rather than the rendering.
-  const editable = shownField;
+  // ONE RULE FOR ONE QUESTION, and it cannot be asked without the answers.
+  //
+  // This was `shownField` itself, called at the render site with no resolver
+  // — so it read every gate as closed and the organization token never
+  // appeared, while [splitFields] a metre away had the answers and had
+  // already decided to show it. Taking the section rather than a resolver is
+  // what stops the next caller reaching for the cheap version: there is no
+  // cheap version to reach for.
+  const editable = useCallback(
+    (section: SetupSection, r: SetupRequirement) => {
+      const own = shownBy.get(sectionKey(section)) ?? [];
+      return shownField(r, answeredIn(section, own));
+    },
+    [shownBy, answeredIn],
+  );
 
   /**
    * What one section would send: only what DIFFERS from what the engine
@@ -824,7 +843,7 @@ export function SetupDialog({
           // exactly the one the engine refuses this way, because the
           // operator never sees the slot it will not overwrite. Beside a
           // field that is not rendered, the refusal was invisible.
-          if (!editable(target)) {
+          if (!editable(found.section, target)) {
             setError(said);
             return;
           }
@@ -1162,7 +1181,7 @@ export function SetupDialog({
       fillTemplate(text, (field) => values[refKey(section, field)] || defaultOf(section, field));
     return (
       <div key={key} className="col gap-1">
-        {editable(r) ? (
+        {editable(section, r) ? (
           <Field
             label={r.label}
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}

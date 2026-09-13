@@ -2102,19 +2102,66 @@ test("a gated field is required exactly when it is shown", () => {
   expect(neededField(gated, () => "false")).toBe(false);
   expect(neededField(gated, () => "true")).toBe(true);
   // AND AN UNGATED FIELD ANSWERS TO `required` ALONE.
-  expect(neededField({ ...gated, required_when: undefined, required: true })).toBe(true);
+  expect(neededField({ ...gated, required_when: undefined, required: true }, () => "")).toBe(true);
 });
 
-// A GATE WITH NOTHING TO READ IS SHUT.
+// AN UNGATED FIELD IS UNAFFECTED BY WHAT THE FORM HOLDS.
 //
-// A caller that only wants the hidden/mintable rule — a count, a fold — must
-// not be handed a field nobody has opened. Open-by-default would put the
-// token in the connect form of every company again, which is the bug it
-// exists to remove.
-test("a gate with no answers to read stays shut", () => {
-  expect(gateOpen(gated)).toBe(false);
-  expect(shownField(gated)).toBe(false);
-  // AND AN UNGATED FIELD IS UNAFFECTED, so the resolver stays optional for
-  // every caller that has no gates to evaluate.
-  expect(gateOpen({ ...gated, required_when: undefined })).toBe(true);
+// The resolver is REQUIRED rather than optional, which is not a style choice:
+// optional, it defaulted to "no answers, so the gate is shut", and one render
+// site asked whether to draw a field without passing any — reading its own
+// gate as closed while the list deciding the fold, a metre away, had the
+// answers and said show it. The organization token never appeared, however
+// the choice beside it was set. Required, every caller is a compile error
+// until it says what the form holds.
+test("an ungated field ignores the answers", () => {
+  const plain = { ...gated, required_when: undefined };
+  expect(gateOpen(plain, () => "")).toBe(true);
+  expect(shownField(plain, () => "")).toBe(true);
+});
+
+// SELECTING THE ANSWER REVEALS THE FIELD THAT ANSWER NEEDS.
+//
+// The whole point of the gate, and the thing a unit test of the predicate
+// cannot prove: the predicate said yes while the field stayed off screen.
+test("choosing the gated answer reveals its field", () => {
+  const coverage: SetupToolState = {
+    ...tool,
+    key: "github",
+    configured: true,
+    requirements: [
+      {
+        field: "provisioning.org_webhook",
+        label: "Which GitHub activity should reach your agents",
+        kind: "choice",
+        config_path: "integrations.github.provisioning.org_webhook",
+        required: false,
+        present: true,
+        value: "false",
+        choices: [
+          { value: "false", label: "Repositories where an agent's app is installed" },
+          { value: "true", label: "Every repository in acme, including new ones" },
+        ],
+      },
+      { ...gated },
+    ],
+  };
+  render(
+    <SetupDialog
+      sections={[{ name: "GitHub", tool: coverage }]}
+      title="GitHub"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  expect(screen.queryByText("Organization token")).toBeNull();
+
+  const choice = screen.getByLabelText(/Which GitHub activity/);
+  fireEvent.change(choice, { target: { value: "true" } });
+
+  // VISIBLE, not merely present in the requirement list: a field revealed
+  // into a collapsed fold is a field somebody still cannot see.
+  const revealed = screen.queryByText("Organization token");
+  expect(revealed).not.toBeNull();
+  expect(revealed?.closest("details")?.open ?? true).toBe(true);
 });
