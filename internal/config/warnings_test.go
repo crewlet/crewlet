@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
 // A WARNING IS A VALID CONFIGURATION WITH A CONSEQUENCE, and the consequence
@@ -43,6 +44,28 @@ func TestTierAWarnsAboutWhatItCannotRefuse(t *testing.T) {
 			func(b *config.Bootstrap) { b.Stream.StoreDir = "" },
 			"stream.store_dir", "keeps everything in memory",
 		},
+		// A BROKER ASKED TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG
+		// produces nothing at all: `stream.debug` unlocks nats-server's
+		// own Debugf population, and those are still DEBUG records.
+		// Nothing refuses it, because the flags override the file.
+		"a verbose broker with nowhere to say it": {
+			func(b *config.Bootstrap) { b.Stream.Debug = true },
+			"stream.debug", "no destination records it",
+		},
+		// AND THE CONSOLE'S LEVEL DOES NOT COUNT WHEN THE CONSOLE IS OFF.
+		// `logging.stderr: false` hands the stream to the file, so a
+		// `debug` console level beside a `warn` file installs no
+		// destination that would record a broker line.
+		"a verbose broker behind a console that was switched off": {
+			func(b *config.Bootstrap) {
+				b.Stream.Debug = true
+				b.Logging.Level = logging.LevelDebug
+				b.Logging.Stderr = new(bool)
+				b.Logging.File.Path = "/var/log/crewlet/node.log"
+				b.Logging.File.Level = logging.LevelWarn
+			},
+			"stream.debug", "no destination records it",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -80,6 +103,47 @@ func TestAFullyStatedDeploymentWarnsAboutNothing(t *testing.T) {
 	}
 	if got := b.Warnings(); len(got) != 0 {
 		t.Errorf("a fully stated deployment warned: %v", got)
+	}
+}
+
+// AND IT GOES QUIET AS SOON AS ANY DESTINATION WOULD RECORD THE LINES. The
+// console and the log file are separate levels on purpose — a `debug` file
+// behind a `warn` console is a supported shape — so a warning that only read
+// `logging.level` would call that combination silent when it is not.
+func TestAVerboseBrokerIsQuietOnceSomethingRecordsIt(t *testing.T) {
+	t.Parallel()
+	for name, mutate := range map[string]func(*config.Bootstrap){
+		"the console is at debug": func(b *config.Bootstrap) {
+			b.Logging.Level = logging.LevelDebug
+		},
+		"only the log file is at debug": func(b *config.Bootstrap) {
+			b.Logging.Level = logging.LevelWarn
+			b.Logging.File.Path = "/var/log/crewlet/node.log"
+			b.Logging.File.Level = logging.LevelDebug
+		},
+		// The file takes the stream over and FOLLOWS logging.level, which
+		// is what makes `-debug` reach both destinations.
+		"the file follows a debug logging.level with the console off": func(b *config.Bootstrap) {
+			b.Logging.Level = logging.LevelDebug
+			b.Logging.Stderr = new(bool)
+			b.Logging.File.Path = "/var/log/crewlet/node.log"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := config.DefaultBootstrap()
+			b.Stream.StoreDir = "/var/lib/crewlet/stream"
+			b.Retention.BackupOwner = "platform-oncall"
+			b.Stream.Debug = true
+			mutate(&b)
+			if err := b.Validate(); err != nil {
+				t.Fatalf("the fixture does not validate: %v", err)
+			}
+			for _, w := range b.Warnings() {
+				if w.Path == "stream.debug" {
+					t.Errorf("warned anyway: %s", w.Message)
+				}
+			}
+		})
 	}
 }
 

@@ -1002,6 +1002,49 @@ from Tier A and its own flags. See
 [Environment Variables](../reference/environment-variables.md#logging).
 Nothing silences a warning.
 
+#### The embedded broker's own logs
+
+The NATS server the engine embeds logs through the engine's logger, under the
+component `queue.nats.server`, so what the **broker** said is always
+distinguishable from what the engine said about it. Anything it reports as
+wrong — a JetStream write error, a slow consumer, stream recovery after an
+unclean shutdown, cluster election trouble — keeps its own severity and
+reaches the log whatever else is configured. Its boot narration ("Starting
+nats-server", the JetStream storage line, "Server is ready") is `debug`: a
+dozen lines describing infrastructure you deliberately did not deploy.
+
+Its **own debug output is a separate switch**, `stream.debug`, and it is off
+by default:
+
+```yaml
+stream:
+  debug: true     # only when the BROKER is what you are diagnosing
+```
+
+`logging.level: debug` and `-debug` say how loud the *engine* is. They are
+what you want to watch a turn — the prompt, the tool calls, the review — and
+they deliberately do not turn this on, because nats-server's debug output is
+per *internal client* rather than per event, and the engine's own coordination
+reads manufacture those continuously. Every coordination key listing is an
+ordered consumer created and then deleted, and deleting one writes two lines
+like:
+
+```
+DEBUG queue.nats.server  nats_server detail="JETSTREAM - JetStream connection closed: Client Closed"
+```
+
+Two of a node's fifteen-second duty loops list keys on every tick, so that is
+a constant background stream on a node doing nothing at all. `Client Closed`
+is the *graceful* close reason and nothing is leaking; it is simply the
+broker narrating its own housekeeping.
+
+Both switches have to agree for these to appear: `stream.debug` decides
+whether nats-server produces them, and a destination at `debug` decides
+whether anything records them. `crewlet validate` warns when the first is set
+and the second is not. `stream.debug` is **refused** for `stream.type: nats` —
+an external cluster logs wherever its own operator configured it to, so a flag
+here would reach nothing.
+
 ### Per-Agent Token Tracking
 
 Every LLM completion records prompt, completion and total tokens plus a call

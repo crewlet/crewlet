@@ -290,6 +290,12 @@ func openNATS(ctx context.Context, b *config.Bootstrap) (*Backends, error) {
 		Token:            b.Stream.Token,
 		TLS:              streamTLS(b.Stream.TLS),
 
+		// The BROKER's own verbosity, which is not the engine's — see
+		// jetstream.Config.Debug. Read by the embedded branch only; the
+		// validator refuses it against an external cluster, so there is
+		// nothing to decide here.
+		Debug: b.Stream.Debug,
+
 		// Through the accessors for the same reason EventRetention goes
 		// through one: the field is a STRING with two meanings, and a
 		// second place deciding which is which is a second place to get

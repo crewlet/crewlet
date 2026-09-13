@@ -785,6 +785,32 @@ type Stream struct {
 	// nothing ever sweeps grows for the life of the deployment.
 	EventRetentionHours float64 `yaml:"event_retention_hours,omitempty" json:"event_retention_hours,omitempty" js:"min=0" desc:"Event stream retention; 0 takes the queue default."`
 
+	// Debug turns on the EMBEDDED broker's own debug logging, which is a
+	// different and much larger population than the boot narration the
+	// bridge already carries.
+	//
+	// SEPARATE FROM `logging.level`, and that separation is the whole
+	// field. It used to be derived from it, so `-debug` — asked for to
+	// watch turns, prompts and tool calls — also subscribed the operator
+	// to nats-server's per internal-client lifecycle trace. The engine's
+	// own coordination reads drive that: a KV key listing is an ordered
+	// ephemeral consumer created and deleted, and deleting a consumer
+	// closes the two internal JetStream clients it was built on, so every
+	// listing writes two "JetStream connection closed: Client Closed"
+	// lines. Two of this node's 15-second duty loops list keys on every
+	// tick, so an idle node produced a permanent stream of them.
+	//
+	// It does NOT gate the broker's warnings and errors, which reach the
+	// log at their own severity whatever this says — that half is what the
+	// bridge exists for. The lines it unlocks are still DEBUG lines, so
+	// they also need a destination at `debug` to be recorded; Warnings()
+	// says so when this is set and none is.
+	//
+	// Refused for `type: nats`: an external cluster logs wherever its own
+	// operator configured it to, and a flag recorded here would reach
+	// nothing.
+	Debug bool `yaml:"debug,omitempty" json:"debug,omitempty" desc:"Turn on the EMBEDDED broker's own debug logging. Separate from logging.level, which is the engine's; refused for type: nats. Its warnings and errors are never gated by this."`
+
 	// Credentials is a path to a NATS credentials file.
 	Credentials string `yaml:"credentials,omitempty" json:"credentials,omitempty" desc:"Path to a NATS credentials file for an external server."`
 
@@ -1030,6 +1056,17 @@ func (s *Stream) validate(path string) error {
 		p.add(at(path, "store_dir"), ErrConflict,
 			"store_dir is where an EMBEDDED server persists; an external "+
 				"cluster keeps its own storage")
+	}
+	// THE SAME RULE `url` AND `store_dir` KEEP, and for the same reason:
+	// the flag is handed to the server this process STARTS, so against an
+	// external cluster it is read by nobody. Accepting it would leave an
+	// operator who asked for broker diagnostics watching a log that never
+	// changes, with nothing saying why.
+	if external && s.Debug {
+		p.add(at(path, "debug"), ErrConflict,
+			"debug turns on the EMBEDDED broker's own logging; an external "+
+				"cluster logs wherever its operator configured it to. Remove "+
+				"it, or set type to %q", StreamEmbedded)
 	}
 	if s.Replicas < 0 {
 		p.add(at(path, "replicas"), ErrOutOfRange, "must not be negative, got %d", s.Replicas)

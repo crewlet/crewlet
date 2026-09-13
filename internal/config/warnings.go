@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/logging"
 )
 
 // Warning is a configuration that is VALID and probably not what somebody
@@ -107,7 +109,67 @@ func (b *Bootstrap) Warnings() []Warning {
 				"holds seats",
 		})
 	}
+	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says
+	// nothing at all. `stream.debug` unlocks nats-server's own Debugf
+	// population, but those are still DEBUG records and every destination
+	// filters by level — so the pair that reads as "I asked for broker
+	// diagnostics" is the pair that produces none. `crewlet run`'s own
+	// -debug / -log-level flags override the file and are invisible from
+	// it, which is why this names them rather than being a refusal.
+	if b.Stream.Debug && !b.logsAtDebug() {
+		out = append(out, Warning{
+			Path: "stream.debug",
+			Message: "the embedded broker will produce its debug output and no " +
+				"destination records it: `logging.level` is " + b.loggingLevelName() +
+				" and no `logging.file.level` is `debug`. Set one of them, or pass " +
+				"`-debug` to `crewlet run`",
+		})
+	}
 	return out
+}
+
+// logsAtDebug reports whether ANY destination this document INSTALLS would
+// record a debug line.
+//
+// The most verbose destination decides, the same rule internal/logging's own
+// fan-out follows: a `debug` file behind a `warn` console is a supported
+// shape, and reading only `logging.level` would call that combination silent
+// when it is not.
+//
+// INSTALLS, not "configures", and that is the half that is easy to get wrong
+// in the other direction too: with `logging.stderr: false` the console is not
+// a destination at all, so `logging.level: debug` beside a `warn` file
+// records nothing — except where there is no file, because [logging.install]
+// keeps stderr rather than leave a process logging nowhere. This mirrors that
+// function; the two disagreeing would make the warning fire on a working
+// deployment or stay quiet on a broken one.
+func (b *Bootstrap) logsAtDebug() bool {
+	file := strings.TrimSpace(b.Logging.File.Path) != ""
+	if console := b.Logging.Stderr == nil || *b.Logging.Stderr || !file; console {
+		if b.Logging.Level == logging.LevelDebug {
+			return true
+		}
+	}
+	if !file {
+		return false
+	}
+	// An empty file level follows `logging.level`, which is what makes
+	// `-debug` reach both destinations.
+	level := b.Logging.File.Level
+	if level == "" {
+		level = b.Logging.Level
+	}
+	return level == logging.LevelDebug
+}
+
+// loggingLevelName is the level this document names, spelled as an operator
+// wrote it — and as the DEFAULT when they wrote nothing, because "logging.level
+// is " followed by an empty string reads as a bug in the warning.
+func (b *Bootstrap) loggingLevelName() string {
+	if b.Logging.Level == "" {
+		return "`info` (unset)"
+	}
+	return "`" + string(b.Logging.Level) + "`"
 }
 
 // Warnings is everything valid about this company that its author should
