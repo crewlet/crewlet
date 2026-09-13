@@ -9,7 +9,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { NAV, activeNavKey, titleFor } from "./nav.ts";
 import { href, useRoute } from "./router.tsx";
-import { CommandPalette, SEARCH_SHORTCUT, isSearchShortcut } from "./CommandPalette.tsx";
+import {
+  CommandPalette,
+  SEARCH_ARIA_KEYSHORTCUTS,
+  SEARCH_SHORTCUT,
+  isSearchShortcut,
+} from "./CommandPalette.tsx";
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -232,7 +237,16 @@ export function Shell({ children }: { children: ReactNode }) {
           </span>
           <h1>{title}</h1>
           <span className="spacer" />
-          <button className="omni" onClick={() => setPaletteOpen(true)}>
+          {/* NAMED ON THE BUTTON, not by its text: the one breakpoint hides
+              the label and the hint and leaves the icon, and content under
+              `display: none` names nothing, so a narrow window had a search
+              button a screen reader announced as "button". */}
+          <button
+            className="omni"
+            aria-label="Search"
+            aria-keyshortcuts={SEARCH_ARIA_KEYSHORTCUTS}
+            onClick={() => setPaletteOpen(true)}
+          >
             <Icon name="search" size="sm" />
             <span className="omni-label">Search</span>
             <Kbd keys={SEARCH_SHORTCUT} />

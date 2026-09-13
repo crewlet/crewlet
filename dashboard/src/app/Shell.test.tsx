@@ -155,6 +155,21 @@ test("the search shortcut does not close search from beneath a token dialog rais
   expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
 });
 
+test("the search button keeps its name where the narrow layout hides its label", () => {
+  mount(<p>screen</p>);
+  // What the stylesheet's one breakpoint does to the button: the label and
+  // the hint go, and the icon is all that is drawn.
+  const narrow = document.createElement("style");
+  narrow.textContent = ".omni .omni-label, .omni .kbd-combo { display: none; }";
+  document.head.append(narrow);
+  try {
+    const search = screen.getByRole("button", { name: "Search" });
+    expect(search.getAttribute("aria-keyshortcuts")).toBe("Control+K Meta+K /");
+  } finally {
+    narrow.remove();
+  }
+});
+
 test("the shortcut hints name the keys the reader's own keyboard prints, in words", () => {
   // Not an Apple platform under the suite, so the command key is Control: a
   // hand-written "⌘K" told everybody else to press a key they do not have.

@@ -53,6 +53,12 @@ const HEXISH = /^[0-9a-f]{16,64}$/i;
  */
 export const SEARCH_SHORTCUT = ["Mod", "k"] as const;
 
+/**
+ * Every key that opens search, as `aria-keyshortcuts` spells them: the chord
+ * under either modifier, and the bare "/" the shell also accepts.
+ */
+export const SEARCH_ARIA_KEYSHORTCUTS = "Control+K Meta+K /";
+
 export function isSearchShortcut(e: { key: string; metaKey: boolean; ctrlKey: boolean }): boolean {
   return (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k";
 }
