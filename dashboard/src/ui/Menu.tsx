@@ -59,7 +59,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./Icon.tsx";
-import { cx } from "./primitives.tsx";
+import { Button, cx } from "./primitives.tsx";
 import { usePopup } from "./useModal.ts";
 import { VIEW_CHANGE_EVENT, placePopup } from "./viewport.ts";
 
@@ -327,14 +327,15 @@ export function Menu({
 
   return (
     <span className="menu-anchor">
-      <button
-        type="button"
+      <Button
         ref={(el) => {
           trigger.current = el;
           popup.insideRef(el);
         }}
-        className={cx("btn", "ghost", size === "sm" && "sm", !children && "icon")}
-        aria-label={children ? undefined : label}
+        variant="ghost"
+        size={size}
+        icon={icon}
+        // An icon trigger is named by its title; one with visible text by the text.
         title={children ? undefined : label}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -350,9 +351,8 @@ export function Menu({
         }}
         onKeyDown={onTriggerKeyDown}
       >
-        <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />
         {children}
-      </button>
+      </Button>
       {layer ? list && createPortal(list, layer) : list}
     </span>
   );

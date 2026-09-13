@@ -37,7 +37,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Icon } from "./Icon.tsx";
+import { Button } from "./primitives.tsx";
 import { Problems } from "./Problems.tsx";
 
 let minted = 0;
@@ -236,9 +236,10 @@ export function ListField({
                   },
                 })}
                 <span className="list-field-actions">
-                  <button
-                    type="button"
-                    className="btn ghost sm icon"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon="arrowUp"
                     aria-label={`Move ${itemName} ${position} up`}
                     title="Move up"
                     disabled={disabled || index === 0}
@@ -247,12 +248,11 @@ export function ListField({
                       if (el) ups.current.set(key, el);
                       else ups.current.delete(key);
                     }}
-                  >
-                    <Icon name="arrowUp" size="xs" />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn ghost sm icon"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon="arrowDown"
                     aria-label={`Move ${itemName} ${position} down`}
                     title="Move down"
                     disabled={disabled || index === count - 1}
@@ -261,19 +261,16 @@ export function ListField({
                       if (el) downs.current.set(key, el);
                       else downs.current.delete(key);
                     }}
-                  >
-                    <Icon name="arrowDown" size="xs" />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn ghost sm icon"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon="trash"
                     aria-label={`Remove ${itemName} ${position}`}
                     title="Remove"
                     disabled={disabled}
                     onClick={() => remove(index)}
-                  >
-                    <Icon name="trash" size="xs" />
-                  </button>
+                  />
                 </span>
               </li>
             );
@@ -295,15 +292,9 @@ export function ListField({
             addBox.current = el;
           },
         })}
-        <button
-          type="button"
-          className="btn sm"
-          onClick={add}
-          disabled={disabled || draft.trim() === ""}
-        >
-          <Icon name="plus" size="xs" />
+        <Button size="sm" icon="plus" onClick={add} disabled={disabled || draft.trim() === ""}>
           Add
-        </button>
+        </Button>
       </div>
       {help && (
         <span className="hint" id={helpID}>
