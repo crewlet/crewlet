@@ -249,7 +249,7 @@ show a type change as no change at all.
 A diff longer than the cap reports its own truncation rather than stopping
 silently.
 
-**Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act.
+**Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act. A changed credential still appears: the revisions are compared as stored, so a rotated key is reported at its path as a change from `"__redacted__"` to `"__redacted__"`, never with either value.
 
 ### `crewlet config activate`
 

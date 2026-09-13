@@ -51,17 +51,27 @@ const (
 // would be read as "that is all that changed".
 const MaxChanges = 500
 
-// Changes compares two documents, oldest first.
+// Changes compares two documents as they are STORED, oldest first, and reports
+// every value REDACTED.
 //
-// Both sides are expected REDACTED. Comparing raw documents would put the old
-// and the new value of a rotated credential in one response — strictly worse
-// than the read this surface already refuses to serve.
+// # Compared unredacted, reported redacted
+//
+// Reporting raw values would put the old and the new value of a rotated
+// credential in one response, which is strictly worse than the read this
+// surface already refuses to serve. Comparing redacted documents instead, as
+// this once did, is blind: every literal credential masks to the same marker
+// on both sides, so rotating one, or replacing one with a `${VAR}` that embeds
+// a literal, diffed to nothing, and a diff is exactly where an operator looks
+// to confirm a rotation landed. So each side is held in both forms, the
+// comparison reads the stored values, and every value a change carries comes
+// from the redacted copy at the same place. A rotated credential reads as a
+// change from the marker to the marker: that it changed, and never what to.
 func Changes(from, to *config.Company) ([]Change, error) {
-	before, err := document(from)
+	before, err := sideOf(from)
 	if err != nil {
 		return nil, err
 	}
-	after, err := document(to)
+	after, err := sideOf(to)
 	if err != nil {
 		return nil, err
 	}
@@ -97,31 +107,76 @@ func document(cfg *config.Company) (map[string]any, error) {
 	return out, nil
 }
 
+// side is one document of a diff, or one value inside it, in the two forms a
+// diff needs: the stored value it compares, and the redacted value at the same
+// place, which is the only one it reports.
+type side struct{ compared, shown any }
+
+// sideOf renders a company in both forms.
+//
+// The redacted copy has the stored one's exact shape, because redaction
+// replaces a non-empty credential string with the non-empty marker and touches
+// nothing else, so the two can be walked in lockstep.
+func sideOf(cfg *config.Company) (side, error) {
+	compared, err := document(cfg)
+	if err != nil {
+		return side{}, err
+	}
+	shown, err := document(cfg.Redact())
+	if err != nil {
+		return side{}, err
+	}
+	return side{compared: compared, shown: shown}, nil
+}
+
+// field steps into a mapping on both forms at once.
+//
+// A shown form that does not have the same shape yields nil, never the stored
+// value: a diff that fell back to the unredacted side would publish exactly
+// what the redacted side exists to hide.
+func (s side) field(key string) side {
+	compared, _ := s.compared.(map[string]any)
+	shown, _ := s.shown.(map[string]any)
+	return side{compared: compared[key], shown: shown[key]}
+}
+
+// item steps into a list on both forms at once, with the same rule as field.
+func (s side) item(i int) side {
+	out := side{}
+	if compared, ok := s.compared.([]any); ok && i < len(compared) {
+		out.compared = compared[i]
+	}
+	if shown, ok := s.shown.([]any); ok && i < len(shown) {
+		out.shown = shown[i]
+	}
+	return out
+}
+
 // compare walks two values in parallel, appending what differs.
-func compare(path string, before, after any, out *[]Change) {
-	switch left := before.(type) {
+func compare(path string, before, after side, out *[]Change) {
+	switch left := before.compared.(type) {
 	case map[string]any:
-		right, ok := after.(map[string]any)
+		right, ok := after.compared.(map[string]any)
 		if !ok {
-			*out = append(*out, Change{Path: path, Kind: KindChanged, From: before, To: after})
+			*out = append(*out, Change{Path: path, Kind: KindChanged, From: before.shown, To: after.shown})
 			return
 		}
 		for _, key := range union(left, right) {
-			a, hasA := left[key]
-			b, hasB := right[key]
+			_, hasA := left[key]
+			_, hasB := right[key]
 			switch {
 			case !hasA:
-				*out = append(*out, Change{Path: join(path, key), Kind: KindAdded, To: b})
+				*out = append(*out, Change{Path: join(path, key), Kind: KindAdded, To: after.field(key).shown})
 			case !hasB:
-				*out = append(*out, Change{Path: join(path, key), Kind: KindRemoved, From: a})
+				*out = append(*out, Change{Path: join(path, key), Kind: KindRemoved, From: before.field(key).shown})
 			default:
-				compare(join(path, key), a, b, out)
+				compare(join(path, key), before.field(key), after.field(key), out)
 			}
 		}
 	case []any:
-		right, ok := after.([]any)
+		right, ok := after.compared.([]any)
 		if !ok {
-			*out = append(*out, Change{Path: path, Kind: KindChanged, From: before, To: after})
+			*out = append(*out, Change{Path: path, Kind: KindChanged, From: before.shown, To: after.shown})
 			return
 		}
 		// BY POSITION, which is the only correspondence a JSON list has.
@@ -132,16 +187,16 @@ func compare(path string, before, after any, out *[]Change) {
 			at := index(path, i)
 			switch {
 			case i >= len(left):
-				*out = append(*out, Change{Path: at, Kind: KindAdded, To: right[i]})
+				*out = append(*out, Change{Path: at, Kind: KindAdded, To: after.item(i).shown})
 			case i >= len(right):
-				*out = append(*out, Change{Path: at, Kind: KindRemoved, From: left[i]})
+				*out = append(*out, Change{Path: at, Kind: KindRemoved, From: before.item(i).shown})
 			default:
-				compare(at, left[i], right[i], out)
+				compare(at, before.item(i), after.item(i), out)
 			}
 		}
 	default:
-		if !equal(before, after) {
-			*out = append(*out, Change{Path: path, Kind: KindChanged, From: before, To: after})
+		if !equal(before.compared, after.compared) {
+			*out = append(*out, Change{Path: path, Kind: KindChanged, From: before.shown, To: after.shown})
 		}
 	}
 }

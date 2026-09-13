@@ -168,8 +168,8 @@ func (s *Service) Revisions(ctx context.Context, limit, offset int) ([]map[strin
 
 // Diff compares one revision against another, or against the active one.
 //
-// Both sides redacted, so a rotated credential shows as a changed mask and
-// never as either value.
+// Both sides are compared as stored and reported redacted (see [Changes]), so
+// a rotated credential shows as a changed mask and never as either value.
 func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[string]any, error) {
 	if s == nil {
 		return nil, fmt.Errorf("configapi: no store on this node")
@@ -193,7 +193,7 @@ func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[str
 	if err != nil {
 		return nil, err
 	}
-	changes, err := Changes(from.Redact(), to.Redact())
+	changes, err := Changes(from, to)
 	if err != nil {
 		return nil, err
 	}

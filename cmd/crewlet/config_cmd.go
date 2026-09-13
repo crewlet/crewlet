@@ -403,7 +403,11 @@ func diffRevisions(ctx context.Context, cs *configStore, revisionID, against str
 	if revisionID == "" {
 		return errors.New("config diff needs a revision to compare")
 	}
-	left, err := redactedCompany(ctx, cs, revisionID)
+	// UNREDACTED, and still never printed that way: Changes compares the
+	// stored values and reports every value redacted. Handing it redacted
+	// documents made a rotated literal credential diff to nothing, since
+	// both sides mask to the same marker.
+	_, left, err := storedCompany(ctx, cs, revisionID)
 	if err != nil {
 		return err
 	}
@@ -411,7 +415,7 @@ func diffRevisions(ctx context.Context, cs *configStore, revisionID, against str
 	if other == "active" {
 		other = ""
 	}
-	right, err := redactedCompany(ctx, cs, other)
+	_, right, err := storedCompany(ctx, cs, other)
 	if err != nil {
 		return err
 	}
@@ -472,15 +476,6 @@ func renderValue(v any) string {
 	default:
 		return fmt.Sprint(value)
 	}
-}
-
-// redactedCompany opens a revision and redacts it, for comparison.
-func redactedCompany(ctx context.Context, cs *configStore, revisionID string) (*config.Company, error) {
-	_, company, err := storedCompany(ctx, cs, revisionID)
-	if err != nil {
-		return nil, err
-	}
-	return company.Redact(), nil
 }
 
 // storedCompany opens one revision, or the active one, as the stored form.

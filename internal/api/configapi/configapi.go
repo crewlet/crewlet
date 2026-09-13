@@ -377,10 +377,9 @@ func (s *Service) getRevision(w http.ResponseWriter, r *http.Request) {
 
 // diff serves GET /config/revisions/{id}/diff?against=<id|active>.
 //
-// Over REDACTED documents on both sides, so a rotated credential shows as a
-// changed mask and never as either value. Comparing the raw documents would
-// put both the old and the new secret in one response — which is strictly
-// worse than the read this surface already refuses to serve.
+// Every value it reports is REDACTED, so a rotated credential shows as a
+// changed mask and never as either value; the comparison itself reads the
+// stored documents, or a rotation would diff to nothing. See [Changes].
 func (s *Service) diff(w http.ResponseWriter, r *http.Request) {
 	body, err := s.Diff(r.Context(), r.PathValue("id"), r.URL.Query().Get("against"))
 	switch {

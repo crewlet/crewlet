@@ -285,6 +285,13 @@ change looks right, which is the single most likely way a credential leaves the
 machine. `crewlet config export -revision <UUID>` covers the rare case that
 needs real values, and it takes a deliberate act.
 
+**Compared as stored, reported redacted.** Comparing the two redacted
+documents would be blind to the change a diff is most often opened to confirm:
+every literal credential masks to the same `"__redacted__"` on both sides, so
+a rotation diffed to nothing. The comparison reads the stored values, and every
+value a change carries is taken from the redacted document at the same place,
+so a rotated credential reads as a change from the mask to the mask.
+
 Two further properties of that surface are worth stating because they are
 easy to assume the other way round:
 

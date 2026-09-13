@@ -367,6 +367,12 @@ func TestALiteralCredentialIsMaskedEverywhereItIsPrinted(t *testing.T) {
 			t.Errorf("the diff leaked %s:\n%s", leaked, diff)
 		}
 	}
+	// AND THE ROTATION IS STILL THERE. Masked on both sides it is the same
+	// marker, and a diff that compared masks reported the rotated key as no
+	// change at all.
+	if !strings.Contains(diff, "api_keys[0]") {
+		t.Errorf("the diff does not report the rotated credential:\n%s", diff)
+	}
 
 	// EXPORT WITHOUT -redact IS THE DELIBERATE ACT that yields the real
 	// values — otherwise there would be no way to get a config back out.
