@@ -149,7 +149,7 @@ When the engine launches a per-role MCP server instance, it merges the base serv
 
 ### Per-Unit Config
 
-A unit declares its Jira project / Confluence space *identity* under `integrations` (used for inbound webhook routing and as the team's write home — not a tool credential, and it does not scope knowledge reads). Real per-agent tool credentials still live in `mcp_env`, which all roles inherit:
+A unit declares its Jira project / Confluence space *identity* under `integrations` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:
 
 ```yaml
 units:
@@ -171,7 +171,7 @@ units:
           atlassian: { JIRA_API_TOKEN: "${ENG_JIRA_TOKEN}" }
 ```
 
-Inheritance: the unit's `mcp_env` is the base, role values override per key. The unit's `integrations` identity (Jira project / Confluence space) is separate from these credentials.
+Inheritance: the unit's `mcp_env` is the base and a seat's own values override it variable by variable, so a seat that sets one variable of a server keeps the unit's other variables for that server. Only the unit's **direct agent** seats inherit it. A child unit inherits nothing (it declares its own block), and a human seat inherits nothing, because a human seat runs no tools and may not carry an `mcp_env`. The unit's `integrations` identity (Jira project / Confluence space) is separate from these credentials.
 
 ---
 

@@ -494,7 +494,7 @@ units:
             project: "BACK"              #   read scope, NOT an MCP credential)
           confluence:
             space: "BACK"
-        mcp_env:                        # optional — per-agent MCP creds, inherited by roles
+        mcp_env:                        # optional: MCP creds shared by the unit's direct agent roles
           atlassian:                     #   (real tool credentials only; the chat transport
             JIRA_API_TOKEN: "${BACK_JIRA_TOKEN}"  #   identity is per-agent)
         roles:
