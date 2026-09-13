@@ -556,6 +556,26 @@ func roleIDOf(ctx context.Context, opts Options, name string) (string, error) {
 // up with: a seat whose account this pass could not read is still a seat
 // somebody is managing, and reporting its account as orphaned would tell an
 // operator to clean up the identity of a working agent.
+//
+// # A disabled one is already where the advisory is asking it to get to
+//
+// The remedy this reports under is "disable or delete the ones you do not
+// want", so an account that is ALREADY DISABLED has reached the end state and
+// reporting it asks for work somebody has done. Worse, it was mostly this
+// engine's own: a `remove_seats` disconnect DISABLES the accounts it removes,
+// so the ordinary reconnect-with-a-smaller-roster cycle turned every correct
+// teardown into a row on the card — which is where the 36 measured
+// `agent-cs-…` rows came from, all of them inert.
+//
+// Skipping them also makes the advisory's own instruction work. Before this,
+// an operator who read the note and disabled an account watched the finding
+// come back unchanged on the next tick, because the only state the filter
+// looked at was the address; the only thing that cleared it was a delete. Now
+// either half of "disable or delete" does.
+//
+// THE ENABLED ONES ARE THE WHOLE FINDING and they still report. That is the
+// account that can still act — a renamed seat's identity, live, holding
+// whatever it held, matching nothing any pass will ever ask for again.
 func orphanedAccounts(existing []User, plan *provision.Plan, domain string) []User {
 	if plan == nil {
 		return nil
@@ -566,6 +586,9 @@ func orphanedAccounts(existing []User, plan *provision.Plan, domain string) []Us
 	}
 	var out []User
 	for _, user := range existing {
+		if user.Disabled {
+			continue
+		}
 		if claimed[strings.ToLower(strings.TrimSpace(user.Email))] {
 			continue
 		}
@@ -728,9 +751,9 @@ func (r *Result) Findings() []integration.Finding {
 		// sentence names the count and three examples; the whole list
 		// travels beside it.
 		detail, all := integration.Listed(
-			fmt.Sprintf("%d service account(s) at this company's own email "+
-				"domain match no seat this engine provisions for — a renamed "+
-				"seat, a changed handle, or an older naming scheme",
+			fmt.Sprintf("%d enabled service account(s) at this company's own "+
+				"email domain match no seat this engine provisions for — a "+
+				"renamed seat, a changed handle, or an older naming scheme",
 				len(addresses)),
 			addresses,
 			"Nothing here removes them: an account is a colleague at Datadog "+

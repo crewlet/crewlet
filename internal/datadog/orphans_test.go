@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -43,11 +44,13 @@ func TestServiceAccountsNoSeatClaimsAreReported(t *testing.T) {
 	orgOK(reg)
 
 	// The organization holds the seat's own account, one from a naming
-	// scheme this engine no longer derives, and a PERSON.
+	// scheme this engine no longer derives, a DISABLED one from the same
+	// scheme, and a PERSON.
 	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"data":[
 			{"id":"u1","attributes":{"email":"crewlet-sre@agents.test.invalid","service_account":true}},
-			{"id":"u2","attributes":{"email":"agent-cs-old@agents.test.invalid","service_account":true,"disabled":true}},
+			{"id":"u2","attributes":{"email":"agent-cs-old@agents.test.invalid","service_account":true}},
+			{"id":"u4","attributes":{"email":"agent-cs-off@agents.test.invalid","service_account":true,"disabled":true}},
 			{"id":"u3","attributes":{"email":"jane@acme.example","service_account":false}}
 		]}`)
 	}
@@ -90,6 +93,13 @@ func TestServiceAccountsNoSeatClaimsAreReported(t *testing.T) {
 	if strings.Contains(f.Detail, "jane@acme.example") {
 		t.Errorf("the finding names a person's account:\n%s", f.Detail)
 	}
+	// AND NOT A DISABLED ONE, which is already where the note is asking it
+	// to get to. See [TestADisabledOrphanIsAlreadyWhereTheNoteAsks].
+	if strings.Contains(f.Detail, "agent-cs-off@agents.test.invalid") ||
+		slices.Contains(f.Subjects, "agent-cs-off@agents.test.invalid") {
+		t.Errorf("the finding names an account that is already disabled:\n%s",
+			f.Detail)
+	}
 	// AN ADVISORY, so the surface is not held out of Ready by it.
 	if phase, _ := f.Kind.Verdict(); phase != integration.PhaseReady {
 		t.Errorf("the advisory reports phase %s: nothing is broken and nothing "+
@@ -127,6 +137,69 @@ func TestAConvergedOrganizationReportsNoOrphans(t *testing.T) {
 	}
 	if f, found := orphansFinding(t, res); found {
 		t.Errorf("a converged organization reported %q", f.Detail)
+	}
+}
+
+// A DISABLED ORPHAN IS ALREADY WHERE THE NOTE IS ASKING IT TO GET TO.
+//
+// The advisory's own remedy is "disable or delete the ones you do not want",
+// so an account that is already disabled is asking an operator for work
+// somebody has done. And mostly THIS ENGINE had done it: a `remove_seats`
+// disconnect disables the accounts it removes, so the ordinary
+// reconnect-with-a-smaller-roster cycle turned every correct teardown into a
+// row on the card. That is where the 36 measured `agent-cs-…` accounts came
+// from — every one of them inert, and the pile of them burying whatever else
+// the card had to say.
+//
+// It also makes the instruction work. The filter looked only at the address,
+// so an operator who read the note and disabled an account watched the finding
+// come back unchanged on the next tick and learned that the card does not
+// respond to what it asks for. Now either half of "disable or delete" clears
+// it.
+//
+// The enabled one in the same organization still reports, which is the half
+// that must not go with it: that account can still act.
+func TestADisabledOrphanIsAlreadyWhereTheNoteAsks(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[
+			{"id":"u1","attributes":{"email":"crewlet-sre@agents.test.invalid","service_account":true}},
+			{"id":"u2","attributes":{"email":"agent-cs-gone@agents.test.invalid","service_account":true,"disabled":true}},
+			{"id":"u3","attributes":{"email":"agent-cs-live@agents.test.invalid","service_account":true}}
+		]}`)
+	}
+	reg.handle["/api/v2/service_accounts/u1/application_keys"] = func(
+		w http.ResponseWriter, _ *http.Request,
+	) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"k1","attributes":{"name":"crewlet"}}]}`))
+	}
+
+	s := newSink()
+	s.held["SRE_DD_KEY"] = "already-held"
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: planWith("sre"),
+		Creds: pair, Sink: s,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f, found := orphansFinding(t, res)
+	if !found {
+		t.Fatalf("findings = %v, none naming the account that can still act",
+			res.Findings())
+	}
+	if want := []string{"agent-cs-live@agents.test.invalid"}; !slices.Equal(f.Subjects, want) {
+		t.Errorf("subjects = %v, want exactly %v: a disabled account has "+
+			"reached the end state this advisory asks for", f.Subjects, want)
+	}
+	// THE SENTENCE SAYS SO, because a count that silently means something
+	// narrower than it reads is how an operator concludes the card is wrong
+	// about their organization.
+	if !strings.Contains(f.Detail, "1 enabled service account") {
+		t.Errorf("the detail does not say the count is of enabled accounts:\n%s",
+			f.Detail)
 	}
 }
 

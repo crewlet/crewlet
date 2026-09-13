@@ -245,15 +245,17 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 | A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
 | A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
 | A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
-| Service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them |
+| **Enabled** service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them, and either one clears the finding |
 
 Two of those are worth knowing about in detail.
 
 #### Accounts this engine made and no longer manages
 
-A live organization accumulates them: a seat renamed, a handle changed, an older naming scheme. **Measured on one: 36 disabled accounts under `agent-cs-…@agents.crewlet.invalid`**, matching nothing a current pass would ask for. They are absent from the plan by construction, so no seat's row mentioned them and the card read **Connected** over an organization full of them.
+A live organization accumulates them: a seat renamed, a handle changed, an older naming scheme. They are absent from the plan by construction, so no seat's row mentions them and the card read **Connected** over an organization full of them.
 
-They are reported in **one** finding, with the addresses in the detail: the decision is the same for all of them, it is a person's, and thirty-six rows of it would bury everything else on the card. It is an **advisory** — phase `ready`, owed to an admin — because nothing is broken and nothing this engine runs will ever change it, so reporting it as a wait would leave somebody watching a retry with nothing to retry.
+**Only the enabled ones.** An account that is already disabled has reached the end state this advisory asks for — its remedy is *disable or delete the ones you do not want* — so reporting it asks an operator for work somebody has done. Mostly this engine had done it: a disconnect with account removal **disables** the accounts it removes, so the ordinary reconnect-with-a-smaller-roster cycle turned every correct teardown into a row on the card. That is what the measured pile was: **36 accounts under `agent-cs-…@agents.crewlet.invalid`, every one of them disabled and inert**, burying whatever else the card had to say. Skipping them also makes the instruction work — the filter looked only at the address, so an operator who read the note and disabled an account watched the finding come back unchanged on the next tick; now either half of *disable or delete* clears it. The **enabled** orphan is the genuine finding and still reports: that is an identity which can still act, matching nothing any pass will ask for again. Disabled ones are visible where they belong, in Datadog's own user list filtered to disabled — nothing here has anything to add about them.
+
+They are reported in **one** finding, with the addresses in the detail: the decision is the same for all of them, it is a person's, and a row each would bury everything else on the card. It is an **advisory** — phase `ready`, owed to an admin — because nothing is broken and nothing this engine runs will ever change it, so reporting it as a wait would leave somebody watching a retry with nothing to retry.
 
 **Nothing removes them.** An account is a colleague at Datadog with history attached, so deleting one because a handle changed is not a decision a timer makes — the same rule a disconnect follows when it declines to delete a company's credentials.
 
