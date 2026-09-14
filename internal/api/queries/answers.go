@@ -263,12 +263,15 @@ func (s Sources) clock() time.Time {
 	return s.Now()
 }
 
-// ErrUnavailable is a question this process cannot answer because the thing it
-// reads from is not wired here.
+// ErrUnavailable is a question this node understood and cannot answer YET: its
+// copy of the company's records is still catching up with the log (see
+// unavailableIfBehind).
 //
 // Distinct from an empty answer, and the distinction is the point: a dashboard
-// that drew "no events" for "this node has no event log" would report a quiet
-// company during a misconfiguration.
+// that drew "there is no work" for "this node has not caught up yet" would
+// report a quiet company to somebody watching a restart. Distinct from
+// [ErrUnknown] too, the answer for a source this registry was never given,
+// which no amount of waiting changes.
 var ErrUnavailable = errors.New("queries: not available on this node")
 
 // ErrNotFound is a question this surface understood, about a record it does

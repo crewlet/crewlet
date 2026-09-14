@@ -192,13 +192,13 @@ func TestARunNoChatCanAnswerSaysSo(t *testing.T) {
 	}
 }
 
-// Without a sandbox backend no run can be parked, so there is nothing this
-// question could describe — unknown is the honest answer, not an empty board.
-func TestANodeWithNoSandboxDoesNotAnswerTheQuestion(t *testing.T) {
+// With no run record to read there is nothing this question could describe,
+// so it is unregistered: unknown is the honest answer, not an empty board.
+func TestARegistryWithNoRunRecordDoesNotAnswerTheQuestion(t *testing.T) {
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
 	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, ""); err == nil {
-		t.Fatal("a node with no sandbox answered the question")
+		t.Fatal("a registry with no run record answered the question")
 	}
 }
 

@@ -143,9 +143,8 @@ func TestTheOrgProjectionCarriesTheDerivedHierarchy(t *testing.T) {
 // reads as "nothing loaded": an empty hierarchy is not one.
 func TestTheOrgProjectionOfAnUnconfiguredNodeStaysEmpty(t *testing.T) {
 	t.Parallel()
-	// Both ways a process has no company: no source of one at all (a
-	// standalone API), and a source that answers none (a node before its
-	// first revision).
+	// Both ways a registry has no company: no source of one at all, and a
+	// source that answers none (a node before its first revision).
 	for name, sources := range map[string]queries.Sources{
 		"no source":                {},
 		"a source with no company": {Company: func() *config.Company { return nil }},

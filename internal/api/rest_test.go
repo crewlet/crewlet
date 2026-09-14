@@ -56,10 +56,10 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	// The routes a node with a company and no store can serve. A question
-	// whose SOURCE is absent is left unregistered by design — that is the
-	// honest answer for a node without an event log — and answers 404 for
-	// a reason that is not "the route was never built", so those are
+	// The routes every node serves from its company and its projection. A
+	// question whose SOURCE is absent is left unregistered by design (a
+	// company on Confluence has no native pages) and answers 404 for a
+	// reason that is not "the route was never built", so those are
 	// exercised separately below.
 	for _, path := range []string{
 		"/agents",

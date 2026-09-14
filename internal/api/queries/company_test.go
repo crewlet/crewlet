@@ -484,9 +484,9 @@ func TestTheAdminWorkspacesAnswersAreOperatorOnly(t *testing.T) {
 
 func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	t.Parallel()
-	// "This node has no lease table" and "the fleet is empty" are
+	// "Nothing here reads the lease table" and "the fleet is empty" are
 	// different answers, and a dashboard that drew the second for the
-	// first would report a company with no nodes during a misconfiguration.
+	// first would report a company with no nodes that has several.
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{})
 	for _, what := range []string{
@@ -494,7 +494,7 @@ func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 		"agent_memory", "config", "config_audit", "config_diff",
 	} {
 		if _, err := r.Answer(t.Context(), what, nil, "operator"); err == nil {
-			t.Errorf("%s answered on a node with no source for it", what)
+			t.Errorf("%s answered from a registry with no source for it", what)
 		}
 	}
 }
@@ -1173,9 +1173,9 @@ func TestIntegrationsCountsWhatBecameOfTheDeliveries(t *testing.T) {
 	}
 }
 
-// NULL, NOT ZERO, when nothing was counted. A node with no event log cannot
-// say how many deliveries were dropped, and reporting 0 would tell an
-// operator every one of them woke a seat.
+// NULL, NOT ZERO, when nothing was counted. An answer with no event log to
+// read cannot say how many deliveries were dropped, and reporting 0 would tell
+// an operator every one of them woke a seat.
 func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -1187,16 +1187,16 @@ func TestUncountedOutcomesAreNullRatherThanZero(t *testing.T) {
 		entry, _ := row.(map[string]any)
 		for _, field := range []string{"skipped", "coalesced"} {
 			if entry[field] != nil {
-				t.Errorf("%s %s = %v, want null on a node with no event log",
+				t.Errorf("%s %s = %v, want null with no event log to read",
 					entry["key"], field, entry[field])
 			}
 		}
 	}
 }
 
-// AN UNREADABLE EVENT LOG REPORTS NULL, NOT ZERO — the same rule as a node
-// with no log at all, and for the same reason: a zero that means "could not
-// tell" is the number an operator would act on.
+// AN UNREADABLE EVENT LOG REPORTS NULL, NOT ZERO: the same rule as an answer
+// with no log to read at all, and for the same reason. A zero that means
+// "could not tell" is the number an operator would act on.
 //
 // A closed store fails the FIRST listing, so this covers the outer guard. The
 // narrower one inside countOutcomes applies the identical rule to a second
@@ -1249,8 +1249,8 @@ func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 		})
 		for kind, row := range rows {
 			if got, present := row["reconcile"]; !present || got != nil {
-				t.Errorf("%s reconcile = %v, want null on a process with no "+
-					"loop to ask", kind, got)
+				t.Errorf("%s reconcile = %v, want null with no loop "+
+					"findings to read", kind, got)
 			}
 		}
 	})

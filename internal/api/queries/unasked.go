@@ -216,10 +216,10 @@ func (s Sources) workRouting(ctx context.Context, p Params) (any, error) {
 // cannot say.
 //
 // ZERO IS "I DO NOT KNOW", which the reader answers `unknown` to rather than
-// guessing — see [tracker.DeliveryUnknown]. A standalone API with no epoch
-// genuinely cannot say how long this company keeps a notice, and answering
-// with the shipped default would date a set against a retention nobody here
-// is running.
+// guessing — see [tracker.DeliveryUnknown]. A registry wired without a company
+// source genuinely cannot say how long this company keeps a notice, and
+// answering with the shipped default would date a set against a retention
+// nobody here is running.
 func (s Sources) inboxRetention() time.Duration {
 	if s.Company == nil {
 		return 0
