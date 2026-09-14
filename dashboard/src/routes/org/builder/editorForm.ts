@@ -39,7 +39,6 @@ import type {
 } from "~/protocol/index.ts";
 import type { NodeKey } from "./model/keys.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
-import { COMPANY_KEY } from "./model/keys.ts";
 import type { EditPartIntent, FieldSet, Intent } from "./model/operations.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 
@@ -404,7 +403,3 @@ export function seatParts(
   parts.push(...toggleParts(key, initial.schedules, form.schedules));
   return parts;
 }
-
-/** The intent Apply records for the company's form. */
-export const companyIntent = (initial: CompanyForm, form: CompanyForm): Intent =>
-  editIntent(COMPANY_KEY, companyParts(initial, form));

@@ -43,14 +43,7 @@ import type {
 import { runState } from "~/lib/seats.ts";
 import type { IndexedDocument } from "./model/document.ts";
 import { COMPANY_KEY, handleOfKey, isMintedKey, type NodeKey } from "./model/keys.ts";
-import {
-  allSeats,
-  allUnits,
-  locate,
-  type Draft,
-  type DraftSeat,
-  type DraftUnit,
-} from "./model/draft.ts";
+import { allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord } from "./model/json.ts";
 import type { BuilderState } from "./model/reducer.ts";
 
@@ -438,13 +431,4 @@ export function isWorking(
 /** The sentence every dialog says about a seat with work in flight. */
 export function workingNote(name: string): string {
   return `${name} is working now. Its current turn continues on the previous configuration until the engine applies this change.`;
-}
-
-/** Every seat in the draft, by key, with its name and kind, in the document's order. */
-export function seatChoices(draft: Draft): { key: NodeKey; name: string; human: boolean }[] {
-  return [...allSeats(draft)].map(({ seat }) => ({
-    key: seat.key,
-    name: seat.data.name,
-    human: seat.data.kind === "human",
-  }));
 }
