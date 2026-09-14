@@ -293,7 +293,9 @@ type DB struct {
 	// writes orders this file's write transactions, pooled and pinned
 	// alike and across every handle on the file, first come first served.
 	// See writelock.go for why the driver's own lock cannot be what orders
-	// them. busy is how long one of this handle's writers waits in it.
+	// them. busy is how long one of this handle's writers waits in it, and
+	// is RESOLVED at construction rather than left zero, so every wait
+	// derived from it is a real one: a zero deadline is an expired one.
 	writes *writeQueue
 	busy   time.Duration
 }

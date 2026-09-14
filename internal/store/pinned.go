@@ -121,10 +121,18 @@ func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 // is cleanup, and the failure that made it necessary is often the
 // cancellation itself. If it cannot be had, the next Tx tries again and says
 // why.
+//
+// BOUNDED BY THE BUSY TIMEOUT all the same, because a context with the
+// cancellation taken off it has no deadline either. A pool wait here is short
+// by construction (the connection just handed back is one free slot), but this
+// runs on the way out of a panic as well, and an unbounded wait there would
+// hold the panic itself inside the store with nothing to say so.
 func (w *Writer) replace(ctx context.Context, conn *sql.Conn) {
 	giveBack(conn, false)
 	w.conn = nil
-	_, _ = w.pinned(context.WithoutCancel(ctx))
+	bounded, stop := context.WithTimeout(context.WithoutCancel(ctx), w.db.busy)
+	defer stop()
+	_, _ = w.pinned(bounded)
 }
 
 // pinned is the writer's connection, drawn afresh if the last was retired.
