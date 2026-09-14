@@ -1109,6 +1109,158 @@ func TestAQuestionThatCouldNotBeAnnouncedIsAskedAgain(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// a claim is handed back only while it stands
+// ---------------------------------------------------------------------
+
+// relaunchThenBreak is a resumed executor that calls run_sandbox again and
+// then breaks before its turn can suspend on the new job, having written
+// nothing outside the engine: a failed relaunch is a failed call, and a
+// failed call proves no outward write.
+type relaunchThenBreak struct {
+	relaunch func(ctx context.Context, run PendingRun)
+}
+
+func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error {
+	r.relaunch(ctx, req.Run)
+	return errors.New("the model provider did not answer")
+}
+
+// withResumer is the rig's coordinator over the same store and box, resuming
+// through r.
+func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
+	t.Helper()
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: r.queue, Pending: r.pending, Manager: r.manager,
+		Resume: resume, Account: r.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	return coordinator
+}
+
+// A RELAUNCH IS NOT THE CLAIM'S TO HAND BACK. The resumed executor called
+// run_sandbox again, so the row holds a new launch with the previous job's
+// conversation cleared, and that launch failed to start and was settled
+// failed. Reverting it to running left a row with no box and no conversation
+// that no poll would ever complete, and a seat re-marked busy on it, its mail
+// parked until the seat changed hands (where recovery re-marked it again).
+func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
+	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
+		rig.runner.StartErr = errors.New("the coding agent would not start")
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err == nil {
+			t.Error("the relaunch started a job the fixture refuses")
+		}
+	}})
+	coordinator.markBusy("swe")
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	// The relaunch ENDED the run when it could not start, and the hand-back
+	// of the PREVIOUS job's claim must not bring it back: a release names the
+	// launch it took, and that launch went with the record.
+	rig.finished("t1")
+	if coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat was parked on a run nothing will ever complete")
+	}
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll fired %d completions for a run that has none", fired)
+	}
+}
+
+// AND NOT A SECOND CHARGE OF THE FIRST JOB. A relaunch that could get no box at
+// all leaves the row naming the previous one, finished and paused. Reverted to
+// running under the new launch's name, the poll found that job finished, and
+// its completion claimed the relaunch, collected the first job's result a
+// second time and charged it again, the relaunch having cleared the record of
+// the first charge, before failing the turn for having nothing to resume.
+func TestAFailedRelaunchDoesNotChargeThePreviousJobAgain(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
+	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
+		// A reattach that failed falls through to a fresh box, and none
+		// could be had either.
+		rig.provider.CreateErr = errors.New("no capacity")
+		defer func() { rig.provider.CreateErr = nil }()
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+			t.Error("the relaunch got a box the fixture refuses")
+		}
+	}})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll fired %d completions for the previous job", fired)
+	}
+	rig.deliverControl(t)
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for one job of 1000", got)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %d failures for a turn nothing tried to resume again", len(failed))
+	}
+}
+
+// NOR A RUN THE SEAT'S NEXT OWNER HAS REAPED. A lease that moved mid-resume
+// hands the seat to a node whose recovery finds the row resumed, reaps it as
+// abandoned, tears its box down and announces the loss. Reverted after that,
+// the run came back as running with no box, a turn announced lost and never
+// completed, holding its seat on every node that recovered it afterwards.
+func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 1000})
+	successor := rig.withResumer(t, &resumeSpy{})
+	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, _ PendingRun) {
+		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2); err != nil {
+			t.Errorf("the successor's recovery: %v", err)
+		}
+	}})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	// The reap ended the run, and the hand-back leaves it ended.
+	rig.finished("t1")
+	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3); err != nil {
+		t.Fatalf("a later recovery: %v", err)
+	}
+	if successor.AwaitingSandbox("swe") {
+		t.Fatal("a later owner parked the seat on a run already announced lost")
+	}
+}
+
+// deliverControl hands the coordinator every completion published to the
+// seat's control topic, as the broker would.
+func (r *coordRig) deliverControl(t *testing.T) {
+	t.Helper()
+	r.queue.mu.Lock()
+	var completions []*events.Event
+	for _, p := range r.queue.published {
+		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == topics.AgentControl("swe") {
+			completions = append(completions, p.event)
+		}
+	}
+	r.queue.mu.Unlock()
+	for _, ev := range completions {
+		if err := r.coordinator.OnEvent(t.Context(), ev); err != nil {
+			t.Fatalf("OnEvent: %v", err)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------
 // accounting
 // ---------------------------------------------------------------------
 
