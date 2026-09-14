@@ -84,7 +84,7 @@ func (Prompt) RequiresRecon(n notify.Inbound) bool {
 // somewhere rather than on somebody — a seat obliged to answer either would
 // comment on every field change in its unit's projects.
 func (Prompt) Addressed(n notify.Inbound) bool {
-	return Reason(n.Metadata[MetaVia]).Primary()
+	return Reason(n.Metadata[MetaVia]).Addressed()
 }
 
 // ConversationKey implements [notify.Prompt]: the task is the conversation.
@@ -475,7 +475,7 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 		"\n4. **If anything is unclear**, comment mentioning the reporter and" +
 		" ask. Do not guess.")
 
-	if reason.Primary() {
+	if reason.Addressed() {
 		// A WATCHER IS NOT BEING ASKED. Watchers are on the task because
 		// the participants rule put them there, so telling one they owe
 		// an answer is precisely how a tracker fills up with "noted,

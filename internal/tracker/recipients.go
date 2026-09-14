@@ -73,18 +73,30 @@ var Reasons = []Reason{
 // Valid reports whether a reason off the wire is one this build knows.
 func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
-// primaryReasons is the eight an inbox shows first.
+// addressedReasons is the eight under which a wake OBLIGES ITS SEAT TO ANSWER.
 //
-// PRIMARY IS "SOMETHING IS BEING ASKED OF YOU OR WAS DIRECTED AT YOU", not
-// "important": routed_to is deliberately Other, because "work routes to you
-// now" is a fact to absorb rather than an obligation.
-var primaryReasons = []Reason{
+// ADDRESSED IS "SOMEBODY IS WAITING ON YOU", not "important": routed_to is
+// deliberately not here, because "work routes to you now" is a fact to absorb
+// rather than an obligation, and a watcher is following the task rather than
+// being asked about it.
+//
+// IT IS NOT THE INBOX'S FIRST BAND, although it was called `primaryReasons`
+// and documented as exactly that for as long as it has existed. That question
+// has its own answer — [DefaultPrimaryReasons] — and the two lists differ on
+// four reasons, correctly: `unassigned` and `unblocked` are changes to your
+// own work that belong at the top of what you read, and neither asks you for
+// an answer; `thread` and `blocking` do ask for one, and neither is what a
+// person wants their inbox to open with. Two questions, two answers. The name
+// was the bug: a reader who found this one first wrote its eight into a
+// screen that needed the other eight, and nothing could have told them apart.
+var addressedReasons = []Reason{
 	ReasonMention, ReasonAsked, ReasonAssignee, ReasonReporter,
 	ReasonAnswered, ReasonPrioritised, ReasonThread, ReasonBlocking,
 }
 
-// Primary reports whether a reason belongs in an inbox's first section.
-func (r Reason) Primary() bool { return slices.Contains(primaryReasons, r) }
+// Addressed reports whether a wake under this reason obliges its seat to
+// answer. For which reasons lead a PERSON's inbox, see [DefaultPrimaryReasons].
+func (r Reason) Addressed() bool { return slices.Contains(addressedReasons, r) }
 
 // Candidate is one handle and why it is a candidate.
 type Candidate struct {
