@@ -995,6 +995,11 @@ renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
 `round_narration`, `partial_round`,
 `total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
+A finished row also carries `duration_ms`, which a live one cannot: it is the
+engine's own measurement of the phase, published on the record rather than
+reconstructed by pairing it with the `agent_phase_started` that shares its key.
+Zero means *not measured* — an agent-mode executor's rounds ran inside a coding
+CLI's own loop, in another process — never *took no time*.
 
 An unreadable or absent event log costs the history and nothing else: the
 answer still carries the seat and its live state.

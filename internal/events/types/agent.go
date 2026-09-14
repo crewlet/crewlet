@@ -367,6 +367,28 @@ type AgentPhaseCompleted struct {
 	TotalTokens     int              `json:"total_tokens"`
 	RoundsUsed      int              `json:"rounds_used"`
 	ExhaustedRounds bool             `json:"exhausted_rounds"`
+	// DurationMS is how long the work this record reports actually took,
+	// measured by the process that published it.
+	//
+	// ON THE RECORD rather than reconstructed from the matching
+	// AgentPhaseStarted, which is what every consumer used to do. That
+	// reconstruction needs BOTH events in one reader's hands, and three
+	// readers never have both: a dashboard deep-linked into a turn while it
+	// runs asked its query before the phase started and only buffers
+	// completed envelopes afterwards; a nested phase — a worker, a judge —
+	// publishes no start at all, so no worker of a delegate fan-out had a
+	// duration anywhere; and a phase started on one node and completed on
+	// another subtracts two clocks nothing reconciles. One record that
+	// carries its own measurement answers all three, and the arithmetic is
+	// done where the clock is.
+	//
+	// Zero means this record measures no loop of its own rather than a
+	// phase that took no time: an agent-mode executor's rounds happen
+	// inside the CLI's own loop, in another process, and the engine's
+	// re-entry replays what that run already did. The detached run's own
+	// wall clock is on sandbox_run_started / sandbox_run_completed, which
+	// is where a reader asking how long the CODING took should look.
+	DurationMS int `json:"duration_ms"`
 	// EmptyAnswerRounds counts the rounds in which the model produced
 	// neither prose nor a tool call — it spent its output budget on hidden
 	// reasoning and stopped.

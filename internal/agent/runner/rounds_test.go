@@ -174,8 +174,13 @@ func thinkAndCall(t *testing.T, name, argsJSON, reasoning string) llm.Completion
 
 // extendableRunner is a seat whose executor exhausts a two-round cap and can
 // be granted more.
+//
+// Takes the PROVIDER INTERFACE rather than the scripted fixture: a phase's own
+// wall clock is only observable against a provider that takes time, and a
+// second copy of this constructor for that one case is how the two come to
+// disagree about the caps that make a phase extendable at all.
 func extendableRunner(
-	t *testing.T, prov *scriptedProvider, pub queue.Publisher, judge extension.Judge,
+	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
 	meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
