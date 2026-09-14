@@ -69,6 +69,68 @@ const (
 // is exactly the mistake [StatusLaunching] exists to make impossible.
 var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed}
 
+// Tail is what a claim expects to find on a run: the job the signal is about,
+// and the statuses that signal may take the tail out of.
+//
+// A CLAIM NAMES WHAT IT CLAIMS, because the two signals that take a tail are
+// about different moments of one row. A completion says a job finished, which
+// is only ever true of a RUNNING row still holding that job; an answer says a
+// parked question was answered, which is only ever true of an [Awaiting] row
+// holding the job that asked it. A claim that took any claimable status took
+// whichever the row happened to be in when the signal arrived. A duplicate
+// completion therefore re-collected a run that had parked on its question and
+// asked it again, and one that outlived its own job claimed the next job
+// while that one was still running: the turn resumed on a half-written result
+// and the settle tore the box down under the job.
+type Tail struct {
+	// Launch is the [PendingRun.LaunchID] the signal was raised for,
+	// matched exactly, the empty value included.
+	Launch string
+
+	// From is the statuses the signal may claim out of. A status outside
+	// [Claimable] is never claimed, whatever this says.
+	From []string
+}
+
+// CompletionTail is what a completion of one job claims: that job, while it
+// is running. The poll only fires on a running row, so a completion that
+// finds its job in any other status is a duplicate of one that already took
+// it.
+func CompletionTail(launch string) Tail {
+	return Tail{Launch: launch, From: []string{StatusRunning}}
+}
+
+// AnswerTail is what an answer claims: the job that asked, while it waits.
+func AnswerTail(launch string) Tail {
+	return Tail{Launch: launch, From: Awaiting}
+}
+
+// Release is how a claimed tail is handed back for its signal's retry: the
+// claim it hands back, where to, and what the claim already did.
+//
+// A RELEASE NAMES WHAT IT RELEASES, for the reason a claim names what it
+// claims. The claim is held across the resume, and the resumed turn is free to
+// move the row on: an executor that calls run_sandbox again opens a new launch
+// on it, and a seat's next owner reaps a claim its previous owner abandoned. A
+// failed resume that put back whatever the row held by then reverted the new
+// launch to running, with no box or no conversation, or revived a run already
+// reaped and announced lost.
+type Release struct {
+	// Launch is the [PendingRun.LaunchID] the claim took, matched exactly.
+	Launch string
+
+	// To is the status the claim took the run out of, which is one of
+	// [Claimable].
+	To string
+
+	// Charged is whether the run's spend is on the token counter, recorded
+	// on the row by the release itself. See [PendingRun.Charged].
+	Charged bool
+
+	// Fence is the lease the claim was taken under.
+	Fence Fence
+}
+
 // Holding are the statuses in which a run holds its seat, so the seat takes no
 // new turn while it is in one.
 //
@@ -166,6 +228,22 @@ type PendingRun struct {
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
 
+	// LaunchID names the job this row currently holds.
+	//
+	// The row is the TURN's, and a turn can run more than one job: a
+	// resumed executor that calls run_sandbox again reuses it, and
+	// [PendingStore.BeginLaunch] names each launch anew. A completion
+	// carries the name of the job it saw finish, which is what lets a
+	// claim tell the job it was raised for from one that has replaced it.
+	// See [Tail].
+	//
+	// Minted by the store and never by the caller, for the reason the
+	// status is: a caller that could choose it could reuse one. Empty on a
+	// row a build that predates it wrote, and a completion from such a
+	// build carries none, so the two still match each other and nothing
+	// else.
+	LaunchID string `json:"launch_id,omitempty"`
+
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
 	//
@@ -247,6 +325,29 @@ type PendingRun struct {
 	// skips is a log that lies about what the run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
+	// Charged is whether this launch's collected tokens are on the fleet's
+	// token counter.
+	//
+	// ON THE ROW, not in the coordinator's memory, because the charge sits
+	// inside the part of the tail that is RETRIED. A resume that fails
+	// hands the claim back and the completion comes back, to this node or
+	// to the seat's next owner, and the retry collects the same finished
+	// job again. With nothing recording the first charge, every retry
+	// charged the run again, against the seat's budget and the company's,
+	// for as long as the resume kept failing.
+	//
+	// WRITTEN BY THE RELEASE that hands the claim back (see [Release]),
+	// because that is the only write through which a retry reaches the
+	// charge again: recorded in a write of its own, a store that refused it
+	// and then accepted the release reopened the run with no record, and the
+	// retry charged it twice. A run parked on its question is reached only
+	// by an answer, which charges nothing, so its park needs no record.
+	//
+	// Launch-scoped, like the suspension: a second run_sandbox call in one
+	// turn is a second job with spend of its own, so [PendingStore.BeginLaunch]
+	// clears it, and nothing else does.
+	Charged bool `json:"charged,omitempty"`
+
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
 	// PausedAt is when this run's box was paused, zero when it is not.
@@ -274,15 +375,20 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 
 // PendingStore is the persistence surface for detached runs.
 //
-// An interface because there are two implementations under one contract suite
-// — the SQL store and a memory twin — and because the coordinator's hardest
-// properties (at-most-once claim, epoch fencing) are properties of the
-// STATEMENTS, which is what makes running both against one suite worth doing.
+// ONE IMPLEMENTATION, [CoordStore], on the fleet's coordination store, whose
+// record operations are certified on both coordination backends. It stays an
+// interface because the coordinator's hardest properties (the at-most-once
+// claim, the scoped release, epoch fencing) are properties of the store's
+// conditional writes, which the sandboxtest suite certifies apart from any
+// caller, and because a coordinator case can stage a store that refuses one
+// write only by wrapping it.
 type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —
-	// clearing the previous job's suspended conversation and the question
-	// it was parked on, while keeping the row's identity and its box.
+	// clearing the previous job's suspended conversation, the question
+	// it was parked on and the record of its charge, while keeping the
+	// row's identity and its box. Either way the launch gets a new
+	// [PendingRun.LaunchID].
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
 	// run_sandbox call in one turn presents the same turn id as the first
@@ -295,12 +401,31 @@ type PendingStore interface {
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
-	// ClaimForResume atomically flips a claimable status to resumed.
+	// ClaimForResume atomically flips a run to resumed, when it holds the
+	// tail's launch in one of the tail's statuses.
 	//
-	// Reports the row IFF THIS CALL WON — the at-most-once tail guard.
-	// The returned row carries ClaimedFrom, so a failed dispatch can put
-	// it back exactly where it was.
-	ClaimForResume(ctx context.Context, turnID string) (PendingRun, bool, error)
+	// Reports the row IFF THIS CALL WON: the at-most-once tail guard, and
+	// the reason a claim names its launch (see [Tail]). The returned row
+	// carries ClaimedFrom, so a failed dispatch can put it back exactly
+	// where it was.
+	ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error)
+
+	// ReleaseClaim hands a claimed run back to the status it was claimed
+	// from, reporting whether THIS call did.
+	//
+	// Only while the claim still stands: the run is resumed, holds the
+	// release's launch, and no newer lease outranks the release's fence.
+	// Anything else means the run has moved on from the claim (see
+	// [Release]), and a retry of the signal has nothing left to take.
+	//
+	// The claim's charge is recorded IN THE SAME WRITE, and never cleared
+	// by one: a run is reopened to a retry with its record or not at all
+	// (see [PendingRun.Charged]).
+	//
+	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
+	// gone. A release to a status outside [Claimable] is an error, because
+	// no claim ever takes a run out of one.
+	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// MarkAwaiting parks a run on a question, freeing the seat.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error

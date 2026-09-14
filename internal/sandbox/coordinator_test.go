@@ -49,27 +49,55 @@ func (s *resumeSpy) calls() []ResumeRequest {
 }
 
 // ledgerSpy records post-charges.
+//
+// A refusal moves nothing, which is what the engine's accountant does: it is
+// coord.Budgets.Charge underneath, and a charge a cap refuses leaves both
+// counters where they were.
 type ledgerSpy struct {
 	mu      sync.Mutex
 	charged int
-	over    bool
+	calls   int
+	refuse  bool
 	err     error
 }
 
 func (l *ledgerSpy) Charge(_ context.Context, _, _ string, tokens int) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.calls++
 	if l.err != nil {
 		return false, l.err
 	}
+	if l.refuse {
+		return true, nil
+	}
 	l.charged += tokens
-	return l.over, nil
+	return false, nil
 }
 
 func (l *ledgerSpy) total() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.charged
+}
+
+func (l *ledgerSpy) set(refuse bool, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refuse, l.err = refuse, err
+}
+
+func (l *ledgerSpy) asked() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.calls
+}
+
+// failWith sets the error every later Resume returns, nil to let them through.
+func (s *resumeSpy) failWith(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
 }
 
 type coordRig struct {
@@ -117,11 +145,13 @@ func (r *coordRig) failures() []types.SandboxRunFailed {
 	return out
 }
 
+// completion is the signal the waiter raises for the job the row holds now.
 func (r *coordRig) completion(turnID string) (types.SandboxRunCompleted, *events.Event) {
 	run := r.get(turnID)
 	payload := types.SandboxRunCompleted{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
-		TurnID: run.TurnID, SandboxID: run.SandboxID, CodingAgent: run.CodingAgent,
+		TurnID: run.TurnID, LaunchID: run.LaunchID,
+		SandboxID: run.SandboxID, CodingAgent: run.CodingAgent,
 	}
 	return payload, events.New(payload, events.TraceContext{TraceID: run.TraceID})
 }
@@ -285,6 +315,7 @@ func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
+	rig.coordinator.markBusy("swe")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = errors.New("the node lost the seat mid-resume")
 
@@ -294,6 +325,11 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning {
 		t.Fatalf("status = %q, want it reverted to %q so the retry can re-claim", got.Status, StatusRunning)
+	}
+	// Running again, the run holds its seat again: the resume freed it,
+	// and a turn slipped in now would run beside a job still owed a tail.
+	if !rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat took new turns while its run waited for the retry")
 	}
 
 	rig.resumer.mu.Lock()
@@ -386,8 +422,16 @@ func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 	if !errors.Is(err, ErrResumeUnavailable) {
 		t.Fatalf("OnCompleted = %v, want ErrResumeUnavailable", err)
 	}
-	if got := rig.get("t1"); got.Status == StatusDone {
-		t.Fatal("the run was settled done by a node that never resumed it")
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim reverted to %q: the NAK'd completion comes back "+
+			"to a claim that refuses it, and the suspended conversation is stranded", got.Status, StatusRunning)
+	}
+	// And the completion, redelivered to a node that can resume, wins.
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the redelivery failed: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times after the redelivery, want 1", got)
 	}
 }
 
@@ -642,26 +686,870 @@ func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------
+// a claim names the job it is for
+// ---------------------------------------------------------------------
+
+// questions is every clarification the coordinator announced.
+func (r *coordRig) questions() []types.SandboxClarificationRequested {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	var out []types.SandboxClarificationRequested
+	for _, p := range r.queue.published {
+		if ask, ok := p.event.Data.(*types.SandboxClarificationRequested); ok {
+			out = append(out, *ask)
+		}
+	}
+	return out
+}
+
+// failPublishes makes every later publish fail, nil to let them through.
+func (r *coordRig) failPublishes(err error) {
+	r.queue.mu.Lock()
+	defer r.queue.mu.Unlock()
+	r.queue.err = err
+}
+
+// A COMPLETION THAT OUTLIVED ITS JOB. A failed resume leaves two completions in
+// flight for one job, the NAK'd delivery and the one the next poll tick
+// publishes, and the retry that wins resumes the turn, whose executor may call
+// run_sandbox again. The other then arrived at a row holding the NEXT job,
+// still running, and claimed it: it collected a half-written result, resumed
+// the turn on it and tore the new job's box down.
+func TestAStaleCompletionDoesNotClaimTheNextRun(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 500})
+	stale, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), stale, ev); err != nil {
+		t.Fatalf("the first run's completion: %v", err)
+	}
+	rig.suspend("t1")
+	next := rig.get("t1")
+
+	if err := rig.coordinator.OnCompleted(t.Context(), stale, ev); err != nil {
+		t.Fatalf("the stale completion: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times, want only the first run's completion to resume", got)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning || got.LaunchID != next.LaunchID {
+		t.Fatalf("row = %s/%s, want the second run still running", got.Status, got.LaunchID)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v under a job that was still running", killed)
+	}
+	if got := rig.accountant.total(); got != 500 {
+		t.Fatalf("charged %d, want only the first run's 500", got)
+	}
+}
+
+// THE SETTLE IS THE CLAIM'S TOO. A resumed turn that called run_sandbox again
+// returns only once its frame has unwound, and the new job can finish, be
+// claimed by its own completion and park on a question of its own inside that
+// window. The settle read the row back, saw a status that was neither running
+// nor launching, and tore down the paused box holding that question's
+// checkout, then marked the run done under the question.
+func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, map[string]any{
+			"pending_tool_name": "run_sandbox",
+		}); err != nil || !suspended {
+			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
+		}
+		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})
+		next, _, err := rig.pending.Get(ctx, r.TurnID)
+		if err != nil {
+			t.Errorf("Get: %v", err)
+		}
+		completion := types.SandboxRunCompleted{
+			AgentHandle: next.AgentHandle, TurnID: next.TurnID, LaunchID: next.LaunchID,
+			SandboxID: next.SandboxID, CodingAgent: next.CodingAgent,
+		}
+		if err := rig.coordinator.OnCompleted(ctx, completion, events.New(completion, events.TraceContext{})); err != nil {
+			t.Errorf("the next job's completion: %v", err)
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the first job's completion: %v", err)
+	}
+
+	got := rig.get("t1")
+	if got.Status != StatusAwaiting || got.Question != "which file?" {
+		t.Fatalf("row = %s %q, want the next job waiting on its question", got.Status, got.Question)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v under a question still waiting for its answer", killed)
+	}
+}
+
+// A RELAUNCH THAT NEVER STARTED IS SETTLED WITH THE TURN. It could get no box,
+// so the row still names the previous job's, paused, and nothing else will
+// reclaim it: a paused box has no provider-side expiry, and the pause reaper
+// only looks at runs waiting on a person.
+func TestAFinishedTurnTearsDownTheBoxAFailedRelaunchLeftBehind(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+		rig.provider.CreateErr = errors.New("no capacity")
+		defer func() { rig.provider.CreateErr = nil }()
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+			t.Error("the relaunch got a box the fixture refuses")
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
+		t.Fatalf("killed %v, want the paused box %q the failed relaunch left named", killed, run.SandboxID)
+	}
+	if got := rig.get("t1"); got.Status != StatusDone || got.SandboxID != "" {
+		t.Fatalf("row = %s naming %q, want the turn's run settled with no box", got.Status, got.SandboxID)
+	}
+}
+
+// THE WAITER'S OWN SIGNAL IS ONE THE COORDINATOR CLAIMS. Every other case
+// here hands the coordinator a completion built from the row; this one takes
+// the one the poll published, so the two cannot disagree about what names a
+// job without a test noticing that every run would then wait forever.
+func TestTheWaitersCompletionIsClaimed(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	if fired := rig.tick(); fired != 1 {
+		t.Fatalf("fired %d completions, want 1", fired)
+	}
+
+	rig.queue.mu.Lock()
+	var control *events.Event
+	for _, p := range rig.queue.published {
+		if p.topic == topics.AgentControl("swe") {
+			control = p.event
+		}
+	}
+	rig.queue.mu.Unlock()
+	if control == nil {
+		t.Fatal("the completion never reached the seat's control topic")
+	}
+	if err := rig.coordinator.OnEvent(t.Context(), control); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times from the waiter's completion, want 1", got)
+	}
+}
+
+// A DUPLICATE COMPLETION OF A PARKED RUN. The row is waiting on a person, and
+// only their answer may take it; a completion that could claim it too
+// reconnected to the paused box, collected the same result and asked the same
+// question a second time.
+func TestADuplicateCompletionDoesNotAskAParkedQuestionAgain(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+
+	payload, ev := rig.completion("t1")
+	for range 2 {
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+	}
+	if got := len(rig.questions()); got != 1 {
+		t.Fatalf("the question was asked %d times, want once", got)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status = %q, want the run still waiting on its answer", got.Status)
+	}
+}
+
+// staleFind answers the parked-run lookup from a snapshot taken before the
+// row moved on, which is what the lookup is by the time the claim lands.
+type staleFind struct {
+	PendingStore
+	snapshot PendingRun
+}
+
+func (s staleFind) FindAwaitingByConversation(context.Context, string, string) (PendingRun, bool, error) {
+	return s.snapshot, true, nil
+}
+
+// AN ANSWER BELONGS TO THE JOB THAT ASKED. The lookup that matched it is a
+// snapshot, and a claim that took whatever the row held by then handed the
+// answer to the job that had replaced the one asking: it resumed the turn with
+// a reply to a question nothing had asked, on top of a job still running.
+func TestAnAnswerDoesNotClaimTheJobThatReplacedTheAsker(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.park("t1")
+	asked := rig.get("t1")
+	if _, err := Launch(t.Context(), rig.manager, rig.pending, rig.queue, launchReq("t1")); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	rig.suspend("t1")
+
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: staleFind{PendingStore: rig.pending, snapshot: asked},
+		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	handled, err := coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	if err != nil {
+		t.Fatalf("TryResumeFromAnswer: %v", err)
+	}
+	if !handled {
+		t.Fatal("an answer to a question already superseded was run as an unrelated message")
+	}
+	if got := len(rig.resumer.calls()); got != 0 {
+		t.Fatalf("resumed %d times into a job that asked nothing", got)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the replacing job left running", got.Status)
+	}
+}
+
+// parkFails is a store whose MarkAwaiting fails a set number of times.
+type parkFails struct {
+	PendingStore
+	mu   sync.Mutex
+	left int
+}
+
+func (p *parkFails) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
+	p.mu.Lock()
+	if p.left > 0 {
+		p.left--
+		p.mu.Unlock()
+		return errors.New("the coordination store did not answer")
+	}
+	p.mu.Unlock()
+	return p.PendingStore.MarkAwaiting(ctx, turnID, q)
+}
+
+// A QUESTION THAT COULD NOT BE RECORDED IS ASKED AGAIN. The failed park left
+// the row resumed, which the completion's retry can never claim, so the run
+// sat stranded with its box paused and its seat freed until the seat changed
+// hands and recovery reaped it as abandoned.
+func TestAQuestionThatCouldNotBeRecordedIsAskedAgain(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.markBusy("swe")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: &parkFails{PendingStore: rig.pending, left: 1},
+		Manager: rig.manager, Resume: rig.resumer, Account: rig.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	coordinator.markBusy("swe")
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a question that was never recorded was acked")
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim handed back for the retry", got.Status)
+	}
+	if !coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat was freed before its question was on the row")
+	}
+
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting || got.Question != "which branch?" {
+		t.Fatalf("row = %s %q, want the retry to park the question", got.Status, got.Question)
+	}
+	if coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked once its question was recorded")
+	}
+}
+
+// statusAtAsk records the run's status at the instant its question is
+// announced.
+type statusAtAsk struct {
+	*recorder
+	rig    *coordRig
+	status []string
+}
+
+func (s *statusAtAsk) Publish(ctx context.Context, topic string, ev *events.Event) error {
+	if ask, ok := ev.Data.(*types.SandboxClarificationRequested); ok {
+		run, _, err := s.rig.pending.Get(ctx, ask.TurnID)
+		if err != nil {
+			return err
+		}
+		s.status = append(s.status, run.Status)
+	}
+	return s.recorder.Publish(ctx, topic, ev)
+}
+
+// A RUN IS PARKED ONLY ONCE ITS QUESTION IS OUT. From the moment the row says
+// awaiting, a completion can no longer reach it and an answer can, so a
+// question that failed to go out after that point could neither be asked again
+// nor handed back without stomping on the answer's claim. Zero pause TTL
+// included: tearing the box down before the question is out would leave a
+// retry nothing to collect.
+func TestAQuestionIsAskedBeforeTheRunIsParked(t *testing.T) {
+	for _, ttl := range []float64{DefaultPauseTTL.Seconds(), 0} {
+		t.Run(fmt.Sprintf("pause ttl %gs", ttl), func(t *testing.T) {
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			if err := rig.pending.AttachSandbox(t.Context(), "t1", BoxRef{
+				SandboxID: rig.get("t1").SandboxID, CommandID: "cmd-1",
+				CodingAgent: "claude-code", PauseTTLSec: ttl,
+			}, Fence{}); err != nil {
+				t.Fatalf("AttachSandbox: %v", err)
+			}
+			rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+
+			spy := &statusAtAsk{recorder: rig.queue, rig: rig}
+			coordinator, err := NewCoordinator(CoordinatorOptions{
+				Queue: spy, Pending: rig.pending, Manager: rig.manager,
+				Resume: rig.resumer, Account: rig.accountant,
+			})
+			if err != nil {
+				t.Fatalf("NewCoordinator: %v", err)
+			}
+			payload, ev := rig.completion("t1")
+			if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if len(spy.status) != 1 || spy.status[0] != StatusResumed {
+				t.Fatalf("status when the question went out = %v, want it still claimed", spy.status)
+			}
+			if got := rig.get("t1"); !slices.Contains(Awaiting, got.Status) {
+				t.Fatalf("status = %q, want the run parked once the question was out", got.Status)
+			}
+		})
+	}
+}
+
+// A QUESTION THAT COULD NOT BE ANNOUNCED IS ASKED AGAIN. It goes out before the
+// row says awaiting, because once it does no redelivery of the completion can
+// reach it: a question recorded but never asked would wait for an answer
+// nobody knew to give.
+func TestAQuestionThatCouldNotBeAnnouncedIsAskedAgain(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{NeedsInput: true, Question: "which branch?", AskTo: "requester"})
+
+	rig.failPublishes(errors.New("the stream did not answer"))
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a question that was never asked was acked")
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim handed back for the retry", got.Status)
+	}
+
+	rig.failPublishes(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry: %v", err)
+	}
+	if got := len(rig.questions()); got != 1 {
+		t.Fatalf("the question was announced %d times, want once", got)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status = %q, want the run waiting on its answer", got.Status)
+	}
+}
+
+// ---------------------------------------------------------------------
+// a claim is handed back only while it stands
+// ---------------------------------------------------------------------
+
+// relaunchThenBreak is a resumed executor that calls run_sandbox again and
+// then breaks before its turn can suspend on the new job, having written
+// nothing outside the engine: a failed relaunch is a failed call, and a
+// failed call proves no outward write.
+type relaunchThenBreak struct {
+	relaunch func(ctx context.Context, run PendingRun)
+}
+
+func (r relaunchThenBreak) Resume(ctx context.Context, req ResumeRequest) error {
+	r.relaunch(ctx, req.Run)
+	return errors.New("the model provider did not answer")
+}
+
+// withResumer is the rig's coordinator over the same store and box, resuming
+// through r.
+func (r *coordRig) withResumer(t *testing.T, resume Resumer) *Coordinator {
+	t.Helper()
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: r.queue, Pending: r.pending, Manager: r.manager,
+		Resume: resume, Account: r.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	return coordinator
+}
+
+// A RELAUNCH IS NOT THE CLAIM'S TO HAND BACK. The resumed executor called
+// run_sandbox again, so the row holds a new launch with the previous job's
+// conversation cleared, and that launch failed to start and was settled
+// failed. Reverting it to running left a row with no box and no conversation
+// that no poll would ever complete, and a seat re-marked busy on it, its mail
+// parked until the seat changed hands (where recovery re-marked it again).
+func TestAFailedResumeLeavesARelaunchItsOwnOutcome(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
+	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
+		rig.runner.StartErr = errors.New("the coding agent would not start")
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err == nil {
+			t.Error("the relaunch started a job the fixture refuses")
+		}
+	}})
+	coordinator.markBusy("swe")
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if got := rig.get("t1"); got.Status != StatusFailed || got.LaunchID == payload.LaunchID {
+		t.Fatalf("row = %s under launch %q, want the relaunch's own failure left standing",
+			got.Status, got.LaunchID)
+	}
+	if coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat was parked on a run nothing will ever complete")
+	}
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll fired %d completions for a run that has none", fired)
+	}
+}
+
+// AND NOT A SECOND CHARGE OF THE FIRST JOB. A relaunch that could get no box at
+// all leaves the row naming the previous one, finished and paused. Reverted to
+// running under the new launch's name, the poll found that job finished, and
+// its completion claimed the relaunch, collected the first job's result a
+// second time and charged it again, the relaunch having cleared the record of
+// the first charge, before failing the turn for having nothing to resume.
+func TestAFailedRelaunchDoesNotChargeThePreviousJobAgain(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 1000})
+	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, r PendingRun) {
+		// A reattach that failed falls through to a fresh box, and none
+		// could be had either.
+		rig.provider.CreateErr = errors.New("no capacity")
+		defer func() { rig.provider.CreateErr = nil }()
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+			t.Error("the relaunch got a box the fixture refuses")
+		}
+	}})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if fired := rig.tick(); fired != 0 {
+		t.Fatalf("the poll fired %d completions for the previous job", fired)
+	}
+	rig.deliverControl(t)
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for one job of 1000", got)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %d failures for a turn nothing tried to resume again", len(failed))
+	}
+}
+
+// NOR A RUN THE SEAT'S NEXT OWNER HAS REAPED. A lease that moved mid-resume
+// hands the seat to a node whose recovery finds the row resumed, reaps it as
+// abandoned, tears its box down and announces the loss. Reverted after that,
+// the run came back as running with no box, a turn announced lost and never
+// completed, holding its seat on every node that recovered it afterwards.
+func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 1000})
+	successor := rig.withResumer(t, &resumeSpy{})
+	coordinator := rig.withResumer(t, relaunchThenBreak{relaunch: func(ctx context.Context, _ PendingRun) {
+		if err := successor.RecoverSeat(ctx, "swe", "node-b:1", 2); err != nil {
+			t.Errorf("the successor's recovery: %v", err)
+		}
+	}})
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	if got := rig.get("t1"); got.Status != StatusFailed {
+		t.Fatalf("status = %q, want the reaped run left failed", got.Status)
+	}
+	if err := successor.RecoverSeat(t.Context(), "swe", "node-c:1", 3); err != nil {
+		t.Fatalf("a later recovery: %v", err)
+	}
+	if successor.AwaitingSandbox("swe") {
+		t.Fatal("a later owner parked the seat on a run already announced lost")
+	}
+}
+
+// honoursCancel refuses a release on a cancelled context, the way the fleet's
+// store does over the wire and the in-memory twin does not.
+type honoursCancel struct{ PendingStore }
+
+func (s honoursCancel) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return s.PendingStore.ReleaseClaim(ctx, turnID, release)
+}
+
+// drained is a resume a drain breaks: the delivery's context is cancelled
+// under it, and it fails with that cancellation.
+type drained struct{ cancel context.CancelFunc }
+
+func (d drained) Resume(ctx context.Context, _ ResumeRequest) error {
+	d.cancel()
+	return ctx.Err()
+}
+
+// A DRAIN THAT BREAKS A RESUME STILL HANDS THE CLAIM BACK. The release is a
+// rollback of the claim, and the failure it undoes is the drain's own
+// cancellation: inheriting it, the release wrote nothing, the run stayed
+// resumed, and the node the drain handed the seat to reaped it as abandoned
+// rather than resuming it.
+func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	delivery, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
+		Resume: drained{cancel: cancel},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(delivery, payload, ev); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OnCompleted = %v, want the drain's cancellation sent back", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim handed back for the seat's next owner", got.Status)
+	}
+	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 2); err != nil {
+		t.Fatalf("the next owner's recovery: %v", err)
+	}
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the redelivery to the next owner: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("the next owner resumed %d times, want the turn continued once", got)
+	}
+}
+
+// deliverControl hands the coordinator every completion published to the
+// seat's control topic, as the broker would.
+func (r *coordRig) deliverControl(t *testing.T) {
+	t.Helper()
+	r.queue.mu.Lock()
+	var completions []*events.Event
+	for _, p := range r.queue.published {
+		if _, ok := p.event.Data.(*types.SandboxRunCompleted); ok && p.topic == topics.AgentControl("swe") {
+			completions = append(completions, p.event)
+		}
+	}
+	r.queue.mu.Unlock()
+	for _, ev := range completions {
+		if err := r.coordinator.OnEvent(t.Context(), ev); err != nil {
+			t.Fatalf("OnEvent: %v", err)
+		}
+	}
+}
+
+// A FAILED ANSWER DOES NOT PARK THE SEAT. The claim goes back to waiting on a
+// person, which does not hold the seat, and marking it busy regardless parked
+// every later delivery until something recounted the seat. Nothing did: the
+// answer's retry resumes and settles the run, and neither step takes back a
+// mark the failure left, so the seat stayed parked after its run was done.
+func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.park("t1")
+	rig.resumer.failWith(errors.New("the model provider did not answer"))
+
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	if err == nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the answer handled and sent back", handled, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status = %q, want the run waiting on its answer again", got.Status)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("a seat whose run went back to waiting on a person was parked")
+	}
+
+	rig.resumer.failWith(nil)
+	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil); err != nil {
+		t.Fatalf("the answer's retry: %v", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusDone {
+		t.Fatalf("status = %q, want the answered run settled", got.Status)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked after its only run settled")
+	}
+}
+
+// ---------------------------------------------------------------------
 // accounting
 // ---------------------------------------------------------------------
 
-// A refusal cannot un-spend a collected run, so the charge is recorded whatever
-// the cap says — that is the only way the meter stays true when it is binding.
-func TestACollectedRunIsChargedEvenOverBudget(t *testing.T) {
+// A cap cannot un-spend a collected run, so a charge it refuses does not stop
+// the turn: the tokens are spent and the work they bought continues. The
+// refusal itself moves no counter, which is the shared counter's answer to
+// every charge it refuses; this case used to assert the opposite of a spy
+// that recorded refused charges, which the real accountant never did.
+func TestAnOverBudgetChargeDoesNotStopTheResume(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.accountant.over = true
+	rig.accountant.set(true, nil)
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 4000, OutputTokens: 1000})
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if got := rig.accountant.total(); got != 5000 {
-		t.Fatalf("charged %d, want 5000", got)
+	if got := rig.accountant.asked(); got != 1 {
+		t.Fatalf("offered the run's spend %d times, want once", got)
 	}
 	if len(rig.resumer.calls()) != 1 {
 		t.Fatal("an over-budget charge stopped the turn from continuing")
+	}
+}
+
+// THE RETRY IS NOT A SECOND RUN. A resume that fails reverts the claim and the
+// completion comes back, and the retry collects the same finished job again.
+// Charging on every pass billed the seat and the company once per retry, for
+// as long as the resume kept failing: every poll tick, on a node that had lost
+// the seat.
+func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	for attempt := range 3 {
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+			t.Fatalf("attempt %d: a failed resume was acked", attempt+1)
+		}
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times, want the last retry to resume once", got)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens over four deliveries of one run, want its 1000 once", got)
+	}
+}
+
+// THE RECORD IS THE FLEET'S, NOT THE COORDINATOR'S. A failed resume's retry
+// goes wherever the seat is, which after a lease move or a restart is a
+// coordinator that never saw the first charge. Only the run's own row can tell
+// it the spend is already counted.
+func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+
+	// The seat's next owner: a coordinator of its own over the same store,
+	// charging the same fleet counter.
+	successor := &ledgerSpy{}
+	next, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Resume: &resumeSpy{}, Account: successor,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if err := next.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the successor's retry: %v", err)
+	}
+	if got := rig.accountant.total() + successor.total(); got != 1000 {
+		t.Fatalf("charged %d tokens across two nodes, want the run's 1000 once", got)
+	}
+}
+
+// onlyTheClaim is a coordination store that answers the claim and its release
+// and refuses every other write a tail makes, the shape of a store under a
+// blip that lets some compare-and-swaps through and not others.
+type onlyTheClaim struct{ PendingStore }
+
+var errUnanswered = errors.New("the coordination store did not answer")
+
+func (onlyTheClaim) MarkBoxPaused(context.Context, string, time.Time) error { return errUnanswered }
+func (onlyTheClaim) MarkAwaiting(context.Context, string, Clarification) error {
+	return errUnanswered
+}
+func (onlyTheClaim) SetStatus(context.Context, string, string, Fence) error { return errUnanswered }
+func (onlyTheClaim) ReleaseBox(context.Context, string) error               { return errUnanswered }
+
+// THE RECORD NEEDS NO WRITE OF ITS OWN. Kept in one, a store that refused it
+// and then accepted the release reopened the run with no record, and the
+// retry charged the same job again. Riding on the release, the run is handed
+// back with its record or not at all.
+func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
+		Resume: resumer, Account: rig.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	payload, ev := rig.completion("t1")
+	for attempt := range 2 {
+		if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+			t.Fatalf("attempt %d: a failed resume was acked", attempt+1)
+		}
+	}
+	resumer.failWith(nil)
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+	if got := len(resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times, want the last retry to resume once", got)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens over three deliveries of one run, want its 1000 once", got)
+	}
+}
+
+// A duplicate completion of a run that parked on a question is the other way
+// one job reaches the charge twice.
+func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		InputTokens: 700, OutputTokens: 300,
+	})
+
+	payload, ev := rig.completion("t1")
+	for range 2 {
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for one parked run, want its 1000 once", got)
+	}
+}
+
+// A SECOND RUN IN ONE TURN IS A SECOND SPEND. The record is the launch's, so a
+// resumed executor that calls run_sandbox again is charged for that job too,
+// even when the first job's completion was retried and its row carries the
+// first job's record into the relaunch.
+func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 400, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the first run's completion: %v", err)
+	}
+
+	rig.resumer.mu.Lock()
+	rig.resumer.relaunch = nil
+	rig.resumer.mu.Unlock()
+	rig.suspend("t1")
+	rig.runner.Finish(Result{Success: true, Text: "second pass", InputTokens: 200, OutputTokens: 300})
+	payload, ev = rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the second run's completion: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for two runs of 500, want both", got)
+	}
+}
+
+// ONLY A CHARGE THAT MOVED THE COUNTER IS RECORDED. A refusal and an
+// unanswered counter both left it where it was, so the retry offers the spend
+// again rather than inheriting an answer about a counter that may have room,
+// or be reachable, by then.
+func TestAnUnrecordedChargeIsOfferedAgainOnTheRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refused bool
+		err     error
+	}{
+		{"refused by a cap", true, nil},
+		{"the counter did not answer", false, errors.New("counter unreachable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+			rig.accountant.set(tc.refused, tc.err)
+			rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+				t.Fatal("a failed resume was acked")
+			}
+			rig.accountant.set(false, nil)
+			rig.resumer.failWith(nil)
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("the retry: %v", err)
+			}
+			if got := rig.accountant.total(); got != 1000 {
+				t.Fatalf("charged %d, want the retry to count the spend the first pass did not", got)
+			}
+		})
 	}
 }
 
@@ -906,7 +1794,7 @@ func TestClaimingASeatReParksItsRunningJobs(t *testing.T) {
 func TestClaimingASeatReapsATailTheDeadOwnerAbandoned(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1"); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", CompletionTail(run.LaunchID)); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 

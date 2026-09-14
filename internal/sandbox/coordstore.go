@@ -9,6 +9,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
@@ -88,6 +90,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// Not the caller's to choose: a row exists to be launched into, and
 	// the only status that can mean is launching.
 	run.Status = StatusLaunching
+	// Nor is the name of the job, and it is new on every launch, the
+	// reset below included: a completion claims only the job it names.
+	run.LaunchID = uuid.NewString()
 	run.UpdatedAt = now
 	raw, err := encodeRun(run)
 	if err != nil {
@@ -109,6 +114,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 			return false
 		}
 		existing.Status = StatusLaunching
+		existing.LaunchID = run.LaunchID
 		// The previous job's suspension is not this job's. Left in place
 		// it is worse than absent: a completion claimed before the new
 		// suspension lands would resume the conversation the LAST call
@@ -127,6 +133,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// being rescued, and its deliveries would satisfy this round's
 		// delivery check.
 		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
+		// it would tell this job's completion that its spend is already
+		// counted, and the company would never be billed for it.
+		existing.Charged = false
 		return true
 	})
 	return err
@@ -138,18 +148,19 @@ func (s *CoordStore) Get(ctx context.Context, turnID string) (PendingRun, bool, 
 	return run, found, err
 }
 
-// ClaimForResume flips a claimable run to resumed, reporting the row IFF THIS
-// CALL WON.
+// ClaimForResume flips a run holding the tail's launch, in one of the tail's
+// statuses, to resumed, reporting the row IFF THIS CALL WON.
 //
 // The at-most-once tail guard, and the reason the version matters: two nodes
-// can be handed the same completion — a redelivery, a zombie finishing between
-// fence checks — and exactly one must run the tail. The status check and the
-// write are one compare-and-swap, so the loser sees `resumed` on its re-read
-// and reports false.
-func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string) (PendingRun, bool, error) {
+// can be handed the same completion (a redelivery, a zombie finishing between
+// fence checks) and exactly one must run the tail. The launch, the status and
+// the write are one compare-and-swap, so the loser sees `resumed` on its
+// re-read, or a job that is no longer its own, and reports false.
+func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error) {
 	var before string
 	run, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if !slices.Contains(Claimable, run.Status) {
+		if run.LaunchID != tail.Launch || !slices.Contains(tail.From, run.Status) ||
+			!slices.Contains(Claimable, run.Status) {
 			return false
 		}
 		before = run.Status
@@ -164,6 +175,24 @@ func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string) (Pending
 	// because a reused run keeps its old question.
 	run.ClaimedFrom = before
 	return run, true, nil
+}
+
+// ReleaseClaim hands a claimed run back while the claim still stands. See the
+// contract on [PendingStore].
+func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if !slices.Contains(Claimable, release.To) {
+		return false, fmt.Errorf("sandbox: a claim is never taken out of %q, so it cannot be released to it",
+			release.To)
+	}
+	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
+			return false
+		}
+		run.Status = release.To
+		run.Charged = run.Charged || release.Charged
+		return true
+	})
+	return released, err
 }
 
 // MarkAwaiting parks a run until a person answers.
