@@ -11,7 +11,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Button, KeyValue, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -21,23 +20,47 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { SandboxRun } from "~/protocol/index.ts";
+import type { SandboxRun, SandboxStatus } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
-  running: "info",
-  awaiting_input: "caution",
-  succeeded: "positive",
-  completed: "positive",
-  failed: "critical",
-  cancelled: "neutral",
-  reclaimed: "neutral",
-};
+/**
+ * THE ENGINE'S OWN SEVEN WORDS, and only those.
+ *
+ * This map used to name `awaiting_input`, `succeeded`, `completed`,
+ * `cancelled` and `reclaimed` — five values `sandbox.PendingRun` cannot write.
+ * So the two states this screen exists to show, `awaiting_clarification` and
+ * `reseed`, fell through to the neutral default and read as unremarkable,
+ * while five entries could never match anything. `internal/sandbox/pending.go`
+ * is the list.
+ */
+const STATUS_TONE: Record<SandboxStatus, "positive" | "caution" | "critical" | "info" | "neutral"> =
+  {
+    launching: "info",
+    running: "info",
+    resumed: "info",
+    // A person is being waited on. `reseed` is the same fact one step worse:
+    // the box was reaped past its pause TTL, so the work is gone and only the
+    // question survives.
+    awaiting_clarification: "caution",
+    reseed: "caution",
+    done: "positive",
+    failed: "critical",
+  };
 
-export function Runs() {
+/** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
+const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
+
+export function Runs({ runId }: { runId?: string }) {
   const nav = useNavigator();
   const live = useSandboxes();
   const now = useNow();
-  const [selected, setSelected] = useParam("run", "");
+  // THE OPEN RUN IS A PATH (`#/activity/runs/{turn_id}`), not a query key: a
+  // detached run is an object with a life of its own — it outlives the turn
+  // that started it and is resumed by another process on another node — so it
+  // is addressed rather than filtered for.
+  const selected = runId ?? "";
+  const setSelected = (id: string) => nav.to(id ? ["activity", "runs", id] : ["activity", "runs"]);
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
   const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: 20_000 });
@@ -52,7 +75,9 @@ export function Runs() {
         turn_id: box.turn_id,
         agent_handle: box.agent_handle,
         role: box.role,
-        status: box.status,
+        // The live projection types its status as a plain string because it
+        // mirrors whatever the run reported; it is the same vocabulary.
+        status: box.status as SandboxStatus,
         coding_agent: box.coding_agent,
         // The live projection carries no placement; the durable row does,
         // and it replaces this entry as soon as the store catches up.
@@ -77,15 +102,13 @@ export function Runs() {
   }, [data, live]);
 
   const detail = rows.find((r) => r.turn_id === selected) ?? null;
-  const waiting = rows.filter((r) => r.status === "awaiting_input").length;
+  const waiting = rows.filter((r) => AWAITING.includes(r.status)).length;
   const running = rows.filter((r) => r.status === "running").length;
 
   return (
     <>
-      <ScreenHead
-        title="Coding runs"
-        sub="Each one is an Execute phase that suspended. It resumes when the sandbox reports back — after a restart, or on another node."
-        badges={
+      <PageActions>
+        {
           <>
             {running > 0 && (
               <Badge tone="info" dot>
@@ -97,7 +120,11 @@ export function Runs() {
             )}
           </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        Each one is an Execute phase that suspended. It resumes when the sandbox reports back —
+        after a restart, or on another node.
+      </PageNote>
 
       <Panel padding="none">
         <StatRow cols={4}>
@@ -241,7 +268,7 @@ export function Runs() {
             </>
           }
         >
-          {detail.status === "awaiting_input" && (
+          {AWAITING.includes(detail.status) && (
             <div className="banner caution" style={{ marginBottom: "var(--space-3)" }}>
               <Icon name="help" size="sm" />
               <span className="col" style={{ gap: 2 }}>

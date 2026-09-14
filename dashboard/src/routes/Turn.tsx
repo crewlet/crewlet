@@ -48,7 +48,6 @@
  */
 
 import { useCallback, useMemo, type ReactNode } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -98,6 +97,8 @@ import {
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -266,7 +267,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
               )}
               <span className="spacer" />
               {triggerId && (
-                <a className="t-link" href={href(["events", triggerId])}>
+                <a className="t-link" href={href(["activity", "events", triggerId])}>
                   the trigger →
                 </a>
               )}
@@ -463,7 +464,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
   return (
     <a
       className={cx("turn-row", event.failed && "failed")}
-      href={href(["events", event.id])}
+      href={href(["activity", "events", event.id])}
       title={fmtDateTime(event.timestamp)}
     >
       <time className="feed-time" dateTime={event.timestamp}>
@@ -601,10 +602,22 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // this tile ever gave, under a caption claiming otherwise.
   const measured = field(rec.learning, "duration_ms");
   const durationMs = typeof measured === "number" ? measured : null;
-  // The turn's trace, from whichever half of the page has it. A turn opened
-  // while it runs has no query answer to read it off.
-  const traceId =
-    events[0]?.trace_id || phaseEvents.find((e) => e.payload?.turn_id === turnId)?.trace_id || "";
+  // EVERY TRACE THIS TURN TOUCHED, not the first one to arrive.
+  //
+  // `events[0].trace_id` is the trace of whichever event happened to sort
+  // first, and the store's own doc says a turn resumed on another node after a
+  // restart spans more than one — which is exactly the turn somebody opens
+  // this page to understand. One button labelled "trace" then led to half the
+  // story with nothing saying a second half existed.
+  const traceIds = useMemo(() => {
+    const seen: string[] = [];
+    for (const ev of [...events, ...phaseEvents]) {
+      const id = ev.trace_id;
+      if (id && !seen.includes(id)) seen.push(id);
+    }
+    return seen;
+  }, [events, phaseEvents]);
+  const traceId = traceIds[0] ?? "";
 
   const conversation = str(rec.summary, "conversation_key") || phases[0]?.conversationKey || "";
 
@@ -663,10 +676,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
-      <ScreenHead
-        title="Turn"
-        sub={<code className="inline">{turnId}</code>}
-        badges={
+      <PageActions>
+        {
           <>
             {role && <Badge outline>{role}</Badge>}
             <Badge outline>{own.length} phases</Badge>
@@ -712,17 +723,36 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             )}
           </>
         }
-        actions={
+        {
           <>
             {role && (
               <Button size="sm" icon="user" onClick={() => nav.to(["seats", role])}>
                 The seat
               </Button>
             )}
-            {traceId && (
-              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", traceId])}>
-                Trace
-              </Button>
+            {traceIds.length > 1 ? (
+              // NAMED, not collapsed. Two traces mean the turn was resumed
+              // somewhere else, and which one a reader wants depends on which
+              // half they are chasing.
+              <span className="row gap-1">
+                {traceIds.map((id, i) => (
+                  <Button
+                    key={id}
+                    size="sm"
+                    icon="gitBranch"
+                    onClick={() => nav.to(["traces", id])}
+                    title={`trace ${id}`}
+                  >
+                    Trace {i + 1} of {traceIds.length}
+                  </Button>
+                ))}
+              </span>
+            ) : (
+              traceId && (
+                <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", traceId])}>
+                  Trace
+                </Button>
+              )
             )}
             <CopyButton
               text={turnJSON}
@@ -742,7 +772,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             />
           </>
         }
-      />
+      </PageActions>
+      <PageNote>{<code className="inline">{turnId}</code>}</PageNote>
 
       {loading && <Skeleton rows={6} />}
       <QueryState

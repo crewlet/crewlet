@@ -244,11 +244,20 @@ export interface SandboxEntry {
 }
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */
+/** The durable statuses `sandbox.PendingRun` actually carries.
+ *
+ *  Not a free string: the screen's own tone map named `succeeded`, `completed`,
+ *  `cancelled` and `reclaimed`, none of which the engine can write, so four of
+ *  its seven entries were unreachable and three real states fell through to
+ *  the neutral default. */
+export type SandboxStatus =
+  "launching" | "running" | "awaiting_clarification" | "resumed" | "done" | "failed" | "reseed";
+
 export interface SandboxRun {
   turn_id: string;
   agent_handle: string;
   role: string;
-  status: string;
+  status: SandboxStatus;
   coding_agent: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
@@ -346,6 +355,25 @@ export interface BudgetsAnswer {
 // Org, tools, schedules
 // ---------------------------------------------------------------------------
 
+/** The `llm:` field of a seat, in every shape `config.PhaseLLM` accepts:
+ *
+ *      llm: fast                        one provider for every phase
+ *      llm: [fast, backup]              a fallback chain for every phase
+ *      llm: {default: fast, judge: tiny} a chain per phase
+ *
+ *  A phase left unset in the mapping form falls back to `default`. */
+export type ProviderKeys = string | string[];
+export type PhaseLLM =
+  | ProviderKeys
+  | {
+      default?: ProviderKeys;
+      review?: ProviderKeys;
+      subagent?: ProviderKeys;
+      auxiliary?: ProviderKeys;
+      judge?: ProviderKeys;
+      sandbox?: ProviderKeys;
+    };
+
 /** A role as `config.Company` serialises it. Verbatim: the config's own names. */
 export interface OrgRole {
   name: string;
@@ -358,8 +386,15 @@ export interface OrgRole {
   behavioral_guidelines?: string[];
   manages?: string[];
   token_budget?: number;
-  llm?: string;
-  llm_auxiliary?: string;
+  /** THREE SHAPES, not one. `config.PhaseLLM` marshals as a string for one
+   *  provider, an array for a fallback chain, and an object keyed on phase for
+   *  a per-phase mapping — all three are valid config and all three reach this
+   *  browser. Declared as a string, the array and the object both arrived as
+   *  values `String(...)` renders as `fast,backup` or `[object Object]`, and
+   *  any consumer calling a string method on one throws. Read it through
+   *  `llmChain()` in `lib/seats.ts`, never directly. */
+  llm?: PhaseLLM;
+  llm_auxiliary?: PhaseLLM;
   learning_enabled?: boolean;
   availability?: string;
   contact?: Record<string, string>;
@@ -371,10 +406,20 @@ export interface OrgRole {
 export interface OrgUnit {
   name: string;
   type?: string;
+  /** The unit's STABLE IDENTITY, which a name is not — a rename moves
+   *  everything keyed on the name and nothing keyed on this. Absent means the
+   *  name is the key, which is what `org.Unit.Key` falls back to. Keying a
+   *  rendered tree on the name remounts a whole subtree on a rename. */
+  id?: string;
   purpose?: string;
   lead?: string;
   goals?: string[];
   channel?: string;
+  /** The tracker project this unit files under, and the knowledge container it
+   *  writes pages to. Vendor-neutral: the same key names a native project and
+   *  a Jira one. Both reach the wire and neither was declared here. */
+  project?: string;
+  space?: string;
   knowledge_refs?: string[];
   mcp_env?: Record<string, Record<string, string>>;
   integrations?: Record<string, unknown>;
@@ -406,25 +451,54 @@ export interface ToolRow {
   source: string;
 }
 
+/** One declared schedule, as `schedule.Row` serialises it.
+ *
+ *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`, `scope_name`,
+ *  `last_run` and `last_outcome`; the server sends `scope_type` and `scope_id`
+ *  and has no last-run field at all — the ledger is a separate answer — so
+ *  four of its nine fields rendered as `undefined` on every row. */
 export interface ScheduleRow {
+  /** `role` or `unit`. */
+  scope_type: string;
+  /** The seat handle or the unit name this schedule is scoped to. */
+  scope_id: string;
   name: string;
   cron: string;
-  task: string;
-  scope: string;
-  scope_name: string;
   timezone: string;
+  task: string;
+  /** Empty for a role schedule, where a target is meaningless rather than
+   *  defaulted — see `schedule.Row`. */
+  target: string;
+  enabled: boolean;
+  timeout_seconds: number;
+  catchup: boolean;
+  /** The seats a fire actually reaches, resolved from the scope and target. */
+  runners: string[];
+  /** Zero-valued when there is no next fire: disabled, an expression that
+   *  cannot be parsed, or a date the calendar never reaches. */
   next_run: string;
-  last_run: string;
-  last_outcome: string;
+  /** Why `next_run` is empty when the reason is a DEFECT rather than a choice
+   *  — an unparseable cron, an unknown timezone. Empty for a healthy row and
+   *  for a merely disabled one, so a blank cell is never the only symptom. */
+  problem?: string;
 }
 
+/** One fire, from the at-most-once dispatch ledger.
+ *
+ *  `outcome` has exactly two values — `fired` and `skipped_catchup` — because
+ *  this is a DISPATCH ledger and not a turn-outcome one. Nothing here can say
+ *  a turn failed; the turn says that. */
 export interface ScheduleRunRow {
-  name: string;
-  scope: string;
-  scope_name: string;
+  scope_type: string;
+  scope_id: string;
+  schedule_name: string;
+  /** The tick this fire stands for, as the ledger's own at-most-once key. */
+  fire_label: string;
+  target_handle: string;
+  scheduled_at: string;
   fired_at: string;
-  outcome: string;
-  detail: string;
+  outcome: "fired" | "skipped_catchup" | "";
+  trace_id: string;
 }
 
 export interface SchedulesAnswer {
@@ -1025,6 +1099,11 @@ export interface WorkSummary {
   key: string;
   project: string;
   title: string;
+  /** The slug a card is drawn under. On the ROW rather than only on the
+   *  document, because a board draws an icon per card and a column per type,
+   *  and a row that could be GROUPED BY a value it did not CARRY rendered
+   *  every card as the same kind of thing. */
+  type: WorkType;
   status: WorkStatus;
   status_group?: WorkStatusGroup;
   priority?: WorkPriority;
@@ -1335,6 +1414,51 @@ export interface WorkProjectDetail extends WorkProjectRow {
   incomplete?: WorkIncomplete;
 }
 
+/** One instant of a sprint's burndown. */
+export interface WorkBurndownPoint {
+  at: string;
+  /** Everything the sprint was carrying then — delivered, abandoned and
+   *  outstanding alike. Without it the remaining line cannot tell "we
+   *  finished eight points" from "somebody added eight and we finished
+   *  sixteen". */
+  scope: number;
+  /** The part still to do: a task whose status then was in an OPEN group.
+   *  NOT the negation of delivery — `cancelled` is finished and undelivered,
+   *  so a line written that way keeps counting work the team dropped. */
+  remaining: number;
+  /** The part that had landed. `cancelled` is in neither this nor
+   *  `remaining`, so the gap between their sum and `scope` IS the abandoned
+   *  work. */
+  delivered: number;
+}
+
+/** One sprint's day-by-day series. */
+export interface WorkBurndown {
+  project: string;
+  sprint: number;
+  name?: string;
+  measure: "points" | "estimate_min";
+  start_at: string;
+  end_at: string;
+  /** From the start to whichever of the sprint's end and now comes first: a
+   *  running sprint draws to today rather than flat into its own future. */
+  points: WorkBurndownPoint[];
+  /** The scope at the start, which is the height the reference line falls
+   *  from. The line itself is the renderer's — two points and a straight
+   *  edge is not something to send over a wire. */
+  ideal: number;
+  tasks: number;
+  /** How many of them carry no value in the measure — the honesty pair the
+   *  sprint figures already carry. */
+  unestimated: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 export interface WorkSprintsAnswer {
   project: string;
   sprints: WorkSprintRow[];
@@ -1397,6 +1521,18 @@ export interface WorkGoal {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  /** The health check-in history, newest LAST as it was written. The only part
+   *  of a goal a person writes in prose, served by `work_goals` since it
+   *  existed and declared by nothing until now. */
+  updates?: WorkGoalUpdate[];
+}
+
+/** One check-in on a goal: who, when, the health they declared, and why. */
+export interface WorkGoalUpdate {
+  at: string;
+  author: string;
+  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
+  text?: string;
 }
 
 export interface WorkGoalsAnswer {
@@ -1424,12 +1560,39 @@ export interface WorkTypeDef {
 }
 
 /** One custom-field declaration. */
+/** One choice on a `dropdown`, `labels` or `relationship` field.
+ *
+ *  A VALUE STORES THE ID, so rendering one means looking its name up here —
+ *  which is the whole reason the declaration travels beside the value. */
+export interface WorkFieldOption {
+  id: string;
+  slug: string;
+  name: string;
+  color?: string;
+  order?: number;
+  archived?: boolean;
+}
+
+/** What a field's type lets it be configured with. */
+export interface WorkFieldConfig {
+  options?: WorkFieldOption[];
+  unit?: string;
+  precision?: number;
+  min?: number;
+  max?: number;
+  /** A `date` field that holds a time of day as well as a day. */
+  time?: boolean;
+  progress?: string;
+  multi?: boolean;
+}
+
 export interface WorkFieldDef {
   id: string;
   slug: string;
   name: string;
   description?: string;
   type: string;
+  config?: WorkFieldConfig;
   applies_to?: string[];
   required?: boolean;
   required_in_subtasks?: boolean;
@@ -1504,6 +1667,12 @@ export interface WorkComment {
   author_kind?: string;
   body: string;
   reply_to?: string;
+  /** A colleague this comment is a QUESTION to, who owes it an answer — set
+   *  only at creation, because turning an old remark into a question would
+   *  wake somebody for a conversation that has moved on. */
+  ask?: string;
+  /** The comment id this one answers, which is what closes that question. */
+  answers?: string;
   mentions?: string[];
   resolved?: boolean;
   resolved_by?: string;
@@ -1599,10 +1768,79 @@ export interface WorkItem {
    *  reset by any human touch. Past its cap the engine refuses the next
    *  hand-off rather than letting the item circle. */
   reassignments?: number;
+  /** Keys this task used to answer to — a project rename or a merge leaves
+   *  them, and every one still resolves, which is why they are worth
+   *  showing beside the current one. */
+  former_keys?: string[];
+  /** What this task blocks: the MIRRORED half of a dependency, carried so a
+   *  close can say who it unblocks without scanning the company. */
+  dependents?: string[];
+  checklists?: WorkChecklist[];
+  spend?: WorkSpend;
+  body_author?: string;
+  body_at?: string;
+  /** When the task entered the status it is in — the EFFECTIVE instant, so
+   *  two nodes compute one duration. */
+  status_entered_at?: string;
+  done_at?: string;
+  closed_at?: string;
   created_at?: string;
   updated_at?: string;
   /** The composed log position this task was last written at. */
   version: number;
+}
+
+/** One sub-item of a checklist. It mints no object and appears on no board. */
+export interface WorkChecklistItem {
+  id: string;
+  name: string;
+  done?: boolean;
+  assignee?: string;
+  parent?: string;
+  order?: number;
+  /** The subtask this item BECAME, which renders it struck through with the
+   *  new key rather than deleted. */
+  promoted_to?: string;
+}
+
+export interface WorkChecklist {
+  id: string;
+  name: string;
+  items?: WorkChecklistItem[];
+}
+
+/** What a task has cost, in turns rather than in a seat's month.
+ *
+ *  A FUNCTION of the applied records rather than a separately transmitted
+ *  number, which is what makes it impossible for it to disagree with the
+ *  turns it summarises. */
+export interface WorkSpend {
+  turns?: number;
+  rounds?: number;
+  input?: number;
+  output?: number;
+  cache_read?: number;
+  cache_write?: number;
+  wall_ms?: number;
+  tokens?: number;
+}
+
+/** One custom-field value with the declaration that explains it.
+ *
+ *  The three marks are states a filter already excludes, and each is a
+ *  different fact: `hidden` is a value whose declaration was ARCHIVED,
+ *  `foreign` is one mirrored in from another tracker, and `undeclared` is one
+ *  this company explains nowhere. A panel that rendered all three as ordinary
+ *  fields would invite somebody to filter on a field that cannot be filtered. */
+export interface WorkFieldValue {
+  slug?: string;
+  name?: string;
+  id: string;
+  type?: string;
+  value: unknown;
+  hidden?: boolean;
+  foreign?: boolean;
+  undeclared?: boolean;
 }
 
 export interface WorkItemDetail {
@@ -1610,6 +1848,11 @@ export interface WorkItemDetail {
   comments?: WorkComment[];
   history?: WorkChange[];
   links?: WorkLink[];
+  /** The task's custom-field values, ANNOTATED — see [WorkFieldValue]. The
+   *  raw map stays on the task; this is the reader's view of it. */
+  fields?: WorkFieldValue[];
+  /** Pages the thread backwards, and is empty when this page is all of it. */
+  comments_cursor?: string;
   /** The SAME predicate WorkSummary.blocked carries — an open dependency edge
    *  — computed by the server in the same transaction as the task, so the
    *  badge here and the badge on the board row cannot disagree. It is on the
@@ -1646,6 +1889,13 @@ export interface PagesAnswer {
   pages: PageSummary[];
   limit: number;
   offset: number;
+  /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
+   *  — so a page list served far behind the log was pixel-identical to a
+   *  complete one. Same envelope as every other state-log answer. */
+  read_level?: ReadLevel;
+  position?: number;
+  log_lag?: number;
+  complete?: boolean;
 }
 
 export interface PageContainer {
@@ -2232,7 +2482,83 @@ export interface WorkMyWork {
   incomplete?: WorkIncomplete;
 }
 
+/** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
+ *
+ *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
+ *  WHY this change found this person, as one of twenty, in the precedence
+ *  order that decided it. A notice also says whether it ASKS something of them
+ *  (`addressed`) or merely informs, and whether it arrived only because nobody
+ *  better was found (`fallback`). */
+export interface WorkInboxNotice {
+  /** The history row this came from, and what a mark names. */
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  /** The AUTHORED instant — a card saying "yesterday" must not move because a
+   *  record was redelivered. */
+  at: string;
+  reason: string;
+  /** Which half of the person's own split this fell in. */
+  primary: boolean;
+  /** It asks something rather than informing: a turn that must answer. */
+  addressed: boolean;
+  /** Delivered only because nobody better was found — a lead hearing about a
+   *  report's task because the report has left. */
+  fallback?: boolean;
+  kind: string;
+  subject_id: string;
+  /** The human-readable key, resolved by the applier so the read is an index
+   *  range rather than a join. */
+  subject_key?: string;
+  excerpt?: string;
+  actor?: string;
+  actor_kind?: string;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
+/** A page of one person's inbox. */
+export interface WorkInboxAnswer {
+  handle: string;
+  notices: WorkInboxNotice[];
+  /** The split that was APPLIED, defaulted — so a screen can say "you are
+   *  seeing these because" without repeating the defaulting rule. */
+  primary_reasons: string[];
+  /** Where this person's own record says they have read to. */
+  seen_through?: { stream?: string; generation?: number; seq?: number };
+  next_cursor?: string;
+  /** Counts over THIS PAGE, and the answer says so: a total over the table
+   *  would be a second scan of rows this answer did not return. A badge built
+   *  on them therefore saturates at the page size rather than claiming a
+   *  total. */
+  unread: number;
+  primary: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+export interface Viewer {
+  /** The operator id the token resolves to, or "" for an anonymous caller. */
+  operator_id: string;
+  /** Whether this caller may ask the operator-gated questions. */
+  operator: boolean;
+  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
+   *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
+  handle: string;
+  name: string;
+  kind: string;
+}
+
 export interface QueryMap {
+  viewer: Viewer;
+  work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
   agent_memory: AgentMemoryAnswer;
   events: EventsPage;
@@ -2254,6 +2580,7 @@ export interface QueryMap {
   work_projects: WorkProjectsAnswer;
   work_project: WorkProjectDetail;
   work_sprints: WorkSprintsAnswer;
+  work_burndown: WorkBurndown;
   work_activity: WorkActivityAnswer;
   work_my_work: WorkMyWork;
   work_goals: WorkGoalsAnswer;

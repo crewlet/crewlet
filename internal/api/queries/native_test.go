@@ -18,6 +18,8 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
+	inbox       tracker.InboxAnswer
+	inboxQuery  tracker.InboxQuery
 	query       tracker.Query
 	answer      tracker.Answer
 	detail      tracker.TaskDetail
@@ -34,6 +36,8 @@ type stubWork struct {
 	project      tracker.ProjectDetail
 	sprintQuery  tracker.SprintQuery
 	sprints      tracker.SprintListing
+	burnQuery    tracker.BurndownQuery
+	burndown     tracker.Burndown
 
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
@@ -43,6 +47,7 @@ type stubWork struct {
 	catalogueQuery tracker.CatalogueQuery
 	taskLevel      statelog.ReadLevel
 	taskFresh      statelog.Freshness
+	taskWants      tracker.DetailWants
 
 	err error
 }
@@ -66,6 +71,13 @@ func (s *stubWork) Sprints(_ context.Context, q tracker.SprintQuery,
 
 	s.sprintQuery = q
 	return s.sprints, s.err
+}
+
+func (s *stubWork) Burndown(_ context.Context, q tracker.BurndownQuery,
+	_ time.Time) (tracker.Burndown, error) {
+
+	s.burnQuery = q
+	return s.burndown, s.err
 }
 
 func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,
@@ -110,15 +122,21 @@ func (s *stubWork) Person(_ context.Context, q tracker.PersonQuery, _ time.Time)
 	return s.person, s.err
 }
 
+func (s *stubWork) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (tracker.InboxAnswer, error) {
+	s.inboxQuery = q
+	return s.inbox, s.err
+}
+
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	s.query = q
 	return s.answer, s.err
 }
 
-func (s *stubWork) Task(_ context.Context, _ string, _ tracker.DetailWants,
+func (s *stubWork) Task(_ context.Context, _ string, want tracker.DetailWants,
 	fresh statelog.Freshness) (tracker.TaskDetail, error) {
 
 	s.taskLevel, s.taskFresh = fresh.Level, fresh
+	s.taskWants = want
 	return s.detail, s.err
 }
 
@@ -156,6 +174,18 @@ func (s *stubPages) Containers(_ context.Context,
 ) ([]pages.Container, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
+}
+
+// personalQuestions are the three scoped by the caller's own seat — see
+// Sources.viewerHandle. They refuse an anonymous caller who names somebody
+// else, so a sweep that walks every native question has to present a
+// credential for these three. Named once rather than per sweep: the set grew
+// from one to three, and each sweep that spelled it as `== "work_my_work"`
+// silently stopped covering the other two.
+var personalQuestions = map[string]bool{
+	"work_my_work": true,
+	"work_person":  true,
+	"work_inbox":   true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -224,6 +254,77 @@ func TestAMissingRecordIsNotFound(t *testing.T) {
 	_, err = askNative(t, queries.Sources{Pages: p}, "page", map[string]any{"id": "nope"})
 	if !errors.Is(err, queries.ErrNotFound) {
 		t.Errorf("a missing page answered %v, want not-found", err)
+	}
+}
+
+// THE ITEM QUERY ASKS FOR EVERY PART, the custom fields included.
+//
+// A detail read without them rendered a task filed with a severity as one that
+// carried none — confidently, in a properties panel, beside a board that had
+// just filtered on that very field. The four are asked for together because
+// one screen draws all four and a second read for the fields would be a second
+// answer that can disagree with the first.
+func TestTheItemQueryAsksForEveryPart(t *testing.T) {
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_item",
+		map[string]any{"id": "ENG-1"}); err != nil {
+		t.Fatalf("work_item: %v", err)
+	}
+	want := tracker.DetailWants{Comments: true, History: true, Links: true, Fields: true}
+	if w.taskWants != want {
+		t.Errorf("work_item asked the reader for %+v, want %+v", w.taskWants, want)
+	}
+}
+
+// A BURNDOWN NAMES BOTH A PROJECT AND A SPRINT, and defaults neither.
+//
+// A sprint is numbered per project, so a number with no key names one sprint
+// per team — and defaulting the number to "the active one" would make a link
+// somebody bookmarked mean a different sprint every fortnight, which is the
+// one thing a chart with a URL must not do.
+func TestABurndownRefusesToGuessItsSprint(t *testing.T) {
+	for _, params := range []map[string]any{
+		{"sprint": 4},
+		{"project": "ENG"},
+		{"project": "ENG", "sprint": 0},
+	} {
+		w := &stubWork{}
+		_, err := askNative(t, queries.Sources{Work: w}, "work_burndown", params)
+		if !errors.Is(err, queries.ErrBadParams) {
+			t.Errorf("work_burndown(%v) answered %v, want a refusal naming the "+
+				"key it needs", params, err)
+		}
+	}
+	w := &stubWork{}
+	if _, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
+		map[string]any{"project": "ENG", "sprint": 4}); err != nil {
+		t.Fatalf("work_burndown: %v", err)
+	}
+	// BOTH KEYS REACH THE READER. Normalising the key is the READER's —
+	// `Burndown` runs it through `ProjectKey` exactly as `Sprints` does —
+	// so a second spelling of that rule here would be the copy that stops
+	// matching. What this surface owes is that neither key is dropped.
+	if w.burnQuery.Project != "ENG" || w.burnQuery.Sprint != 4 {
+		t.Errorf("the reader was asked for %+v, want ENG sprint 4", w.burnQuery)
+	}
+	// AND THE CALLER'S OWN FRESHNESS, resolved to this surface's default
+	// like every other native question — a burndown that silently took a
+	// linearizable read would put a chart's poll on the raft log.
+	if w.burnQuery.Level != statelog.ReadStale {
+		t.Errorf("the burndown was read at %q, want the dashboard's own stale "+
+			"default", w.burnQuery.Level)
+	}
+}
+
+// A SPRINT NOBODY HAS MINTED IS NOT FOUND, never an empty series: a chart
+// drawn from an empty answer is a sprint in which nothing happened, which is
+// a different thing from a sprint that does not exist.
+func TestAnUnmintedSprintIsNotFound(t *testing.T) {
+	w := &stubWork{err: tracker.ErrNoSprint}
+	_, err := askNative(t, queries.Sources{Work: w}, "work_burndown",
+		map[string]any{"project": "ENG", "sprint": 99})
+	if !errors.Is(err, queries.ErrNotFound) {
+		t.Errorf("an unminted sprint answered %v, want not-found", err)
 	}
 }
 
@@ -531,6 +632,8 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 		// credential in front of it.
 		{"work_my_work", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }},
 		{"pages", map[string]any{},
 			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
 		{"page", map[string]any{"id": "p1"},
@@ -545,7 +648,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			work, pages := &stubWork{}, &stubPages{}
 			src := queries.Sources{Work: work, Pages: pages}
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			if _, err := ask(t, src, tc.what, tc.args); err != nil {
@@ -652,6 +755,10 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.myWorkQuery.MaxLag, w.myWorkQuery.MaxLagSeq)
 			}},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.inboxQuery.MaxLag, w.inboxQuery.MaxLagSeq)
+			}},
 		{"pages", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
 			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
 		}},
@@ -696,7 +803,7 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			t.Parallel()
 			work, pages := &stubWork{}, &stubPages{}
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			all := map[string]any{}
@@ -757,10 +864,14 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
 		{"work_sprints", map[string]any{"project": "ENG"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.sprintQuery.MinPosition }},
+		{"work_burndown", map[string]any{"project": "ENG", "sprint": 1},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.burnQuery.MinPosition }},
 		{"work_activity", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
 		{"work_my_work", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.inboxQuery.MinPosition }},
 		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
 		{"page", map[string]any{"id": "p1"},
 			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
@@ -769,7 +880,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {

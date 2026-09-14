@@ -25,7 +25,8 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useOrg } from "~/lib/store-hooks.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Chip, Meter, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { Select } from "~/ui/primitives.tsx";
@@ -34,6 +35,8 @@ import { useParam } from "~/app/router.tsx";
 import { fmtDate, plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { WorkGoal, WorkGoalTarget } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The health values, and their tone. A closed set, so one the engine adds
  *  later renders as itself rather than vanishing. */
@@ -49,6 +52,14 @@ const HEALTH: Record<
 
 export function Goals() {
   const now = useNow();
+  // A HANDLE IS THE DATABASE'S WORD FOR A PERSON, and every other surface in
+  // the tree resolves it through the chart before showing it. This screen
+  // printed the slug on a goal's owner chips, so a goal owned by "Ada
+  // Okonkwo" was attributed to `ada-okonkwo` beside a board that calls her
+  // by name — and the chip is a FILTER, so the value it sends must stay the
+  // handle while the word it shows is the name.
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
   const [group, setGroup] = useParam("group", "");
   const [owner, setOwner] = useParam("owner", "");
   const [archived, setArchived] = useParam("archived", "");
@@ -76,11 +87,12 @@ export function Goals() {
 
   return (
     <>
-      <ScreenHead
-        title="Goals"
-        sub="The tier above projects: an outcome, who owns it, and what its targets say. The percentage is computed from the work every time it is read — nothing stores one, so nothing can disagree with the board."
-        badges={<Badge outline>{plural(goals.length, "goal")}</Badge>}
-      />
+      <PageActions>{<Badge outline>{plural(goals.length, "goal")}</Badge>}</PageActions>
+      <PageNote>
+        The tier above projects: an outcome, who owns it, and what its targets say. The percentage
+        is computed from the work every time it is read — nothing stores one, so nothing can
+        disagree with the board.
+      </PageNote>
 
       {!loading && !error && goals.length > 0 && (
         <StatRow cols={3}>
@@ -117,7 +129,7 @@ export function Goals() {
         </Chip>
         {owner && (
           <Chip on onClick={() => setOwner("")} title="Clear this filter">
-            {owner}
+            {index.byHandle.get(owner)?.name ?? owner}
           </Chip>
         )}
       </div>
@@ -137,21 +149,29 @@ export function Goals() {
         }
       >
         {goals.map((goal) => (
-          <GoalPanel key={goal.id} goal={goal} now={now} onOwner={setOwner} />
+          <GoalPanel
+            key={goal.id}
+            goal={goal}
+            now={now}
+            onOwner={setOwner}
+            seatName={(handle) => index.byHandle.get(handle)?.name ?? handle}
+          />
         ))}
       </QueryState>
     </>
   );
 }
 
-function GoalPanel({
+export function GoalPanel({
   goal,
   now,
   onOwner,
+  seatName,
 }: {
   goal: WorkGoal;
   now: number;
   onOwner: (h: string) => void;
+  seatName: (handle: string) => string;
 }) {
   const health = HEALTH[goal.health ?? ""];
   return (
@@ -169,10 +189,16 @@ function GoalPanel({
         </span>
       }
     >
-      <div className="row gap-2 wrap" style={{ marginBottom: "var(--sp-3)" }}>
+      <div className="row gap-2 wrap" style={{ marginBottom: "var(--space-3)" }}>
         {goal.owners.map((handle) => (
-          <Chip key={handle} onClick={() => onOwner(handle)} title={`Only ${handle}'s goals`}>
-            {handle}
+          // THE CHIP SHOWS A NAME AND SENDS A HANDLE: the word is for the
+          // reader and the value is the filter's.
+          <Chip
+            key={handle}
+            onClick={() => onOwner(handle)}
+            title={`Only ${seatName(handle)}'s goals`}
+          >
+            {seatName(handle)}
           </Chip>
         ))}
         {goal.due_at && (
@@ -196,6 +222,7 @@ function GoalPanel({
         </p>
       ) : (
         <Meter
+          fullMeans="achieved"
           used={Math.round(goal.progress * 100)}
           max={100}
           ariaLabel={`${goal.name} — overall progress`}
@@ -211,10 +238,11 @@ function GoalPanel({
   );
 }
 
-function TargetMeter({ target }: { target: WorkGoalTarget }) {
+export function TargetMeter({ target }: { target: WorkGoalTarget }) {
   if (target.progress === undefined) {
     return (
       <Meter
+        fullMeans="achieved"
         used={0}
         max={100}
         ariaLabel={`${target.name} — progress`}
@@ -226,6 +254,7 @@ function TargetMeter({ target }: { target: WorkGoalTarget }) {
   }
   return (
     <Meter
+      fullMeans="achieved"
       used={Math.round(target.progress * 100)}
       max={100}
       ariaLabel={`${target.name} — progress`}
@@ -247,4 +276,100 @@ function targetRight(target: WorkGoalTarget): string {
   }
   const unit = target.unit ? ` ${target.unit}` : "";
   return `${target.current ?? 0}${unit} of ${target.goal ?? 0}${unit}`;
+}
+
+/**
+ * One goal.
+ *
+ * `work_goals` has taken an `id` since it existed and `#/goals/{id}` fell
+ * through to the list, because the route dispatch discarded `route.path[1]` —
+ * so every link to a goal, from a target, from a check-in or from a colleague,
+ * landed on every goal.
+ *
+ * The CHECK-IN FEED is the part a list cannot show: `updates[]` is the only
+ * part of a goal a person writes in prose, each one carrying the health they
+ * declared at the time, and it was served by the engine and declared by
+ * nothing on this side.
+ */
+export function Goal({ id }: { id: string }) {
+  const now = useNow();
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const { data, loading, error } = useQuery("work_goals", { id }, { pollMs: 60_000 });
+  const goal = data?.goals?.[0];
+
+  return (
+    <>
+      <PageActions>
+        {goal?.health && HEALTH[goal.health] ? (
+          <Badge tone={HEALTH[goal.health]!.tone}>{HEALTH[goal.health]!.label}</Badge>
+        ) : undefined}
+      </PageActions>
+      <PageNote>
+        {goal?.description ||
+          "A goal is the tier above projects: what the company is trying to move, and what says whether it moved."}
+      </PageNote>
+      {loading && !goal && <Skeleton rows={4} />}
+      <QueryState
+        error={error}
+        loading={loading}
+
+        empty={
+          goal
+            ? undefined
+            : {
+                title: "No goal with that id",
+                hint: "A goal is addressed by its uuid. It may have been removed, or this node's copy of the log may not have reached it yet.",
+              }
+        }
+      >
+        {goal && (
+          <>
+            <GoalPanel goal={goal} now={now} onOwner={() => {}} seatName={seatName} />
+
+            {/* THE CHECK-IN HISTORY. Health is set by a PERSON and never
+                inferred, so each entry is somebody's judgement at a moment,
+                with the reasoning they gave for it — newest first here,
+                because a reader wants the current view and then how it got
+                there. The engine appends, so the list itself is oldest-first. */}
+            <Panel
+              title="Check-ins"
+              icon="activity"
+              count={goal.updates?.length ?? 0}
+              padding="none"
+              subtitle="the only part of a goal a person writes"
+            >
+              {goal.updates?.length ? (
+                <div className="list">
+                  {[...goal.updates].reverse().map((update, i) => (
+                    <div key={`${update.at}-${i}`} className="thread-entry">
+                      <div className="row gap-1">
+                        <strong className="t-cell">{seatName(update.author)}</strong>
+                        {update.health && HEALTH[update.health] && (
+                          <Badge tone={HEALTH[update.health]!.tone}>
+                            {HEALTH[update.health]!.label}
+                          </Badge>
+                        )}
+                        <span className="spacer" />
+                        <span className="t-caption" title={update.at}>
+                          {relTime(update.at, now)}
+                        </span>
+                      </div>
+                      {update.text && <p className="t-caption">{update.text}</p>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="thread-entry t-caption faint">
+                  Nobody has checked in on this goal. A check-in is a person declaring its health
+                  and saying why — the engine never infers one from progress.
+                </div>
+              )}
+            </Panel>
+          </>
+        )}
+      </QueryState>
+    </>
+  );
 }

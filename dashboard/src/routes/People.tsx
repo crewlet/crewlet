@@ -13,14 +13,15 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Segmented, SearchInput } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
+import { awaitingPerson, indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -30,6 +31,12 @@ const STATE_ORDER = [
   { key: "working", label: "Working" },
   { key: "idle", label: "Idle" },
   { key: "offline", label: "Not running here" },
+  // A SEAT THE ENGINE REMOVED is not a seat a healthy peer is running.
+  // `terminated` had no branch and fell through to `offline`, so a removed
+  // seat sat in "Not running here" beside seats another node runs perfectly
+  // well — the one bucket whose whole meaning is "this is fine, look
+  // elsewhere".
+  { key: "terminated", label: "Removed from the company" },
   { key: "human", label: "Human teammates" },
 ] as const;
 
@@ -38,15 +45,22 @@ function bucketOf(
   agent: AgentRow | undefined,
   sandboxes: ReturnType<typeof useSandboxes>,
 ): string {
-  if (seat.kind === "human") return "human";
+  // A KIND IS NOT A STATE, and this short-circuit is why a human teammate
+  // could never be reported as waiting on anybody: every human seat was
+  // filed under one label before anything about what it is doing was read.
+  // Grouping by state now answers the same question for both kinds, and
+  // "which seats are people" is a filter rather than a bucket.
   const sandbox = sandboxes.find((s) => s.role === seat.name);
-  if (sandbox?.status === "awaiting_input") return "needs";
+  if (awaitingPerson(sandbox?.status)) return "needs";
   if (agent?.last_error) return "broken";
   const state = runState(agent, sandboxes);
   if (state === "afk" || state === "failed") return "broken";
   if (state === "working" || state === "awaiting_sandbox") return "working";
+  if (state === "terminated") return "terminated";
   if (state === "idle") return "idle";
-  return "offline";
+  // A human seat is never run by a node, so "not running here" would be a
+  // fault report about something that is working exactly as designed.
+  return seat.kind === "human" ? "human" : "offline";
 }
 
 export function People() {
@@ -99,10 +113,8 @@ export function People() {
 
   return (
     <>
-      <ScreenHead
-        title="People"
-        sub="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
-        badges={
+      <PageActions>
+        {
           <>
             <Badge outline>{plural(agentSeats, "agent seat")}</Badge>
             {index.seats.length - agentSeats > 0 && (
@@ -110,7 +122,11 @@ export function People() {
             )}
           </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        Every seat in the company — the ones this node runs and the ones its peers do. A seat that
+        is not held anywhere reads as “not running here”.
+      </PageNote>
 
       <div className="toolbar">
         <div style={{ maxWidth: 320, flex: 1 }}>

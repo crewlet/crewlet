@@ -6,7 +6,6 @@
  */
 
 import { useMemo, useRef } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
@@ -29,7 +28,8 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { awaitingPerson, indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
 import {
   fmtCount,
   fmtDateTime,
@@ -48,10 +48,30 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
+
+/** A provider chain, in the order the fallback walks it. */
+function ModelChain({ keys }: { keys: string[] }) {
+  return (
+    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+      {keys.map((key, i) => (
+        <span key={key} className="row gap-1">
+          {i > 0 && (
+            <span className="faint" title="falls back to">
+              →
+            </span>
+          )}
+          <code className="inline">{key}</code>
+        </span>
+      ))}
+    </span>
+  );
+}
 
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
@@ -91,10 +111,17 @@ export function SeatScreen({ handle }: { handle: string }) {
   // A PERSON RECORD IS A HUMAN'S. A seat has a MAILBOX — the durable
   // subscription the engine attaches when it acquires the seat — and nothing
   // on a person's record describes one, so this is read only for a human.
+  // AND ONLY WHERE THE READER MAY HAVE IT. A person record is somebody's
+  // unread notices, the order they mean to work in and who set it — the
+  // engine scopes it to the seat the caller's own credential is bound to, and
+  // a colleague reading it needs an operator one. Asking anyway would put a
+  // refusal on the screen where the honest answer is that this is theirs.
+  const viewer = useViewer();
+  const mayReadPerson = viewer.operator || (viewer.handle !== "" && viewer.handle === handle);
   const person = useQuery(
     "work_person",
     { handle },
-    { enabled: tab === "overview" && seat?.kind === "human", pollMs: 60_000 },
+    { enabled: tab === "overview" && seat?.kind === "human" && mayReadPerson, pollMs: 60_000 },
   );
   const spend = useQuery(
     "tokens",
@@ -142,7 +169,6 @@ export function SeatScreen({ handle }: { handle: string }) {
   if (!seat) {
     return (
       <>
-        <ScreenHead title={handle} />
         <Empty
           icon="user"
           title={`No seat called “${handle}”`}
@@ -160,20 +186,18 @@ export function SeatScreen({ handle }: { handle: string }) {
   const manager = index.managerOf.get(seat.name);
   const reports = index.reportsOf.get(seat.name) ?? [];
   const human = seat.kind === "human";
+
+  // A HUMAN SEAT HAS NO RUNTIME TABS (see the strip below), so a URL naming
+  // one — a bookmark from before the seat's kind changed, or a link between
+  // two seats — must land somewhere real rather than on a blank page.
+  const shown: Tab = human && tab !== "overview" && tab !== "access" ? "overview" : (tab as Tab);
   const state = runState(agent, sandboxes);
   const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
 
   return (
     <>
-      <ScreenHead
-        title={
-          <span className="row" style={{ gap: "var(--space-3)" }}>
-            <Avatar name={seat.name} size="lg" human={human} />
-            {seat.name}
-          </span>
-        }
-        sub={seat.goal || statusLine(agent, { sandbox, seat })}
-        badges={
+      <PageActions>
+        {
           <>
             <Badge mono outline>
               @{seat.handle}
@@ -186,7 +210,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {seat.unit && <Badge outline>{seat.unit.name}</Badge>}
           </>
         }
-        actions={
+        {
           <Button
             icon="activity"
             size="sm"
@@ -195,7 +219,8 @@ export function SeatScreen({ handle }: { handle: string }) {
             Its events
           </Button>
         }
-      />
+      </PageActions>
+      <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
 
       {agent?.last_error && (
         <div className="banner critical">
@@ -206,7 +231,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
           </span>
           {agent.last_error.event_id && (
-            <a className="t-link" href={href(["events", agent.last_error.event_id])}>
+            <a className="t-link" href={href(["activity", "events", agent.last_error.event_id])}>
               event →
             </a>
           )}
@@ -218,7 +243,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           <span>This seat is AFK: {afkReason(agent?.afk_reason)}.</span>
         </div>
       )}
-      {sandbox?.status === "awaiting_input" && (
+      {sandbox && awaitingPerson(sandbox.status) && (
         <div className="banner caution">
           <Icon name="help" size="sm" />
           <span>
@@ -232,17 +257,46 @@ export function SeatScreen({ handle }: { handle: string }) {
 
       <Tabs<Tab>
         ariaLabel="Seat sections"
-        value={tab as Tab}
+        value={shown}
         onChange={setTab}
-        options={[
-          { value: "overview", label: "Overview", icon: "user" },
-          { value: "model", label: "Model activity", icon: "brain" },
-          { value: "memory", label: "Memory", icon: "database" },
-          { value: "cost", label: "Cost", icon: "coin" },
-          { value: "access", label: "Access", icon: "key" },
-        ]}
+        // THE KIND DECIDES THE SET. Model activity, Memory and Cost are
+        // properties of a RUNTIME, and a human seat has none: it is
+        // addressable and never spawned. All five were rendered
+        // unconditionally, so a human teammate's Cost tab read "TOKENS · 7D —
+        // 0 · INPUT / OUTPUT — 0 / 0 · CONFIGURED BUDGET — unlimited", which
+        // is three measurements of a thing that cannot be measured, and their
+        // Memory tab offered a diary nothing will ever write.
+        //
+        // Not disabled — absent. A tab that cannot have content is not an
+        // empty state, it is a claim that the reader is missing something.
+        options={
+          human
+            ? [
+                { value: "overview" as const, label: "Overview", icon: "user" as const },
+                { value: "access" as const, label: "Access", icon: "key" as const },
+              ]
+            : [
+                { value: "overview" as const, label: "Overview", icon: "user" as const },
+                { value: "model" as const, label: "Model activity", icon: "brain" as const },
+                { value: "memory" as const, label: "Memory", icon: "database" as const },
+                { value: "cost" as const, label: "Cost", icon: "coin" as const },
+                { value: "access" as const, label: "Access", icon: "key" as const },
+              ]
+        }
       >
-        {tab === "overview" && human && person.data?.held && (
+        {/* WITHHELD, and said so. A panel that simply is not there reads as
+            a person with nothing on their plate, which is the one thing it
+            must not read as. */}
+        {shown === "overview" && human && !mayReadPerson && (
+          <Panel title="Their day" icon="check">
+            <p className="t-body">
+              Their inbox, their queue and their pinned views are theirs. Reading another person's
+              record needs an operator credential.
+            </p>
+          </Panel>
+        )}
+
+        {shown === "overview" && human && person.data?.held && (
           <Panel
             title="Their day"
             icon="check"
@@ -292,7 +346,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </Panel>
         )}
 
-        {tab === "overview" && (
+        {shown === "overview" && (
           <>
             <Panel padding="none">
               <StatRow cols={4}>
@@ -370,10 +424,24 @@ export function SeatScreen({ handle }: { handle: string }) {
                         <span className="faint">nobody</span>
                       ),
                     ],
-                    ["Model", seat.llm || <span className="faint">default provider</span>],
+                    // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or a
+                    // per-phase mapping, so this is the flattened order the
+                    // provider chain actually walks — and an empty ARRAY is
+                    // truthy, which is why the fallback is an explicit length
+                    // test rather than `||`.
+                    [
+                      "Model",
+                      seat.llm.length ? (
+                        <ModelChain keys={seat.llm} />
+                      ) : (
+                        <span className="faint">default provider</span>
+                      ),
+                    ],
                     [
                       "Auxiliary model",
-                      seat.llmAuxiliary || (
+                      seat.llmAuxiliary.length ? (
+                        <ModelChain keys={seat.llmAuxiliary} />
+                      ) : (
                         <span className="faint">none — reflection uses the default</span>
                       ),
                     ],
@@ -433,7 +501,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Section title="Direct reports" hint={`${reports.length}`}>
                 <div className="seat-grid">
                   {reports.map((r) => (
-                    <a key={r.handle} className="seat-card" href={href(["seats", r.handle])}>
+                    <a
+                      key={r.handle}
+                      className="seat-card"
+                      href={href(["company", "people", r.handle])}
+                    >
                       <div className="row">
                         <Avatar name={r.name} human={r.kind === "human"} />
                         <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
@@ -485,7 +557,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "model" && (
+        {shown === "model" && (
           <>
             {history.loading && !turns.length && <Skeleton rows={4} height={44} />}
             {/* The QUERY'S OWN STATE, BESIDE THE TURNS RATHER THAN IN PLACE OF
@@ -553,7 +625,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "memory" && (
+        {shown === "memory" && (
           <>
             {memory.loading && <Skeleton rows={5} />}
             <QueryState error={memory.error} loading={memory.loading}>
@@ -735,7 +807,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "cost" && (
+        {shown === "cost" && (
           <>
             <Panel padding="none">
               <StatRow cols={3}>
@@ -779,6 +851,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 subtitle="process-lifetime, not the 7-day window"
               >
                 <Meter
+                  fullMeans="spent"
                   used={agent.budget.used}
                   max={agent.budget.max}
                   ariaLabel={`${agent.role}'s token budget`}
@@ -873,7 +946,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "access" && (
+        {shown === "access" && (
           <div className="col gap-4">
             <Panel title="Identity on other surfaces" icon="link">
               {Object.keys(seat.contact).length ? (

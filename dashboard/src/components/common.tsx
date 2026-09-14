@@ -40,7 +40,7 @@ export function SeatChip({
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
       style={{ gap: "var(--space-2)", minWidth: 0 }}
-      href={href(["seats", target])}
+      href={href(["company", "people", target])}
     >
       <Avatar name={name} size={size} human={human} />
       <span className="truncate">{name}</span>
@@ -77,7 +77,7 @@ export function SeatCard({
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
   return (
-    <a className="seat-card" data-tone={tone} href={href(["seats", seat.handle])}>
+    <a className="seat-card" data-tone={tone} href={href(["company", "people", seat.handle])}>
       <div className="row">
         <Avatar name={seat.name} size="lg" human={seat.kind === "human"} />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
@@ -198,7 +198,7 @@ export function EventRow({
   return (
     <a
       className={cx("feed-row", event.failed && "failed")}
-      href={href(["events", event.id])}
+      href={href(["activity", "events", event.id])}
       onClick={onOpen}
     >
       {body}

@@ -310,25 +310,53 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 	}
 }
 
-// THE TWENTY REASONS SPLIT EIGHT AND TWELVE.
-func TestTheReasonsAreAClosedSetSplitEightAndTwelve(t *testing.T) {
+// THE TWENTY REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER.
+//
+// AND THE OTHER EIGHT ARE A DIFFERENT EIGHT. [tracker.DefaultPrimaryReasons]
+// is which reasons lead a PERSON's inbox, and it is not this list — the two
+// agree on four and differ on four, deliberately. They were both called
+// "primary" and both eight long, which is how a reader comes to use one where
+// the other belongs, and nothing failed when they did.
+func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 	t.Parallel()
 	if len(tracker.Reasons) != 20 {
 		t.Fatalf("%d reasons are enumerated; there are twenty", len(tracker.Reasons))
 	}
-	primary := 0
+	addressed := 0
 	for _, r := range tracker.Reasons {
 		if !r.Valid() {
 			t.Errorf("%q is enumerated and not valid", r)
 		}
-		if r.Primary() {
-			primary++
+		if r.Addressed() {
+			addressed++
 		}
 	}
-	if primary != 8 {
-		t.Fatalf("%d reasons are primary; the split is eight and twelve", primary)
+	if addressed != 8 {
+		t.Fatalf("%d reasons oblige an answer; the split is eight and twelve", addressed)
 	}
 	if tracker.Reason("overridden").Valid() {
 		t.Error("a reason nothing writes is valid")
+	}
+
+	// THE TWO LISTS ARE THE SAME LENGTH AND NOT THE SAME LIST. Without
+	// this, folding one into the other passes every test in the tree.
+	if len(tracker.DefaultPrimaryReasons) != 8 {
+		t.Fatalf("%d reasons lead an inbox by default; there are eight",
+			len(tracker.DefaultPrimaryReasons))
+	}
+	differ := 0
+	for _, r := range tracker.DefaultPrimaryReasons {
+		if !r.Valid() {
+			t.Errorf("%q leads an inbox and is not a reason", r)
+		}
+		if !r.Addressed() {
+			differ++
+		}
+	}
+	if differ == 0 {
+		t.Error("every reason that leads an inbox also obliges an answer, so " +
+			"the two lists have been folded into one — they are different " +
+			"questions: unblocked work leads an inbox and asks nothing, and " +
+			"a thread you are in asks something and is not what an inbox opens with")
 	}
 }

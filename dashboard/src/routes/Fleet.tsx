@@ -7,7 +7,6 @@
  * its own poll failed rather than showing the last reading as if it were now.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
@@ -17,6 +16,8 @@ import { fmtDateTime, fmtDuration, relTime, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { FleetNode } from "~/protocol/index.ts";
 import { RetentionPanels } from "./Retention.tsx";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -31,7 +32,7 @@ const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "neutral
   error: "critical",
 };
 
-export function Fleet() {
+export function Fleet({ node }: { node?: string }) {
   const now = useNow();
   const { data, loading, error } = useQuery("fleet", undefined, { pollMs: POLL_MS });
 
@@ -43,16 +44,19 @@ export function Fleet() {
 
   return (
     <>
-      <ScreenHead
-        title="Fleet"
-        sub="Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that cannot reach the configuration it should be running releases its seats rather than serving stale work."
-        badges={
+      <PageActions>
+        {
           <>
             <Badge outline>{plural(nodes.length, "node")}</Badge>
             {data?.this_node && <Badge tone="accent">you are on {data.this_node}</Badge>}
           </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that
+        cannot reach the configuration it should be running releases its seats rather than serving
+        stale work.
+      </PageNote>
 
       {error && (
         <div className="banner critical">
@@ -331,7 +335,12 @@ export function Fleet() {
           </Panel>
         </div>
 
-        {(data?.unplaceable?.length || data?.unmanned_roles?.length) && (
+        {/* `> 0`, NOT the bare length. `0 || 0` is `0`, and React renders a
+            zero as the text "0" — so a healthy fleet drew a stray digit under
+            the panels, which is the one thing a fleet screen must not do:
+            an operator reading this page is looking for a number that is
+            wrong, and here was one with no label at all. */}
+        {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (
           <Panel title="Not running anywhere" icon="alert">
             <div className="col gap-2">
               {data?.unmanned_roles?.map((r) => (

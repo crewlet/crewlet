@@ -674,16 +674,25 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		t.Errorf("the company spent %d against a cap of 200", used)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
+	//
+	// WAITED FOR, not read once. `FleetStore.Charge` is two keys and no
+	// transaction — it bumps the org first and compensates if the seat then
+	// refuses — so there is a real window in which the org has been charged
+	// and the seat has not. The wait above settles on the ORG's counter, which
+	// is the near side of exactly that window, and reading the seat's
+	// immediately afterwards caught the gap under a loaded runner: "seat spent
+	// 0 and the org 150".
+	//
+	// The invariant is unchanged and still asserted — one charge moves both —
+	// it is simply an EVENTUAL one, as everything two keys apart in a store
+	// with no transaction has to be.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
-	seatUsed, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
-	if err != nil {
-		t.Fatalf("seat used: %v", err)
-	}
-	if seatUsed != used {
-		t.Errorf("seat spent %d and the org %d; one charge must move both",
-			seatUsed, used)
-	}
+	seatScope := coord.AgentScope(id.String())
+	waitFor(t, "the seat's own counter to catch up with the company's", func() bool {
+		seatUsed, err := budgets.Used(t.Context(), seatScope)
+		return err == nil && seatUsed == used
+	})
 }
 
 // The trace a wake starts must reach the events the turn it caused writes —

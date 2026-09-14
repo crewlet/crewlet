@@ -171,6 +171,46 @@ func (o *Organization) SeatByHandle(handle string) *Role {
 	return nil
 }
 
+// SeatByOperatorID returns the seat an api.auth token id is bound to, or nil.
+//
+// THE BINDING IS ON THE SEAT, not on the token, and [HumanContact] says why:
+// Tier A is the root of trust and may never read Tier B, so a `seat:` field on
+// a token would have the trusted tier depending on the untrusted one. The
+// inverse lookup therefore lives here, where the seats are.
+//
+// It is what lets a person acting through the dashboard, the REST API or the
+// operator tool server act AS THEMSELVES: the token resolves to an operator
+// id, the operator id resolves to a seat, and that seat's own inbox, queue and
+// pins are theirs rather than a credential's.
+//
+// COMPARED CASE-INSENSITIVELY on a trimmed value, for the reason the field's
+// own doc gives: the id is written in two files by one person and two files
+// are two chances to disagree about case.
+//
+// A seat of EITHER KIND, though in practice only a human seat carries one —
+// nothing stops a company binding a token to an agent seat, and refusing that
+// here would be this lookup inventing a rule the config does not state.
+// Returns the FIRST match: two seats naming one token id is a configuration
+// mistake, and answering "both" would only move the decision to every caller.
+func (o *Organization) SeatByOperatorID(operatorID string) *Role {
+	want := strings.ToLower(strings.TrimSpace(operatorID))
+	if want == "" {
+		return nil
+	}
+	for r := range o.AllRoles() {
+		// Contact is a POINTER and most seats have none: an agent seat
+		// has no external identities at all, and a human seat that
+		// declares only availability has none either.
+		if r == nil || r.Contact == nil {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(r.Contact.CrewletOperatorID)) == want {
+			return r
+		}
+	}
+	return nil
+}
+
 // AgentSeatByID returns the agent seat whose derived id is id — the inverse
 // of AgentIDFor.
 //
@@ -472,6 +512,9 @@ func (o *Organization) Validate() error {
 	if err := o.validateLeadSchedules(); err != nil {
 		errs = append(errs, err)
 	}
+	if err := o.validateContactIdentities(); err != nil {
+		errs = append(errs, err)
+	}
 	return errors.Join(errs...)
 }
 
@@ -582,6 +625,59 @@ func (o *Organization) validateHandles() error {
 			continue
 		}
 		owner[h] = r.Name
+	}
+	return errors.Join(errs...)
+}
+
+// validateContactIdentities enforces chart-wide uniqueness of every external
+// account a seat is reachable at.
+//
+// # What a collision costs
+//
+// An identity is how an inbound message finds a person, and the two consumers
+// resolve a duplicate OPPOSITE WAYS. [notify.Registry.ReconcileHumanContacts]
+// keys a map on (transport, id), so the last seat in chart order wins and the
+// first silently stops being reachable. Every walk of the chart —
+// [Organization.SeatByOperatorID] among them — answers the first. So a
+// duplicated `crewlet_operator_id` gives one person another person's dashboard
+// while their own wakes go elsewhere, and neither seat looks wrong.
+//
+// It is checked on the DECLARED values rather than the resolved ones for the
+// reason [HumanContact.Identities] gives: validation runs where the config is
+// read, which is not always where the environment that resolves a ${VAR}
+// lives, and two seats sharing a literal is the collision somebody typed. Two
+// seats pointing at one ${VAR} is the same mistake spelled once, so it is
+// caught here too — the reference is compared as its own text.
+//
+// Per FIELD, not per transport: Jira and Confluence share `atlassian_account_id`
+// and reporting one collision twice would read as two problems.
+func (o *Organization) validateContactIdentities() error {
+	var errs []error
+	type claimant struct{ role, field string }
+	owner := make(map[string]claimant)
+	for r := range o.AllRoles() {
+		if r == nil || r.Contact == nil {
+			continue
+		}
+		for _, f := range contactFields {
+			value := strings.TrimSpace(*f.value(r.Contact))
+			if value == "" {
+				continue
+			}
+			// The same normalisation the lookups use, so a collision
+			// that differs only in case is still a collision.
+			key := f.key + "\x00" + strings.ToLower(value)
+			if first, taken := owner[key]; taken {
+				errs = append(errs, fmt.Errorf(
+					"%w %s=%q: roles %q and %q — an inbound message finds "+
+						"whichever seat a reader resolved first, and "+
+						"notification registration takes the other one, so "+
+						"one of these two silently stops being reachable",
+					ErrDuplicateIdentity, f.key, value, first.role, r.Name))
+				continue
+			}
+			owner[key] = claimant{role: r.Name, field: f.key}
+		}
 	}
 	return errors.Join(errs...)
 }

@@ -9,7 +9,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -17,6 +16,8 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 interface Node {
   event: EventRecord;
@@ -74,25 +75,30 @@ export function TraceScreen({ traceId }: { traceId: string }) {
 
   const from = events.length ? Math.min(...events.map((e) => tsKey(e.timestamp))) : 0;
   const to = events.length ? Math.max(...events.map((e) => tsKey(e.timestamp))) : 0;
-  const failed = events.filter((e) => (e.payload?.failed as boolean) === true).length;
+  // THE ROW'S OWN FIELD, not its payload. `EventLog.Trace` scans through
+  // `scanRows`, whose SELECT does not include `payload` — so `e.payload` is
+  // undefined on every span and this tile read 0 on every trace ever drawn,
+  // under a caption asserting that nothing had failed. `failed` is derived
+  // server-side from the type and the stored tag and has always been on the
+  // wire; it is what the feed's own red rows are drawn from.
+  const failed = events.filter((e) => e.failed === true).length;
 
   return (
     <>
-      <ScreenHead
-        title="Trace"
-        sub={<code className="inline">{traceId}</code>}
-        badges={
+      <PageActions>
+        {
           <>
             <Badge outline>{events.length} events</Badge>
             {truncated && <Badge tone="caution">oldest {events.length} shown</Badge>}
           </>
         }
-        actions={
+        {
           <Button size="sm" icon="activity" onClick={() => nav.to(["activity"], { q: traceId })}>
             In the log
           </Button>
         }
-      />
+      </PageActions>
+      <PageNote>{<code className="inline">{traceId}</code>}</PageNote>
 
       {loading && <Skeleton rows={6} />}
       <QueryState
@@ -142,7 +148,11 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               const start = tsKey(event.timestamp);
               const left = to > from ? ((start - from) / (to - from)) * 100 : 0;
               return (
-                <a key={event.id} className="feed-row" href={href(["events", event.id])}>
+                <a
+                  key={event.id}
+                  className="feed-row"
+                  href={href(["activity", "events", event.id])}
+                >
                   <time className="feed-time" dateTime={event.timestamp}>
                     {fmtTime(event.timestamp)}
                   </time>

@@ -14,7 +14,7 @@ import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
-import { ALL_NAV } from "./nav.ts";
+import { DESTINATIONS } from "./nav.ts";
 import { buildHash } from "./router.tsx";
 
 class InertWebSocket {
@@ -56,17 +56,13 @@ afterEach(() => {
 describe("the shell", () => {
   test("mounts against an engine that has answered nothing", () => {
     mount();
-    // The chrome is present and honest: not connected, and saying so.
-    expect(screen.getByText("engine unreachable")).toBeDefined();
-    expect(screen.getAllByText("Overview").length).toBeGreaterThan(0);
-  });
-
-  test("an empty company still shows every section", () => {
-    // A fresh company has no seats, no events and no spend. Each panel says
-    // what would fill it rather than rendering an unexplained blank.
-    mount();
-    expect(screen.getByText("No seat is mid-turn")).toBeDefined();
-    expect(screen.getByText("Nothing has happened yet")).toBeDefined();
+    // The chrome is present and honest: not connected, and saying so — in the
+    // rail's own engine pill and in the state bar, which is the one place a
+    // degraded connection is reported now.
+    expect(screen.getAllByText("unreachable").length).toBeGreaterThan(0);
+    // AND THE LANDING SCREEN IS THE INBOX, which is what a person opening
+    // this wants to know: is anything waiting on me.
+    expect(screen.getAllByText("Inbox").length).toBeGreaterThan(0);
   });
 
   test("a disconnected engine is itself the first thing needing a person", () => {
@@ -76,39 +72,27 @@ describe("the shell", () => {
     expect(screen.getByText("No connection to the engine")).toBeDefined();
   });
 
-  test("a connected, quiet company has nothing waiting", () => {
-    const { store, view } = mount();
-    store.applyHealth({ status: "ok" });
-    view.rerender(
-      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
-        <Router>
-          <App />
-        </Router>
-      </ClientContext.Provider>,
-    );
-    expect(screen.getByText("Nothing is waiting on you")).toBeDefined();
-  });
-
-  test("the overview leads with what needs a person", () => {
-    // The order is the argument: obligations first, then what the company is
-    // doing, then what it has cost.
+  test("every workspace is in the rail, locked ones included", () => {
+    // A SECTION THAT VANISHES without a credential is indistinguishable from
+    // one that does not exist, so Admin is always a row and carries a lock.
     mount();
-    const headings = screen.getAllByText(/Needs a person|Live seats|Spend by phase/);
-    expect(headings[0]?.textContent).toContain("Needs a person");
+    for (const label of ["Inbox", "Work", "Company", "Knowledge", "Activity", "Cost", "Admin"]) {
+      expect(screen.getAllByText(label).length, label).toBeGreaterThan(0);
+    }
   });
 });
 
 describe("routing", () => {
-  // DERIVED FROM THE NAV, not a hand-written list. The list was one, and a
-  // hand-written one covers exactly the screens somebody remembered to add to
-  // it — so a new nav entry that renders a blank ships green, which is the one
-  // failure this test exists to catch.
-  test("every nav route renders a screen rather than a blank", () => {
-    const visited = ALL_NAV.map((item) => buildHash(item.path));
-    // The two newest screens are the reason the list is derived: a hand-written
+  // DERIVED FROM THE DESTINATIONS TABLE, not a hand-written list. The list
+  // was one, and a hand-written one covers exactly the screens somebody
+  // remembered to add to it — so a new destination that renders a blank ships
+  // green, which is the one failure this test exists to catch.
+  test("every destination renders a screen rather than a blank", () => {
+    const visited = DESTINATIONS.map((item) => buildHash(item.path));
+    // The two-level routes are the reason the list is derived: a hand-written
     // one would not have them.
-    expect(visited).toContain(buildHash(["work"]));
-    expect(visited).toContain(buildHash(["pages"]));
+    expect(visited).toContain(buildHash(["work", "views"]));
+    expect(visited).toContain(buildHash(["activity", "turns"]));
     for (const hash of visited) {
       location.hash = hash;
       const { view } = mount();
@@ -122,11 +106,11 @@ describe("routing", () => {
   test("an unknown screen says so instead of rendering nothing", () => {
     location.hash = "#/nonsense";
     mount();
-    expect(screen.getByText("Not a screen")).toBeDefined();
+    expect(screen.getByText(/there is no such screen/)).toBeDefined();
   });
 
   test("a seat that does not exist explains itself", () => {
-    location.hash = "#/seats/ghost";
+    location.hash = "#/company/people/ghost";
     mount();
     expect(screen.getByText(/No seat called/)).toBeDefined();
   });
@@ -134,8 +118,12 @@ describe("routing", () => {
 
 describe("live state reaches the screen", () => {
   test("a pushed roster renders its seats", () => {
+    // THE HASH BEFORE THE MOUNT. The router reads `location.hash` at mount
+    // and then listens for `hashchange`, which jsdom dispatches
+    // asynchronously — so assigning it after mounting and re-rendering
+    // synchronously renders the screen the reader was on before.
+    location.hash = "#/company/people";
     const { store, view } = mount();
-    location.hash = "#/people";
     store.applyOrg({
       name: "Acme",
       roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
@@ -192,7 +180,7 @@ describe("a turn watched to its end", () => {
   });
 
   function seatView() {
-    location.hash = "#/seats/ceo?tab=model";
+    location.hash = "#/company/people/ceo?tab=model";
     const { store, view } = mount();
     store.applyOrg(seat);
     const redraw = () =>

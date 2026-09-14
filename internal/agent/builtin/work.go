@@ -1031,7 +1031,7 @@ func (t *createWorkItem) Description() string {
 }
 
 func (t *createWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return scheduleInto(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"title": map[string]any{
@@ -1101,7 +1101,20 @@ func (t *createWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"title"},
+	}, false)
+}
+
+// scheduleInto merges the scheduling parameters into a tool's own schema.
+//
+// MERGED rather than repeated, because the two tools have to accept exactly
+// the same spellings: a create that takes `due` and an update that takes
+// `due_at` is a pair a model gets wrong once and then avoids.
+func scheduleInto(schema map[string]any, update bool) map[string]any {
+	props, _ := schema["properties"].(map[string]any)
+	for key, value := range scheduleSchema(update) {
+		props[key] = value
 	}
+	return schema
 }
 
 func (t *createWorkItem) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -1150,6 +1163,13 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 		task.Fields = fields
 	}
+	// WHEN IT IS DUE, HOW BIG IT IS AND WHICH SPRINT IT IS IN — see
+	// workschedule.go for why these were filterable and unwritable.
+	plan, refusal := readSchedule(args, now, t.deps.zone(), CreateWorkItemTool)
+	if refusal != "" {
+		return failed(refusal), nil
+	}
+	plan.applyToTask(&task)
 	if task.Type == "" {
 		task.Type = tracker.DefaultType
 	}
@@ -1161,6 +1181,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			clip(string(task.Priority)), priorityList())), nil
 	}
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		parent, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`parent`", ref)
 		if refusal != "" {
 			return failed(refusal), nil
@@ -1451,7 +1472,7 @@ func (t *updateWorkItem) Description() string {
 }
 
 func (t *updateWorkItem) Parameters() map[string]any {
-	return map[string]any{
+	return scheduleInto(map[string]any{
 		"type": "object",
 		"properties": map[string]any{
 			"item": map[string]any{
@@ -1520,7 +1541,7 @@ func (t *updateWorkItem) Parameters() map[string]any {
 			},
 		},
 		"required": []any{"item"},
-	}
+	}, true)
 }
 
 // setArgSchema is the shape every set-valued argument takes.
@@ -1572,7 +1593,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		return failed(readFailure(UpdateWorkItemTool, err)), nil
 	}
 
-	patch, kind, refusal := patchFromArgs(args, actor)
+	patch, kind, refusal := patchFromArgs(args, actor, t.deps.now(), t.deps.zone())
 	if refusal != "" {
 		return failed(refusal), nil
 	}
@@ -1759,11 +1780,36 @@ func (d WorkDeps) declareLabels(ctx context.Context, actor Actor,
 // it, and a recipient told "fields changed" would have to read the deltas to
 // find out what happened. The order below is that judgement, most specific
 // first.
-func patchFromArgs(args map[string]any,
-	actor Actor) (tracker.TaskPatch, tracker.ChangeKind, string) {
+func patchFromArgs(args map[string]any, actor Actor, now time.Time,
+	loc *time.Location) (tracker.TaskPatch, tracker.ChangeKind, string) {
 
 	var patch tracker.TaskPatch
 	kind := tracker.ChangeFields
+
+	// THE SCHEDULING HALF FIRST, so a refusal about a date a model typed
+	// arrives before anything else is decided — and so the kind below can
+	// still be overridden by a status or an assignee, which is what a
+	// change with both in it is actually about.
+	plan, refusal := readSchedule(args, now, loc, UpdateWorkItemTool)
+	if refusal != "" {
+		return patch, kind, refusal
+	}
+	if plan.applyToPatch(&patch) && (plan.Sprint != nil || plan.Cleared["sprint"]) {
+		// A SPRINT MOVE IS ITS OWN KIND, because it is what the change is
+		// TO everybody downstream: the sprint's team is told their
+		// commitment moved, where `fields` would tell them a column
+		// changed. The dates and the sizing stay `fields`, which is what
+		// they are.
+		//
+		// AND TAKING A TASK OUT IS A MOVE, which the set-only gate missed:
+		// `sprint: null` leaves [schedule.Sprint] nil and records the
+		// clear, so a removal — the change a sprint's team most needs to
+		// hear, since it is commitment leaving the window — was filed as
+		// `fields`. The writer's own rollover already spells a clear as
+		// sprint zero under [tracker.ChangeSprint], so this is the tool
+		// path agreeing with it rather than a new rule.
+		kind = tracker.ChangeSprint
+	}
 
 	if v, held := args["title"]; held {
 		title := strings.TrimSpace(argString(map[string]any{"v": v}, "v"))
@@ -1869,37 +1915,19 @@ func appendMissing(all []string, handle string, add bool) []string {
 }
 
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
-	if patch.Title != nil {
-		task.Title = *patch.Title
-	}
-	if patch.Body != nil {
-		task.Body = *patch.Body
-	}
-	if patch.Assignee != nil {
-		task.Assignee = *patch.Assignee
-	}
-	if patch.Status != nil {
-		task.Status = *patch.Status
-		task.StatusGroup = patch.Status.Group()
-	}
-	if patch.Priority != nil {
-		task.Priority = *patch.Priority
-	}
-	if patch.Tags != nil {
-		task.Tags = *patch.Tags
-	}
-	if patch.RoutingUnit != nil {
-		task.RoutingUnit = *patch.RoutingUnit
-	}
-	if patch.Watchers != nil {
-		task.Watchers = *patch.Watchers
-	}
-	if patch.Muted != nil {
-		task.Muted = *patch.Muted
-	}
+	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
+	// reimplementation, so every field added to [tracker.TaskPatch] had to
+	// be remembered here too — and when the schedule fields arrived the
+	// durable row took them and this snapshot did not. [tracker.TaskDeltas]
+	// then compared a task against itself on exactly those fields, so a due
+	// date, an estimate, a size or a sprint a seat moved reached its
+	// notification as a change that changed nothing.
+	task = tracker.Patched(task, patch)
+
 	if patch.Watch != nil {
-		// THE GESTURE APPLIED TO THE SNAPSHOT THIS TOOL READ. The
-		// durable sets are the WRITER's, settled inside its own
+		// THE GESTURE APPLIED TO THE SNAPSHOT THIS TOOL READ, which is
+		// the one thing genuinely this caller's rather than the merge's.
+		// The durable sets are the WRITER's, settled inside its own
 		// transaction, and this is only the wake's recipient list — so
 		// it is the best answer the tool has rather than the authority.
 		// Leaving it out would be worse than approximating it: a person

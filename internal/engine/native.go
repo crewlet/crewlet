@@ -1134,7 +1134,14 @@ func (c chartUnits) ResolveUnit(name string) (string, tracker.LeadRef, bool) {
 	// about the project's work, and rendering `none` beside a unit whose
 	// parent has a lead sends a founder looking for a gap there is not.
 	if role := c.org.EffectiveLead(unit); role != nil {
-		lead.Handle = org.Slugify(role.Name)
+		// THE SEAT'S OWN HANDLE, through the accessor every other namer
+		// of a seat goes through. Slugifying the display name here was a
+		// SECOND derivation, and it disagreed with the first on every
+		// seat whose operator declared a handle: a unit led by "Ada
+		// Okonkwo" with `handle: ada` resolved to `ada-okonkwo`, which
+		// is nobody — so the lead could not be looked up in the chart,
+		// filtered on, asked, or opened as a person.
+		lead.Handle = role.Handle()
 		lead.Kind = tracker.AuthorAgent
 		if role.IsHuman() {
 			lead.Kind = tracker.AuthorHuman

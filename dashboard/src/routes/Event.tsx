@@ -5,7 +5,6 @@
  * event id pasted out of a log is a destination.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Code, CopyButton, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
@@ -14,6 +13,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
@@ -26,18 +27,14 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
   return (
     <>
-      <ScreenHead
-        title={data ? data.summary || data.type : "Event"}
-        sub={data ? <code className="inline">{data.type}</code> : eventId}
-        badges={
-          data ? (
-            <>
-              <Badge outline>{humanize(data.category) || "system"}</Badge>
-              {data.source && <Badge outline>{data.source}</Badge>}
-            </>
-          ) : undefined
-        }
-        actions={
+      <PageActions>
+        {data ? (
+          <>
+            <Badge outline>{humanize(data.category) || "system"}</Badge>
+            {data.source && <Badge outline>{data.source}</Badge>}
+          </>
+        ) : undefined}
+        {
           <>
             {data?.trace_id && (
               <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", data.trace_id])}>
@@ -60,7 +57,8 @@ export function EventScreen({ eventId }: { eventId: string }) {
             )}
           </>
         }
-      />
+      </PageActions>
+      <PageNote>{data ? <code className="inline">{data.type}</code> : eventId}</PageNote>
 
       {loading && <Skeleton rows={5} />}
       <QueryState

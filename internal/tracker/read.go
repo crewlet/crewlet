@@ -36,9 +36,17 @@ import (
 // every row of a fifty-row page. What a caller needs beyond this is a
 // single-task read, which is flat at any age.
 type TaskRow struct {
-	ID          string      `json:"id"`
-	Key         string      `json:"key"`
-	Title       string      `json:"title"`
+	ID    string `json:"id"`
+	Key   string `json:"key"`
+	Title string `json:"title"`
+
+	// Type is the slug a card is drawn under. On the ROW rather than only
+	// on the document, because a board draws an icon per card and a column
+	// per type, and a row that could be GROUPED BY a value it did not
+	// CARRY rendered every card as the same kind of thing — with the only
+	// way to draw the icon being a document read per card.
+	Type string `json:"type"`
+
 	Status      Status      `json:"status"`
 	StatusGroup StatusGroup `json:"status_group"`
 	Priority    Priority    `json:"priority"`
@@ -1499,7 +1507,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	// statement order.
 	joins = extraJoin + joins
 	joinArgs = append(append([]any{}, extraArgs...), joinArgs...)
-	query := `SELECT t.id, t.key, t.title, t.status, t.status_group, t.priority,
+	query := `SELECT t.id, t.key, t.title, t.type, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.sprint_number, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
 	                 t.archived, t.rank, t.updated_at, t.version,
@@ -1517,7 +1525,15 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []TaskRow
+	// ALLOCATED RATHER THAN NIL, and this is the one reader in the tree
+	// where that is a wire contract rather than a style: a nil slice
+	// marshals to `null`, every answer carrying task rows declares the key
+	// as an array, and a client doing `rows.length` on the empty case
+	// throws where it should have drawn "nothing here". A collection is
+	// EMPTY or it is absent; it is never null. The three-valued nils in
+	// this tree are pointers and maps precisely so that a nil SLICE can
+	// mean this and only this.
+	out := []TaskRow{}
 	var pageKeys [][]any
 	for rows.Next() {
 		var row TaskRow
@@ -1527,7 +1543,7 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		var updated int64
 		var version int64
 		sortValues := make([]any, len(terms))
-		targets := []any{&row.ID, &row.Key, &row.Title, &row.Status,
+		targets := []any{&row.ID, &row.Key, &row.Title, &row.Type, &row.Status,
 			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
 			&sprint, &parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
 			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}

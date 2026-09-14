@@ -40,6 +40,16 @@ export interface ToolCall {
   args: string;
   result: string;
   failed: boolean;
+  /** How long the call took. A reader inside a transcript asking why a phase
+   *  took four minutes is asking this. 0 when the producer did not record it. */
+  durationMs: number;
+  /** WHERE THE TOOL CAME FROM, recorded at registration and the one frame that
+   *  knows: `builtin`, `mcp:<server>`, or `a2a`. Without it a reader cannot
+   *  tell an engine builtin from somebody else's MCP server inside the round
+   *  that called it. */
+  origin: string;
+  /** Which MCP server answered, for an `mcp:` origin. */
+  server: string;
 }
 
 /** One round's model turn: what it reasoned, and what it said out loud. */
@@ -117,6 +127,15 @@ export interface PhaseRecord {
   hostIteration: number;
   backend: string;
   codingAgent: string;
+  /** The box that ran this phase, when a coding agent did. Links a transcript
+   *  to the detached run it suspended into. */
+  sandboxId: string;
+  /** What the run reported it cost, in currency. 0 when nothing reported one —
+   *  which is every phase but a sandbox-backed one, and every subscription
+   *  CLI, where the marginal cost genuinely is nothing. */
+  costUSD: number;
+  /** The branches and pull requests the phase delivered. */
+  deliveredRefs: string[];
   /**
    * What woke the turn this phase belongs to, as [types.Trigger.Map] writes
    * it. `id` and `sender` have always been on the wire and were not declared
@@ -187,6 +206,13 @@ export function toolCalls(raw: unknown): ToolCall[] {
       args: str(rec.arguments ?? rec.args),
       result: str(rec.result ?? rec.output ?? rec.error),
       failed: rec.success === false || rec.failed === true || Boolean(rec.error),
+      // THREE FIELDS THE WIRE CARRIES AND THIS DROPPED. They are on
+      // `ToolExecution` in the protocol types and were discarded here, so a
+      // transcript could not say how long a call took, whether it was a
+      // builtin or somebody's MCP server, or which server answered.
+      durationMs: typeof rec.duration_ms === "number" ? rec.duration_ms : 0,
+      origin: typeof rec.origin === "string" ? rec.origin : "",
+      server: typeof rec.server === "string" ? rec.server : "",
     };
   });
 }
@@ -340,6 +366,11 @@ export function fromLiveCall(call: LiveCall, role: string): PhaseRecord {
     hostIteration: 0,
     backend: "",
     codingAgent: "",
+    // A RUNNING phase has none of these yet: the box id is stamped when the
+    // run is registered, and the cost and the refs are what it REPORTS back.
+    sandboxId: "",
+    costUSD: 0,
+    deliveredRefs: [],
     trigger: (call.trigger as PhaseRecord["trigger"]) ?? null,
     at: call.updated_at,
     startedAt: call.started_at || call.updated_at,
@@ -398,6 +429,14 @@ export function fromPhaseEvent(ev: EventRecord): PhaseRecord | null {
     hostIteration: num(p.host_iteration),
     backend: String(p.backend ?? ""),
     codingAgent: String(p.coding_agent ?? ""),
+    // THE SANDBOX'S THREE, all on `AgentPhaseCompleted` and none of them read
+    // until now: which box ran it (so the badge naming the coding agent can
+    // reach the run), what the run cost in currency — the ONE money figure the
+    // engine records, from a CLI's own `total_cost_usd` — and the branches and
+    // pull requests the phase produced.
+    sandboxId: String(p.sandbox_id ?? ""),
+    costUSD: num(p.cost_usd),
+    deliveredRefs: Array.isArray(p.delivered_refs) ? (p.delivered_refs as string[]) : [],
     trigger: (p.trigger as PhaseRecord["trigger"]) ?? null,
     at: ev.timestamp,
     // A finished phase has one instant that matters — when it landed. How

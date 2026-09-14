@@ -1,27 +1,41 @@
 /**
- * The company as a structure.
+ * The company: what it is for, and the shape it has.
  *
- * Three lenses over one tree, and the lens is in the URL so a chart someone is
- * looking at is a link they can send. The tree is drawn as nested units rather
- * than as a centred graph: the hierarchy nests to any depth by design, and a
- * centred layout at depth four is a horizontal scroll nobody reads.
+ * # Two tabs, not three
+ *
+ * The chart and the charter. The DIRECTORY that used to be a third lens here
+ * is now its own destination — `#/company/people` — because a list of every
+ * seat is a place a reader goes rather than a way of looking at the tree, and
+ * a row in the rail beats a segmented control nobody finds.
+ *
+ * The tree is drawn as nested units rather than as a centred graph: the
+ * hierarchy nests to any depth by design, and a centred layout at depth four
+ * is a horizontal scroll nobody reads.
+ *
+ * # A unit is an object with a page
+ *
+ * `UnitScreen` is that page. It existed as a query key on the org screen
+ * (`#/org?unit=`), which meant a team could not be linked to, could not carry
+ * its own tabs, and was one filter away from being lost.
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
-import { SeatChip, StateBadge, Section } from "~/components/common.tsx";
+import { StateBadge, Section } from "~/components/common.tsx";
 import { Avatar, Badge, Empty, Panel, Segmented } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { indexOrg, statusLine, type Seat } from "~/lib/seats.ts";
+import { indexOrg } from "~/lib/seats.ts";
 import type { OrgUnit } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
+import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
 
-type Lens = "chart" | "directory" | "charter";
+type Lens = "chart" | "charter";
 
-export function OrgScreen() {
+export function CompanyScreen() {
   const org = useOrg();
   const agents = useAgents();
   const sandboxes = useSandboxes();
@@ -64,7 +78,7 @@ export function OrgScreen() {
               <a
                 key={seat.handle}
                 className={`org-node${seat.kind === "human" ? " human" : ""}`}
-                href={href(["seats", seat.handle])}
+                href={href(["company", "people", seat.handle])}
               >
                 <Avatar name={seat.name} human={seat.kind === "human"} />
                 <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
@@ -95,22 +109,22 @@ export function OrgScreen() {
 
   return (
     <>
-      <ScreenHead
-        title={org?.name ? `${org.name} — org chart` : "Org chart"}
-        sub="The hierarchy is the execution graph: knowledge, delegation and routing all follow it."
-        actions={
+      <PageActions>
+        {
           <Segmented<Lens>
             ariaLabel="Org view"
             value={lens as Lens}
             onChange={setLens}
             options={[
               { value: "chart", label: "Chart", icon: "sitemap" },
-              { value: "directory", label: "Directory", icon: "users" },
               { value: "charter", label: "Charter", icon: "flag" },
             ]}
           />
         }
-      />
+      </PageActions>
+      <PageNote>
+        The hierarchy is the execution graph: knowledge, delegation and routing all follow it.
+      </PageNote>
 
       {lens === "chart" && (
         <>
@@ -121,7 +135,7 @@ export function OrgScreen() {
                   <a
                     key={seat.handle}
                     className={`org-node${seat.kind === "human" ? " human" : ""}`}
-                    href={href(["seats", seat.handle])}
+                    href={href(["company", "people", seat.handle])}
                   >
                     <Avatar name={seat.name} human={seat.kind === "human"} />
                     <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
@@ -151,86 +165,6 @@ export function OrgScreen() {
             )}
           </div>
         </>
-      )}
-
-      {lens === "directory" && (
-        <Panel padding="none">
-          <DataTable<Seat>
-            rows={index.seats}
-            rowKey={(s) => s.handle}
-            defaultSort={{ key: "name", dir: "asc" }}
-            empty={{ title: "No seats", hint: "Roles come from the company configuration." }}
-            columns={[
-              {
-                key: "name",
-                header: "Seat",
-                sortValue: (s) => s.name,
-                cell: (s) => (
-                  <SeatChip name={s.name} handle={s.handle} human={s.kind === "human"} />
-                ),
-              },
-              {
-                key: "handle",
-                header: "Handle",
-                sortValue: (s) => s.handle,
-                shrink: true,
-                cell: (s) => <code className="inline">@{s.handle}</code>,
-              },
-              {
-                key: "unit",
-                header: "Unit",
-                sortValue: (s) => s.unit?.name ?? "",
-                cell: (s) => s.unit?.name ?? <span className="faint">org-wide</span>,
-              },
-              {
-                key: "manager",
-                header: "Reports to",
-                sortValue: (s) => index.managerOf.get(s.name)?.name ?? "",
-                cell: (s) => {
-                  const m = index.managerOf.get(s.name);
-                  return m ? (
-                    <SeatChip name={m.name} handle={m.handle} />
-                  ) : (
-                    <span className="faint">—</span>
-                  );
-                },
-              },
-              {
-                key: "reports",
-                header: "Manages",
-                align: "right",
-                sortValue: (s) => index.reportsOf.get(s.name)?.length ?? 0,
-                cell: (s) =>
-                  index.reportsOf.get(s.name)?.length || <span className="faint">—</span>,
-              },
-              {
-                key: "state",
-                header: "State",
-                shrink: true,
-                sortValue: (s) =>
-                  s.kind === "human" ? "human" : (seatFor(s.name)?.state ?? "offline"),
-                cell: (s) =>
-                  s.kind === "human" ? (
-                    <Badge outline>human</Badge>
-                  ) : (
-                    <StateBadge agent={seatFor(s.name)} sandboxes={sandboxes} />
-                  ),
-              },
-              {
-                key: "doing",
-                header: "Doing",
-                cell: (s) => (
-                  <span className="truncate t-caption">
-                    {statusLine(seatFor(s.name), {
-                      seat: s,
-                      sandbox: sandboxes.find((b) => b.role === s.name) ?? null,
-                    })}
-                  </span>
-                ),
-              },
-            ]}
-          />
-        </Panel>
       )}
 
       {lens === "charter" && (
@@ -287,6 +221,162 @@ export function OrgScreen() {
             </div>
           </Section>
         </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * One unit's page.
+ *
+ * A UNIT IS AN OBJECT, and it had no address: it was `#/org?unit=`, a filter
+ * on a lens, so a team could not be linked to and carried nothing of its own.
+ * Here it is a page with the four facts a unit actually has — who leads it,
+ * what it is for, who is in it, and what it has been told to do — and the
+ * routing consequence that makes a unit more than a label: knowledge,
+ * delegation and escalation all follow this tree.
+ *
+ * Addressed by `id` where a unit declares one and by NAME where it does not,
+ * which is the same rule the engine's own `Unit.Key` follows — so a link from
+ * a project's owning unit and a link from the chart reach the same page.
+ */
+export function UnitScreen({ id }: { id: string }) {
+  const org = useOrg();
+  const agents = useAgents();
+  const sandboxes = useSandboxes();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seatFor = (name: string) => agents.find((a) => a.role === name);
+
+  const unit = index.units.find((u) => (u.id || u.name) === id || u.name === id);
+  usePageLabels(unit ? { [id]: unit.name } : {});
+
+  if (!unit) {
+    return (
+      <Empty
+        icon="sitemap"
+        title={`No unit called “${id}”`}
+        hint="A unit is addressed by its id where it declares one and by its name where it does not — the same key the engine files work, routing and pages under."
+      />
+    );
+  }
+
+  const seats = index.seats.filter((s) => s.unitChain.some((u) => u.name === unit.name));
+  const direct = index.seats.filter((s) => s.unit?.name === unit.name);
+  // THE EFFECTIVE LEAD, which is the nearest ancestor's where this unit
+  // declares none. It behaves identically everywhere in the engine, and hiding
+  // the difference is how somebody concludes a team is unmanaged.
+  const lead = direct[0]?.unitLead ?? unit.lead ?? "";
+
+  return (
+    <>
+      <PageActions>
+        {
+          <a className="t-link" href={href(["company"], { lens: "chart" })}>
+            Chart →
+          </a>
+        }
+      </PageActions>
+
+      <ObjectHeader
+        kind="Unit"
+        icon="sitemap"
+        identifier={unit.id || undefined}
+        title={unit.name}
+        facts={[
+          { label: "Type", value: unit.type || "unit" },
+          {
+            label: "Lead",
+            value: lead ? (
+              <>
+                {index.byName.get(lead)?.name ?? lead}
+                {!unit.lead && <span className="faint"> (inherited)</span>}
+              </>
+            ) : (
+              ""
+            ),
+            path: lead ? ["company", "people", index.byName.get(lead)?.handle ?? lead] : undefined,
+          },
+          { label: "Seats", value: seats.length },
+          { label: "Directly in it", value: direct.length },
+          { label: "Sub-units", value: (unit.children ?? []).length },
+        ]}
+      />
+
+      {unit.purpose && (
+        <Panel title="Purpose" icon="target">
+          <p className="t-body measure">{unit.purpose}</p>
+        </Panel>
+      )}
+
+      {unit.goals?.length ? (
+        <Panel title="Goals" icon="flag" count={unit.goals.length}>
+          <ul className="col gap-1" style={{ paddingLeft: "var(--space-4)", margin: 0 }}>
+            {unit.goals.map((g, i) => (
+              <li key={i} className="t-cell">
+                {g}
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+
+      <Panel
+        title="Seats"
+        icon="users"
+        count={seats.length}
+        subtitle="everyone in this unit and everything under it"
+        padding="none"
+      >
+        <div className="org-seats" style={{ padding: "var(--space-3)" }}>
+          {seats.map((seat) => (
+            <a
+              key={seat.handle}
+              className={`org-node${seat.kind === "human" ? " human" : ""}`}
+              href={href(["company", "people", seat.handle])}
+            >
+              <Avatar name={seat.name} human={seat.kind === "human"} />
+              <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
+                <span className="truncate t-cell">{seat.name}</span>
+                <span className="truncate t-caption mono">@{seat.handle}</span>
+              </span>
+              {seat.kind === "human" ? (
+                <Badge outline>human</Badge>
+              ) : (
+                <StateBadge agent={seatFor(seat.name)} sandboxes={sandboxes} />
+              )}
+            </a>
+          ))}
+          {seats.length === 0 && (
+            <Empty
+              inline
+              icon="users"
+              title="No seats in this unit"
+              hint="A unit with no seats routes nothing: work filed to it reaches its lead, or nobody."
+            />
+          )}
+        </div>
+      </Panel>
+
+      {(unit.children ?? []).length > 0 && (
+        <Panel title="Sub-units" icon="sitemap" count={(unit.children ?? []).length} padding="none">
+          <div className="list">
+            {(unit.children ?? []).map((child) => (
+              <a
+                key={child.name}
+                className="thread-entry"
+                href={href(["company", "units", child.id || child.name])}
+              >
+                <Icon name="folder" size="sm" />
+                <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                  <strong className="t-cell truncate">{child.name}</strong>
+                  {child.purpose && <span className="t-caption truncate">{child.purpose}</span>}
+                </span>
+                <Badge outline>{child.type || "unit"}</Badge>
+                <Icon name="arrowRight" size="sm" />
+              </a>
+            ))}
+          </div>
+        </Panel>
       )}
     </>
   );

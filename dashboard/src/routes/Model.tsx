@@ -19,7 +19,6 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
@@ -39,6 +38,8 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 const PAGE = 60;
 
@@ -251,10 +252,8 @@ export function ModelActivity() {
 
   return (
     <>
-      <ScreenHead
-        title="Model activity"
-        sub="Every phase the models ran, one row each. Open a row for the transcript on that seat — reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
-        badges={
+      <PageActions>
+        {
           <>
             {liveCount > 0 && (
               <Badge tone="info" dot>
@@ -278,7 +277,12 @@ export function ModelActivity() {
             <Badge outline>{plural(filtered.length, "phase")} loaded</Badge>
           </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        Every phase the models ran, one row each. Open a row for the transcript on that seat —
+        reading what a model said is a one-agent job, and this page has to stay readable with fifty
+        of them running.
+      </PageNote>
 
       {/* ONE row of controls. This screen had eighteen: a segmented control, a
           free-text box, a chip per seat, a chip per phase and a failures chip
@@ -395,7 +399,7 @@ export function ModelActivity() {
           </>
         )}
         <span className="spacer" />
-        <a className="t-link" href={href(["spend"])}>
+        <a className="t-link" href={href(["cost"])}>
           where the tokens go →
         </a>
       </div>

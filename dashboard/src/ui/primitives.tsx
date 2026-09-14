@@ -603,10 +603,20 @@ export function Select({
 }: {
   value: string;
   onChange: (v: string) => void;
-  options: string[];
+  /**
+   * A bare string is its own label, and a pair separates the two.
+   *
+   * The pair is not a convenience. Every value this control sends is a WIRE
+   * value — a status slug, a handle, a sprint number — and every one of them
+   * has a word a person uses instead: a picker offering `in_progress` and
+   * `ada` is a picker written in the database's vocabulary, and one that sent
+   * "In progress" would be refused by the engine's own closed set.
+   */
+  options: (string | { value: string; label: string })[];
   ariaLabel: string;
   anyLabel?: string;
 }) {
+  const rows = options.map((o) => (typeof o === "string" ? { value: o, label: o } : o));
   return (
     <div className={cx("picker", value && "on")}>
       <select
@@ -616,9 +626,9 @@ export function Select({
         onChange={(e) => onChange(e.target.value)}
       >
         <option value="">{anyLabel}</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
+        {rows.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
           </option>
         ))}
       </select>
@@ -666,9 +676,32 @@ export function Avatar({
 // ---------------------------------------------------------------------------
 
 /**
- * How full something is, drawn as a bar.
+ * A bar: how full something is, and WHICH WAY FULL MEANS.
  *
- * Two things about the ARIA here, both of which it got wrong.
+ * # The direction is the caller's to state, because it is not derivable
+ *
+ * A bar at 100% is two opposite pieces of news depending on what it measures.
+ * A budget at 100% is refused charges; a goal at 100% is the goal reached.
+ * The tone was derived from the fill alone — 75% caution, 100% critical —
+ * which is exactly right for a budget and exactly backwards for progress: a
+ * goal three-quarters of the way there rendered as a WARNING, and one fully
+ * achieved would have rendered as a CRISIS.
+ *
+ * So `fullMeans` is REQUIRED rather than defaulted. A default would be the
+ * wrong answer half the time, silently, and the one call site that had
+ * noticed was passing `tone="accent"` to opt out of the rule rather than
+ * fixing it — which is the shape a wrong default always leaves behind.
+ *
+ *   - `spent`    — a budget, a capacity, a quota. Full is bad, and the bar
+ *                  warns before it gets there.
+ *   - `achieved` — progress towards something wanted. Full is GOOD and says
+ *                  so; nothing below it is a fault the bar can diagnose, so
+ *                  everything short of done is simply the accent.
+ *
+ * `tone` still overrides both, for the cases a caller knows something the
+ * ratio does not — a budget already refusing charges is critical at any fill.
+ *
+ * # And two things about the ARIA
  *
  * A `role="meter"` with no accessible name announces as "meter, 120000" and
  * nothing else — a number with no subject, on a screen that has several. The
@@ -693,6 +726,7 @@ export function Meter({
   ariaLabel,
   right,
   tone,
+  fullMeans,
 }: {
   used: number;
   max: number;
@@ -702,6 +736,8 @@ export function Meter({
   ariaLabel: string;
   right?: ReactNode;
   tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
+  /** Which way full means; see the note above. Required, never defaulted. */
+  fullMeans: "spent" | "achieved";
 }) {
   const scaled = max > 0;
   // CLAMPED AT BOTH ENDS, like `aria-valuenow` below. Only the top used to
@@ -709,9 +745,19 @@ export function Meter({
   // leaving a bar that silently keeps its previous width rather than reading
   // empty. The doc above promises clamping; this is the half that was not.
   const pct = scaled ? Math.max(0, Math.min(100, (used / max) * 100)) : 0;
-  // The tone is DERIVED from the fill unless the caller overrides it, so a bar
-  // that is nearly full says so without every call site remembering to.
-  const auto = pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
+  // The tone is DERIVED from the fill AND from what full means, unless the
+  // caller overrides it — so a bar that is nearly full warns where warning is
+  // the right news, and celebrates where it is not.
+  const auto =
+    fullMeans === "achieved"
+      ? pct >= 100
+        ? "positive"
+        : "accent"
+      : pct >= 100
+        ? "critical"
+        : pct >= 75
+          ? "caution"
+          : "accent";
   return (
     <div className="meter">
       {(label || right) && (

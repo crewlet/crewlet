@@ -941,6 +941,13 @@ a.brand:hover {
   background: var(--accent);
   transition: width var(--dur-slow) var(--ease-out);
 }
+/* A ranked list's own bar. Its colour and width are the datum's, set
+   inline, so the class carries only the identity a test and a reader need
+   — the fill is the one part of a bar that MEANS something, and it has to
+   be addressable to be asserted about. */
+.bar-fill {
+  transition: width var(--dur-slow) var(--ease-out);
+}
 .meter-fill[data-tone="caution"] {
   background: var(--caution);
 }
@@ -1433,23 +1440,4 @@ kbd {
   width: 100%;
   height: 28px;
   overflow: visible;
-}
-
-/* The work BOARD: one column per group, side by side, scrolling sideways
-   rather than wrapping.
-
-   HORIZONTAL OVERFLOW IS THE POINT. A board grouped by assignee can have a
-   dozen columns, and wrapping them into rows loses the one thing a board is
-   for — every column visible at once, in the order the axis declares. So the
-   strip scrolls and each column keeps a readable width instead of being
-   squeezed to a fraction of one. */
-.board {
-  display: flex;
-  gap: var(--sp-3);
-  overflow-x: auto;
-  padding-bottom: var(--sp-2);
-}
-.board > .panel {
-  flex: 0 0 auto;
-  width: min(320px, 80vw);
 }

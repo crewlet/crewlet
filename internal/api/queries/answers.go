@@ -268,6 +268,10 @@ func Register(r *Registry, s Sources) {
 	if s.Coord != nil {
 		r.Register("fleet", s.fleet)
 	}
+	// WHO IS ASKING. Registered unconditionally: a process with no company
+	// still has a credential presented to it, and "this token resolves to
+	// no seat" is the answer a screen needs in order to say what to bind.
+	r.Register("viewer", s.viewer)
 	if s.Company != nil {
 		// Gated on the COMPANY, not on the durable counter: the caps are
 		// what the screen is about, and a node with a company and no store
@@ -324,16 +328,34 @@ func Register(r *Registry, s Sources) {
 		r.Register("work_projects", s.workProjects)
 		r.Register("work_project", s.workProject)
 		r.Register("work_sprints", s.workSprints)
+		// THE BURNDOWN IS A SERIES, and a series is a different read
+		// from a set of figures: `work_sprints` scores every sprint in
+		// the window at two instants, and this one scores ONE sprint at
+		// every day of its own window. Folding it in would make the
+		// five-sprint report pay for five series nobody asked to draw.
+		r.Register("work_burndown", s.workBurndown)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.
 		r.Register("work_activity", s.workActivity)
-		// AND ONE PERSON'S DAY. Operator-only, because it is seven
-		// lists ABOUT somebody — their priorities, the questions
-		// waiting on them, the sub-items they claimed — and a surface
-		// that answered it anonymously would render anybody's day to
-		// anybody who asked.
-		r.RegisterOperator("work_my_work", s.workMyWork)
+		// AND ONE PERSON'S DAY, plus the notices that reached them.
+		//
+		// SCOPED RATHER THAN OPERATOR-ONLY — see [Sources.viewerHandle].
+		// A caller reads the seat their own token is bound to, and
+		// naming anybody else's needs an operator credential, which is
+		// the same authority the tools that WRITE these records
+		// enforce. Registered operator-only, as `work_my_work` was, the
+		// landing screen becomes the most-gated screen in the product
+		// and the human teammate — one of the two readers this
+		// dashboard is for — is fictional. `work_person` has always
+		// been registered ungated, so this is what already ships rather
+		// than a new posture.
+		r.Register("work_my_work", s.workMyWork)
+		// THE READER HAS ALWAYS EXISTED and nothing asked it: twenty
+		// typed wake reasons, an addressed flag, a fallback flag and
+		// this person's own read and snooze marks, swept on a 365-day
+		// retention and reaching no screen.
+		r.Register("work_inbox", s.workInbox)
 		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)

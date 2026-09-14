@@ -1,98 +1,126 @@
 /**
- * The work board — the company's own tracker.
+ * The tracker — the company's own work, as a place rather than a table.
  *
  * # Why this screen exists at all, and what it is not
  *
  * It is NOT a second tracker. A company running Jira has none of these
  * questions registered, and this screen says so rather than drawing an empty
- * board: an operator who wired Jira and then found a blank Crewlet board
- * would reasonably conclude their integration was broken.
+ * board: an operator who wired Jira and then found a blank Crewlet board would
+ * reasonably conclude their integration was broken.
  *
  * # An unhydrated projection is not an empty company
  *
  * Every row here comes from this node's own projection of the fleet's record,
  * which is the same copy a seat's tools read — so an operator and an agent
  * looking at one item see one item. A node that has not finished its boot
- * reconcile REFUSES rather than answering empty, and `QueryState` renders
- * that refusal as "still catching up". Drawing it as "no work" would be an
- * answer somebody acts on, by filing the duplicate.
+ * reconcile REFUSES rather than answering empty, and `QueryState` renders that
+ * refusal as "still catching up". Drawing it as "no work" would be an answer
+ * somebody acts on, by filing the duplicate.
  *
  * # Read-only, deliberately
  *
- * Nothing here writes. An item is filed and moved by a seat's own tools, or
- * by an operator through the MCP surface, and both are attributed to
- * somebody — where a board button would write as "the dashboard", which is
- * not a person and not a seat and cannot be asked why.
+ * Nothing here writes. An item is filed and moved by a seat's own tools, or by
+ * an operator through the MCP surface, and both are attributed to somebody —
+ * where a board button would write as "the dashboard", which is not a person
+ * and not a seat and cannot be asked why. That is also why there is no drag: a
+ * rank is a value on the task, and dragging one would be the dashboard
+ * deciding a team's order.
+ *
+ * # A tracker is a workspace, not a table
+ *
+ * The rail, the tabs and the peek exist so a reader moves between projects,
+ * shapes and items without leaving the place they are in. Each of those is a
+ * SECTION and leaves a history entry, because each is a place the reader
+ * called; every filter REPLACES, because four ticked chips are one screen and
+ * Back means "off this list" rather than "untick one".
  */
 
-import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useEffect, useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
+import { DetailRail, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
+import {
+  BoardCard,
+  Coverage,
+  Fact,
+  RowList,
+  StatusBadge,
+  TypeIcon,
+  type RowChrome,
+} from "~/components/work.tsx";
+import { ItemPeek } from "./WorkItem.tsx";
 import {
   Badge,
   Banner,
+  Button,
   Chip,
   Empty,
+  Meter,
   Panel,
   SearchInput,
   Segmented,
+  Select,
   Skeleton,
-  Stat,
-  StatRow,
+  Tabs,
 } from "~/ui/primitives.tsx";
-import { Select } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { BarList, StackedBar, Legend } from "~/ui/charts.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import {
+  anyFilter,
+  bucketByDay,
+  buildItemsParams,
+  CALENDAR_CELL_CHIPS,
+  calendarWeeks,
+  dayKey,
+  defaultView,
+  describeChange,
+  filterPatchForGroup,
+  GROUP_AXES,
+  gridRange,
+  groupLabel,
+  monthOf,
+  monthLabel,
+  PRIORITIES,
+  projectKeys,
+  scopeOf,
+  shapeOf,
+  shiftMonth,
+  shownRows,
+  SORTS,
+  STATUSES,
+  statusLabel,
+  totalHint,
+  typeName,
+  viewParams,
+  WEEKDAYS,
+  type CalendarCell,
+  type Shape,
+  type TrackerFilters,
+} from "~/lib/work.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
-  WorkGroup,
   WorkActivityRecord,
+  WorkGroup,
   WorkProjectDetail,
   WorkProjectRow,
-  WorkIncomplete,
-  WorkStatus,
   WorkSummary,
   WorkView,
 } from "~/protocol/index.ts";
 
-/** The board's own vocabulary, rendered. A closed set, so a status the engine
- *  adds later shows as itself rather than vanishing from the filter. */
-/** The tracker's SIX. `blocked` is NOT one: a blocker is data carried beside
- *  the status, because a task can be both in progress and blocked and a single
- *  field cannot say so — so it is a badge and a filter, never a column value.
- *  `cancelled` is here and reads as "finished without being delivered", which
- *  is the whole of what a close reason used to say. */
-const STATUSES: { value: WorkStatus; label: string }[] = [
-  { value: "todo", label: "To do" },
-  { value: "in_progress", label: "In progress" },
-  { value: "in_review", label: "In review" },
-  { value: "done", label: "Done" },
-  { value: "cancelled", label: "Cancelled" },
-  { value: "closed", label: "Closed" },
-];
+/** The icon a view's tab wears, by what it draws. */
+const VIEW_ICON = {
+  list: "menu",
+  board: "columns",
+  calendar: "calendar",
+} as const;
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
-  todo: "neutral",
-  in_progress: "info",
-  in_review: "caution",
-  done: "positive",
-  cancelled: "neutral",
-  closed: "neutral",
-};
-
-const PRIORITY_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
-  low: "neutral",
-  normal: "neutral",
-  high: "caution",
-  urgent: "critical",
-};
-
-export function Work() {
+export function Work({ project = "" }: { project?: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   // ONE CLOCK for the screen, ticking on its own: a relative time computed
@@ -100,64 +128,45 @@ export function Work() {
   // "2 minutes ago" stays that for an hour on a screen nobody touches.
   const now = useNow();
 
-  const [project, setProject] = useParam("project", "");
-  const [status, setStatus] = useParam("status", "");
-  const [assignee, setAssignee] = useParam("assignee", "");
+  // THE SECTIONS — a place the reader called, so each pushes history.
+  //
+  // THE PROJECT IS NOT ONE OF THEM ANY MORE: it is a PATH now (`#/work/ENG`),
+  // because a project is an object with a page rather than a filter on the
+  // company's list. That is what lets it have sprints, a catalogue and an
+  // activity feed of its own without any of them being a query key on a
+  // screen called "Work".
+  const [viewKey, setViewKey] = useParam("view", "", "section");
+  const [month, setMonth] = useParam("month", "", "section");
+
+  // AND THE FILTERS, which replace: four ticked chips are ONE screen.
   const [q, setQ] = useParam("q", "");
-  // `open` is THREE-STATED on the wire and here: an absent filter asks for
-  // everything, and reading it as false would show only finished work.
-  const [scope, setScope] = useParam("scope", "open");
-  const [view, setView] = useParam("view", "");
+  const [status, setStatus] = useParam("status", "");
   const [type, setType] = useParam("type", "");
+  const [priority, setPriority] = useParam("priority", "");
+  const [assignee, setAssignee] = useParam("assignee", "");
+  const [sprint, setSprint] = useParam("sprint", "");
   const [groupBy, setGroupBy] = useParam("group_by", "");
+  const [group, setGroup] = useParam("group", "");
+  const [sort, setSort] = useParam("sort", "");
+  const [blocked, setBlocked] = useParam("blocked", "");
+  const [overdue, setOverdue] = useParam("overdue", "");
 
-  const params: Record<string, unknown> = {};
-  // THE CONTAINER IS THE SCOPE, and an absent one is NEITHER the workspace
-  // nor a project — the engine refuses to default it, because an omitted key
-  // would otherwise be the most expensive query in the system. This screen is
-  // a person's, so the default is everything and it says so.
-  params.container = project ? `project:${project}` : "workspace";
-  if (status) params.status = status;
-  if (type) params.type = type;
-  // A GROUPED ANSWER IS A DIFFERENT SHAPE: `groups` replaces `items`, and each
-  // column's count is over the whole set rather than over the rows it carries.
-  if (groupBy) params.group_by = groupBy;
-  if (assignee) params.assignee = assignee;
-  if (q) params.q = q;
-  // OPEN AND CLOSED ARE STATUS GROUPS, not a boolean: the four groups are
-  // what every rule in the tracker is written at, and `done` and `closed` are
-  // two of them rather than one negation.
-  if (scope === "open") params.status_group = "not_started,active";
-  if (scope === "closed") params.status_group = "done,closed";
+  const container = project ? `project:${project}` : "workspace";
 
-  // A change to an item publishes onto the seat inbox rather than to the
-  // dashboard socket, so there is no push behind this and a poll is correct.
-  // Twenty seconds: a board is read, not watched, and a tracker's own pace is
-  // a person typing a comment.
-  const { data, loading, error } = useQuery("work_items", params, { pollMs: 20_000 });
+  // THE PEEK IS THE FRAME'S. It was `item=` on this screen alone, which is why
+  // a board could peek a task and nothing else in the product could peek
+  // anything — see `app/frame/DetailRail.tsx`.
+  const peek = usePeek();
+  const { open: openPeek, move: movePeek } = usePeekControls();
 
-  // THE STRIP IS A SEPARATE QUESTION from the rows, for the reason
-  // `containers` is separate from `pages`: it is drawn once per container and
-  // the rows are redrawn on every filter change. Its poll is slower for the
-  // same reason — a saved view is arranged by a person, not by the work.
-  const strip = useQuery("work_views", { container: params.container }, { pollMs: 120_000 });
-  // THE TYPES COME FROM THE CATALOGUE, never from the rows: a filter built
-  // from the page can only offer the types that happen to be on it, so a
-  // board showing no bugs would offer no way to ask for one. The catalogue
-  // is the company's own vocabulary and changes about once a quarter, which
-  // is why this poll is the slowest on the screen.
-  const catalogue = useQuery("work_catalogue", undefined, { pollMs: 300_000 });
-  // THE PROJECT LIST IS THE COMPANY'S, never the page's. Derived from the
-  // rows it could only offer the projects that happen to be on screen, so a
-  // board filtered to one project offered no way back to another — and the
-  // counts beside each name are the MAINTAINED columns, three reads rather
-  // than an aggregate over every task in the company. A minute, because a
-  // project's shape changes at the pace somebody files work rather than at
-  // the pace a board is read.
-  const catalogueProjects = useQuery("work_projects", undefined, { pollMs: 60_000 });
-  // AND THE PROJECT'S OWN OVERVIEW, only while one is selected: its sprint,
-  // its lead and the unit that owns it are what a board scoped to a project
-  // cannot say from its rows.
+  // THE PROJECT LIST IS THE COMPANY'S, never the page's — a rail built from
+  // the rows could only ever offer the projects already on screen, so a board
+  // narrowed to one offered no way back. The counts beside each name are the
+  // MAINTAINED columns, three reads rather than an aggregate over every task.
+  const projects = useQuery("work_projects", undefined, { pollMs: 60_000 });
+  // AND THE CHOSEN PROJECT'S OWN OVERVIEW: its sprint, its lead, the unit that
+  // owns it and its vocabulary — facts about the CONTAINER that a board can
+  // say none of from its rows.
   // ENABLED ON THE SELECTION, not just parameterised by it. The engine
   // refuses this question without a key — correctly, since there is no
   // default project — so passing no params is not "ask for everything", it is
@@ -167,381 +176,510 @@ export function Work() {
     enabled: project !== "",
     pollMs: 60_000,
   });
+  // THE TAB STRIP is drawn once per container where the rows are redrawn on
+  // every filter change, so it is a separate question with a slower poll: a
+  // saved view is arranged by a person, not by the work.
+  const strip = useQuery("work_views", { container }, { pollMs: 120_000 });
+  // THE TYPES COME FROM THE CATALOGUE, never from the rows: a filter built
+  // from the page can only offer the types that happen to be on it, so a board
+  // showing no bugs would offer no way to ask for one. The catalogue is the
+  // company's own vocabulary and changes about once a quarter.
+  const catalogue = useQuery("work_catalogue", undefined, { pollMs: 300_000 });
+
+  const views = strip.data?.views ?? [];
+  const chosenView = viewKey || defaultView(views);
+  const shape: Shape = shapeOf(chosenView, views);
+  const detail = overview.data;
+
+  // THE VIEW SETS THE SCOPE, and it is the view's own `status_group` read back
+  // through the segment that expresses it.
+  //
+  // This control is the single authority on `status_group`: [buildItemsParams]
+  // spreads a view's params and then OVERWRITES that key from the scope, so a
+  // view saved over closed work was answered as open work on the segment's
+  // default — the saved filter could not take effect, and the segment named a
+  // scope the rows did not match. Seeding the segment from the view is what
+  // makes the two agree, and the reason it is the DEFAULT rather than a write
+  // is that a default is not a value: the control reads the view until
+  // somebody moves it, and a scope they chose is in the URL and outlives the
+  // view switch, exactly as every other filter on this screen does.
+  //
+  // A group the three segments cannot express — a saved view narrowed to
+  // `active` alone — reads as ALL, which is what [scopeOf] already answers for
+  // it. The segment and the query still agree, which is the property that
+  // matters; they simply agree on the wider set.
+  const viewScope = scopeOf(viewParams(chosenView, views).status_group) || "open";
+  const [scope, setScope] = useParam("scope", viewScope);
+
+  const filters: TrackerFilters = {
+    q,
+    status,
+    type,
+    priority,
+    assignee,
+    sprint,
+    scope,
+    groupBy,
+    group,
+    sort,
+    blocked: blocked === "true",
+    overdue: overdue === "true",
+  };
+
+  const thisMonth = month || monthOf(now);
+  const todayKey = dayKey(new Date(now).toISOString());
+  const weeks = useMemo(
+    () => (shape === "calendar" ? calendarWeeks(thisMonth, todayKey) : []),
+    [shape, thisMonth, todayKey],
+  );
+
+  const params = useMemo(
+    () =>
+      buildItemsParams({
+        container,
+        shape,
+        view: viewParams(chosenView, views),
+        filters,
+        range: weeks.length ? gridRange(weeks) : undefined,
+      }),
+    // The filters object is a fresh literal on every render; its content is
+    // what the query depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [container, shape, chosenView, views, weeks, JSON.stringify(filters)],
+  );
+
+  // A change to an item publishes onto the seat inbox rather than to the
+  // dashboard socket, so there is no push behind this and a poll is correct.
+  // Twenty seconds: a board is read, not watched, and a tracker's own pace is
+  // a person typing a comment.
+  const { data, loading, error } = useQuery("work_items", params, { pollMs: 20_000 });
   // AND WHAT HAPPENED, which is a different question from what is there: the
   // feed is ordered by the LOG rather than by anything this board sorts on,
   // so a change that moved nothing on screen is still visible.
-  const feed = useQuery(
-    "work_activity",
-    { container: params.container, limit: 20 },
-    { pollMs: 60_000 },
-  );
-  const types = catalogue.data?.types ?? [];
-  const views = strip.data?.views ?? [];
-  // THE VIEW IS A SET OF DEFAULTS, never a lock: picking one puts its
-  // parameters on the URL, where every explicit control still overrides them.
-  // Storing the view's id instead would make the filters lie about what is on
-  // screen the moment somebody touched one.
-  const applyView = (v: WorkView) => {
-    setStatus(v.params?.status ?? "");
-    setAssignee(v.params?.assignee ?? "");
-    setQ(v.params?.q ?? "");
-    setScope(scopeOf(v.params?.status_group));
-    setType(v.params?.type ?? "");
-    setView(v.key);
+  const feed = useQuery("work_activity", { container, limit: 20 }, { pollMs: 60_000 });
+
+  const groups = useMemo(() => data?.groups ?? [], [data]);
+  const rows = useMemo(() => data?.items ?? [], [data]);
+  const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
+
+  const chrome: RowChrome = {
+    seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
+    types: catalogue.data?.types,
+    statuses: detail?.statuses,
   };
 
-  const groups = data?.groups ?? [];
-  const rows = useMemo(
-    () => [...(data?.items ?? [])].sort((a, b) => tsKey(b.updated) - tsKey(a.updated)),
-    [data],
-  );
+  const applyView = (v: WorkView) => setViewKey(v.key);
 
-  const shown = useMemo(() => shownRows(rows, groups), [groups, rows]);
+  const clearFilters = () => {
+    setQ("");
+    setStatus("");
+    setType("");
+    setPriority("");
+    setAssignee("");
+    setSprint("");
+    // TO THE VIEW'S, not to "open": clearing a narrowing returns the screen to
+    // what the view asked for, and passing the fallback drops the key from the
+    // URL so the view keeps supplying it.
+    setScope(viewScope);
+    setGroupBy("");
+    setGroup("");
+    setSort("");
+    setBlocked("");
+    setOverdue("");
+  };
 
-  const projects = useMemo(
-    () => projectKeys(catalogueProjects.data?.projects, shown),
-    [catalogueProjects.data, shown],
-  );
-
-  const byStatus = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const item of shown) counts[item.status] = (counts[item.status] ?? 0) + 1;
-    return counts;
-  }, [shown]);
-
-  // BLOCKED IS COUNTED FROM THE FLAG, not from a status: a task is blocked
-  // AND in progress, so counting it as a status would have hidden it in
-  // whichever of the two the row happened to carry.
-  const blocked = useMemo(() => shown.filter((r) => r.blocked).length, [shown]);
-
-  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const itemHref = (row: WorkSummary) => href(["work", row.key]);
 
   return (
     <>
-      <ScreenHead
-        title="Work"
-        sub="The company's own tracker — every item, who owns it and what moved it. Read-only here: work is filed and moved by the seats themselves, so every change is attributed to somebody."
-        actions={
-          // ONE PERSON'S DAY IS NOT A NAV ENTRY, because route dispatch is a
-          // switch on the first path segment and `work` already owns it —
-          // two entries claiming one head would make one of them silently
-          // unreachable. It is reached from here instead, which is also
-          // where somebody is when they want it.
-          <a href={href(["work", "me"])}>My work →</a>
+      <PageActions>
+        {
+          // REAL ANCHORS rather than buttons that navigate: these leave the
+          // tracker, so they are middle-clickable like every other way out of
+          // a screen, and they go through the router's own history rules
+          // instead of around them.
+          <>
+            <a className="t-link" href={href(["me"])}>
+              My work →
+            </a>
+            {project && (
+              <a className="t-link" href={href(["work", project, "sprints"])}>
+                Sprints →
+              </a>
+            )}
+            <a className="t-link" href={href(["goals"])}>
+              Goals →
+            </a>
+          </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        The company's own work — every project, board and item. Read-only here: work is filed and
+        moved by the seats themselves, so every change is attributed to somebody.
+      </PageNote>
 
-      {/* The counts are of what is ON SCREEN, and the label says so. A header
-          that reported the page's length as the project's size would say
-          "50 items" for every project with more than fifty. */}
-      {!loading && !error && (
-        <StatRow cols={4}>
-          <Stat
-            label="Shown"
-            value={shown.length}
-            sub={totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
-          />
-          <Stat label="In progress" value={byStatus.in_progress ?? 0} />
-          <Stat label="Blocked" value={blocked} icon={blocked ? "alert" : undefined} />
-          <Stat label="In review" value={byStatus.in_review ?? 0} />
-        </StatRow>
-      )}
+      <div className="work-main">
+        {project ? (
+          <ProjectHead detail={detail} chrome={chrome} />
+        ) : (
+          <WorkspaceHead projects={projects.data?.projects ?? []} />
+        )}
 
-      {/* THE VIEW STRIP. Every container has three of these without anybody
-          saving one, so it is never empty and never needs a setup gesture —
-          which is also why a failure to read it leaves the board alone
-          rather than blocking it: the filters below are the real control,
-          and a strip is a shortcut to a set of them.
-
-          A GROUP, NOT A TAB LIST. It declared `role="tablist"` while its
-          children are `Chip`s — plain buttons — so it promised a reader tabs
-          it does not contain: `tablist` requires `tab` children, and this is
-          the one mis-role in the tree an automated checker flags outright. It
-          also promised one tab stop with arrows inside it and delivered N
-          stops with no arrow keys, which is the same contract this release
-          just fixed on `Segmented`. These chips are a multi-select-shaped
-          shortcut rather than one-of-N — `Clear` is among them — so the
-          honest role is a labelled group of buttons, each carrying its own
-          `aria-pressed`. */}
-      {views.length > 0 && (
-        <div className="toolbar" role="group" aria-label="Saved views">
-          {views.map((v) => (
-            <Chip
-              key={v.key}
-              on={view === v.key}
-              onClick={() => applyView(v)}
-              title={v.builtin ? `The built-in ${v.type}` : viewTitle(v)}
-            >
-              {v.pinned ? "★ " : ""}
-              {v.name}
-            </Chip>
-          ))}
-          {view && (
-            <Chip onClick={() => setView("")} title="Stop following a view">
-              Clear
-            </Chip>
-          )}
-        </div>
-      )}
-
-      <div className="toolbar">
-        <div style={{ flex: 1, maxWidth: 360 }}>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            ariaLabel="Find an item by key or title"
-            placeholder="ENG-42, or words from the title"
-          />
-        </div>
-        <Select
-          value={project}
-          onChange={setProject}
-          ariaLabel="Project"
-          anyLabel="Every project"
-          options={projects}
-        />
-        <Select
-          value={status}
-          onChange={setStatus}
-          ariaLabel="Status"
-          anyLabel="Any status"
-          options={STATUSES.map((s) => s.value)}
-        />
-        {types.length > 0 && (
-          <Select
-            value={type}
-            onChange={setType}
-            ariaLabel="Type"
-            anyLabel="Any type"
-            options={types.map((t) => t.slug)}
+        {views.length > 0 && (
+          <Tabs
+            ariaLabel="Views"
+            value={chosenView}
+            onChange={(key) => applyView(views.find((v) => v.key === key) ?? views[0]!)}
+            options={views.map((v) => ({
+              value: v.key,
+              label: `${v.pinned ? "★ " : ""}${v.name}`,
+              icon: VIEW_ICON[v.type] ?? "menu",
+            }))}
           />
         )}
-        <Select
-          value={groupBy}
-          onChange={setGroupBy}
-          ariaLabel="Group by"
-          anyLabel="No grouping"
-          options={["status", "status_group", "assignee", "priority", "type", "tag"]}
-        />
-        {/* THREE SEGMENTS, not a checkbox: "open", "closed" and "everything"
-            are three real questions, and a two-state control would make the
-            third unreachable — which is how a board that can never show a
-            closed item ships. */}
-        <Segmented
-          value={scope}
-          onChange={setScope}
-          ariaLabel="Open or closed"
-          options={[
-            { value: "open", label: "Open" },
-            { value: "closed", label: "Closed" },
-            { value: "", label: "All" },
-          ]}
-        />
-        {assignee && (
-          <Chip on onClick={() => setAssignee("")} title="Clear this filter">
-            {seatName(assignee)}
-          </Chip>
-        )}
-      </div>
 
-      {/* THE PROJECT'S OWN OVERVIEW, only while one is selected. Its sprint,
-          its lead and the unit that owns it are facts about the CONTAINER,
-          and a board can say none of them from its rows. */}
-      {project && <ProjectOverview detail={overview.data} />}
-
-      <ActivityFeed records={feed.data?.records ?? []} now={now} />
-
-      {loading && <Skeleton rows={6} />}
-
-      {/* THE BOARD, when one was asked for. Each column reports its own
-          count over the WHOLE set beside the rows it carries — so a column
-          of four hundred says four hundred and hands back twenty, and the
-          header never becomes a property of the page. */}
-      {!loading && !error && groups.length > 0 && (
-        <>
-          {data?.groups_overlap && (
-            <Banner tone="info">
-              One item can be on several of these columns, so the counts add up to more than the
-              total.
-            </Banner>
-          )}
-          {data?.groups_dropped ? (
-            <Banner tone="caution">
-              {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit
-              and are not shown.
-            </Banner>
-          ) : null}
-          <div className="board">
-            {groups.map((group) => (
-              <Panel
-                key={group.key}
-                title={group.label || group.key || "—"}
-                count={group.count}
-                padding="tight"
-              >
-                {group.rows.map((item) => (
-                  <div key={item.id} className="row gap-2">
-                    <a className="mono" href={href(["work", item.key])}>
-                      {item.key}
-                    </a>
-                    <a href={href(["work", item.key])} className="truncate">
-                      {item.title}
-                    </a>
-                  </div>
-                ))}
-                {group.count > group.rows.length && (
-                  <p className="t-caption faint">
-                    {group.count - group.rows.length} more in this column
-                  </p>
-                )}
-              </Panel>
-            ))}
+        <div className="work-filters">
+          <div className="work-filters-search">
+            <SearchInput
+              value={q}
+              onChange={setQ}
+              ariaLabel="Find an item by key or title"
+              placeholder="Key or title"
+            />
           </div>
-        </>
-      )}
-
-      <QueryState
-        error={error}
-        loading={loading}
-        empty={
-          rows.length || groups.length
-            ? undefined
-            : {
-                title: "Nothing matches",
-                hint: "No item on this node's copy of the tracker matches these filters. Widen them, or check that work is being filed at all.",
-              }
-        }
-      >
-        <Coverage answer={data} />
-        {groups.length === 0 && (
-          <Panel>
-            <DataTable
-              rows={rows}
-              rowKey={(r) => r.id}
-              defaultSort={{ key: "updated", dir: "desc" }}
-              columns={[
-                {
-                  key: "key",
-                  header: "Key",
-                  shrink: true,
-                  sortValue: (r) => r.key,
-                  cell: (r) => (
-                    <a className="mono" href={href(["work", r.key])}>
-                      {r.key}
-                    </a>
-                  ),
-                },
-                {
-                  key: "title",
-                  header: "Title",
-                  sortValue: (r) => r.title,
-                  cell: (r) => (
-                    <a href={href(["work", r.key])} className="truncate">
-                      {r.title}
-                    </a>
-                  ),
-                },
-                {
-                  key: "status",
-                  header: "Status",
-                  shrink: true,
-                  sortValue: (r) => r.status,
-                  cell: (r) => (
-                    <>
-                      <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
-                        {STATUSES.find((s) => s.value === r.status)?.label ?? r.status}
-                      </Badge>
-                      {/* BESIDE the status rather than instead of it, which is
-                        the whole reason it is its own field: a task in
-                        progress with an open blocker is both, and a column
-                        that showed one would hide the other. */}
-                      {r.blocked && (
-                        <Badge tone="critical" outline>
-                          Blocked
-                        </Badge>
-                      )}
-                    </>
-                  ),
-                },
-                {
-                  key: "priority",
-                  header: "Priority",
-                  shrink: true,
-                  sortValue: (r) => r.priority ?? "",
-                  cell: (r) =>
-                    r.priority && r.priority !== "normal" ? (
-                      <Badge tone={PRIORITY_TONE[r.priority] ?? "neutral"}>{r.priority}</Badge>
-                    ) : (
-                      <span className="muted">—</span>
-                    ),
-                },
-                {
-                  key: "assignee",
-                  header: "Assignee",
-                  shrink: true,
-                  sortValue: (r) => r.assignee ?? "",
-                  cell: (r) =>
-                    r.assignee ? (
-                      <SeatChip name={seatName(r.assignee)} handle={r.assignee} />
-                    ) : (
-                      // NOBODY IS A STATE, and the one worth seeing: an
-                      // unassigned item routes to the project's lead, and a
-                      // project with no lead routes to nobody at all.
-                      <span className="muted">Unassigned</span>
-                    ),
-                },
-                {
-                  key: "updated",
-                  header: "Updated",
-                  shrink: true,
-                  align: "right",
-                  sortValue: (r) => tsKey(r.updated),
-                  cell: (r) => (
-                    <span title={fmtDateTime(r.updated)}>{relTime(r.updated, now)}</span>
-                  ),
-                },
+          <Select
+            value={status}
+            onChange={setStatus}
+            ariaLabel="Status"
+            anyLabel="Any status"
+            options={STATUSES.map((s) => ({
+              value: s.value,
+              label: statusLabel(s.value, detail?.statuses),
+            }))}
+          />
+          {(catalogue.data?.types ?? []).length > 0 && (
+            <Select
+              value={type}
+              onChange={setType}
+              ariaLabel="Type"
+              anyLabel="Any type"
+              options={(catalogue.data?.types ?? [])
+                .filter((t) => !t.archived)
+                .map((t) => ({ value: t.slug, label: t.name }))}
+            />
+          )}
+          <Select
+            value={priority}
+            onChange={setPriority}
+            ariaLabel="Priority"
+            anyLabel="Any priority"
+            options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+          />
+          <Select
+            value={assignee}
+            onChange={setAssignee}
+            ariaLabel="Assignee"
+            anyLabel="Anybody"
+            options={[
+              // UNASSIGNED IS A VALUE, not a missing filter — it is the one
+              // question a lead actually opens a board to ask.
+              { value: "none", label: "Unassigned" },
+              ...index.seats.map((s) => ({ value: s.handle, label: s.name })),
+            ]}
+          />
+          {project && detail?.sprints && (
+            <Select
+              value={sprint}
+              onChange={setSprint}
+              ariaLabel="Sprint"
+              anyLabel="Any sprint"
+              options={[
+                { value: "active", label: "Active sprint" },
+                { value: "next", label: "Next sprint" },
+                { value: "none", label: "Backlog" },
+                ...(detail.recent_sprints ?? []).map((s) => ({
+                  value: String(s.number),
+                  label: `${s.number} · ${s.name}`,
+                })),
               ]}
             />
-          </Panel>
-        )}
-      </QueryState>
+          )}
+          {shape !== "calendar" && (
+            <Select
+              value={groupBy}
+              onChange={(value) => {
+                setGroupBy(value);
+                // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the
+                // axis changes it narrows the board to a key the new axis
+                // has never heard of, which answers nothing.
+                setGroup("");
+              }}
+              ariaLabel="Group by"
+              anyLabel={shape === "board" ? "By status" : "No grouping"}
+              options={GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
+                value: a.value,
+                label: a.label,
+              }))}
+            />
+          )}
+          {shape === "list" && (
+            <Select
+              value={sort}
+              onChange={setSort}
+              ariaLabel="Sort"
+              anyLabel="Default order"
+              options={SORTS}
+            />
+          )}
+          {/* THREE SEGMENTS, not a checkbox: "open", "closed" and
+                "everything" are three real questions, and a two-state control
+                would make the third unreachable — which is how a board that
+                can never show a closed item ships. */}
+          <Segmented
+            value={scope}
+            onChange={setScope}
+            ariaLabel="Open or closed"
+            options={[
+              { value: "open", label: "Open" },
+              { value: "closed", label: "Closed" },
+              { value: "", label: "All" },
+            ]}
+          />
+          <Chip
+            on={filters.blocked}
+            onClick={() => setBlocked(filters.blocked ? "" : "true")}
+            title="Only work that cannot move"
+          >
+            Blocked
+          </Chip>
+          <Chip
+            on={filters.overdue}
+            onClick={() => setOverdue(filters.overdue ? "" : "true")}
+            title="Only open work past its due date"
+          >
+            Overdue
+          </Chip>
+          {anyFilter(filters) && (
+            <Button size="sm" variant="ghost" icon="x" onClick={clearFilters}>
+              Clear
+            </Button>
+          )}
+          <span className="work-summary">
+            <Coverage answer={data} />
+            {!loading && !error && (
+              <span>
+                {plural(shown.length, "item")}{" "}
+                {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
+              </span>
+            )}
+          </span>
+        </div>
 
-      {!loading && !error && projects.length === 0 && shown.length === 0 && (
-        <Empty
-          icon="inbox"
-          title="No work has been filed yet"
-          hint="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project's key comes from a unit's `project` field."
-        />
+        {group && groups.length > 0 && (
+          <Banner tone="info">
+            Showing one column of this board.
+            <Button size="sm" variant="ghost" onClick={() => setGroup("")}>
+              Show every column
+            </Button>
+          </Banner>
+        )}
+        {data?.groups_overlap && (
+          <Banner tone="info">
+            One item can be on several of these columns, so the counts add up to more than the
+            total.
+          </Banner>
+        )}
+        {data?.groups_dropped ? (
+          <Banner tone="caution">
+            {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit and
+            are not shown. Narrow the board to bring them into range.
+          </Banner>
+        ) : null}
+
+        <div className="work-body">
+          <div className="col gap-4" style={{ minWidth: 0 }}>
+            {loading && !data && <Skeleton rows={6} />}
+
+            <QueryState
+              error={error}
+              loading={loading}
+              empty={
+                shown.length || groups.length
+                  ? undefined
+                  : {
+                      title: "Nothing matches",
+                      hint: "No item on this node's copy of the tracker matches these filters. Widen them, or check that work is being filed at all.",
+                    }
+              }
+            >
+              {shape === "board" && (
+                <Board
+                  now={now}
+                  groups={groups}
+                  axis={String(params.group_by ?? "status")}
+                  chrome={chrome}
+                  detail={detail}
+                  workspace={!project}
+                  selected={peek?.kind === "item" ? peek.id : ""}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  onOverflow={(axis, key) => {
+                    const patch = filterPatchForGroup(axis, key);
+                    setViewKey(patch.view ?? "list");
+                    setGroupBy(patch.group_by ?? "");
+                    setGroup(patch.group ?? "");
+                  }}
+                />
+              )}
+              {shape === "list" && (
+                <List
+                  rows={rows}
+                  groups={groups}
+                  axis={groupBy}
+                  chrome={chrome}
+                  detail={detail}
+                  now={now}
+                  selected={peek?.kind === "item" ? peek.id : ""}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  onOverflow={(axis, key) => {
+                    setGroupBy(axis);
+                    setGroup(key);
+                  }}
+                />
+              )}
+              {shape === "calendar" && (
+                <CalendarView
+                  weeks={weeks}
+                  rows={rows}
+                  month={thisMonth}
+                  chrome={chrome}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  onMonth={setMonth}
+                  onToday={() => setMonth("")}
+                />
+              )}
+            </QueryState>
+
+            <ActivityFeed records={feed.data?.records ?? []} now={now} />
+          </div>
+        </div>
+
+        {/* THE PEEK, in the frame's own rail. `[` and `]` step through the
+              rows this list actually loaded, which is what makes a board
+              readable without leaving it — and the same rail, the same
+              keystrokes and the same way out on every kind of object. */}
+        {peek?.kind === "item" && (
+          <DetailRail
+            ref={peek}
+            onStep={(delta) => {
+              const keys = rows.map((r) => r.key);
+              const at = keys.indexOf(peek.id);
+              const next = keys[Math.max(0, Math.min(keys.length - 1, at + delta))];
+              if (next && next !== peek.id) movePeek({ kind: "item", id: next });
+            }}
+          >
+            <ItemPeek itemKey={peek.id} chrome={chrome} />
+          </DetailRail>
+        )}
+
+        {!loading && !error && (projects.data?.projects ?? []).length === 0 && (
+          <Empty
+            icon="inbox"
+            title="No work has been filed yet"
+            hint="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key."
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The rail
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// The two heads
+// ---------------------------------------------------------------------------
+
+/**
+ * The company's work at a glance, ranked by where the open work is.
+ *
+ * ONE HUE FOR EVERY BAR. A hue per project would be identity colouring by row
+ * — rename the project and its colour changes, which is the proof it never
+ * meant anything — and the label already carries which project it is. The
+ * chart is absent below two projects, because a one-bar chart is a number.
+ */
+export function WorkspaceHead({ projects }: { projects: WorkProjectRow[] }) {
+  if (projects.length === 0) return null;
+  const counts = projects.reduce(
+    (acc, p) => ({
+      open: acc.open + p.task_counts.open,
+      done: acc.done + p.task_counts.done,
+      closed: acc.closed + p.task_counts.closed,
+    }),
+    { open: 0, done: 0, closed: 0 },
+  );
+  return (
+    <>
+      <div className="work-facts">
+        <Fact label="Projects">{projects.length}</Fact>
+        <Fact label="Open">{counts.open}</Fact>
+        <Fact label="Done">{counts.done}</Fact>
+        <Fact label="Closed">{counts.closed}</Fact>
+      </div>
+      {projects.length > 1 && (
+        <Panel title="Open work by project" icon="columns" padding="normal">
+          <BarList
+            data={[...projects]
+              .sort((a, b) => b.task_counts.open - a.task_counts.open)
+              .map((p) => ({
+                label: (
+                  <span className="row gap-2">
+                    <span className="key-mark">{p.key}</span>
+                    <span className="truncate">{p.name}</span>
+                  </span>
+                ),
+                value: p.task_counts.open,
+                display: p.task_counts.open,
+                sub: `${p.task_counts.done} done · ${p.task_counts.closed} closed`,
+                color: "var(--viz-1)",
+                // A REAL LINK: a project is a page now, so the bar opens in a
+                // tab like anything else on this screen.
+                href: href(["work", p.key]),
+              }))}
+            emptyLabel="No project holds any open work."
+          />
+        </Panel>
       )}
     </>
   );
 }
 
-/** One item: its description, its thread and everything that moved it. */
 /**
- * EVERY ROW ON SCREEN, grouped or flat.
+ * One project's own facts — the container half a board cannot say from its rows.
  *
- * A grouped answer carries NO flat `items` by construction — `groups` replaces
- * them, because returning both would be the same rows twice — so everything
- * derived from `items` alone reported a fully populated board as empty: the
- * header read 0 shown, 0 in progress, 0 blocked, and the panel at the foot of
- * the screen drew "No work has been filed yet" underneath the board's own
- * columns.
- *
- * The top-level rows are enough and subgroup rows are deliberately NOT added:
- * a subgroup's rows are a slice of its own column's, so folding them in would
- * count the same task twice.
+ * ABSENT RATHER THAN EMPTY while the read is in flight: an overview rendered
+ * with zeroes is a project that looks unstaffed, unled and out of sprint,
+ * which is a conclusion somebody acts on.
  */
-/** One project's overview strip — the container facts a board cannot show.
- *
- *  ABSENT RATHER THAN EMPTY while the read is in flight or a project has no
- *  answer: an overview rendered with zeroes is a project that looks
- *  unstaffed, unled and out of sprint, which is a conclusion somebody acts
- *  on. */
-export function ProjectOverview({ detail }: { detail?: WorkProjectDetail | null }) {
+export function ProjectHead({
+  detail,
+  chrome,
+}: {
+  detail?: WorkProjectDetail | null;
+  chrome?: RowChrome;
+}) {
   if (!detail) return null;
   const sprint = detail.sprints?.active;
   const pending = detail.sprints?.pending_spillovers ?? [];
+  const counts = detail.task_counts;
+  const total = counts.open + counts.done + counts.closed;
+  const measure = sprint?.figures.measure === "estimate_min" ? "minutes" : "points";
+  const committed = sprint ? sprint.figures.committed + sprint.figures.added : 0;
+
   return (
     <>
       {/* A UNIT THE CHART NO LONGER HAS is a finding, not a blank: it is what
@@ -552,390 +690,417 @@ export function ProjectOverview({ detail }: { detail?: WorkProjectDetail | null 
           current org chart does not have — work filed here routes to nobody.
         </Banner>
       )}
-      {/* A CLOSED SPRINT NOBODY HAS SETTLED. The work is neither carried
-          forward nor dropped until a lead says which. */}
       {pending.length > 0 && (
         <Banner tone="caution">
           Sprint{pending.length === 1 ? "" : "s"} {pending.join(", ")} closed with the spillover
           still undecided — the unfinished work is waiting on a lead.
         </Banner>
       )}
-      <StatRow cols={4}>
-        <Stat label="Open" value={detail.task_counts.open} sub={detail.name} />
-        <Stat label="Done" value={detail.task_counts.done} />
-        <Stat
-          label="Lead"
-          value={detail.lead.handle || "none"}
-          sub={detail.unit.name || detail.unit.key || "no unit"}
-        />
-        {/* THE MEASURE IS ON THE LABEL, because a bare "12 of 34" is points
-            to one team and minutes to another. */}
-        <Stat
-          label={sprint ? `Sprint ${sprint.number}` : "Sprint"}
-          value={
-            sprint
-              ? `${sprint.figures.done} / ${sprint.figures.committed + sprint.figures.added}`
-              : "none"
-          }
-          sub={
-            sprint
-              ? `${sprint.figures.measure === "points" ? "points" : "minutes"} · ${
-                  sprint.days_remaining
-                }d left`
-              : "this project runs none"
-          }
-        />
-      </StatRow>
+
+      <div className="work-facts">
+        {/* A HANDLE IS THE DATABASE'S WORD FOR A PERSON. Every other
+            surface in the tree resolves it through the chart and shows the
+            name somebody is actually called; this one printed the slug. */}
+        <Fact label="Lead">
+          {detail.lead.handle ? (
+            <SeatChip
+              name={chrome?.seatName?.(detail.lead.handle) ?? detail.lead.handle}
+              handle={detail.lead.handle}
+            />
+          ) : (
+            <span className="muted">nobody</span>
+          )}
+        </Fact>
+        <Fact label="Unit">
+          <span className="truncate">
+            {detail.unit.name || detail.unit.key || <span className="muted">none</span>}
+          </span>
+        </Fact>
+        <Fact label="Open">{counts.open}</Fact>
+        <Fact label="Done">{counts.done}</Fact>
+        {/* THE CENSUS AS A SHAPE. The three numbers say how much; the bar says
+            the proportion, which is the fact a reader actually wants — "mostly
+            finished" against "mostly ahead" — and it is drawn in the STATUS
+            tones the badges use rather than the chart hues, so the same fact
+            is not two colours on one screen. */}
+        {total > 0 && (
+          <Fact label="Census">
+            <span className="col" style={{ gap: 4, width: "100%" }}>
+              <StackedBar
+                segments={[
+                  { label: "Open", value: counts.open, color: "var(--info)" },
+                  { label: "Done", value: counts.done, color: "var(--positive)" },
+                  { label: "Closed", value: counts.closed, color: "var(--viz-other)" },
+                ]}
+              />
+              <Legend
+                items={[
+                  { label: "Open", color: "var(--info)" },
+                  { label: "Done", color: "var(--positive)" },
+                  { label: "Closed", color: "var(--viz-other)" },
+                ]}
+              />
+            </span>
+          </Fact>
+        )}
+        {/* THE MEASURE IS ALWAYS NAMED, because a bare "8 / 25" is points to
+            one team and minutes to another. */}
+        <Fact label={sprint ? `Sprint ${sprint.number} · ${sprint.name}` : "Sprint"}>
+          {sprint ? (
+            <span className="col" style={{ gap: 4, width: "100%" }}>
+              <Meter
+                used={sprint.figures.done}
+                max={Math.max(1, committed)}
+                ariaLabel={`Sprint ${sprint.number} — delivered`}
+                right={`${sprint.figures.done} of ${committed} ${measure} · ${sprint.days_remaining}d left`}
+                fullMeans="achieved"
+              />
+            </span>
+          ) : (
+            // TWO DIFFERENT FACTS, and one sentence used to cover both:
+            // "this team does not work in sprints" and "this team is
+            // between sprints" send a reader to different places, and the
+            // answer tells them apart — a project that runs sprints has a
+            // POLICY whether or not one is open right now. It is also a
+            // value rather than a sentence, because the five facts beside
+            // it are words and numbers.
+            <span className="muted">{detail.sprint_policy ? "none running" : "not used"}</span>
+          )}
+        </Fact>
+      </div>
     </>
   );
 }
 
-/** The project filter's options: the COMPANY's own listing, falling back to
- *  whatever is on the page.
+// ---------------------------------------------------------------------------
+// The board
+// ---------------------------------------------------------------------------
+
+export function Board({
+  groups,
+  axis,
+  chrome,
+  detail,
+  now,
+  workspace,
+  selected,
+  hrefOf,
+  onOpen,
+  onOverflow,
+}: {
+  groups: WorkGroup[];
+  axis: string;
+  chrome: RowChrome;
+  detail?: WorkProjectDetail | null;
+  now: number;
+  workspace?: boolean;
+  selected?: string;
+  hrefOf: (row: WorkSummary) => string;
+  onOpen: (row: WorkSummary) => void;
+  onOverflow: (axis: string, key: string) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="work-board">
+      {groups.map((group) => {
+        const label = groupLabel(axis, group, {
+          statuses: detail?.statuses,
+          types: chrome.types,
+          tags: detail?.tags,
+          seatName: chrome.seatName,
+        });
+        return (
+          <section className="work-col" key={group.key || "—"}>
+            <header className="work-col-head">
+              {axis === "status" && (
+                <i className={`dot ${statusTone(group.key)}`} aria-hidden="true" />
+              )}
+              {axis === "type" && <TypeIcon type={group.key} types={chrome.types} />}
+              <span className="truncate">{label}</span>
+              <span className="count-chip">{group.count}</span>
+            </header>
+            <div className="work-col-body">
+              {group.rows.map((row) => (
+                <BoardCard
+                  key={row.id}
+                  row={row}
+                  now={now}
+                  chrome={chrome}
+                  href={hrefOf(row)}
+                  selected={selected === row.key}
+                  onOpen={() => onOpen(row)}
+                  showSprint={workspace}
+                />
+              ))}
+              {group.rows.length === 0 && <div className="work-col-empty">Nothing here</div>}
+            </div>
+            {/* A COLUMN'S COUNT IS OVER THE WHOLE SET and its rows are a
+                slice, so a column of four hundred says four hundred and hands
+                back fifty. The rest are reachable rather than merely counted:
+                the link is the same query as a list narrowed to this column. */}
+            {group.count > group.rows.length && (
+              <div className="work-col-foot">
+                <a
+                  href={href(["work"], { view: "list", group_by: axis, group: group.key })}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onOverflow(axis, group.key);
+                  }}
+                >
+                  {group.count - group.rows.length} more →
+                </a>
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function statusTone(status: string): string {
+  return (
+    {
+      todo: "",
+      in_progress: "info",
+      in_review: "caution",
+      done: "positive",
+      closed: "",
+      cancelled: "",
+    }[status] ?? ""
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The list
+// ---------------------------------------------------------------------------
+
+export function List({
+  rows,
+  groups,
+  axis,
+  chrome,
+  detail,
+  now,
+  selected,
+  hrefOf,
+  onOpen,
+  onOverflow,
+}: {
+  rows: WorkSummary[];
+  groups: WorkGroup[];
+  axis: string;
+  chrome: RowChrome;
+  detail?: WorkProjectDetail | null;
+  now: number;
+  selected?: string;
+  hrefOf: (row: WorkSummary) => string;
+  onOpen: (row: WorkSummary) => void;
+  onOverflow: (axis: string, key: string) => void;
+}) {
+  if (groups.length > 0) {
+    return (
+      <div className="col gap-3">
+        {groups.map((group) => (
+          <Panel key={group.key || "—"} padding="none">
+            <header className="work-group-head">
+              <span className="truncate">
+                {groupLabel(axis, group, {
+                  statuses: detail?.statuses,
+                  types: chrome.types,
+                  tags: detail?.tags,
+                  seatName: chrome.seatName,
+                })}
+              </span>
+              <span className="count-chip">{group.count}</span>
+            </header>
+            <RowList
+              rows={group.rows}
+              now={now}
+              chrome={chrome}
+              hrefOf={hrefOf}
+              onOpen={onOpen}
+              selected={selected}
+            />
+            {group.count > group.rows.length && (
+              <div className="work-group-foot">
+                <a
+                  href={href(["work"], { view: "list", group_by: axis, group: group.key })}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onOverflow(axis, group.key);
+                  }}
+                >
+                  {group.count - group.rows.length} more →
+                </a>
+              </div>
+            )}
+          </Panel>
+        ))}
+      </div>
+    );
+  }
+  if (rows.length === 0) return null;
+  return (
+    <Panel padding="none">
+      <RowList
+        rows={rows}
+        now={now}
+        chrome={chrome}
+        hrefOf={hrefOf}
+        onOpen={onOpen}
+        selected={selected}
+      />
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The calendar
+// ---------------------------------------------------------------------------
+
+export function CalendarView({
+  weeks,
+  rows,
+  month,
+  chrome,
+  hrefOf,
+  onOpen,
+  onMonth,
+  onToday,
+}: {
+  weeks: CalendarCell[][];
+  rows: WorkSummary[];
+  month: string;
+  chrome: RowChrome;
+  hrefOf: (row: WorkSummary) => string;
+  onOpen: (row: WorkSummary) => void;
+  onMonth: (month: string) => void;
+  onToday: () => void;
+}) {
+  const buckets = useMemo(() => bucketByDay(rows), [rows]);
+  const undated = rows.length - [...buckets.values()].flat().length;
+  return (
+    <Panel padding="none">
+      <div className="work-cal">
+        <div className="work-cal-nav">
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="chevronLeft"
+            title="The month before"
+            onClick={() => onMonth(shiftMonth(month, -1))}
+          />
+          <span className="work-cal-month">{monthLabel(month)}</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="chevronRight"
+            title="The month after"
+            onClick={() => onMonth(shiftMonth(month, 1))}
+          />
+          <Button size="sm" variant="ghost" onClick={onToday}>
+            Today
+          </Button>
+        </div>
+        <div className="work-cal-grid">
+          {WEEKDAYS.map((day) => (
+            <div className="work-cal-dow" key={day}>
+              {day}
+            </div>
+          ))}
+          {weeks.flat().map((cell) => {
+            const due = buckets.get(cell.key) ?? [];
+            const shownChips = due.slice(0, CALENDAR_CELL_CHIPS);
+            return (
+              <div
+                className={`work-cal-cell${cell.inMonth ? "" : " out"}${cell.today ? " today" : ""}`}
+                key={cell.key}
+              >
+                <span className="work-cal-day">{cell.day}</span>
+                {shownChips.map((row) => (
+                  <a
+                    key={row.id}
+                    className="work-cal-chip"
+                    data-overdue={row.overdue ? "true" : undefined}
+                    data-done={
+                      row.status_group === "done" || row.status_group === "closed"
+                        ? "true"
+                        : undefined
+                    }
+                    href={hrefOf(row)}
+                    title={`${row.key} · ${row.title}`}
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                      e.preventDefault();
+                      onOpen(row);
+                    }}
+                  >
+                    <TypeIcon type={row.type} types={chrome.types} />
+                    <span className="work-cal-key">{row.key}</span>
+                    <span className="truncate">{row.title}</span>
+                  </a>
+                ))}
+                {due.length > shownChips.length && (
+                  <span className="work-cal-more">+{due.length - shownChips.length} more</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {/* THERE IS NO `due=null` IN THE GRAMMAR, so the count of undated work
+            is what this answer happens to carry rather than the company's. It
+            is said all the same: a reader who cannot see the omission reads
+            the month as the whole backlog. */}
+        <div className="work-cal-note">
+          Only work with a due date appears here — the list shows the rest.
+          {undated > 0 ? ` ${undated} of the items on this page carry no due date.` : ""}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The feed
+// ---------------------------------------------------------------------------
+
+/**
+ * What happened in this container lately.
  *
- *  The listing is the honest set — a filter built from the rows can only offer
- *  the projects that happen to be on them, so a board already narrowed to one
- *  offered exactly one choice and no way back. The fallback is not decoration:
- *  the listing is a separate poll, and a filter that empties while it is in
- *  flight is a control that flickers every time the board is re-read. */
-/** What happened in this container lately.
- *
- *  A DIFFERENT QUESTION from what is on the board: the feed is ordered by the
- *  log rather than by anything the rows sort on, so a change that moved
- *  nothing on screen — a comment, a watcher, a quiet re-type — is still
- *  visible. It renders the AUTHORED instant, which is what the writer's clock
- *  said and what "yesterday" has to keep meaning.
- *
- *  ABSENT when empty rather than drawn as an empty panel: a board with no
- *  history yet has nothing to say about it. */
+ * A DIFFERENT QUESTION from what is on the board: the feed is ordered by the
+ * log rather than by anything the rows sort on, so a change that moved nothing
+ * on screen — a comment, a watcher, a quiet re-type — is still visible. It
+ * renders the AUTHORED instant, which is what the writer's clock said and what
+ * "yesterday" has to keep meaning.
+ */
 export function ActivityFeed({ records, now }: { records: WorkActivityRecord[]; now: number }) {
   if (records.length === 0) return null;
   return (
-    <Panel title="Recent activity" count={records.length} padding="tight">
+    <Panel title="Recent activity" icon="activity" count={records.length} padding="none">
       {records.map((record) => (
-        <div key={record.id} className="row gap-2">
-          <span className="muted">{relTime(record.at, now)}</span>
-          <Badge tone="neutral">{record.kind}</Badge>
-          {record.subject_key && (
-            <a className="mono" href={href(["work", record.subject_key])}>
-              {record.subject_key}
-            </a>
-          )}
-          <span className="truncate">{describeChange(record)}</span>
-          <span className="muted">{record.actor}</span>
+        <div key={record.id} className="work-feed-row">
+          <span className="work-feed-when" title={fmtDateTime(record.at)}>
+            {relTime(record.at, now)}
+          </span>
+          <span className="work-feed-kind">
+            <Badge outline>{record.kind.replaceAll("_", " ")}</Badge>
+          </span>
+          <span>
+            {record.subject_key ? (
+              <a className="mono t-link" href={href(["work", record.subject_key])}>
+                {record.subject_key}
+              </a>
+            ) : (
+              <span className="faint">—</span>
+            )}
+          </span>
+          <span className="work-feed-what truncate">{describeChange(record)}</span>
+          <span className="work-feed-who">{record.actor || "the engine"}</span>
         </div>
       ))}
     </Panel>
   );
 }
 
-/** One commit in a sentence.
- *
- *  FROM THE DELTAS where there are any, because "todo → in_progress" is what
- *  every reader of a change wants and the kind alone does not say it. The
- *  excerpt is the fallback, and the kind is the last resort — a row with
- *  neither is still a row, and rendering it blank would make a real commit
- *  look like a rendering bug. */
-export function describeChange(record: WorkActivityRecord): string {
-  const moved = Object.entries(record.fields ?? {});
-  if (moved.length > 0) {
-    return moved.map(([field, d]) => `${field}: ${d.from || "—"} → ${d.to || "—"}`).join(", ");
-  }
-  if (record.excerpt) return record.excerpt;
-  return record.kind.replaceAll("_", " ");
-}
-
-export function projectKeys(listed: WorkProjectRow[] | undefined, shown: WorkSummary[]): string[] {
-  if (listed && listed.length > 0) return listed.map((p) => p.key);
-  const keys = new Set<string>();
-  for (const item of shown) keys.add(item.project);
-  return [...keys].sort();
-}
-
-export function shownRows(items: WorkSummary[], groups: WorkGroup[]): WorkSummary[] {
-  if (groups.length === 0) return items;
-  return groups.flatMap((group) => group.rows);
-}
-
-export function WorkItem({ id }: { id: string }) {
-  const org = useOrg();
-  const index = useMemo(() => indexOrg(org), [org]);
-  const now = useNow();
-  const { data, loading, error } = useQuery(
-    "work_item",
-    { id },
-    { enabled: id !== "", pollMs: 15_000 },
-  );
-
-  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
-  const item = data?.task;
-
-  return (
-    <>
-      <ScreenHead
-        title={item?.key || id || "Item"}
-        sub={item?.title}
-        badges={
-          item ? (
-            <>
-              <Badge tone={STATUS_TONE[item.status] ?? "neutral"} dot>
-                {STATUSES.find((s) => s.value === item.status)?.label ?? item.status}
-              </Badge>
-              {data?.blocked && (
-                <Badge tone="critical" outline>
-                  Blocked
-                </Badge>
-              )}
-              {item.type && <Badge outline>{item.type}</Badge>}
-              {item.project && <Badge outline>{item.project}</Badge>}
-            </>
-          ) : undefined
-        }
-      />
-
-      {loading && <Skeleton rows={8} />}
-
-      <QueryState error={error} loading={loading}>
-        {item && (
-          <>
-            <Coverage answer={data} />
-            <Panel title="Description">
-              {item.body ? (
-                <div className="prose">{item.body}</div>
-              ) : (
-                <span className="muted">No description was written.</span>
-              )}
-            </Panel>
-
-            <Panel title="Ownership">
-              <StatRow cols={3}>
-                <Stat
-                  label="Assignee"
-                  value={item.assignee ? seatName(item.assignee) : "Unassigned"}
-                />
-                <Stat label="Reporter" value={item.reporter ? seatName(item.reporter) : "—"} />
-                {/* THE REASSIGNMENT COUNT IS A BUDGET, not trivia: an item
-                    handed on too many times has stopped being work and
-                    started being a hot potato, and the engine refuses the
-                    next hand-off rather than letting it circle. */}
-                <Stat
-                  label="Hand-offs"
-                  value={item.reassignments ?? 0}
-                  sub="each reassignment spends the item's own budget"
-                  icon={(item.reassignments ?? 0) >= 6 ? "alert" : undefined}
-                />
-              </StatRow>
-              {item.watchers?.length ? (
-                <div
-                  className="row wrap"
-                  style={{ gap: "var(--space-2)", marginTop: "var(--space-3)" }}
-                >
-                  <span className="muted">Watching:</span>
-                  {item.watchers.map((w) => (
-                    <SeatChip key={w} name={seatName(w)} handle={w} />
-                  ))}
-                </div>
-              ) : null}
-            </Panel>
-
-            {data.links?.length ? (
-              <Panel title="Links">
-                <ul className="list">
-                  {data.links.map((link) => (
-                    <li
-                      key={`${link.kind}:${link.other}`}
-                      className="row"
-                      style={{ gap: "var(--space-2)" }}
-                    >
-                      <Badge outline>{link.kind.replace(/_/g, " ")}</Badge>
-                      <a href={href(["work", link.key || link.other])} className="mono">
-                        {link.key || link.other}
-                      </a>
-                      <span className="truncate">{link.title}</span>
-                      {/* The DERIVED half is the one nobody authored — an
-                          editor has to change the other end. */}
-                      {link.derived && <span className="muted">(the other end authored this)</span>}
-                    </li>
-                  ))}
-                </ul>
-              </Panel>
-            ) : null}
-
-            <Panel title={`Thread (${data.comments?.length ?? 0})`}>
-              {data.comments?.length ? (
-                <div className="col gap-3">
-                  {data.comments.map((c) => (
-                    <div key={c.id} className="comment">
-                      <div className="row" style={{ gap: "var(--space-2)" }}>
-                        <SeatChip name={seatName(c.author)} handle={c.author} />
-                        <span className="muted" title={fmtDateTime(c.created_at)}>
-                          {relTime(c.created_at, now)}
-                        </span>
-                        {c.updated_at && <span className="muted">(edited)</span>}
-                        {c.resolved && <Badge tone="positive">Resolved</Badge>}
-                      </div>
-                      <div className="prose">{c.body}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <span className="muted">Nobody has commented.</span>
-              )}
-            </Panel>
-
-            <Panel title="History">
-              {data.history?.length ? (
-                <ul className="list">
-                  {data.history.map((change) => (
-                    <li key={change.id} className="row" style={{ gap: "var(--space-2)" }}>
-                      <Icon name="activity" size="sm" />
-                      <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
-                      <span className="muted">{change.kind.replace(/_/g, " ")}</span>
-                      {/* The snapshot records what changed as VALUES, not as
-                          from/to pairs — the applier writes the state the
-                          change produced, and the previous value survives in
-                          the entry before it. */}
-                      {change.fields &&
-                        Object.keys(change.fields).map((field) => (
-                          <span key={field} className="muted">
-                            {field}
-                          </span>
-                        ))}
-                      {/* A COMMIT THAT ANNOUNCED NOTHING — one that carried
-                          no notification at all. A fact about the change
-                          rather than about its importance: a bulk edit is
-                          quiet by construction. A commit WITHOUT this marker
-                          announced something; whether it reached anybody is
-                          resolved against the live roster at wake time and is
-                          not what this says. */}
-                      {change.quiet && <span className="muted">(quiet)</span>}
-                      <span className="spacer" />
-                      <span className="muted" title={fmtDateTime(change.at)}>
-                        {relTime(change.at, now)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <span className="muted">Nothing has moved this item yet.</span>
-              )}
-            </Panel>
-          </>
-        )}
-      </QueryState>
-    </>
-  );
-}
-
-/** The coverage half every tracker answer carries — a board's and a task's
- *  alike, which is why this is its own type rather than either answer's. */
-interface CoverageFacts {
-  read_level?: string;
-  complete?: boolean;
-  log_seq?: number;
-  applied_through?: number;
-  incomplete?: WorkIncomplete;
-}
-
-/** How stale an answer may be, and what it could not account for.
- *
- * # Two different facts, and a screen that shows only one lies
- *
- * `read_level` says how FRESH the answer is — whether it came from this
- * node's rows as they stood, or from a position the caller's own write is at
- * or below. `complete` says whether the answer could account for everything
- * it was asked about: a node holding records this build cannot decode has
- * rows that may be missing, rows that should have left and may still be
- * present, and totals computed over the incomplete set.
- *
- * A screen that renders the freshness badge and swallows the coverage flag is
- * worse than a stale tile, because a person reads "a moment ago" and
- * concludes the board is right. So the incomplete line is a BANNER above the
- * rows rather than a badge beside them, it names the count and the scope, and
- * it says the remedy — which is a build that can read the records, not a
- * refresh.
- */
-function Coverage({ answer }: { answer?: CoverageFacts | null }) {
-  if (!answer) return null;
-  const behind =
-    answer.applied_through !== undefined &&
-    answer.log_seq !== undefined &&
-    answer.applied_through < answer.log_seq;
-
-  return (
-    <>
-      {answer.complete === false && (
-        <Banner tone="caution">
-          <strong>
-            This answer is incomplete
-            {answer.incomplete
-              ? ` — ${answer.incomplete.records} record(s) this build cannot read`
-              : ""}
-          </strong>{" "}
-          Rows may be missing, rows that should have gone may still be here, and the counts were
-          computed over what is shown.
-          {answer.incomplete?.scope?.length
-            ? ` Affected: ${answer.incomplete.scope.join(", ")}.`
-            : ""}
-          {answer.incomplete
-            ? ` Record version ${answer.incomplete.version}, from sequence ${answer.incomplete.from.seq} — a build that can read it is what resolves this, not a refresh.`
-            : ""}
-        </Banner>
-      )}
-      <div className="row" style={{ gap: "var(--space-2)" }}>
-        {answer.read_level && (
-          <Badge outline title="How fresh this answer is, as the engine actually served it">
-            {answer.read_level}
-          </Badge>
-        )}
-        {/* APPLIED_THROUGH BESIDE SEQ, so a node holding something it cannot
-            apply is visible as its own state rather than as lag. */}
-        {behind && (
-          <Badge tone="caution" outline>
-            applied through {answer.applied_through} of {answer.log_seq}
-          </Badge>
-        )}
-      </div>
-    </>
-  );
-}
-
-/** The board's own count against the engine's hint.
- *
- * The hint is CAPPED by construction — an exact total over an unbounded set
- * is the one query in this grammar that turns a poll into a scan — and the
- * ANSWER says whether it was, so this reads a flag rather than carrying a
- * copy of the engine's ceiling.
- */
-function totalHint(hint: number, shown: number, capped?: boolean): string {
-  if (hint <= 0) return "";
-  // THE ENGINE SAYS WHETHER IT COUNTED THAT FAR, and the threshold is not
-  // repeated here: comparing the hint against a ceiling of our own was a
-  // second copy of the engine's, wrong at exactly one value — a set of
-  // exactly ten thousand is EXACT and read as "10000+".
-  if (capped) return `of ${hint}+ matching`;
-  if (hint <= shown) return `of ${hint} matching`;
-  return `of ${hint} matching — page through for the rest`;
-}
-
-/** scopeOf maps a view's status_group back onto the board's three segments.
- *
- *  THE SEGMENTS ARE A SHORTHAND for the two groups each names, so a view
- *  carrying exactly those groups lands on the segment rather than on "All"
- *  with an invisible filter. Anything else is "All": a view filtering to one
- *  group is not one of the three questions the control asks. */
-function scopeOf(group: string | undefined): string {
-  if (group === "not_started,active") return "open";
-  if (group === "done,closed") return "closed";
-  return "";
-}
-
-/** viewTitle says whose a saved view is, which is the one thing its name
- *  cannot: two people's "My work" are two different views. */
-function viewTitle(v: WorkView): string {
-  const parts: string[] = [];
-  if (v.owner) parts.push(`${v.owner}'s`);
-  parts.push(v.type);
-  if (v.protected) parts.push("— only its owner may change it");
-  return parts.join(" ");
-}
+export { describeChange, projectKeys, shownRows, typeName, StatusBadge };

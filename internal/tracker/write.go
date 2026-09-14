@@ -397,11 +397,20 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			{Kind: TermObject, Container: *patch.Project, ID: id},
 		}}
 	}
-	if patch.Status != nil {
-		var err error
-		if scope, err = w.scopeForStatus(ctx, id, project, scope); err != nil {
-			return WriteResult{}, err
-		}
+	// EVERY PATCH, not only a status one. The apply rewrites every row
+	// naming this task as a blocker on EVERY task apply — `maintainDeps`
+	// runs out of `explodeTask`, which nothing gates — so a patch that
+	// changed only a due date wrote a dependent's row under a scope that
+	// never named it.
+	//
+	// Gated on the status, this was UNRECOVERABLE rather than merely
+	// narrow: [ScopeSet.covers] inside the decide refuses such a write and
+	// tells the caller to re-run, and the re-run took the same gate and
+	// came up short again. Any edit at all to a task somebody waits on was
+	// refused for ever, with an error promising it would not be.
+	var err error
+	if scope, err = w.scopeForDependents(ctx, id, project, scope); err != nil {
+		return WriteResult{}, err
 	}
 	at := w.Now()
 
@@ -416,6 +425,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			current, held, err := readTask(ctx, tx, id)
 			if err != nil {
 				return statelog.Decision{}, err
@@ -450,6 +460,18 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				}
 				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				if err := declaredTags(ctx, tx, home, *patch.Tags); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
+			// AND A SPRINT THE PROJECT ACTUALLY MINTED, on the home
+			// the patch is landing on rather than the one it left.
+			if patch.Sprint != nil {
+				home := current.Project
+				if patch.Project != nil {
+					home = *patch.Project
+				}
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
+				if err := mintedSprint(ctx, tx, home, patch.Sprint); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
@@ -489,15 +511,15 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			}
 			// THE SCOPE THE REQUEST CLAIMED STILL COVERS THIS WRITE.
 			//
-			// A status write's apply rewrites `blocker_open` and
+			// EVERY task apply rewrites `blocker_open` and
 			// `cleared_at` on every row that names this task as a
 			// blocker — rows keyed on OTHER tasks — so the record
 			// enumerates one object term per dependent (see
-			// [scopeForStatus]). That enumeration is read BEFORE the
-			// request is built, because the publisher probes the
-			// deferral index with the REQUEST's scope while the applier
-			// files a deferral under the ENVELOPE's, and the two must
-			// be one set.
+			// [Writer.scopeForDependents]). That enumeration is read
+			// BEFORE the request is built, because the publisher probes
+			// the deferral index with the REQUEST's scope while the
+			// applier files a deferral under the ENVELOPE's, and the
+			// two must be one set.
 			//
 			// This is the check that makes reading it early honest: if
 			// a dependent arrived between that read and this snapshot,

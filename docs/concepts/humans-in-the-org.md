@@ -63,6 +63,16 @@ agents mention and reach them, and how inbound webhooks attribute their
 activity by name. A seat with no contact would be inert (visible in the
 chart but unreachable), so it's rejected at validation.
 
+**And no two seats may claim one identity.** Each of these fields is an
+external account, and an account belongs to one person. A duplicate is
+rejected at validation because it does not fail loudly on its own: inbound
+routing keys a map on the identity, so the *last* seat in the chart takes it,
+while every walk of the chart answers the *first*. One of the two people
+silently stops receiving their own mail, with both entries looking perfectly
+ordinary — and with `crewlet_operator_id` the two directions disagree outright,
+so a token opens one person's dashboard while their wakes go to another seat.
+The comparison ignores case and surrounding whitespace, because the lookups do.
+
 `crewlet_operator_id` satisfies that requirement on its own, and the seat is
 still reachable: their queue is the dashboard, not a chat mention. The roster
 an agent reads says so explicitly rather than telling it to @-mention somebody

@@ -76,6 +76,15 @@ export interface BarDatum {
   display?: ReactNode;
   color?: string;
   onClick?: () => void;
+  /**
+   * Where this bar GOES.
+   *
+   * A bar that navigates is a link, and a link has to be middle-clickable: a
+   * button with an onClick opens nothing in a tab, which on a chart of
+   * projects is the gesture a reader makes most. `onClick` remains for a bar
+   * that changes the chart rather than leaving it.
+   */
+  href?: string;
   sub?: ReactNode;
 }
 
@@ -103,18 +112,28 @@ export function BarList({
   return (
     <div className="col" style={{ gap: "var(--space-2)" }}>
       {shown.map((d, i) => {
-        const pct = top > 0 ? Math.max(1.5, (d.value / top) * 100) : 0;
-        const Row = d.onClick ? "button" : "div";
+        // A ZERO DRAWS NOTHING. The 1.5% floor is there so a value that
+        // is merely tiny beside the largest still has a visible mark —
+        // but applied to zero it draws the same sliver, and "nobody
+        // delivered anything" then looks exactly like "somebody
+        // delivered a little". The number beside the bar is what carries
+        // a zero; the bar is what carries the proportion.
+        const pct = top > 0 && d.value > 0 ? Math.max(1.5, (d.value / top) * 100) : 0;
+        const Row = d.href ? "a" : d.onClick ? "button" : "div";
+        const interactive = !!(d.href || d.onClick);
         return (
           <Row
             key={i}
-            className={cx("col", d.onClick && "clickable")}
+            className={cx("col", interactive && "clickable")}
             style={{
               gap: 3,
               textAlign: "left",
-              cursor: d.onClick ? "pointer" : undefined,
+              cursor: interactive ? "pointer" : undefined,
               width: "100%",
+              color: "inherit",
+              textDecoration: "none",
             }}
+            href={d.href}
             onClick={d.onClick}
           >
             <div className="row" style={{ gap: "var(--space-2)" }}>
@@ -127,6 +146,7 @@ export function BarList({
             </div>
             <div className="meter-track" style={{ height: 5 }}>
               <div
+                className="bar-fill"
                 style={{
                   height: "100%",
                   width: `${pct}%`,
@@ -197,7 +217,31 @@ export function TimeSeries({
   label,
   format = (n) => n.toLocaleString(),
 }: {
-  series: { name: string; points: SeriesPoint[]; color?: string }[];
+  series: {
+    name: string;
+    points: SeriesPoint[];
+    color?: string;
+    /**
+     * Whether the line carries an area under it.
+     *
+     * DEFAULTS TO "ONLY WHEN THERE IS ONE SERIES", which is this kit's own
+     * stated rule and which it could not express until now: three translucent
+     * areas stacked on one chart blend into a fourth colour nobody chose, and
+     * the reader cannot tell which of them is on top. One series keeps its
+     * fill, because a lone line over a lot of white is a thinner claim than
+     * the quantity deserves.
+     */
+    fill?: boolean;
+    /**
+     * A REFERENCE rather than a measurement — an ideal, a target, a cap.
+     *
+     * Drawn as a dash so it cannot be read as data: a straight solid line
+     * among measured ones is indistinguishable from a series that happened to
+     * be linear, which is the one thing a reference line must never look
+     * like.
+     */
+    dashed?: boolean;
+  }[];
   from: number;
   to: number;
   height?: number;
@@ -236,20 +280,26 @@ export function TimeSeries({
           const area = `${x(pts[0]!.t).toFixed(2)},${H - padB} ${line} ${x(
             pts[pts.length - 1]!.t,
           ).toFixed(2)},${H - padB}`;
+          const filled = s.fill ?? series.length === 1;
           return (
             <g key={s.name}>
-              <defs>
-                <linearGradient id={`${id}-${i}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity="0.22" />
-                  <stop offset="100%" stopColor={color} stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <polygon points={area} fill={`url(#${id}-${i})`} />
+              {filled && (
+                <>
+                  <defs>
+                    <linearGradient id={`${id}-${i}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity="0.22" />
+                      <stop offset="100%" stopColor={color} stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+                  <polygon points={area} fill={`url(#${id}-${i})`} />
+                </>
+              )}
               <polyline
                 points={line}
                 fill="none"
                 stroke={color}
                 strokeWidth={1.75}
+                strokeDasharray={s.dashed ? "6 5" : undefined}
                 vectorEffect="non-scaling-stroke"
                 strokeLinejoin="round"
                 strokeLinecap="round"
@@ -259,12 +309,28 @@ export function TimeSeries({
         })}
       </svg>
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <span className="t-caption">{new Date(from).toLocaleString()}</span>
+        <span className="t-caption">{formatEdge(from, span)}</span>
         <span className="t-caption">peak {format(peak)}</span>
-        <span className="t-caption">{new Date(to).toLocaleString()}</span>
+        <span className="t-caption">{formatEdge(to, span)}</span>
       </div>
     </figure>
   );
+}
+
+/**
+ * The two ends of the x axis, at the resolution the WINDOW has.
+ *
+ * A clock on a window of weeks is noise — "09:00:00" under both ends of a
+ * fortnight says the same nothing twice — and a bare date on a window of
+ * minutes cannot tell the two ends apart at all. So the span decides, at the
+ * one boundary where the answer changes: a day.
+ */
+function formatEdge(at: number, span: number): string {
+  const date = new Date(at);
+  if (span >= 24 * 60 * 60 * 1000) {
+    return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  return date.toLocaleString();
 }
 
 // ---------------------------------------------------------------------------

@@ -635,6 +635,7 @@ describe("Code", () => {
  * component compares is what makes the branch reachable at all — and it is
  * the real branch: the same measurement a browser answers differently.
  */
+
 function overflowing(node: ReactElement, axis: "height" | "width" = "height"): HTMLElement {
   const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";
   const client = axis === "height" ? "clientHeight" : "clientWidth";

@@ -112,11 +112,14 @@ type WorkReader interface {
 		tracker.ProjectDetail, error)
 	Sprints(ctx context.Context, q tracker.SprintQuery, now time.Time) (
 		tracker.SprintListing, error)
+	Burndown(ctx context.Context, q tracker.BurndownQuery, now time.Time) (
+		tracker.Burndown, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
 	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
 		tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
+	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -238,8 +241,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	// against — but the bound is about this node's LAG, checked before
 	// any row is read, and a detail is exactly as far behind as a board
 	// on the same node. The floor travels for the same reason.
+	//
+	// EVERY PART, the custom fields included: a screen draws a properties
+	// panel from the ANNOTATED values — each with the slug, name and type
+	// that explain it — and a detail that left them out rendered a task
+	// filed with a severity as one that carried none, beside a board that
+	// had just filtered on that very field.
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
-		Comments: true, History: true, Links: true,
+		Comments: true, History: true, Links: true, Fields: true,
 	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
@@ -393,15 +402,21 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// THE HANDLE IS A PARAMETER for the reason [Sources.workViews]' viewer is: this
-// whole surface is guarded, so the caller already holds the company's own
-// credential. What the parameter selects is whose day to render, and the
-// engine's own write side is where the authority lives — a read here can no
-// more mark somebody's work read than a screen can.
+// SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
+// `work_inbox` take: an absent handle is the caller's own seat, and naming
+// anybody else's needs an operator credential.
+//
+// It DEMANDED a handle and checked nothing, on the reasoning that the whole
+// surface is guarded so the caller already holds the company's credential.
+// That reasoning has a hole in it that the other two do not: `api.allow_
+// anonymous_read` opens this surface, and this answer carries the richest
+// personal record the engine keeps — somebody's unread notices, what they mean
+// to work on next, and who set that order. The parameter selected whose. A
+// scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle := strings.TrimSpace(p.String("handle"))
-	if handle == "" {
-		return nil, badParams("handle", "", nil)
+	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
 	}
 	fresh, err := freshness(p)
 	if err != nil {
@@ -673,6 +688,54 @@ func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
 	return listing, nil
 }
 
+// workBurndown answers one sprint's day-by-day series.
+//
+// TWO REQUIRED KEYS AND NO DEFAULT FOR EITHER. A sprint is numbered per
+// project, so a number with no key names one sprint per team; and defaulting
+// the number to "the active one" would make a saved link mean a different
+// sprint every fortnight, which is the one thing a chart somebody bookmarked
+// must not do.
+func (s Sources) workBurndown(ctx context.Context, p Params) (any, error) {
+	project := strings.TrimSpace(p.String("project"))
+	if project == "" {
+		return nil, badParams("project", "", nil)
+	}
+	number := p.Int("sprint", 0)
+	if number <= 0 {
+		return nil, badParams("sprint", strings.TrimSpace(p.String("sprint")),
+			[]string{"a sprint number this project has minted"})
+	}
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.Work.Burndown(ctx, tracker.BurndownQuery{
+		Project: project,
+		Sprint:  number,
+		// THE WHOLE FRESHNESS, as every other native read hands it over.
+		// `MinPosition` was the one field this call dropped, so a caller
+		// that had just written and passed the position back was told
+		// its burndown was served — at a checkpoint that need not have
+		// included the write. A floor silently ignored is the one shape
+		// a read level cannot be audited from the answer.
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+	}, time.Now().UTC())
+	switch {
+	case errors.Is(err, tracker.ErrNoProject), errors.Is(err, tracker.ErrNoSprint):
+		// BOTH ARE NOT-FOUND and the message survives the
+		// classification, which is what tells a caller which of the two
+		// they got: a mistyped key and a sprint nobody has minted are
+		// different repairs.
+		return nil, fmt.Errorf("%w: %w", ErrNotFound, err)
+	case err != nil:
+		return nil, unavailableIfBehind(err)
+	}
+	return out, nil
+}
+
 // chartUnits is the running org as the tracker's unit seam.
 //
 // THE ADAPTER IS THE ENGINE'S, not a second copy: resolving a project's
@@ -778,9 +841,13 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	handle := strings.TrimSpace(p.String("handle"))
-	if handle == "" {
-		return nil, badParams("handle", "", nil)
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerHandle]. This
+	// was registered operator-only and demanded a handle, which is why
+	// routes/MyWork.tsx picked the alphabetically first seat: there was no
+	// way for the screen to know whose day it was drawing.
+	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
 	}
 	fresh, err := freshness(p)
 	if err != nil {

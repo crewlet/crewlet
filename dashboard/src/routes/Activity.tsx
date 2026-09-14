@@ -20,36 +20,49 @@
  * retained history".
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Badge, Button, Chip, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
  *
- * Mirrors `internal/events/category.go`. A chip for a category with nothing in
- * it is still useful — it says the category exists and is quiet — which is the
- * opposite of a chip that vanishes because the ring evicted its last row.
+ * Mirrors `events.CategoryNames()`, which returns EIGHT. This list held ten:
+ * `communication` and `knowledge` are categories no event is registered
+ * under, so two of the chips could never match a row and the reader was
+ * invited to filter a log down to nothing and conclude the engine was quiet.
+ * A chip for a category with nothing in it is still useful — it says the
+ * category exists and is quiet — but only where the category exists.
  */
 const CATEGORIES = [
-  "lifecycle",
-  "task",
-  "communication",
-  "decision",
-  "knowledge",
-  "learning",
   "a2a",
+  "decision",
+  "learning",
+  "lifecycle",
   "notification",
-  "webhook",
   "system",
+  "task",
+  "webhook",
 ] as const;
 
 const PAGE = 100;
+
+/** Whether two instants fall on the same local day. */
+function sameDay(a: string, b: string): boolean {
+  const x = new Date(a);
+  const y = new Date(b);
+  return (
+    x.getFullYear() === y.getFullYear() &&
+    x.getMonth() === y.getMonth() &&
+    x.getDate() === y.getDate()
+  );
+}
 
 export function Activity() {
   const { socket } = useClient();
@@ -65,6 +78,24 @@ export function Activity() {
   const [paging, setPaging] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
 
+  // A FILTER CHANGE IS A NEW QUERY, so the pages fetched under the old one go
+  // with it. They used to survive, and it broke three ways at once: rows
+  // fetched under the previous category stayed in the list and were filtered
+  // client-side into a set that no longer matched what the server would have
+  // answered; the cursor kept pointing into the old query's history, so "load
+  // older" walked the wrong sequence; and `exhausted` stayed true, so a
+  // narrower filter reported that there was no more history to fetch when its
+  // own first page had never been asked for.
+  //
+  // The server-side keys only. `q` and `failed` are applied in the browser to
+  // whatever arrived, so changing them cannot invalidate a page.
+  useEffect(() => {
+    setOlder([]);
+    setCursor(null);
+    setExhausted(false);
+    setPageError(null);
+  }, [category, actor]);
+
   const rows = useMemo(() => {
     const seen = new Set<string>();
     const all = [...liveEvents, ...older].filter((e) => {
@@ -73,18 +104,25 @@ export function Activity() {
       return true;
     });
     const needle = q.trim().toLowerCase();
-    return all
-      .filter((e) => !category || e.category === category)
-      .filter((e) => !actor || (e.actor ?? "").toLowerCase().includes(actor.toLowerCase()))
-      .filter((e) => !onlyFailed || e.failed)
-      .filter(
-        (e) =>
-          !needle ||
-          (e.summary ?? "").toLowerCase().includes(needle) ||
-          (e.type ?? "").toLowerCase().includes(needle) ||
-          (e.source ?? "").toLowerCase().includes(needle),
-      )
-      .sort(newestFirst);
+    return (
+      all
+        .filter((e) => !category || e.category === category)
+        // EQUALITY, because that is what the server does. `store.List` compares
+        // the actor for equality, so a prefix typed here narrowed the loaded
+        // rows by substring and then fetched older pages by exact match — two
+        // different filters over one list, and the paged half came back empty
+        // for every prefix. The search box is where substring lives.
+        .filter((e) => !actor || (e.actor ?? "") === actor)
+        .filter((e) => !onlyFailed || e.failed)
+        .filter(
+          (e) =>
+            !needle ||
+            (e.summary ?? "").toLowerCase().includes(needle) ||
+            (e.type ?? "").toLowerCase().includes(needle) ||
+            (e.source ?? "").toLowerCase().includes(needle),
+        )
+        .sort(newestFirst)
+    );
   }, [liveEvents, older, category, actor, q, onlyFailed]);
 
   const counts = useMemo(() => {
@@ -133,27 +171,27 @@ export function Activity() {
 
   return (
     <>
-      <ScreenHead
-        title="Event log"
-        sub="Everything the engine published, live and then paged out of the store. This tab holds the last 400 in memory; older rows are fetched."
-        badges={<Badge outline>{plural(rows.length, "event")} shown</Badge>}
-        actions={
-          filtered ? (
-            <Button
-              icon="x"
-              size="sm"
-              onClick={() => {
-                setCategory("");
-                setActor("");
-                setQ("");
-                setOnlyFailed("");
-              }}
-            >
-              Clear filters
-            </Button>
-          ) : undefined
-        }
-      />
+      <PageActions>
+        {<Badge outline>{plural(rows.length, "event")} shown</Badge>}
+        {filtered ? (
+          <Button
+            icon="x"
+            size="sm"
+            onClick={() => {
+              setCategory("");
+              setActor("");
+              setQ("");
+              setOnlyFailed("");
+            }}
+          >
+            Clear filters
+          </Button>
+        ) : undefined}
+      </PageActions>
+      <PageNote>
+        Everything the engine published, live and then paged out of the store. This tab holds the
+        last 400 in memory; older rows are fetched.
+      </PageNote>
 
       <div className="toolbar">
         <div style={{ maxWidth: 300, flex: 1 }}>
@@ -202,8 +240,17 @@ export function Activity() {
       <Panel padding="none">
         {rows.length ? (
           <div className="list">
-            {rows.map((ev) => (
-              <EventRow key={ev.id} event={ev} />
+            {rows.map((ev, i) => (
+              // THE DATE, once per day. A list that pages back a month
+              // rendered every row as a bare wall clock, so 09:14 on the
+              // fourteenth and 09:14 three weeks earlier were the same string
+              // in the same column. `EventRow` has always taken this prop and
+              // one screen passed it.
+              <EventRow
+                key={ev.id}
+                event={ev}
+                showDate={i === 0 || !sameDay(rows[i - 1]!.timestamp, ev.timestamp)}
+              />
             ))}
           </div>
         ) : (

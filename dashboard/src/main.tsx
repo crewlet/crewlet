@@ -20,6 +20,9 @@ import "./styles/fonts.css";
 import "./styles/base.css";
 import "./styles/components.css";
 import "./styles/shell.css";
+// THE FRAME AFTER THE SHELL, so the rail, the workspace sidebar and the page
+// bar win over the single-sidebar layout the shell still carries rules for.
+import "./styles/frame.css";
 import "./styles/screens.css";
 
 // Before the first paint, so a reader whose machine is set to light never sees

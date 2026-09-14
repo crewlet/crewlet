@@ -89,6 +89,29 @@ export function fmtDate(ts: string | null | undefined): string {
 }
 
 /**
+ * A date with the year dropped when it is the reader's OWN year.
+ *
+ * For a column of dates — a list of due dates, a calendar's own cells — the
+ * year is the same four characters on almost every row, and the one date that
+ * is NOT in this year is the only one the reader has to notice. Repeating it
+ * everywhere is how that one hides.
+ *
+ * `now` is a required argument for the reason [relTime]'s is: every date on a
+ * screen has to agree about which year is the current one, and a function
+ * that read the clock itself would decide that separately per render.
+ */
+export function fmtDateCompact(ts: string | null | undefined, now: number): string {
+  const d = parseUTC(ts);
+  if (!d) return "—";
+  const thisYear = new Date(now).getFullYear();
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "2-digit",
+    ...(d.getFullYear() === thisYear ? {} : { year: "numeric" }),
+  });
+}
+
+/**
  * "4m ago", "2h ago", "just now".
  *
  * `now` is a REQUIRED argument rather than a call to the clock inside. Every

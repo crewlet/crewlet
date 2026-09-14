@@ -907,7 +907,7 @@ should follow, in order:
    the thread.
 3. The engine's dashboard shows the turn. `examples/nimbus-claude-cli.config.yaml`
    serves it on <http://localhost:8000> — the **Event log** carries the
-   inbound notification with its source, and **Model activity** carries the
+   inbound notification with its source, and **Turns** carries the
    turn it woke: each phase, the rounds it took, and the tools each round
    called.
 
