@@ -24,7 +24,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
@@ -36,6 +35,8 @@ import { fmtDateTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * How a read that did not answer is reported to the operator.
@@ -52,7 +53,7 @@ function refusal(err: unknown): string {
   return err.detail || err.code || "the engine refused the read";
 }
 
-export function Secrets() {
+export function Secrets({ name }: { name?: string }) {
   const now = useNow();
   const toast = useToast();
   // GET /secrets, over REST, because no question in the registry answers it.
@@ -144,16 +145,18 @@ export function Secrets() {
 
   return (
     <>
-      <ScreenHead
-        title="Secrets"
-        sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
-        badges={<Badge outline>{plural(list.length, "credential")} held</Badge>}
-        actions={
+      <PageActions>
+        {<Badge outline>{plural(list.length, "credential")} held</Badge>}
+        {
           <Button icon="plus" variant="primary" onClick={() => setWriting({ editing: "" })}>
             Store a secret
           </Button>
         }
-      />
+      </PageActions>
+      <PageNote>
+        The company's sealed credentials. Names, key ids and provenance — this screen never asks for
+        a value.
+      </PageNote>
 
       <div className="banner neutral">
         <Icon name="shield" size="sm" />

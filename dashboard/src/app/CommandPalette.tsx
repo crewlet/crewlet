@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ALL_NAV } from "./nav.ts";
+import { DESTINATIONS } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -71,7 +71,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "file",
           label: query,
           hint: "as an event",
-          go: () => nav.to(["events", query]),
+          go: () => nav.to(["activity", "events", query]),
         },
         -3,
       );
@@ -81,8 +81,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           group: "Open by id",
           icon: "gitBranch",
           label: query,
-          hint: "as a trace",
-          go: () => nav.to(["traces", query]),
+          hint: "as a trace — every event that carries it",
+          // A TRACE HAS NO PAGE OF ITS OWN any more, and it never should have
+          // had one: a trace is a set of events, and the event log already
+          // filters on it. The screen that existed for it could show nothing
+          // the log could not.
+          go: () => nav.to(["activity", "events"], { trace: query }),
         },
         -2,
       );
@@ -93,13 +97,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "layers",
           label: query,
           hint: "as a turn",
-          go: () => nav.to(["turns", query]),
+          go: () => nav.to(["activity", "turns", query]),
         },
         -1,
       );
     }
 
-    for (const item of ALL_NAV) {
+    for (const item of DESTINATIONS) {
       const s = query ? score(item.label, query) : 0;
       if (s < 0) continue;
       push(
@@ -136,7 +140,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             seat.kind === "human"
               ? "human teammate"
               : `@${seat.handle}${live?.state ? ` · ${live.state}` : ""}`,
-          go: () => nav.to(["seats", seat.handle]),
+          go: () => nav.to(["company", "people", seat.handle]),
         },
         s + 1,
       );
@@ -152,7 +156,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "sitemap",
           label: unit.name,
           hint: `${unit.type ?? "unit"}${unit.lead ? ` · lead ${unit.lead}` : ""}`,
-          go: () => nav.to(["org"], { unit: unit.name }),
+          go: () => nav.to(["company", "units", unit.id || unit.name]),
         },
         s + 2,
       );
@@ -169,7 +173,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             icon: "wrench",
             label: tool.name,
             hint: tool.source,
-            go: () => nav.to(["tools"], { q: tool.name }),
+            go: () => nav.to(["admin", "tools"], { q: tool.name }),
           },
           s + 3,
         );
@@ -181,7 +185,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           icon: "activity",
           label: `Events mentioning “${q.trim()}”`,
           hint: "the event log, filtered",
-          go: () => nav.to(["activity"], { q: q.trim() }),
+          go: () => nav.to(["activity", "events"], { q: q.trim() }),
         },
         900,
       );

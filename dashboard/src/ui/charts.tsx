@@ -76,6 +76,15 @@ export interface BarDatum {
   display?: ReactNode;
   color?: string;
   onClick?: () => void;
+  /**
+   * Where this bar GOES.
+   *
+   * A bar that navigates is a link, and a link has to be middle-clickable: a
+   * button with an onClick opens nothing in a tab, which on a chart of
+   * projects is the gesture a reader makes most. `onClick` remains for a bar
+   * that changes the chart rather than leaving it.
+   */
+  href?: string;
   sub?: ReactNode;
 }
 
@@ -110,17 +119,21 @@ export function BarList({
         // delivered a little". The number beside the bar is what carries
         // a zero; the bar is what carries the proportion.
         const pct = top > 0 && d.value > 0 ? Math.max(1.5, (d.value / top) * 100) : 0;
-        const Row = d.onClick ? "button" : "div";
+        const Row = d.href ? "a" : d.onClick ? "button" : "div";
+        const interactive = !!(d.href || d.onClick);
         return (
           <Row
             key={i}
-            className={cx("col", d.onClick && "clickable")}
+            className={cx("col", interactive && "clickable")}
             style={{
               gap: 3,
               textAlign: "left",
-              cursor: d.onClick ? "pointer" : undefined,
+              cursor: interactive ? "pointer" : undefined,
               width: "100%",
+              color: "inherit",
+              textDecoration: "none",
             }}
+            href={d.href}
             onClick={d.onClick}
           >
             <div className="row" style={{ gap: "var(--space-2)" }}>

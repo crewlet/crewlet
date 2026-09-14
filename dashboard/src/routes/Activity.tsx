@@ -21,13 +21,14 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Badge, Button, Chip, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -170,27 +171,27 @@ export function Activity() {
 
   return (
     <>
-      <ScreenHead
-        title="Event log"
-        sub="Everything the engine published, live and then paged out of the store. This tab holds the last 400 in memory; older rows are fetched."
-        badges={<Badge outline>{plural(rows.length, "event")} shown</Badge>}
-        actions={
-          filtered ? (
-            <Button
-              icon="x"
-              size="sm"
-              onClick={() => {
-                setCategory("");
-                setActor("");
-                setQ("");
-                setOnlyFailed("");
-              }}
-            >
-              Clear filters
-            </Button>
-          ) : undefined
-        }
-      />
+      <PageActions>
+        {<Badge outline>{plural(rows.length, "event")} shown</Badge>}
+        {filtered ? (
+          <Button
+            icon="x"
+            size="sm"
+            onClick={() => {
+              setCategory("");
+              setActor("");
+              setQ("");
+              setOnlyFailed("");
+            }}
+          >
+            Clear filters
+          </Button>
+        ) : undefined}
+      </PageActions>
+      <PageNote>
+        Everything the engine published, live and then paged out of the store. This tab holds the
+        last 400 in memory; older rows are fetched.
+      </PageNote>
 
       <div className="toolbar">
         <div style={{ maxWidth: 300, flex: 1 }}>

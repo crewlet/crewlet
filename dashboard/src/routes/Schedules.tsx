@@ -20,7 +20,6 @@
  * which is the catchup cap doing its job or a node that was down too long.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
@@ -28,6 +27,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The ledger's two outcomes, and nothing else — see the note above. */
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "neutral"> = {
@@ -43,8 +44,12 @@ function identity(scopeType: string, scopeID: string, name: string): string {
 const rowID = (s: ScheduleRow) => identity(s.scope_type, s.scope_id, s.name);
 const runID = (r: ScheduleRunRow) => identity(r.scope_type, r.scope_id, r.schedule_name);
 
-export function Schedules() {
+export function Schedules({ scope = [] }: { scope?: string[] }) {
   const now = useNow();
+  // `#/activity/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
+  // Three segments because a schedule's identity is all three: two units may
+  // each declare a "standup", and a role and a unit may both.
+  const [scopeType, scopeId, scheduleName] = scope;
   // Schedules are pushed on a config apply, and the RUNS are not pushed at
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
   const { data, loading, error } = useQuery("schedules", undefined, { pollMs: 30_000 });
@@ -65,11 +70,13 @@ export function Schedules() {
 
   return (
     <>
-      <ScreenHead
-        title="Schedules"
-        sub="Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up, and a run is capped on wall clock."
-        badges={<Badge outline>{plural(schedules.length, "schedule")} defined</Badge>}
-      />
+      <PageActions>
+        {<Badge outline>{plural(schedules.length, "schedule")} defined</Badge>}
+      </PageActions>
+      <PageNote>
+        Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up,
+        and a run is capped on wall clock.
+      </PageNote>
 
       <Panel padding="none">
         <StatRow cols={3}>

@@ -317,8 +317,8 @@ test("the workspace chart ranks projects by open work in a single hue", () => {
       version: 1,
     },
   ];
-  const { container } = render(<WorkspaceHead projects={projects} onChoose={() => {}} />);
-  const labels = [...container.querySelectorAll(".work-rail-key")].map((el) => el.textContent);
+  const { container } = render(<WorkspaceHead projects={projects} />);
+  const labels = [...container.querySelectorAll(".key-mark")].map((el) => el.textContent);
   expect(labels).toEqual(["ENG", "OPS"]);
   const fills = [...container.querySelectorAll(".meter-track > div")].map(
     (el) => (el as HTMLElement).style.background,
@@ -341,7 +341,6 @@ test("a single project draws its facts and no comparison", () => {
           version: 1,
         },
       ]}
-      onChoose={() => {}}
     />,
   );
   expect(container.querySelector(".meter-track")).toBeNull();

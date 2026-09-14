@@ -13,7 +13,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
@@ -21,6 +20,8 @@ import { Badge, Empty, Panel, Segmented, SearchInput } from "~/ui/primitives.tsx
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { awaitingPerson, indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -112,10 +113,8 @@ export function People() {
 
   return (
     <>
-      <ScreenHead
-        title="People"
-        sub="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
-        badges={
+      <PageActions>
+        {
           <>
             <Badge outline>{plural(agentSeats, "agent seat")}</Badge>
             {index.seats.length - agentSeats > 0 && (
@@ -123,7 +122,11 @@ export function People() {
             )}
           </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        Every seat in the company — the ones this node runs and the ones its peers do. A seat that
+        is not held anywhere reads as “not running here”.
+      </PageNote>
 
       <div className="toolbar">
         <div style={{ maxWidth: 320, flex: 1 }}>

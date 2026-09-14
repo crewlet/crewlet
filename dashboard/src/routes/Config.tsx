@@ -10,7 +10,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
@@ -29,10 +28,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Lens = "active" | "audit" | "diff";
 
-export function ConfigScreen() {
+export function ConfigScreen({ revision: revisionPath }: { revision?: string }) {
   const now = useNow();
   const [lens, setLens] = useParam("lens", "active", "section");
   const [revision, setRevision] = useParam("revision", "");
@@ -52,10 +53,8 @@ export function ConfigScreen() {
 
   return (
     <>
-      <ScreenHead
-        title="Configuration"
-        sub="The founder-owned company document, versioned in the store and applied live. Secrets are redacted by the engine before it leaves the process."
-        actions={
+      <PageActions>
+        {
           <Segmented<Lens>
             ariaLabel="Configuration view"
             value={lens as Lens}
@@ -67,7 +66,11 @@ export function ConfigScreen() {
             ]}
           />
         }
-      />
+      </PageActions>
+      <PageNote>
+        The founder-owned company document, versioned in the store and applied live. Secrets are
+        redacted by the engine before it leaves the process.
+      </PageNote>
 
       {lens === "active" && (
         <>

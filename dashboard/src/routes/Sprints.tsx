@@ -31,7 +31,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage } from "~/components/work.tsx";
@@ -44,6 +43,8 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDate, tsKey } from "~/lib/format.ts";
 import type { WorkBurndown, WorkSprintRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The measure's own word, because a bare number is points to one team and
  *  minutes to another. */
@@ -57,16 +58,13 @@ const STATE_TONE: Record<string, "positive" | "caution" | "info" | "neutral"> = 
   closed: "positive",
 };
 
-export function Sprints() {
+export function Sprints({ project, sprint }: { project: string; sprint?: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
-  const [project, setProject] = useParam("project", "");
-  // THE PROJECT LIST IS THE COMPANY'S, so this screen can be reached with no
-  // project chosen and still offer one — a sprint report needs a project and
-  // a screen that could not name one would be a dead end.
-  const projects = useQuery("work_projects", undefined, { pollMs: 60_000 });
-  const keys = (projects.data?.projects ?? []).map((p) => p.key);
-  const chosen = project || keys[0] || "";
+  // THE PROJECT IS THE PATH (`#/work/ENG/sprints`), not a picker: a sprint is
+  // numbered per project, so a report reached with no project named was a
+  // screen that had to guess — and it guessed the alphabetically first one.
+  const chosen = project;
 
   // NOT UNTIL ONE IS CHOSEN — see the same guard on the board's project
   // overview. `chosen` is empty while the catalogue is still loading and stays
@@ -104,34 +102,22 @@ export function Sprints() {
 
   return (
     <>
-      <ScreenHead
-        title="Sprints"
-        sub="What each sprint took on, what arrived after it started, and what actually shipped inside its own window."
-        actions={
-          <a className="t-link" href={href(["work"], chosen ? { project: chosen } : undefined)}>
-            Tracker →
+      <PageActions>
+        {
+          <a className="t-link" href={href(["work", chosen])}>
+            Board →
           </a>
         }
-      />
+      </PageActions>
+      <PageNote>
+        What each sprint took on, what arrived after it started, and what actually shipped inside
+        its own window.
+      </PageNote>
 
       <div className="toolbar">
-        <Select
-          value={chosen}
-          onChange={setProject}
-          ariaLabel="Project"
-          anyLabel="Pick a project"
-          options={keys}
-        />
         <span className="spacer" />
         <Coverage answer={report.data} />
       </div>
-
-      {!chosen && projects.data && (
-        <Empty
-          title="No projects"
-          hint="A sprint belongs to a project, and this company has none yet."
-        />
-      )}
 
       {chosen && (
         <QueryState error={report.error} loading={report.loading}>

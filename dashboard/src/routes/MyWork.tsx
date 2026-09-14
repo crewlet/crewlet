@@ -26,7 +26,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
@@ -39,6 +38,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase } from "~/lib/reasons.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { WorkAskRow, WorkChecklistRow, WorkSummary } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 export function MyWork() {
   const org = useOrg();
@@ -98,27 +99,27 @@ export function MyWork() {
           real thing to do, and a screen called "My work" showing somebody
           else's without saying so is how a reader acts on work that is not
           theirs. */}
-      <ScreenHead
-        title="My work"
-        sub="Everything one person is expected to look at — their priorities, what they hold, the questions waiting on them, and what became workable while they were away."
-        badges={
-          whose ? (
-            <Badge
-              outline={whose !== viewer.handle}
-              tone={whose === viewer.handle ? "positive" : undefined}
-            >
-              {whose === viewer.handle
-                ? "yours"
-                : `${index.byHandle.get(whose)?.name ?? whose}’s day`}
-            </Badge>
-          ) : undefined
-        }
-        actions={
+      <PageActions>
+        {whose ? (
+          <Badge
+            outline={whose !== viewer.handle}
+            tone={whose === viewer.handle ? "positive" : undefined}
+          >
+            {whose === viewer.handle
+              ? "yours"
+              : `${index.byHandle.get(whose)?.name ?? whose}’s day`}
+          </Badge>
+        ) : undefined}
+        {
           <a className="t-link" href={href(["work"])}>
             Tracker →
           </a>
         }
-      />
+      </PageActions>
+      <PageNote>
+        Everything one person is expected to look at — their priorities, what they hold, the
+        questions waiting on them, and what became workable while they were away.
+      </PageNote>
 
       <div className="toolbar">
         <Select

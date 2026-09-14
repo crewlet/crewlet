@@ -160,3 +160,29 @@ describe("every class the dashboard names", () => {
     expect(body).toMatch(/gap:\s*var\(--space-\d+\)/);
   });
 });
+
+// AND EVERY STYLESHEET REACHES THE BROWSER.
+//
+// The gate above proves a class is DECLARED somewhere under `styles/`. It
+// cannot prove the declaration is loaded — and a stylesheet nothing imports is
+// invisible to the bundler, so the rules in it never ship. That is exactly how
+// the frame's own stylesheet came to pass every check while the application
+// rendered with none of it: `frame.css` existed, declared every class the rail,
+// the sidebar and the page bar use, and `main.tsx` did not import it, so the
+// dashboard loaded with a 1440px rail and a stacked page bar.
+//
+// A missing import has no other symptom: nothing errors, nothing warns, and
+// the page renders — just wrongly, and only where somebody looks.
+test("every stylesheet is imported by the entry point", () => {
+  const entry = readFileSync(join(SRC, "main.tsx"), "utf8");
+  const sheets = readdirSync(join(SRC, "styles"))
+    .filter((f) => f.endsWith(".css"))
+    .sort();
+  expect(sheets.length).toBeGreaterThan(0);
+  const missing = sheets.filter((f) => !entry.includes(`./styles/${f}`));
+  expect(
+    missing,
+    "these stylesheets are in the tree and nothing imports them, so none of " +
+      "their rules reach the browser",
+  ).toEqual([]);
+});

@@ -23,7 +23,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
 import { Badge, Button, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -44,11 +43,13 @@ import { awaitingPerson, indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** How far back the activity strip reaches, and how finely it is cut. */
 const STRIP_MINUTES = 60;
 
-export function Overview() {
+export function LiveNow() {
   const nav = useNavigator();
   const agents = useAgents();
   const sandboxes = useSandboxes();
@@ -140,75 +141,29 @@ export function Overview() {
           label: a.role,
           value: a.total_tokens,
           display: fmtCount(a.total_tokens),
-          onClick: () => nav.to(["seats", a.handle || a.role]),
+          href: href(["company", "people", a.handle || a.role]),
         })),
     [tokens, nav],
   );
 
   return (
     <>
-      <ScreenHead
-        title={org?.name || "Your company"}
-        sub={
-          org?.mission ||
-          "The engine is running. This screen answers what needs a person, what the company is doing, and what it has cost."
-        }
-        badges={
+      <PageActions>
+        {
           <>
             <Badge outline>{plural(seatCount, "agent seat")}</Badge>
             {humanCount > 0 && <Badge outline>{plural(humanCount, "human")}</Badge>}
-          </>
-        }
-        actions={
-          <>
-            <Button icon="users" onClick={() => nav.to(["people"])}>
-              People
-            </Button>
-            <Button icon="brain" onClick={() => nav.to(["model"])}>
-              Model activity
+            <Button icon="brain" onClick={() => nav.to(["activity", "turns"])}>
+              Turns
             </Button>
           </>
         }
-      />
-
-      {/* 1. What needs a person. Always first, always present. */}
-      <Panel
-        title="Needs a person"
-        icon="flag"
-        count={attention.length}
-        padding="none"
-        actions={
-          attention.length > 0 ? (
-            <span className="t-caption">most costly to ignore first</span>
-          ) : undefined
-        }
-      >
-        {attention.length ? (
-          <div className="list">
-            {attention.slice(0, 8).map((item) => (
-              <AttentionRow key={item.id} item={item} />
-            ))}
-            {attention.length > 8 && (
-              <div className="attention-row" data-severity="info">
-                <span className="attention-icon">
-                  <Icon name="more" size="sm" />
-                </span>
-                <span className="t-caption">
-                  and {attention.length - 8} more — every one of them is on the screen it belongs
-                  to.
-                </span>
-              </div>
-            )}
-          </div>
-        ) : (
-          <Empty
-            inline
-            icon="check"
-            title="Nothing is waiting on you"
-            hint="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
-          />
-        )}
-      </Panel>
+      </PageActions>
+      <PageNote>
+        What the company is doing at this moment — which seats are working, what is running in a
+        box, and what it is costing. WHAT NEEDS A PERSON is not here: it is the Inbox, because a
+        condition waiting on somebody is a claim on them rather than a statistic about the company.
+      </PageNote>
 
       {/* 2. What the company is doing. */}
       <Panel padding="none">
