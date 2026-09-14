@@ -210,9 +210,15 @@ export function AfterSaveStrip({
 export function PreviousRevisionNote() {
   const saved = useSavedRevision();
   const waiting = saved !== null && saved.epoch !== null;
+  // ON THE RECONCILE CADENCE, not the strip's quick one. This note lives for
+  // as long as the node has not applied the revision, which can be for ever
+  // when the node refuses it, and a node's applied epoch cannot move faster
+  // than `configplane.ReconcileInterval` anyway. The Shell already reads
+  // `stream` on the same interval; a second, faster poller of the same
+  // answer would be paid for the life of the tab.
   const stream = useQuery("stream", undefined, {
     enabled: waiting,
-    pollMs: waiting ? APPLYING_POLL_MS : undefined,
+    pollMs: waiting ? RECONCILE_POLL_MS : undefined,
   });
   if (!saved || saved.epoch === null) return null;
   if ((stream.data?.applied_epoch ?? 0) >= saved.epoch) return null;
