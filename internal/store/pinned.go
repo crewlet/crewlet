@@ -85,30 +85,46 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // belongs after Tx returns rather than inside it.
 //
 // A CONNECTION THAT CANNOT BE TRUSTED IS REPLACED. When an attempt leaves its
-// transaction possibly open ([attempt] reports it unfit), the pinned
-// connection is retired and a fresh one pinned in its place, under the same
-// declared pin. Keeping it would refuse every later BEGIN on the one
-// connection this writer uses, which stopped a domain applying for good.
+// transaction possibly open ([attempt] reports it unfit, or fn panicked and
+// nothing reported anything), the pinned connection is retired and a fresh one
+// pinned in its place, under the same declared pin. Keeping it would refuse
+// every later BEGIN on the one connection this writer uses, which stopped a
+// domain applying for good.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryTransient(ctx, func() error {
+	return retryTransient(ctx, func() (err error) {
 		conn, err := w.pinned(ctx)
 		if err != nil {
 			return err
 		}
-		fit, err := w.db.writeOn(ctx, conn, fn)
-		if !fit {
-			giveBack(conn, false)
-			w.conn = nil
-			// RE-PINNED NOW rather than at the next Tx, so [Writer.Conn]
-			// keeps answering a live connection, and drawn WITHOUT the
-			// caller's cancellation: a replacement is cleanup, and the
-			// failure that made it necessary is often the cancellation
-			// itself. If it cannot be had, the next Tx tries again and
-			// says why.
-			_, _ = w.pinned(context.WithoutCancel(ctx))
-		}
+		// REPLACED ON EVERY EXIT THAT IS NOT A CLEAN ONE, a body that
+		// panics included: [attempt] re-panics rather than returning its
+		// verdict, and nobody is left to say whether its rollback
+		// happened. Keeping a connection that may still carry an open
+		// transaction is the failure this whole path exists to end, and on
+		// a pinned writer it is permanent.
+		fit := false
+		defer func() {
+			if !fit {
+				w.replace(ctx, conn)
+			}
+		}()
+		fit, err = w.db.writeOn(ctx, conn, fn)
 		return err
 	})
+}
+
+// replace retires the writer's connection and pins a fresh one in its place,
+// under the same declared pin.
+//
+// RE-PINNED NOW rather than at the next Tx, so [Writer.Conn] keeps answering a
+// live connection, and drawn WITHOUT the caller's cancellation: a replacement
+// is cleanup, and the failure that made it necessary is often the
+// cancellation itself. If it cannot be had, the next Tx tries again and says
+// why.
+func (w *Writer) replace(ctx context.Context, conn *sql.Conn) {
+	giveBack(conn, false)
+	w.conn = nil
+	_, _ = w.pinned(context.WithoutCancel(ctx))
 }
 
 // pinned is the writer's connection, drawn afresh if the last was retired.
@@ -197,8 +213,12 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
 		}
-		fit, err := attempt(ctx, conn.BeginTx, nil, fn)
-		giveBack(conn, fit)
+		// GIVEN BACK ON EVERY EXIT, for the reason [DB.Tx] carries: a body
+		// that panics unwinds past the return path, and a connection not
+		// handed back there is lost to the pool for good.
+		fit := false
+		defer func() { giveBack(conn, fit) }()
+		fit, err = attempt(ctx, conn.BeginTx, nil, fn)
 		return err
 	})
 }

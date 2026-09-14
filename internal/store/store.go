@@ -777,11 +777,12 @@ func (c *connector) Driver() driver.Driver { return c.drv }
 // file can abort it. A transaction that only reads belongs in [DB.Read], which
 // takes no lock and queues behind nothing.
 //
-// A PANIC rolls back and re-panics rather than leaving the transaction open.
-// Without that, a panic in fn returns through the runtime with the connection
-// still holding an uncommitted transaction, and on a single-writer database
-// that connection going back to the pool with an open transaction blocks every
-// subsequent write, so one bug in one handler wedges the whole process.
+// A PANIC rolls back, retires the connection and re-panics. Both halves of
+// that are load-bearing on a single-writer database: a connection returned to
+// the pool with an uncommitted transaction still on it refuses the next
+// caller's BEGIN, and a connection never returned at all is one the pool has
+// lost for good. Either way one bug in one handler wedges the whole process,
+// the second way permanently.
 //
 // The rollback error is deliberately discarded on the failure paths: fn's error
 // is what the caller needs, and replacing it with "rollback failed" would hide
@@ -808,8 +809,16 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
 		}
-		clean, err := d.writeOn(ctx, conn, fn)
-		giveBack(conn, clean)
+		// GIVEN BACK ON EVERY EXIT, the panic below included: [attempt]
+		// re-panics rather than returning, so a hand-back written on the
+		// return path alone never runs and the connection is lost to the
+		// pool for the life of the process. Four of those and every later
+		// transaction on this handle waits in database/sql for ever. Unfit
+		// while the attempt is in flight, because a panic leaves nobody to
+		// say whether its rollback happened.
+		clean := false
+		defer func() { giveBack(conn, clean) }()
+		clean, err = d.writeOn(ctx, conn, fn)
 		return err
 	})
 }

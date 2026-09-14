@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -227,4 +228,155 @@ func (t *rollbackFaultTx) Rollback() error {
 		return errors.New("injected: the rollback did not happen")
 	}
 	return t.Tx.Rollback()
+}
+
+// A BODY THAT PANICS DOES NOT COST THE HANDLE ITS CONNECTION.
+//
+// Every transaction here draws a connection and hands it back when the attempt
+// is over. A panic does not end an attempt by returning: it unwinds through
+// the runtime, past anything written on the return path. What that costs
+// depends on which path it passed through, and both are fatal to the handle:
+//
+//   - a POOLED connection never handed back is one database/sql has lost for
+//     the life of the process. Measured on the default pool of four, a fifth
+//     transaction after four panicking bodies waited in the pool for ever.
+//   - a PINNED connection is the only one its writer will ever have, and a
+//     panic reports nothing about whether its rollback happened, so keeping it
+//     is keeping a connection that may still carry an open transaction.
+//
+// Each case panics through one path and then asks that path for a connection
+// it can use. The pooled cases run on a pool of ONE, so a single lost
+// connection is the whole pool, and under a deadline, so a pool that has lost
+// it fails here rather than hanging. The pinned case breaks the rollback as
+// well, which is what makes its connection unusable rather than merely
+// suspect.
+//
+// Mutation: hand the connection back on the return path rather than on the way
+// out of the attempt, and the pooled cases fail with a deadline expired inside
+// database/sql and the pinned case with "cannot start a transaction within a
+// transaction".
+func TestABodyThatPanicsDoesNotCostTheHandleItsConnection(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		// breakRollback arms the fault, so the panic's own rollback fails
+		// and leaves the transaction open on the connection.
+		breakRollback bool
+		opts          store.Options
+		panicking     func(context.Context, *store.DB, *store.Writer)
+		next          func(context.Context, *store.DB, *store.Writer) error
+	}{
+		{
+			name: "a pooled write",
+			opts: store.Options{MaxOpenConns: 1},
+			panicking: func(ctx context.Context, db *store.DB, _ *store.Writer) {
+				_ = db.Tx(ctx, func(*sql.Tx) error { panic(errBodyPanicked) })
+			},
+			next: func(ctx context.Context, db *store.DB, _ *store.Writer) error {
+				return db.Tx(ctx, insert(ctx, 2))
+			},
+		},
+		{
+			name: "a pooled read",
+			opts: store.Options{MaxOpenConns: 1},
+			panicking: func(ctx context.Context, db *store.DB, _ *store.Writer) {
+				_ = db.Read(ctx, func(*sql.Tx) error { panic(errBodyPanicked) })
+			},
+			next: func(ctx context.Context, db *store.DB, _ *store.Writer) error {
+				return db.Tx(ctx, insert(ctx, 2))
+			},
+		},
+		{
+			name:          "a pinned write",
+			breakRollback: true,
+			opts:          store.Options{PinnedWriters: 1},
+			panicking: func(ctx context.Context, _ *store.DB, w *store.Writer) {
+				_ = w.Tx(ctx, func(tx *sql.Tx) error {
+					if err := insert(ctx, 1)(tx); err != nil {
+						return err
+					}
+					panic(errBodyPanicked)
+				})
+			},
+			// THROUGH Writer.Conn RATHER THAN Writer.Tx. Tx's own retry
+			// retires the connection on the BEGIN that meets the open
+			// transaction and draws another, so a transaction through Tx
+			// recovers whether or not the panic replaced anything, and
+			// says nothing about which. What a caller reaching for the
+			// pinned connection ITSELF gets is the whole question here,
+			// and [store.Writer.Conn] promises a live one.
+			next: func(ctx context.Context, _ *store.DB, w *store.Writer) error {
+				conn := w.Conn()
+				if conn == nil {
+					return errors.New("the writer has no pinned connection")
+				}
+				tx, err := conn.BeginTx(ctx, nil)
+				if err != nil {
+					return err
+				}
+				return tx.Rollback()
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			fault := &rollbackFault{}
+			opts := c.opts
+			opts.WrapDriver = fault.wrap
+			node, err := store.Open(ctx, filepath.Join(t.TempDir(), "panic.db"), opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer func() { _ = node.Close() }()
+			db := node.Replicated()
+			if err := db.Tx(ctx, func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(ctx, `CREATE TABLE retire_probe (id INTEGER PRIMARY KEY)`)
+				return err
+			}); err != nil {
+				t.Fatalf("create the probe table: %v", err)
+			}
+			var w *store.Writer
+			if c.opts.PinnedWriters > 0 {
+				if w, err = db.Writer(ctx); err != nil {
+					t.Fatalf("pin a writer: %v", err)
+				}
+				defer func() { _ = w.Close() }()
+			}
+
+			fault.armed.Store(c.breakRollback)
+			got := panicValue(func() { c.panicking(ctx, db, w) })
+			if err, ok := got.(error); !ok || !errors.Is(err, errBodyPanicked) {
+				t.Fatalf("the transaction returned %v where its body panicked "+
+					"with %v: a panic must reach the caller rather than be "+
+					"swallowed by the store", got, errBodyPanicked)
+			}
+			if c.breakRollback && !fault.fired.Load() {
+				t.Fatal("the rollback fault never fired, so this case staged " +
+					"nothing to recover from")
+			}
+
+			// UNDER A DEADLINE: a connection the panic lost is one this
+			// call waits for inside database/sql with nothing left to
+			// free it, and a test that hung would report the same
+			// failure as a timeout nobody can attribute.
+			bounded, stop := context.WithTimeout(ctx, 30*time.Second)
+			defer stop()
+			if err := c.next(bounded, db, w); err != nil {
+				t.Fatalf("the transaction after a panicking body could not "+
+					"begin: %v", err)
+			}
+		})
+	}
+}
+
+// errBodyPanicked is what a panicking body panics with, so the test can tell
+// its own panic from any other.
+var errBodyPanicked = errors.New("the transaction's body panicked")
+
+// panicValue runs fn and reports what it panicked with, or nil.
+func panicValue(fn func()) (v any) {
+	defer func() { v = recover() }()
+	fn()
+	return nil
 }
