@@ -264,6 +264,7 @@ export function Field({
           className="input"
           value={value}
           disabled={disabled}
+          autoFocus={autoFocus}
           aria-describedby={describedBy || undefined}
           aria-invalid={error ? true : undefined}
           onChange={(e) => onChange(e.target.value)}

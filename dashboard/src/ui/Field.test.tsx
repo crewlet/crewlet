@@ -15,6 +15,29 @@ import { Field } from "./Field.tsx";
 afterEach(cleanup);
 
 // Typed the way a person says it out loud, saved the way the config demands.
+// EVERY KIND TAKES THE FOCUS IT IS ASKED TO. The choice was the one control
+// that dropped `autoFocus`, so a form opened at a field that happens to be a
+// select (a unit's lead) started on its first control instead.
+test("autoFocus focuses the field's control, a choice included", () => {
+  for (const kind of ["text", "multiline", "choice"] as const) {
+    render(
+      <>
+        <input aria-label="Before" autoFocus />
+        <Field
+          label="Target"
+          kind={kind}
+          value="a"
+          onChange={() => {}}
+          choices={[{ value: "a", label: "A" }]}
+          autoFocus
+        />
+      </>,
+    );
+    expect(document.activeElement, kind).toBe(screen.getByLabelText("Target"));
+    cleanup();
+  }
+});
+
 test("a url field supplies the scheme the config requires", () => {
   const onChange = vi.fn();
   render(<Field label="Jira site" kind="url" value="" onChange={onChange} />);
