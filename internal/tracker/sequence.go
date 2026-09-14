@@ -406,6 +406,9 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	if err := declaredTags(ctx, tx, task.Project, task.Tags); err != nil {
 		return nil, nil, err
 	}
+	if err := mintedSprint(ctx, tx, task.Project, task.Sprint); err != nil {
+		return nil, nil, err
+	}
 	if err := requiredFields(ctx, tx, project, task); err != nil {
 		return nil, nil, err
 	}
@@ -1499,4 +1502,41 @@ func (w *Writer) drainRows() float64 {
 		return rows
 	}
 	return 1
+}
+
+// mintedSprint refuses a task filed into a sprint the project never minted.
+//
+// THE SCHEMA ALREADY PROMISED THIS — `sprint` is documented as a number
+// `sprint_report` lists for the project — and nothing checked it, so any
+// positive integer was accepted and stored. The task then pointed at a
+// membership that does not exist: `sprint_report` and the burndown both refuse
+// it with [ErrNoSprint], so the work was filed somewhere no report could ever
+// show it, and the seat that filed it was told the write succeeded.
+//
+// ABSENT IS UNAVAILABLE, NOT A REFUSAL, which is the same answer
+// [Writer.refuseCreate] gives for a project this node does not hold. A sprint
+// is minted by a record like any other, so a seat that mints one and files
+// into it in the next breath can reach a node that has not applied the mint
+// yet — and refusing there would turn replication lag into a permanent-looking
+// error about a sprint that plainly exists. [statelog.ErrUnavailable] is what
+// tells the caller to come back rather than to change what they asked for.
+func mintedSprint(ctx context.Context, tx *sql.Tx, project string, number *int) error {
+	if number == nil || *number == 0 {
+		// NOT NAMED, or taken out of its sprint: neither says anything
+		// about a sprint that has to exist.
+		return nil
+	}
+	sprint, held, err := readSprint(ctx, tx, project, *number)
+	switch {
+	case err != nil:
+		return err
+	case !held:
+		return fmt.Errorf("tracker: sprint %d of %s is not on this node: %w",
+			*number, project, statelog.ErrUnavailable)
+	case sprint.Archived:
+		return fmt.Errorf("tracker: sprint %d of %s is archived, so no work "+
+			"is filed into it; `sprint_report` lists the ones that take work",
+			*number, project)
+	}
+	return nil
 }
