@@ -315,6 +315,13 @@ func TestAWriteThatLostTheRaceIsRefused(t *testing.T) {
 			t.Errorf("the conflict omits %q: %s", want, res.Body.String())
 		}
 	}
+	// AS HISTORY, and nothing more: this node goes on serving the revision
+	// it served, which its reconciler moves on to whatever won.
+	s.assertKeptInert(t, decode(t, res))
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Header().Get("ETag") != `"`+base+`"` {
+		t.Errorf("GET /config after the refusal serves %s, want the base %s it served before",
+			got.Header().Get("ETag"), base)
+	}
 }
 
 // AND A WRITE WITH NOTHING IN ITS WAY STILL LANDS, or the guard above is

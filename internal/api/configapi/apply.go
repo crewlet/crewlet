@@ -326,6 +326,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 // activate <id>`, where the other order would point the fleet at a revision no
 // node can read.
 //
+// STORED AS HISTORY, and made this node's active revision only once the fleet
+// has taken it. Until the compare-and-set lands nobody has accepted the write,
+// and a revision marked active locally is a claim this node acts on without
+// asking: it serves it from GET /config, and offers it to the whole fleet at
+// its next start whenever it is newer than the pointer. A loser stored that
+// way was published one restart after its 409, over the write that won.
+//
 // The plane is there: [Service.prepare] refused the write otherwise, and a
 // prepared write comes from nowhere else.
 func (s *Service) commit(ctx context.Context, p *prepared, summary, operator string) (Applied, error) {
@@ -334,7 +341,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
 	}
 	at := s.now()
-	id, err := s.configs.InsertActive(ctx, store.Revision{
+	id, err := s.configs.Insert(ctx, store.Revision{
 		ParentID: p.base, Source: "api", CreatedBy: operator,
 		Summary: summary, Payload: payload, CreatedAt: at,
 	})
@@ -355,7 +362,8 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 	if errors.Is(err, coord.ErrActivationRaced) {
 		// THE REVISION IS KEPT, not unwound: stored, valid and inert, so
 		// the operator's work survives as history they can revert to,
-		// and this node's reconciler adopts whichever revision won.
+		// while this node goes on serving what it served, and its
+		// reconciler adopts whichever revision won.
 		log.InfoContext(ctx, "config_activation_raced",
 			"revision", id, "expected", p.base, "by", operator)
 		raced := &RacedError{Base: p.base, Stored: id}
@@ -366,6 +374,16 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 	}
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: activate the config: %w", err)
+	}
+	// THE FLEET TOOK IT, so it is this node's company too. Best effort: the
+	// activation has landed and cannot be taken back, so a failure here is
+	// not the write's failure, and the reconciler makes the fleet's target
+	// this node's active revision when it applies the epoch.
+	if _, aerr := s.configs.Activate(ctx, id, at); aerr != nil {
+		log.WarnContext(ctx, "config_revision_not_marked_active",
+			"revision", id, "epoch", published.Epoch, "error", aerr,
+			"detail", "the fleet is running this revision; this node marks "+
+				"it active when its reconciler applies the epoch")
 	}
 	s.nudge(ctx, id, summary, operator)
 	log.InfoContext(ctx, "config_revision_written",

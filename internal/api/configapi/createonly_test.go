@@ -59,8 +59,8 @@ func TestACreateOnlyWriteIsRefusedByTheFleetsActivation(t *testing.T) {
 			t.Errorf("PUT %s refusal = %v, want already_configured naming %s",
 				query, body, fleetRevision)
 		}
-		if got := s.writes(); got != [3]int32{} {
-			t.Errorf("PUT %s stored or activated something: %v", query, got)
+		if got := s.writes(); got != (writeCounts{}) {
+			t.Errorf("PUT %s stored or activated something: %+v", query, got)
 		}
 		if target, _, err := s.plane.Target(t.Context()); err != nil || target.RevisionID != fleetRevision {
 			t.Errorf("the fleet's activation moved to %+v (err %v)", target, err)
@@ -87,11 +87,35 @@ func TestAWriteBuiltOnNothingIsRefusedWhenTheFleetHasOne(t *testing.T) {
 		t.Errorf("refusal = %v, want revision_advanced naming %s", body, fleetRevision)
 	}
 	// The revision is kept, inert, as every other lost race keeps it.
-	if body["stored_revision_id"] == nil {
-		t.Errorf("the refusal does not name the revision it stored: %v", body)
-	}
+	s.assertKeptInert(t, body)
 	if target, _, err := s.plane.Target(t.Context()); err != nil || target.RevisionID != fleetRevision {
 		t.Errorf("the fleet's activation moved to %+v (err %v)", target, err)
+	}
+}
+
+// assertKeptInert checks that a write refused at the activation left its
+// revision in the history and did not make it this node's company.
+//
+// INERT IS THE WHOLE POINT, and it is a property of this node as much as of
+// the fleet. A node's active revision is what it serves from GET /config and
+// what it offers the fleet at its next start whenever it is newer than the
+// pointer, so a loser left active here was served straight after its refusal
+// and published one restart later, over the company that won.
+func (s *surface) assertKeptInert(t *testing.T, refusal map[string]any) {
+	t.Helper()
+	stored, _ := refusal["stored_revision_id"].(string)
+	if stored == "" {
+		t.Fatalf("the refusal does not name the revision it stored: %v", refusal)
+	}
+	revision, found, err := s.configs.Get(t.Context(), stored)
+	if err != nil || !found {
+		t.Fatalf("the refused write's revision is not in the history (found=%v err=%v)", found, err)
+	}
+	if revision.Active {
+		t.Errorf("the refused write's revision %s is this node's active revision", stored)
+	}
+	if active, found, err := s.configs.Active(t.Context()); err == nil && found && active.ID == stored {
+		t.Errorf("this node serves the revision the fleet refused: %s", stored)
 	}
 }
 
@@ -161,9 +185,11 @@ func TestACreateOnlyWriteLosingAtTheActivationIsAlreadyConfigured(t *testing.T) 
 	if body["error"] != "already_configured" || body["current_revision_id"] != racing.winner {
 		t.Errorf("refusal = %v, want already_configured naming %s", body, racing.winner)
 	}
-	// The revision is kept, inert, as every lost race keeps it.
-	if body["stored_revision_id"] == nil {
-		t.Errorf("the refusal does not name the revision it stored: %v", body)
+	// The revision is kept, inert, as every lost race keeps it: the node
+	// still has no company of its own, so it answers as it did before.
+	s.assertKeptInert(t, body)
+	if got := s.do(t, http.MethodGet, "/config", "", nil); got.Code != http.StatusNotFound {
+		t.Errorf("GET /config after the refusal = %d, want 404 as before: %s", got.Code, got.Body)
 	}
 }
 

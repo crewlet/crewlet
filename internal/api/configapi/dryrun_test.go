@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
@@ -18,19 +19,26 @@ import (
 )
 
 // A dry run is a write that stores, activates and publishes nothing. These
-// cases hold it to that with fakes that COUNT the three calls a write makes,
+// cases hold it to that with fakes that COUNT the four calls a write makes,
 // wrapped around the real store and plane so everything else a request does is
 // exactly what production runs.
 
-// countingRevisions counts every revision stored.
+// countingRevisions counts every revision stored, and every one this node
+// marked as its active revision.
 type countingRevisions struct {
 	configapi.RevisionStore
-	inserts atomic.Int32
+	inserts      atomic.Int32
+	markedActive atomic.Int32
 }
 
-func (c *countingRevisions) InsertActive(ctx context.Context, r store.Revision) (string, error) {
+func (c *countingRevisions) Insert(ctx context.Context, r store.Revision) (string, error) {
 	c.inserts.Add(1)
-	return c.RevisionStore.InsertActive(ctx, r)
+	return c.RevisionStore.Insert(ctx, r)
+}
+
+func (c *countingRevisions) Activate(ctx context.Context, revisionID string, at time.Time) (string, error) {
+	c.markedActive.Add(1)
+	return c.RevisionStore.Activate(ctx, revisionID, at)
 }
 
 // countingPlane counts every activation.
@@ -81,13 +89,24 @@ func newCountedSurface(t *testing.T) *counted {
 // the same plane it counts.
 func (c *counted) forget() {
 	c.revisions.inserts.Store(0)
+	c.revisions.markedActive.Store(0)
 	c.plane.activations.Store(0)
 	c.queue.publishes.Store(0)
 }
 
-// writes is how many stores, activations and publishes the surface has made.
-func (c *counted) writes() [3]int32 {
-	return [3]int32{c.revisions.inserts.Load(), c.plane.activations.Load(), c.queue.publishes.Load()}
+// writeCounts is what a surface has written: revisions stored, revisions this
+// node marked active, fleet activations, and events published.
+type writeCounts struct{ stored, markedActive, activated, published int32 }
+
+// oneWrite is exactly what a write that lands makes.
+var oneWrite = writeCounts{1, 1, 1, 1}
+
+// writes is how many of each the surface has made.
+func (c *counted) writes() writeCounts {
+	return writeCounts{
+		c.revisions.inserts.Load(), c.revisions.markedActive.Load(),
+		c.plane.activations.Load(), c.queue.publishes.Load(),
+	}
 }
 
 // A DRY RUN STORES, ACTIVATES AND PUBLISHES NOTHING, valid or not.
@@ -125,9 +144,8 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 			if res.Code != tc.want {
 				t.Fatalf("%s dry run = %d, want %d: %s", tc.method, res.Code, tc.want, res.Body)
 			}
-			if got := s.writes(); got != [3]int32{} {
-				t.Errorf("a dry run made %d stores, %d activations and %d publishes, want none",
-					got[0], got[1], got[2])
+			if got := s.writes(); got != (writeCounts{}) {
+				t.Errorf("a dry run wrote %+v, want nothing", got)
 			}
 			if after := s.do(t, http.MethodGet, "/config/revisions", "", nil).Body.String(); after != before {
 				t.Errorf("a dry run changed the history:\nbefore %s\nafter  %s", before, after)
@@ -151,8 +169,8 @@ func TestADryRunStoresActivatesAndPublishesNothing(t *testing.T) {
 		if res.Code != http.StatusCreated {
 			t.Fatalf("%s write = %d, want 201: %s", method, res.Code, res.Body)
 		}
-		if got := s.writes(); got != [3]int32{1, 1, 1} {
-			t.Errorf("a %s write counted %v, want one store, one activation, one publish", method, got)
+		if got := s.writes(); got != oneWrite {
+			t.Errorf("a %s write counted %+v, want one of each", method, got)
 		}
 	}
 }
@@ -231,8 +249,8 @@ func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
 	if derived, ok := decode(t, res)["derived"].(map[string]any); !ok || derived["seats"] == nil {
 		t.Errorf("the check carries no hierarchy for the company as it stands: %s", res.Body)
 	}
-	if got := s.writes(); got != [3]int32{} {
-		t.Errorf("a check stored %v", got)
+	if got := s.writes(); got != (writeCounts{}) {
+		t.Errorf("a check wrote %+v", got)
 	}
 	// A body with nothing in it at all is still a patch that says nothing,
 	// and a write of it would mint an epoch every node reconciles onto.
@@ -283,8 +301,8 @@ func TestTheDryRunParameterIsReadFirstAndOnlyTrueOrFalse(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Errorf("dry_run=false with a summary = %d, want 201: %s", res.Code, res.Body)
 	}
-	if got := s.writes(); got != [3]int32{1, 1, 1} {
-		t.Errorf("dry_run=false counted %v, want the one write", got)
+	if got := s.writes(); got != oneWrite {
+		t.Errorf("dry_run=false counted %+v, want the one write", got)
 	}
 }
 
@@ -375,8 +393,8 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 		t.Errorf("a create check on a configured node = %d %s, want 412 already_configured",
 			created.Code, created.Body)
 	}
-	if got := s.writes(); got != [3]int32{} {
-		t.Errorf("refused checks counted %v, want nothing", got)
+	if got := s.writes(); got != (writeCounts{}) {
+		t.Errorf("refused checks counted %+v, want nothing", got)
 	}
 }
 
