@@ -1043,6 +1043,13 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   the revision and clears the kept draft. `ReviewSaveDialog.tsx` states every
   change and consequence and gates the irreversible ones on an
   acknowledgement.
+- **Create mode is a form, one template operation, and a create-only write.**
+  `CreateCompany.tsx` collects the charter, the starting shape and an optional
+  seat for the operator, and records the model's `applyTemplate` (refused
+  outside create mode), so the start is a single undo and is checked like any
+  other draft. The save is `PUT` with `If-None-Match: *`; a company that
+  appeared meanwhile is offered instead, and the draft is discarded rather
+  than replayed onto it.
 - **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
   keeps `{revision_id, epoch}` in a tab-lived store outside any screen
   (`savedRevision.ts`), watches the `stream` query's `applied_epoch` and the

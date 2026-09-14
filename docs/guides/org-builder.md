@@ -42,6 +42,37 @@ builder reads the configuration again and checks the draft under the new
 token; if the engine refuses it, editing pauses until a token it accepts is
 set.
 
+## Creating the company
+
+On an engine with no active configuration the lens opens on a form: the
+company's name and mission, a shape to start from, and optionally a seat for
+yourself.
+
+| Start from | What it writes |
+|---|---|
+| New company | A chief executive and three units (Engineering, Product, Marketing), each with one agent seat reporting to the chief executive |
+| Established company | A chief executive, Engineering with a Reliability team, Product with a Design team, and Go to Market, with each unit's lead reporting up the chain |
+| Start empty | The charter alone |
+
+The Established company template asks whether unit leads are **agents** (seats
+the engine runs) or **people** (human seats). A template never invents a
+contact identity, so human leads are created without one and the review lists
+each seat that still needs one; the only identity written is the one you type
+for your own seat.
+
+Everything the template writes is one change: undo takes you back to the form.
+From there the organization is edited like any other, and **Review and save**
+creates the company with `PUT /config` and `If-None-Match: *`, which is
+refused if a company exists anywhere in the fleet. If one was created while
+you were writing yours, the builder says so and offers to discard your draft
+and open the company: a draft that starts a company is never applied to one
+that exists, and never replayed onto it.
+
+After a successful create, two steps remain that the dashboard cannot take:
+connecting chat and trackers on the Integrations screen, and adding a model
+provider, which no dashboard screen writes. The panel gives the exact
+`crewlet config import` and `PATCH /config` commands for it.
+
 ## Views and the check
 
 The toolbar switches between the **Canvas** (a chart with a **Structure** and

@@ -109,6 +109,7 @@ import { seatsNeedingContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
 import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
+import { CreateCompany, NextSteps } from "./CreateCompany.tsx";
 import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
 import { browserClock, randomKeys, restTransport, sessionDraftStorage } from "./runtime.ts";
 import { useSave, type SaveEvents } from "./useSave.ts";
@@ -733,10 +734,19 @@ function Lens({
   );
 
   const conflict = status === "conflict" ? conflictOf(state) : null;
+  const creating = state.mode === "create";
+  const templateApplied = state.log.ops.some((op) => op.type === "applyTemplate");
+  useEffect(() => {
+    if (conflict?.reason === "already_configured") setCompanyExists(true);
+  }, [conflict]);
 
   // ---- Saving -------------------------------------------------------------------
 
   const savedRevision = useSavedRevision();
+  const [created, setCreated] = useState(false);
+  // A company that appeared while a create draft was being written: the draft
+  // cannot be applied to it, and must never be replayed onto it.
+  const [companyExists, setCompanyExists] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const reviewAfterUpdate = useRef(false);
   const changed = useMemo(() => hasChanges(state), [state]);
@@ -755,6 +765,7 @@ function Lens({
       clearDraft(storage);
       dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
       setReviewing(false);
+      if (landed.mode === "create") setCreated(true);
       toast.ok("Saved. The engine is applying it.");
       announce("Saved. The engine is applying it.");
       load(true);
@@ -762,6 +773,7 @@ function Lens({
     onConflict: ({ reason, currentRevisionId }) => {
       setReviewing(false);
       reset();
+      if (reason === "already_configured") setCompanyExists(true);
       if (reason === "revision_advanced" || reason === "base_moved") {
         reviewAfterUpdate.current = true;
         void beginUpdate(currentRevisionId);
@@ -906,7 +918,12 @@ function Lens({
   return (
     <BuilderContext.Provider value={api}>
       <div className={cx("org-builder-body", fill && "fill")}>
-        <div className="org-builder-toolbar" role="toolbar" aria-label="Organization builder">
+        <div
+          className="org-builder-toolbar"
+          role="toolbar"
+          aria-label="Organization builder"
+          hidden={creating && !templateApplied}
+        >
           <Segmented
             ariaLabel="Builder view"
             semantics="tabs"
@@ -1137,15 +1154,25 @@ function Lens({
         )}
         {documentProblems.length > 0 && <DocumentProblems problems={documentProblems} />}
 
-        <TabPanel id={viewPanel} value={view}>
-          {view === "canvas" ? (
-            <TabPanel id={chartPanel} value={chart}>
-              <Surface component={viewSurface} name="The canvas" />
-            </TabPanel>
-          ) : (
-            <Surface component={viewSurface} name="The outline" />
-          )}
-        </TabPanel>
+        {created && <NextSteps onDismiss={() => setCreated(false)} />}
+
+        {creating && !templateApplied ? (
+          <CreateCompany
+            keys={keys}
+            disabled={readOnly}
+            onApply={(intent) => dispatch({ type: "record", intent })}
+          />
+        ) : (
+          <TabPanel id={viewPanel} value={view}>
+            {view === "canvas" ? (
+              <TabPanel id={chartPanel} value={chart}>
+                <Surface component={viewSurface} name="The canvas" />
+              </TabPanel>
+            ) : (
+              <Surface component={viewSurface} name="The outline" />
+            )}
+          </TabPanel>
+        )}
 
         {savedRevision && <AfterSaveStrip saved={savedRevision} onDismiss={clearSavedRevision} />}
 
@@ -1194,6 +1221,35 @@ function Lens({
             onConfirm={confirmUpdate}
             onCancel={cancelUpdate}
           />
+        )}
+
+        {companyExists && (
+          <Dialog
+            title="A company already exists on this engine"
+            icon="alert"
+            onClose={() => setCompanyExists(false)}
+            footer={
+              <>
+                <Button onClick={() => setCompanyExists(false)}>Keep my draft</Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    setCompanyExists(false);
+                    dispatchRaw({ type: "discard" });
+                    load(true);
+                  }}
+                >
+                  Discard it and open the company
+                </Button>
+              </>
+            }
+          >
+            <p>
+              A company was created on this engine while this draft was being written. A draft that
+              starts a company cannot be applied to one that exists, and it is never replayed onto
+              it: open the company and make the changes there.
+            </p>
+          </Dialog>
         )}
 
         {dialog && (

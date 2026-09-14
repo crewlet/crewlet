@@ -203,6 +203,22 @@ describe("checking the draft", () => {
   });
 });
 
+// NO PROVIDER, NO AGENT. The dashboard writes none, so the lens says where
+// one comes from rather than leaving a company nobody can run.
+test("a company with no model provider is told so, and one with a provider is not", async () => {
+  const without = company();
+  delete without.providers;
+  const engine = new Engine(without);
+  mountBuilder({ engine });
+  expect(await screen.findByText(/No model provider is configured/)).toBeDefined();
+  cleanup();
+
+  const engineWith = new Engine(company());
+  mountBuilder({ engine: engineWith });
+  await screen.findByText("No problems");
+  expect(screen.queryByText(/No model provider is configured/)).toBeNull();
+});
+
 describe("a token change mid-edit", () => {
   test("keeps the draft, reads the configuration again and checks under the new token", async () => {
     storeToken("first");
