@@ -89,6 +89,18 @@ type report struct {
 	// that does not build. Measured before this field existed: a package with
 	// an undefined symbol in a _test.go file went through here and exited 0.
 	failedPkgs []string
+	// tests is how many NAMED tests reported a result — passed, failed or
+	// skipped.
+	//
+	// Separate from ran, and the separation is the whole vacuous-pass guard.
+	// A package with NO TEST FILES still emits a package-level record, so a
+	// run containing only such packages has a non-empty `ran` and would have
+	// satisfied a guard written on it — reporting success with not one test
+	// executed, which is the exact shape this program exists to refuse. `ran`
+	// answers "which packages did this run cover", which is what the stale
+	// check needs; this answers "did anything actually run".
+	tests int
+
 	// ran is every package the stream carried a record for.
 	//
 	// Load-bearing for the staleness half: BOTH test targets run a SUBSET of
@@ -151,6 +163,10 @@ func read(in *bufio.Scanner, out *os.File) report {
 		switch e.Action {
 		case "output":
 			buffered[key] = append(buffered[key], e.Output)
+		case "pass", "fail", "skip":
+			r.tests++
+		}
+		switch e.Action {
 		case "skip":
 			r.skipped = append(r.skipped, Skip{Package: short(e.Package), Test: e.Test})
 			delete(buffered, key)
@@ -247,16 +263,11 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 			"a failure, so the run did not finish — its stream ends after %d "+
 			"package(s). Nothing here can say the suite passed.", producer, len(r.ran))
 
-	case len(r.ran) == 0:
-		// NO PACKAGE REPORTED AT ALL. A toolchain error, an unusable package
-		// list, or a producer that died before its first record. The shape
-		// this replaced printed "no test skipped" and exited 0 — the gate
-		// certifying nothing, which is the failure it exists to prevent, one
-		// level up.
-		return 1, "\nskipgate: no package reported a result. The test command " +
-			"produced no usable stream, so no suite ran."
-
 	case len(r.failed) > 0 || len(r.failedPkgs) > 0:
+		// DECIDED BEFORE "not one test ran", because a build failure is both:
+		// nothing executed AND a package reported failure, and naming the
+		// compile error is what the reader can act on.
+		//
 		// BOTH counts, because they are different failures. A package can fail
 		// with no failing test in it — that is what a build error looks like
 		// from here, and reporting only named tests would pass a tree that
@@ -264,17 +275,29 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 		return 1, fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s)",
 			len(r.failed), len(r.failedPkgs))
 
+	case r.tests == 0:
+		// NOT ONE TEST RAN. A toolchain error, an unusable package list, a
+		// producer that died before its first record — or a package set that
+		// contains no tests at all, which a guard counting PACKAGES would
+		// have waved through, since a package with no test files still
+		// reports itself. The shape this replaced printed "no test skipped"
+		// and exited 0, certifying nothing.
+		return 1, fmt.Sprintf("\nskipgate: not one test reported a result across "+
+			"%d package(s). The test command produced no usable stream, so no "+
+			"suite ran.", len(r.ran))
+
 	case declarationsBroken:
 		return 1, "\nskipgate: the declared skips and the observed ones disagree"
 
 	case len(r.skipped) == 0:
 		// Ordinary: every Environment entry's prerequisite was present. It can
 		// no longer mean "nothing ran" — that is caught above.
-		return 0, fmt.Sprintf("skipgate: no test skipped across %d package(s)", len(r.ran))
+		return 0, fmt.Sprintf("skipgate: %d test(s), none skipped, across %d package(s)",
+			r.tests, len(r.ran))
 
 	default:
-		return 0, fmt.Sprintf("skipgate: %d skip(s) across %d package(s), all declared",
-			len(r.skipped), len(r.ran))
+		return 0, fmt.Sprintf("skipgate: %d skip(s) of %d test(s) across %d package(s), all declared",
+			len(r.skipped), r.tests, len(r.ran))
 	}
 }
 

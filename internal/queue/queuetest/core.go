@@ -800,6 +800,32 @@ func (s *suite) runCore(t *testing.T) {
 					verb.name, verb.err)
 			}
 		}
+
+		// AND THE REFUSAL LEFT NOTHING BEHIND, which the error alone does not
+		// say. A backend can refuse with ErrNotLive and still have mutated
+		// broker state on the way — that is the shape of the defect the
+		// deleted restart case was written for, where the twin refused
+		// Publish and Subscribe while EnsureSubscription, DeleteSubscription
+		// and PauseTopic went through on a stopped client. Checking only the
+		// error would let a hold survive and call it a pass.
+		//
+		// The TAIL is capability-gated rather than the whole case, so this
+		// still runs everywhere the verbs above do and the backend that
+		// cannot restart simply does not reach the second half. Gating the
+		// case would have made it a skip — and a skip on the one backend that
+		// can observe the property is how the deleted case came to run
+		// nowhere at all.
+		if !s.caps.Restartable {
+			return
+		}
+		if err := q.Start(ctx); err != nil {
+			t.Fatalf("restart after the refusals: %v", err)
+		}
+		j := newJournal()
+		subscribe(ctx, t, q, "stopped.t", "g", recordingHandler(j))
+		publish(ctx, t, q, "stopped.t", newEvent("after"))
+		j.awaitLabels(t, "a restarted queue to deliver rather than stay gated "+
+			"by a hold a refused call left behind", "after")
 	})
 
 	t.Run("start_stop_lifecycle", func(t *testing.T) {

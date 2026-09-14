@@ -297,7 +297,7 @@ Rules:
 When in doubt, ask: "Could anyone be running the shape I am about to change?" If no tag ever shipped it, nobody is — so change it cleanly and completely rather than carrying its ghost forward.
 
 ## Testing
-- Run tests: `go test ./...`
+- Run tests: **`make test`** and **`make test-solo`**, never a bare `go test ./...`. That command bypasses BOTH halves of what the suite now depends on: it runs the cluster-forming packages alongside everything else, which is the contention `internal/solo` exists to remove, and it skips `internal/skipgate`, so a case that quietly stopped asserting reports a pass. A single package under `go test ./internal/foo/` for a fast loop is fine — it is `./...` that is the trap
 - Test files sit beside what they cover, as Go expects: `internal/queue/queue.go` → `internal/queue/queue_test.go`
 - **A contract with more than one implementation gets ONE suite.** `queuetest`, `coordtest`, `storetest`, `scheduletest` and `sandboxtest` export the suite; each backend runs it. A twin that agrees only with itself proves nothing, which is why the memory twins are certified by the same cases as the real backends
 - Every subsystem needs tests, and a test names the invariant it protects rather than the function it calls

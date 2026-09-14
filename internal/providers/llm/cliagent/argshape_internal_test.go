@@ -41,9 +41,25 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	// message says the opposite of what happened — the one shape "a skip is
 	// not a pass" exists to catch. The impostor is distinguished by its
 	// OUTPUT FORM, which is what was actually meant.
-	out, err := exec.Command(binary, "--version").Output()
+	// THE PROBE RUNS UNDER THE SAME FILTERED ENVIRONMENT as the call below.
+	// It was a bare exec.Command, which leaves cmd.Env nil — and a nil Env
+	// means os/exec hands the child THIS PROCESS'S WHOLE ENVIRONMENT. So the
+	// one step whose entire purpose is deciding whether the binary on PATH is
+	// even the right program was handing an unidentified executable every key
+	// and token the environment carried, before any identity check had run.
+	probe := exec.CommandContext(t.Context(), binary, "--version")
+	probe.Env = vendorCLIEnv(t.TempDir(), nil)
+	out, err := probe.Output()
 	version := strings.TrimSpace(string(out))
-	if err != nil || !regexp.MustCompile(`^grok \d+\.\d+\.\d+`).MatchString(version) {
+	// THE BUILD ID IS THE PROVENANCE, not the major number and not a bare
+	// semver. `grok 1.` was a time bomb — the day xAI ships 2.0 the right CLI
+	// is on PATH and this goes quiet. But a bare `^grok \d+\.\d+\.\d+`
+	// is worse in the other direction: the npm impostor is grok@0.0.4, which
+	// that shape ADMITS while the old major check excluded it. xAI's own
+	// prints its commit in parentheses — `grok 1.0.30 (04b7ffed98c6)` — and
+	// requiring that rejects both a future major going quiet and a same-named
+	// package being argued with about flags it has never heard of.
+	if err != nil || !regexp.MustCompile(`^grok \d+\.\d+\.\d+ \(`).MatchString(version) {
 		t.Skipf("this is not xAI's own grok (%q) — the npm package of the same "+
 			"name is a different program", version)
 	}
@@ -118,15 +134,13 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 	t.Helper()
 
 	lower := strings.ToLower(got)
-	for _, marker := range []string{
-		"signed in", "sign in", "log in", "login",
-		"credential", "api key", "api_key", "apikey",
-		"authenticate", "unauthorized", "not authorized",
-	} {
-		if strings.Contains(lower, marker) {
-			return
-		}
-	}
+	// REFUSALS FIRST. The auth markers used to be checked first, on the
+	// reasoning that reaching authentication proves the flags parsed — but a
+	// PARSER ERROR can quote the flag it choked on, and the flags these
+	// profiles pass are named after credentials. "unexpected argument
+	// --credential" contains "credential", so a malformed profile was read as
+	// proof that it worked. The refusal is the stronger signal and is decided
+	// before anything can be mistaken for success.
 	for _, refusal := range []string{
 		"a value is required", "unexpected argument",
 		"invalid value", "unrecognized", "unknown option",
@@ -135,6 +149,15 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 		if strings.Contains(lower, refusal) {
 			t.Fatalf("the profile's argv does not parse (%q):\nargs: %v\n%s",
 				refusal, args, got)
+		}
+	}
+	for _, marker := range []string{
+		"signed in", "sign in", "log in", "login",
+		"credential", "api key", "api_key", "apikey",
+		"authenticate", "unauthorized", "not authorized",
+	} {
+		if strings.Contains(lower, marker) {
+			return
 		}
 	}
 	t.Fatalf("the CLI neither asked for a credential nor refused the argv, so "+

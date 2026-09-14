@@ -224,7 +224,7 @@ func TestARunThatDidNotFinishIsNotAPass(t *testing.T) {
 	}{
 		{
 			name:     "killed after some packages, no failure recorded",
-			r:        report{ran: ran("internal/a", "internal/b")},
+			r:        report{ran: ran("internal/a", "internal/b"), tests: 3},
 			producer: killed,
 			code:     1,
 			says:     "did not finish",
@@ -244,39 +244,40 @@ func TestARunThatDidNotFinishIsNotAPass(t *testing.T) {
 		},
 		{
 			name:     "a real failure is reported as one, not as an unfinished run",
-			r:        report{ran: ran("internal/a"), failed: []string{"internal/a TestX"}},
+			r:        report{ran: ran("internal/a"), tests: 4, failed: []string{"internal/a TestX"}},
 			producer: errors.New("exit status 1"),
 			code:     1,
 			says:     "1 test(s) failed",
 		},
 		{
 			name:     "a build failure, which has no failing test in it",
-			r:        report{ran: ran("internal/a"), failedPkgs: []string{"internal/a"}},
+			r:        report{ran: ran("internal/a"), tests: 0, failedPkgs: []string{"internal/a"}},
 			producer: errors.New("exit status 2"),
 			code:     1,
 			says:     "in 1 package(s)",
 		},
 		{
 			name:   "declarations disagree",
-			r:      report{ran: ran("internal/a")},
+			r:      report{ran: ran("internal/a"), tests: 7},
 			broken: true,
 			code:   1,
 			says:   "disagree",
 		},
 		{
 			name: "a clean run",
-			r:    report{ran: ran("internal/a", "internal/b")},
+			r:    report{ran: ran("internal/a", "internal/b"), tests: 12},
 			code: 0,
-			says: "no test skipped across 2",
+			says: "12 test(s), none skipped",
 		},
 		{
 			name: "a clean run with declared skips",
 			r: report{
 				ran:     ran("internal/a"),
+				tests:   5,
 				skipped: []Skip{{Package: "internal/a", Test: "TestT"}},
 			},
 			code: 0,
-			says: "1 skip(s) across 1 package(s)",
+			says: "1 skip(s) of 5 test(s)",
 		},
 	}
 

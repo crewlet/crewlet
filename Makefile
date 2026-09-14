@@ -236,6 +236,20 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
+# .NOTPARALLEL, and it is about correctness rather than tidiness: under
+# `make -j check` GNU Make is free to start `test` and `test-solo` at the same
+# time, which puts the multi-member cluster packages back on the machine
+# alongside the whole parallel partition — precisely the contention the split
+# exists to remove, on the one invocation a contributor reaches for to go
+# faster. CI keeps them in separate jobs and so is unaffected; this is what
+# gives the local gate the same isolation.
+#
+# Measured here, by doing it accidentally: `make test-solo` with a
+# `make test-cross` running beside it failed internal/e2e's
+# TestEveryNodeMintsIntoOneKeySpace with `ensure stream
+# CREWLET_NOTIFICATIONS: context deadline exceeded`, and passed alone.
+.NOTPARALLEL:
+
 check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-solo test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
