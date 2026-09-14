@@ -6,9 +6,11 @@
  * and the outline draws rows, but "which unit is this seat drawn in", "who
  * leads this unit" and "who does this seat report to" must have one answer,
  * or the two views of one draft disagree. So both read this module, and so do
- * the editor and the dialogs for the three facts a card also shows: a seat's
- * handle, the seat a reported handle names, and the Datadog fallback. It is
- * pure: no React, no DOM, tested in a node environment.
+ * the editor and the dialogs for two facts a card also shows: the seat a
+ * reported handle names, and the Datadog fallback. The third, a seat's
+ * handle, is the model's (`document.knownHandles`), because the reducer
+ * records operations by it; this module reads it there like every other
+ * surface. It is pure: no React, no DOM, tested in a node environment.
  *
  * THE DOCUMENT GIVES THE SHAPE, THE ENGINE GIVES THE MEANING. Units, their
  * seats and their children are drawn as the draft holds them, because that is
@@ -232,10 +234,19 @@ export function keyOfHandle(
  * the engine.
  */
 export function datadogFallback(company: CompanyDocument): string | undefined {
-  const datadog = getPath(company, DATADOG_ROUTE_TO.slice(0, -1));
-  if (!isRecord(datadog) || datadog.enabled !== true) return undefined;
-  const handle = typeof datadog.route_to === "string" ? datadog.route_to.trim() : "";
+  if (!datadogEnabled(company)) return undefined;
+  const routeTo = getPath(company, DATADOG_ROUTE_TO);
+  const handle = typeof routeTo === "string" ? routeTo.trim() : "";
   return handle === "" ? undefined : handle;
+}
+
+/**
+ * Whether the company's Datadog block is switched on, which is the only time
+ * the engine builds its parser and routes an alert to anybody (`enabled` is a
+ * plain boolean whose absence is off, `config.Datadog.Enabled`).
+ */
+export function datadogEnabled(company: CompanyDocument): boolean {
+  return getPath(company, [...DATADOG_ROUTE_TO.slice(0, -1), "enabled"]) === true;
 }
 
 /** The engine's facts about the last checked document, by node key. */

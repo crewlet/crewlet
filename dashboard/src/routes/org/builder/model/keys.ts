@@ -95,8 +95,9 @@ export function isNodeKey(value: unknown): value is NodeKey {
 
 /**
  * Where minted keys come from. Injected so a test can mint predictable keys
- * and the UI can use `crypto.randomUUID`, without this directory touching a
- * global.
+ * and the UI can use the browser's random source (`runtime.randomKeys`, over
+ * `crypto.getRandomValues`, since `randomUUID` exists only in a secure
+ * context), without this directory touching a global.
  */
 export interface KeySource {
   /** A fresh random token: letters, digits, `_` and `-`, at most 64 characters. */

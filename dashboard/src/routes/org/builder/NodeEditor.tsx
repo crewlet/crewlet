@@ -96,7 +96,7 @@ import { kindOf, type EditPartIntent } from "./model/operations.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
-import { datadogFallback } from "./chartModel.ts";
+import { datadogEnabled, datadogFallback } from "./chartModel.ts";
 import {
   PHASE_MODEL_FIELDS,
   currentCheck,
@@ -1448,7 +1448,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
   if (isConnected(company, "datadog")) {
     // A block that is switched off wakes nobody, whatever its route_to says,
     // which is how the engine reads it and how the chart draws it.
-    const on = getPath(company, ["integrations", "datadog", "enabled"]) === true;
+    const on = datadogEnabled(company);
     const fallback = handle !== undefined && datadogFallback(company) === handle;
     facts.push(
       <ReadOnlyFact

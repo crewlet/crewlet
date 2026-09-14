@@ -8,9 +8,11 @@
  * of the document that check sent (`model/document.placeDerivation`, the one
  * placing every reader shares). A node the last check has not described (one
  * added since) has no answer here, and the screens say so rather than guess.
- * What the charts read about a node, its handle, the seat a reported handle
- * names and the Datadog fallback, is `chartModel.ts`'s, so a card and the
- * dialog it opens can never name a seat two ways.
+ * What a card also shows is read where the card reads it, so a card and the
+ * dialog it opens can never name a seat two ways: a seat's handle through the
+ * one rule the reducer records by (`model/document.knownHandles`, read as
+ * `reducer.handlesOf`), and the seat a reported handle names and the Datadog
+ * fallback from `chartModel.ts`.
  *
  * ONLY A CHECK OF THE DRAFT AS IT STANDS. A check still out, or one that
  * answered for an older draft, describes a company the operator has since
