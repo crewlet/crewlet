@@ -143,7 +143,11 @@ describe("a seat", () => {
       "Give a whole number of tokens, or leave it empty for unlimited.",
     );
     expect(tokenBudgetError("-1")).not.toBeUndefined();
-    expect(tokenBudgetError("99999999999999999999")).not.toBeUndefined();
+    // The ceiling is what a JSON number carries without rounding, and the
+    // message names it rather than blaming the engine, which holds an int64.
+    expect(tokenBudgetError("99999999999999999999")).toBe(
+      "Give a budget of at most 9007199254740991, or leave it empty for unlimited.",
+    );
     expect(tokenBudgetError(" 42 ")).toBeUndefined();
     expect(tokenBudgetError("")).toBeUndefined();
   });

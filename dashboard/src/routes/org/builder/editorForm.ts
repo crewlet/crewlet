@@ -180,7 +180,16 @@ export function seatForm(data: ConfigRole, accessLevel: string): SeatForm {
 // Checking what was typed
 // ---------------------------------------------------------------------------
 
-/** The largest token budget a seat may be given: the engine reads it as a Go `int64`. */
+/**
+ * The largest token budget this form writes.
+ *
+ * JAVASCRIPT'S CEILING, NOT THE ENGINE'S. The engine reads `token_budget` as a
+ * Go `int64` and would take far more, but the value travels as a JSON number
+ * and anything above 2^53-1 is rounded on the way through, so what the engine
+ * stored would not be what somebody typed. A budget that large is a slipped
+ * key rather than a budget, so the form refuses it and names the largest one
+ * it can write.
+ */
 const MAX_TOKEN_BUDGET = Number.MAX_SAFE_INTEGER;
 
 /**
@@ -193,7 +202,8 @@ export function tokenBudgetError(typed: string): string | undefined {
   if (value === "") return undefined;
   if (!/^\d+$/.test(value))
     return "Give a whole number of tokens, or leave it empty for unlimited.";
-  if (Number(value) > MAX_TOKEN_BUDGET) return "That budget is larger than the engine can hold.";
+  if (Number(value) > MAX_TOKEN_BUDGET)
+    return `Give a budget of at most ${MAX_TOKEN_BUDGET}, or leave it empty for unlimited.`;
   return undefined;
 }
 
