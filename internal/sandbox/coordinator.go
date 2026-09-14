@@ -691,8 +691,15 @@ func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) err
 // ONLY THE CLAIM THIS CALL TOOK (see [Release]). A run that has moved on from
 // it, relaunched by the resumed turn or reaped by the seat's next owner, is
 // left as it stands, and what holds the seat is then the store's answer rather
-// than this claim's. counted is whether the busy count still includes this
-// run, which it does until the resume frees the seat.
+// than this claim's.
+//
+// THE SEAT FOLLOWS THE STATUS THE RUN GOES BACK TO. counted is whether the
+// busy count still includes this run, which it does until the resume frees
+// the seat, and only a park, whose claim is always out of running, hands one
+// back before that. A run back in running holds the seat again; one back
+// waiting on a person does not, and marking the seat busy for it parked every
+// later delivery on a run no poll completes, with nothing left to take the
+// mark back once its answer's retry had settled it.
 //
 // A CONTEXT OF ITS OWN, like [Coordinator.teardown], because this is a
 // rollback and the failure it undoes is often the cancellation itself: a drain
@@ -718,7 +725,7 @@ func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool)
 			"detail", "the run no longer holds this claim, so nothing was handed back: "+
 				"the resumed turn launched another job, or the seat's next owner reaped it")
 		c.syncBusy(ctx, run.AgentHandle)
-	case !counted:
+	case !counted && slices.Contains(Holding, to):
 		c.markBusy(run.AgentHandle)
 	}
 }
