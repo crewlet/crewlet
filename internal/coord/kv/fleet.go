@@ -770,10 +770,14 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	if req.RevisionID == "" {
 		return coord.Activation{}, errors.New("coord/kv: an activation needs a revision id")
 	}
+	if req.Expect != "" && req.ExpectAbsent {
+		return coord.Activation{}, errors.New("coord/kv: an activation cannot " +
+			"expect a revision and no revision at once")
+	}
 	// THE EXPECTATION IS RESOLVED FIRST, before anything is written: a
 	// caller that has already lost the race must not leave a payload
 	// behind for a revision the fleet will never point at.
-	seq, err := f.expectedSeq(ctx, req.Expect)
+	seq, err := f.expectedSeq(ctx, req)
 	if err != nil {
 		return coord.Activation{}, err
 	}
@@ -806,7 +810,7 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	// between makes this fail rather than overwrite — which is the only
 	// thing standing between two operators editing at once and one of them
 	// losing their change with a 201 in hand.
-	revision, err := f.flip(ctx, req.Expect, seq, raw)
+	revision, err := f.flip(ctx, req, seq, raw)
 	if err != nil {
 		return coord.Activation{}, err
 	}
@@ -821,9 +825,11 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 // expectedSeq resolves the caller's expectation to the KV sequence to
 // compare-and-set against, or reports the race.
 //
-// Zero means unconditional — see [coord.ActivationRequest.Expect].
-func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, error) {
-	if expect == "" {
+// Zero means unconditional — see [coord.ActivationRequest.Expect] — and it is
+// also what a create-only write compares against, since there is no entry to
+// take a sequence from.
+func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationRequest) (uint64, error) {
+	if req.Expect == "" && !req.ExpectAbsent {
 		return 0, nil
 	}
 	entry, err := f.config.Get(ctx, activationKey)
@@ -831,7 +837,8 @@ func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, er
 		// NOTHING TO HAVE RACED WITH. A node seeded from a file holds a
 		// locally-active revision before it has published anything, and
 		// treating that as a race would refuse every config write on it
-		// until it did. See [coord.ActivationRequest.Expect].
+		// until it did. See [coord.ActivationRequest.Expect]. It is also
+		// exactly what a create-only write is waiting to see.
 		return 0, nil
 	}
 	if err != nil {
@@ -841,16 +848,35 @@ func (f *FleetStore) expectedSeq(ctx context.Context, expect string) (uint64, er
 	if err = json.Unmarshal(entry.Value(), &record); err != nil {
 		return 0, fmt.Errorf("coord/kv: decode the activation: %w", err)
 	}
-	if record.RevisionID != expect {
+	if req.ExpectAbsent {
+		return 0, fmt.Errorf("%w: expected no activation, the fleet is on %s",
+			coord.ErrActivationRaced, record.RevisionID)
+	}
+	if record.RevisionID != req.Expect {
 		return 0, fmt.Errorf("%w: expected %s, the fleet is on %s",
-			coord.ErrActivationRaced, expect, record.RevisionID)
+			coord.ErrActivationRaced, req.Expect, record.RevisionID)
 	}
 	return entry.Revision(), nil
 }
 
 // flip writes the pointer, conditionally when there was an expectation.
-func (f *FleetStore) flip(ctx context.Context, expect string, seq uint64, raw []byte) (uint64, error) {
-	if expect == "" {
+//
+// A CREATE-ONLY write is a Create rather than an Update: there is no sequence
+// to name, and the store's own "only if this key is absent" is what makes two
+// nodes both convinced the company is theirs to write resolve to one winner.
+func (f *FleetStore) flip(ctx context.Context, req coord.ActivationRequest, seq uint64, raw []byte) (uint64, error) {
+	switch {
+	case req.ExpectAbsent:
+		revision, err := f.config.Create(ctx, activationKey, raw)
+		if err != nil {
+			if errors.Is(err, jetstream.ErrKeyExists) || isWrongLastSequence(err) {
+				return 0, fmt.Errorf("%w: an activation was published while this "+
+					"write was being prepared", coord.ErrActivationRaced)
+			}
+			return 0, unavailable("publish the activation", err)
+		}
+		return revision, nil
+	case req.Expect == "":
 		revision, err := f.config.Put(ctx, activationKey, raw)
 		if err != nil {
 			return 0, unavailable("publish the activation", err)
@@ -864,7 +890,7 @@ func (f *FleetStore) flip(ctx context.Context, expect string, seq uint64, raw []
 			// race rather than as an unavailable store, because the
 			// caller's fix is to re-read and rebuild rather than retry.
 			return 0, fmt.Errorf("%w: %s was replaced while this write was "+
-				"being prepared", coord.ErrActivationRaced, expect)
+				"being prepared", coord.ErrActivationRaced, req.Expect)
 		}
 		return 0, unavailable("publish the activation", err)
 	}

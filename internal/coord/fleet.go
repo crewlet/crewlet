@@ -407,6 +407,26 @@ type ActivationRequest struct {
 	// did. The lost-update this exists to catch needs a winner, and an
 	// empty pointer has none.
 	Expect string
+
+	// ExpectAbsent is the create-only compare-and-set: publish this only
+	// if the fleet has no activation at all.
+	//
+	// It is what Expect cannot say. An empty Expect is unconditional, and
+	// an Expect naming a revision passes when there is no pointer, so
+	// neither refuses the write that matters here: a node whose OWN store
+	// is empty, writing the company it believes is the first, while the
+	// fleet is already running one. A node reaches that state
+	// legitimately, by joining a fleet and not having reconciled yet, or
+	// by failing the best-effort copy of the pointer into its own store,
+	// and its write would replace a running company outright: the company
+	// name changes, so every seat id derived from it changes, and all of
+	// their memory is orphaned.
+	//
+	// Refused with [ErrActivationRaced], like any other lost race, leaving
+	// nothing behind. Set together with Expect it is a programming error
+	// rather than a posture, because a write cannot have been built on a
+	// revision and on nothing at once.
+	ExpectAbsent bool
 }
 
 // ErrActivationRaced reports an activation whose Expect no longer matches.
@@ -454,6 +474,11 @@ type Plane interface {
 	// succeed and the later write silently wins. With it the loser gets
 	// [ErrActivationRaced] and can re-read, which is the whole difference
 	// between a lost edit and a 409.
+	//
+	// [ActivationRequest.ExpectAbsent] is that same guard for a write built
+	// on NOTHING: it lands only while the fleet has no activation, so a
+	// node that has not caught up cannot replace the company the fleet is
+	// running with the first one it is handed.
 	Activate(ctx context.Context, req ActivationRequest) (Activation, error)
 
 	// Payload returns the sealed payload of the revision the fleet is

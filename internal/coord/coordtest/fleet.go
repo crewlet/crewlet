@@ -591,6 +591,120 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
+	// A CREATE-ONLY ACTIVATION LANDS ON AN EMPTY STORE. It is what a first
+	// import is: a company built on nothing, asking to be the first.
+	name: "an activation expecting no activation lands on an empty store",
+	fn: func(h *fleetHarness) {
+		got, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(),
+			ExpectAbsent: true})
+		if err != nil {
+			h.t.Fatalf("a create-only activation on an empty store was refused: %v", err)
+		}
+		if got.Epoch == 0 || got.RevisionID != "rev-1" {
+			h.t.Fatalf("published %+v", got)
+		}
+		body, ok, err := h.f.Payload(h.ctx, "rev-1")
+		if err != nil || !ok || string(body) != `{"v":1}` {
+			h.t.Fatalf("payload = %q ok=%v err=%v, want the created revision's", body, ok, err)
+		}
+	},
+}, {
+	// AND IT IS REFUSED WHEN THE FLEET HAS ONE, whatever this node's own
+	// store says. A node that joined a fleet and has not reconciled yet
+	// believes nothing is configured; without this, its first import
+	// replaces a running company, renaming it and orphaning the memory of
+	// every seat, and nothing refuses it.
+	name: "an activation expecting no activation is refused when one exists",
+	fn: func(h *fleetHarness) {
+		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "the-fleets", Payload: []byte(`{"v":1}`), At: h.now()}); err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "a-second-company", Payload: []byte(`{"v":2}`), At: h.now(),
+			ExpectAbsent: true})
+		if !errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("err = %v, want coord.ErrActivationRaced", err)
+		}
+		// AND IT CHANGED NOTHING: the pointer still names the company the
+		// fleet is running, and its payload is still there for every peer
+		// that has yet to apply it. A refusal that had already published
+		// the loser's body leaves the fleet pointed at a revision no peer
+		// can read.
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found || target.RevisionID != "the-fleets" {
+			h.t.Fatalf("target = %+v found=%v err=%v, want the fleet's own", target, found, err)
+		}
+		body, ok, err := h.f.Payload(h.ctx, "the-fleets")
+		if err != nil || !ok || string(body) != `{"v":1}` {
+			h.t.Fatalf("payload = %q ok=%v err=%v, want the fleet's own", body, ok, err)
+		}
+	},
+}, {
+	// EXACTLY ONE OF N CONCURRENT CREATIONS LANDS. Two operators pressing
+	// Create on two nodes at the same moment is the shape this is for, and
+	// it cannot be read off the single-threaded cases: they prove the
+	// comparison happens, this proves it is atomic.
+	name: "concurrent create-only activations leave exactly one winner",
+	fn: func(h *fleetHarness) {
+		var wg sync.WaitGroup
+		won := make(chan string, 8)
+		raced := make(chan error, 8)
+		for i := range 8 {
+			wg.Go(func() {
+				id := fmt.Sprintf("company-%d", i)
+				_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+					RevisionID: id, Payload: []byte("{}"), At: h.now(),
+					ExpectAbsent: true})
+				switch {
+				case err == nil:
+					won <- id
+				case errors.Is(err, coord.ErrActivationRaced):
+					raced <- err
+				default:
+					h.t.Errorf("Activate: %v", err)
+				}
+			})
+		}
+		wg.Wait()
+		close(won)
+		close(raced)
+		if got := len(won); got != 1 {
+			h.t.Fatalf("%d of 8 creations were accepted, want exactly 1", got)
+		}
+		if got := len(raced); got != 7 {
+			h.t.Fatalf("%d creations were told they lost, want 7", got)
+		}
+		target, found, err := h.f.Target(h.ctx)
+		if err != nil || !found {
+			h.t.Fatalf("Target: %v found=%v", err, found)
+		}
+		if winner := <-won; target.RevisionID != winner {
+			h.t.Fatalf("the fleet is on %s, want the creation that won, %s",
+				target.RevisionID, winner)
+		}
+	},
+}, {
+	// A WRITE CANNOT HAVE BEEN BUILT ON A REVISION AND ON NOTHING AT ONCE,
+	// so asking for both is refused as the programming error it is rather
+	// than resolved in favour of one.
+	name: "an activation expecting both a revision and none is refused",
+	fn: func(h *fleetHarness) {
+		_, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: []byte("{}"), At: h.now(),
+			Expect: "rev-0", ExpectAbsent: true})
+		if err == nil {
+			h.t.Fatal("an activation expecting a revision and no revision was accepted")
+		}
+		if errors.Is(err, coord.ErrActivationRaced) {
+			h.t.Fatalf("err = %v, want a refusal of the request rather than a race", err)
+		}
+		if _, found, ferr := h.f.Target(h.ctx); ferr != nil || found {
+			h.t.Fatalf("a refused request published an activation (found=%v err=%v)", found, ferr)
+		}
+	},
+}, {
 	// EXACTLY ONE OF N CONCURRENT EDITS ON ONE BASE LANDS. This is the
 	// property the whole mechanism exists for, and it cannot be read off
 	// the single-threaded cases: they prove the comparison happens, this

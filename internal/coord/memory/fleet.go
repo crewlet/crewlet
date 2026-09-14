@@ -231,10 +231,21 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 	// passes against it proves nothing about the real store.
 	// An unset pointer is NOT a race — see the KV's own note and
 	// [coord.ActivationRequest.Expect].
+	if req.Expect != "" && req.ExpectAbsent {
+		return coord.Activation{}, errors.New("coord/memory: an activation cannot " +
+			"expect a revision and no revision at once")
+	}
 	if req.Expect != "" && f.set && f.target.RevisionID != req.Expect {
 		return coord.Activation{}, fmt.Errorf(
 			"%w: expected %s, the fleet is on %s",
 			coord.ErrActivationRaced, req.Expect, f.target.RevisionID)
+	}
+	// CREATE-ONLY, and the comparison an expectation cannot make: this
+	// write was built on nothing, so any pointer at all is a race with it.
+	if req.ExpectAbsent && f.set {
+		return coord.Activation{}, fmt.Errorf(
+			"%w: expected no activation, the fleet is on %s",
+			coord.ErrActivationRaced, f.target.RevisionID)
 	}
 
 	// The payload lands before the pointer, matching the KV's two writes.
