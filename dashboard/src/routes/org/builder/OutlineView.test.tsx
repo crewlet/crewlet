@@ -488,6 +488,14 @@ describe("reorder", () => {
     );
   });
 
+  test("a chord with Ctrl or Command is not a reorder", () => {
+    const { probe } = mount(checkedEdit(doc, primary("alpha")));
+    rowOf(seatKey("beta")).focus();
+    press("ArrowUp", { altKey: true, ctrlKey: true });
+    press("ArrowUp", { altKey: true, metaKey: true });
+    expect(probe.state.log.ops).toEqual([]);
+  });
+
   test("read-only, Alt+Down reorders nothing", () => {
     const { probe } = mount(checkedEdit(doc, primary("alpha")), { readOnly: true });
     rowOf(seatKey("alpha")).focus();

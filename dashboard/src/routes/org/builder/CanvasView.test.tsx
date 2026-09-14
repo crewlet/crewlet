@@ -335,10 +335,14 @@ describe("keys", () => {
     press("Enter");
     expect(spies.openEditor).toHaveBeenLastCalledWith(COMPANY_KEY);
 
-    // A chord is the Builder's (Undo), never the node's.
+    // A chord is the Builder's (Undo), never the node's, and Shift turns
+    // neither Enter nor Delete into the node's action.
     item("Dev").focus();
     press("Backspace", { metaKey: true });
+    press("Delete", { shiftKey: true });
     expect(spies.openDelete).toHaveBeenCalledTimes(2);
+    press("Enter", { shiftKey: true });
+    expect(spies.openEditor).toHaveBeenCalledTimes(2);
   });
 
   test("read-only, a node can still be opened but never deleted", () => {
