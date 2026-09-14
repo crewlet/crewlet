@@ -51,10 +51,10 @@ func TestEveryDocumentedReadRouteAnswers(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	// The routes a node with a company and no store can serve. A question
-	// whose SOURCE is absent is left unregistered by design — that is the
-	// honest answer for a node without an event log — and answers 404 for
-	// a reason that is not "the route was never built", so those are
+	// The routes every node serves from its company and its projection. A
+	// question whose SOURCE is absent is left unregistered by design (a
+	// company on Confluence has no native pages) and answers 404 for a
+	// reason that is not "the route was never built", so those are
 	// exercised separately below.
 	for _, path := range []string{
 		"/agents",
@@ -92,12 +92,13 @@ func TestARouteWithNoSourceAnswersTheQueryLayer(t *testing.T) {
 	t.Parallel()
 	a := restApp(t)
 
-	// No event log wired, so `events` is unregistered.
+	// No native knowledge base wired, which is a company on Confluence, so
+	// `pages` is unregistered.
 	rec := httptest.NewRecorder()
-	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/events", nil))
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/pages", nil))
 	res := rec.Result()
 	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET /events = %d, want the query layer's 404", res.StatusCode)
+		t.Fatalf("GET /pages = %d, want the query layer's 404", res.StatusCode)
 	}
 	// The mux's own 404 is text/plain; the query layer's carries a JSON
 	// error code. That is how a caller tells them apart.

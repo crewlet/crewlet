@@ -122,13 +122,7 @@ export function EnginePanel({
             ["Stream", engine?.queue || "—"],
             ["Dashboard clients", engine?.clients ?? "—"],
             [
-              "Engine up since",
-              engine?.engine_started_at
-                ? `${fmtDateTime(engine.engine_started_at)} (${relTime(engine.engine_started_at, now)})`
-                : "—",
-            ],
-            [
-              "Process up since",
+              "Up since",
               engine?.started_at
                 ? `${fmtDateTime(engine.started_at)} (${relTime(engine.started_at, now)})`
                 : "—",

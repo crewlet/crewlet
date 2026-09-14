@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -230,9 +231,10 @@ func TestAwaitingSandboxParksRatherThanRunning(t *testing.T) {
 
 func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	t.Parallel()
-	// The merged topology: the API process and the engine share one
-	// broker, and the API outlives the engine's own shutdown. An engine
-	// that closed what it was lent would take the API's broker with it.
+	// A caller that opened the backends keeps their lifetime: it needs the
+	// estate after the engine stops (a failed boot's leftovers, a peer's
+	// record read back). An engine that closed what it was lent would take
+	// the caller's broker with it.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
 	})
@@ -256,6 +258,43 @@ func TestBorrowedBackendsOutliveTheEngine(t *testing.T) {
 	}
 	if back.Store == nil {
 		t.Error("the engine closed a store it was lent")
+	}
+}
+
+// A PARTIAL SET IS REFUSED, NAMING WHAT IS MISSING. It used to be run: the
+// engine skipped whatever needed the absent piece, so an engine lent a queue
+// and no store served a company with no conversation ledger and no native
+// tracker, and nothing said so. Every node `crewlet run` builds holds all four.
+func TestBackendsSuppliedWithoutEveryEstateAreRefused(t *testing.T) {
+	t.Parallel()
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+
+	for missing, strip := range map[string]func(*engine.Backends){
+		"Queue": func(p *engine.Backends) { p.Queue = nil },
+		"Coord": func(p *engine.Backends) { p.Coord = nil },
+		"Fleet": func(p *engine.Backends) { p.Fleet = nil },
+		"Store": func(p *engine.Backends) { p.Store = nil },
+	} {
+		partial := *back
+		strip(&partial)
+		e, err := engine.New(t.Context(), engine.Options{
+			Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: &partial,
+		})
+		if err == nil {
+			e.Stop(context.Background())
+			t.Errorf("backends with no %s built an engine", missing)
+			continue
+		}
+		if !strings.Contains(err.Error(), missing) {
+			t.Errorf("the refusal does not name the missing %s: %v", missing, err)
+		}
 	}
 }
 

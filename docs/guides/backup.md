@@ -26,9 +26,11 @@ bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 mess
 ```
 
 The path is on the **engine's host**, not yours — this writes files where the
-node runs and downloads nothing. Run it against a node with `seats` or
-`workers` in its roles: an ingress-only node holds neither estate and says so
-rather than writing a backup of nothing.
+node runs and downloads nothing. Any node produces one, whatever its roles:
+every node holds its own store and, on the embedded topology, its own broker.
+A node that dialled an **external** NATS cluster is the exception, and it says
+so: its copy carries the store estates alone, and the stream half is backed up
+at the cluster (`nats account backup`) from the same moment.
 
 ## What state exists, and where
 
@@ -262,6 +264,12 @@ announce is logged rather than silent — and it is bounded and self-correcting:
 the log keeps a longer window than it needed to, and the next backup announces
 again.
 
+The announcement, the trim hold and the manifest's `node_id` are all keyed on
+the node's **resolved** id: `node.id` when the file sets it, else
+`CREWLET_NODE_ID`, else the default. A node named only through the variable
+is the shape a container orchestrator runs, and keying on the raw field would
+give every such node one shared, blank key.
+
 **A pin that outlives its owner is visible.** A backup takes a trim hold before
 the first byte is copied and releases it when the copy ends; `crewlet.backup.holds`
 is how many the fleet is carrying, and a count that does not return to zero is a
@@ -332,7 +340,8 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   that live leaseholders outrank. Every node down → restore store files and
   the stream estate from the *same* backup set → start everything.
 - **Keep node identity.** A clustered embedded member's replicas are placed by
-  server name, which is the node's `node.id`: a node restored under a fresh
+  server name, which is the node's resolved id (`node.id`, else
+  `CREWLET_NODE_ID`): a node restored under a fresh
   name is a new peer, its old replicas are orphaned, and the stream sits short
   of quorum waiting for a server that will never return.
 - **Expect bounded duplicates, not loss.** Mailboxes hold exactly the unacked

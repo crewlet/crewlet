@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -264,7 +265,8 @@ func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	port := taken.Addr().(*net.TCPAddr).Port
 
 	e := testEngine(t)
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, port), e, nil, nil, nil, logging.Get("test"))
+	boot := bootstrapFor(t, port)
+	surface, err := serveNode(t, boot, e)
 	if err == nil {
 		surface.stop(context.Background(), logging.Get("test"))
 		t.Fatal("binding a port already in use reported success")
@@ -274,17 +276,17 @@ func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	}
 }
 
-func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
+func TestANodeServesItsOwnHealth(t *testing.T) {
 	t.Parallel()
 	// One process is both engine and API, sharing one broker and one
-	// store. The API half is what makes the node reachable at all — every
-	// inbound webhook arrives through it — so an engine that ran without
-	// it would hold seats and hear nothing.
+	// store. The API half is what makes the node reachable at all (every
+	// inbound webhook arrives through it), so an engine that ran without it
+	// would hold seats and hear nothing.
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
+	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -296,9 +298,12 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	}
 	body := getJSON(t, base+"/health")
 
-	// The engine's own answers, which only a co-located process has.
-	if body["engine"] != true {
-		t.Errorf("engine = %v, want true on a merged node", body["engine"])
+	// The engine's own answers, which only the process running it has.
+	if _, present := body["in_flight"]; !present {
+		t.Errorf("the body carries no in-flight count: %v", body)
+	}
+	if body["started_at"] == "" || body["started_at"] == nil {
+		t.Errorf("started_at = %v, want the engine's own start", body["started_at"])
 	}
 	if body["configured"] != true {
 		t.Errorf("configured = %v: the node built an epoch and did not say so, "+
@@ -307,6 +312,93 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	if body["queue"] == "" || body["queue"] == nil {
 		t.Errorf("queue = %v, want the broker named", body["queue"])
 	}
+}
+
+// A NODE NAMED THROUGH CREWLET_NODE_ID ANSWERS AS ITSELF, on its health body
+// and in its backups.
+//
+// The raw `node.id` is empty on exactly the node a container orchestrator runs,
+// which injects the variable and leaves the key out, and both surfaces used to
+// read that raw field: /health answered as the default node-0 while the node's
+// presence lease named it correctly, and a backup was keyed on a blank id, a
+// trim hold every such node shared and a backup point the fleet's register
+// refuses. Not parallel, because it sets the process environment.
+func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
+	const name = "node-from-env"
+	t.Setenv(config.NodeIDEnvVar, name)
+	e := testEngine(t)
+	boot := bootstrapFor(t, 0)
+	boot.API.Port = freePort(t)
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	if boot.Node.ID != "" {
+		t.Fatalf("the bootstrap names node %q itself, so this case proves nothing",
+			boot.Node.ID)
+	}
+
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+
+	if got := getJSON(t, base+"/health")["node"]; got != name {
+		t.Errorf("health node = %v, want %q from %s", got, name, config.NodeIDEnvVar)
+	}
+
+	dir := filepath.Join(t.TempDir(), "backup")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		base+"/backup?dir="+dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer a-test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /backup: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var manifest map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&manifest); err != nil {
+		t.Fatalf("decode the backup answer: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("POST /backup = %d: %v", res.StatusCode, manifest)
+	}
+	if manifest["node_id"] != name {
+		t.Errorf("the backup is keyed on node %v, want %q", manifest["node_id"], name)
+	}
+}
+
+// serveNode builds the API half of a node the way runEngine does: the config
+// surface first (a node with api.port 0 still needs a config WRITER), the
+// reconciler that owns the posture, then the listener.
+func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
+	t.Helper()
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	configSurface, err := configapi.New(configapi.Options{
+		Store: e.Backends().Store, Cipher: cipher,
+		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
+	})
+	if err != nil {
+		t.Fatalf("config surface: %v", err)
+	}
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		t.Fatalf("node identity: %v", err)
+	}
+	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
+		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
+		Queue: e.Backends().Queue, NodeID: nodeID, Cipher: cipher,
+	})
+	if err != nil {
+		t.Fatalf("reconciler: %v", err)
+	}
+	return serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+		logging.Get("test"))
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.

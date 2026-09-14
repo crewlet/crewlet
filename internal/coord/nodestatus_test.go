@@ -8,10 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// ABSENT IS NOT ZERO. A node that publishes no status — an older build, or
-// one whose engine is not co-located — is not a node with no work in
-// flight, and a confident 0 would draw an idle row for a process that is
-// simply not saying.
+// ABSENT IS NOT ZERO. A node that publishes no status (a peer running a build
+// older than the field) is not a node with no work in flight, and a confident 0
+// would draw an idle row for a process that is simply not saying.
 func TestANodeThatPublishesNoStatusIsNotReadAsIdle(t *testing.T) {
 	t.Parallel()
 	for name, meta := range map[string]map[string]any{

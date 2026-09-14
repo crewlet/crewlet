@@ -197,8 +197,8 @@ func TestSatisfiedNeedsBothHalves(t *testing.T) {
 		{"present and resolved", setup.Requirement{Present: true, Resolved: boolPtr(true)}, true},
 		{"present and unresolved", setup.Requirement{Present: true, Resolved: boolPtr(false)}, false},
 		// Where resolution is unknown, present is the most that can be
-		// claimed and it is claimed: a standalone API must not show a
-		// permanent list of things to fix that are already fine.
+		// claimed and it is claimed: a reader with no resolver must not
+		// show a permanent list of things to fix that are already fine.
 		{"present, cannot say", setup.Requirement{Present: true}, true},
 	}
 	for _, tc := range cases {
@@ -302,6 +302,35 @@ var datadogReqs = []setup.Requirement{
 		Field: "route_to", Kind: setup.KindHandle, Required: true,
 		ConfigPath: "integrations.datadog.route_to",
 	},
+}
+
+// A WRITER MISSING A HALF REFUSES BY FIELD, before it writes anything.
+//
+// Every Writer the API builds carries both, so this is a wiring mistake rather
+// than a node shape, and the refusal names the field to set rather than a
+// process with no store. The config half is checked before anything is sealed,
+// and the secret half before the first credential is, so neither leaves a
+// value in the store with nothing pointing at it.
+func TestAWriterMissingAHalfRefusesByField(t *testing.T) {
+	t.Parallel()
+	submit := setup.Submission{
+		Kind:   integration.KindDatadog,
+		Values: map[string]string{"webhook_token": "s3cr3t-value", "route_to": "sre-lead"},
+	}
+
+	_, err := setup.Writer{}.Write(context.Background(), datadogReqs, submit)
+	if err == nil || !strings.Contains(err.Error(), "Writer.Config") {
+		t.Errorf("a writer with no config surface = %v, want a refusal naming Writer.Config", err)
+	}
+
+	rec := &recorder{}
+	_, err = setup.Writer{Config: rec}.Write(context.Background(), datadogReqs, submit)
+	if err == nil || !strings.Contains(err.Error(), "Writer.Secrets") {
+		t.Errorf("a writer with no secret store = %v, want a refusal naming Writer.Secrets", err)
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("the refused submission still wrote %v", rec.events)
+	}
 }
 
 // THE SECRET IS DURABLE BEFORE THE POINTER LANDS. The other order leaves the

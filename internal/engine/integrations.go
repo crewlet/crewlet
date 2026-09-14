@@ -246,7 +246,7 @@ func (e *Engine) Integrations() *integration.Worker { return e.integrations }
 // `-roles ingress` has put the API and the seats on separate hosts.
 func (e *Engine) IntegrationStates(ctx context.Context) ([]integration.State, error) {
 	store, err := e.IntegrationStore()
-	if err != nil || store == nil {
+	if err != nil {
 		return nil, err
 	}
 	return store.LoadIntegrations(ctx)
@@ -259,12 +259,10 @@ func (e *Engine) IntegrationStates(ctx context.Context) ([]integration.State, er
 // the two disagree about an integration's state depending on which surface
 // last touched it.
 //
-// Nil with no error is a node with no coordination store: there is nowhere
-// for a status to live, which is a real posture rather than a failure.
+// Every engine holds a fleet store ([New] refuses backends without one), so
+// this never answers "nowhere to record": it used to, with a nil and no error,
+// for a node with no coordination store that no process is.
 func (e *Engine) IntegrationStore() (*integration.CoordStore, error) {
-	if e.backends == nil || e.backends.Fleet == nil {
-		return nil, nil
-	}
 	return integration.NewCoordStore(e.backends.Fleet)
 }
 

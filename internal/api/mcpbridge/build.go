@@ -23,13 +23,12 @@ const KeyDomain = "crewlet.mcp.v1"
 // laptop all answer this differently with the same company running.
 const BaseURLVar = "CREWLET_MCP_BRIDGE_URL"
 
-// Build is THE construction path, called by the engine and by a standalone API
-// alike.
+// Build is THE construction path, called by every engine.
 //
-// Both need one and for different halves: the engine OPENS a run's session and
-// mints its endpoint, and whichever process is externally reachable VERIFIES
-// the token. That is why the token is signed from shared key material rather
-// than stored — see [runtoken.KeyFrom].
+// A run's session is opened by the engine that launched it, and the token is
+// verified by whichever node the box reaches, which on a fleet need not be the
+// same one. That is why the token is signed from shared key material rather
+// than stored; see [runtoken.KeyFrom].
 //
 // An unset base URL builds NOTHING, and that is a real configuration rather
 // than an error: most deployments run no agent mode. The route is then absent,
@@ -45,14 +44,15 @@ func Build(env func(string) string, keyMaterial []string) *Bridge {
 	}
 	key := runtoken.KeyFrom(KeyDomain, keyMaterial)
 	if len(key) == 0 {
-		// A PER-PROCESS KEY CANNOT WORK ACROSS TWO. Logged rather than
-		// refused, because a merged deployment — the default — is
-		// perfectly correct with one, and refusing would take agent mode
-		// away from the topology it works on.
+		// A PER-PROCESS KEY CANNOT WORK ACROSS TWO NODES. Logged rather
+		// than refused, because a single node is perfectly correct with
+		// one, and refusing would take agent mode away from the topology
+		// it works on.
 		log.Warn("mcp_bridge_signing_key_ephemeral",
 			"detail", "no Tier A secrets.keys, so bridge tokens are signed with "+
-				"a per-process key — a split API cannot verify tokens the "+
-				"engine minted. `crewlet secrets keygen` fixes it")
+				"a per-process key; a peer then reads this node's tokens as "+
+				"forged rather than as a call that reached the wrong node. "+
+				"`crewlet secrets keygen` fixes it")
 	}
 	return New(Options{Key: key, BaseURL: base})
 }

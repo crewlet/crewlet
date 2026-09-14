@@ -944,9 +944,9 @@ func TestAnUnreadableSubscriptionListFallsBackToTheLead(t *testing.T) {
 	}
 }
 
-// NO SUBSCRIPTION LIST AT ALL IS A SUPPORTED SHAPE, not a degraded one: a
-// single node with no coordination store routes by mention and space lead
-// alone, exactly as this build did before.
+// A PARSER WITH NO SUBSCRIPTION LIST STILL ROUTES, by mention and space lead
+// alone, exactly as it did before the list existed: the list only ever adds
+// recipients, so its absence must never cost one.
 func TestAParserWithNoSubscriptionListStillRoutes(t *testing.T) {
 	t.Parallel()
 	got := route(t, parser(t, nil),

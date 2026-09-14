@@ -395,10 +395,10 @@ test("a surface that is busy is retried rather than abandoning the rest", async 
 });
 
 /**
- * AND A REFUSAL THAT WILL NOT CHANGE IS STILL TERMINAL.
+ * AND A REFUSAL THAT IS NOT A RACE IS STILL TERMINAL.
  *
- * Retrying a node with no fleet status store is a loop with no exit, and the
- * operator needs the banner and the way out rather than a spinner.
+ * Retrying a status row the node could not write is a loop the fault does not
+ * end, and the operator needs the banner and the way out rather than a spinner.
  */
 test("a refusal that is not a race stops and offers the force", async () => {
   const sent: Sent[] = [];
@@ -411,7 +411,10 @@ test("a refusal that is not a race stops and offers the force", async () => {
         body: init?.body ? JSON.parse(String(init.body)) : null,
       });
       return new Response(
-        JSON.stringify({ error: "no_status_store", detail: "this node has no fleet status store" }),
+        JSON.stringify({
+          error: "internal_error",
+          detail: "the fleet status row could not be written",
+        }),
         { status: 503 },
       );
     }),
@@ -420,7 +423,7 @@ test("a refusal that is not a race stops and offers the force", async () => {
   render(<DisconnectDialog name="Jira" kinds={["jira"]} onClose={() => {}} onDone={() => {}} />);
   fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
 
-  await waitFor(() => expect(screen.getByText(/no fleet status store/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/status row could not be written/)).toBeTruthy());
   expect(screen.queryByText(/has to wait its turn/)).toBeNull();
   expect(sent.filter((s) => s.method === "DELETE")).toHaveLength(1);
 });

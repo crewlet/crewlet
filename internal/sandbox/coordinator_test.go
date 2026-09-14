@@ -369,25 +369,32 @@ func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
 }
 
 // A node with no seat to resume into must send the completion back rather than
-// settle the run and tear the box down with the turn inside it.
+// settle the run and tear the box down with the turn inside it, AND give the
+// claim back, so the node that does hold the seat can win it.
+//
+// The resumer is what says so: only the engine knows which seats it holds.
+// This used to be a nil resumer instead, for a node that could resume nothing
+// at all, and that path returned before the revert below it, stranding the row
+// in resumed where no retry could claim it.
 func TestANodeThatCannotResumeSaysSoRatherThanSettling(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.err = fmt.Errorf("%w: seat %q is not held on this node",
+		ErrResumeUnavailable, "swe")
 
-	coordinator, err := NewCoordinator(CoordinatorOptions{
-		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
-	})
-	if err != nil {
-		t.Fatalf("NewCoordinator: %v", err)
-	}
 	payload, ev := rig.completion("t1")
-	err = coordinator.OnCompleted(t.Context(), payload, ev)
+	err := rig.coordinator.OnCompleted(t.Context(), payload, ev)
 	if !errors.Is(err, ErrResumeUnavailable) {
 		t.Fatalf("OnCompleted = %v, want ErrResumeUnavailable", err)
 	}
-	if got := rig.get("t1"); got.Status == StatusDone {
+	got := rig.get("t1")
+	if got.Status == StatusDone {
 		t.Fatal("the run was settled done by a node that never resumed it")
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim given back (%q) for the seat's owner",
+			got.Status, StatusRunning)
 	}
 }
 
@@ -968,9 +975,25 @@ func TestReleasingASeatTearsNothingDown(t *testing.T) {
 	}
 }
 
+// EVERY COLLABORATOR IS REQUIRED, and a missing one is refused by name. The
+// resumer is among them: every node that builds a coordinator runs the engine a
+// completion resumes into, and "not on this node" is the resumer's answer.
 func TestACoordinatorNeedsItsCollaborators(t *testing.T) {
-	if _, err := NewCoordinator(CoordinatorOptions{}); err == nil {
-		t.Fatal("a coordinator with no queue, store or manager was accepted")
+	_, err := NewCoordinator(CoordinatorOptions{})
+	if err == nil {
+		t.Fatal("a coordinator with no queue, store, manager or resumer was accepted")
+	}
+	for _, field := range []string{"Queue", "Pending", "Manager", "Resume"} {
+		if !strings.Contains(err.Error(), "CoordinatorOptions."+field) {
+			t.Errorf("the refusal does not name CoordinatorOptions.%s: %v", field, err)
+		}
+	}
+
+	rig := newCoordRig(t)
+	if _, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+	}); err == nil || !strings.Contains(err.Error(), "CoordinatorOptions.Resume") {
+		t.Fatalf("a coordinator with no resumer = %v, want it refused naming Resume", err)
 	}
 }
 

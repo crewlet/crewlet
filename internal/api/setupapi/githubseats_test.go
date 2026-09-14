@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/crewlet/crewlet/internal/api/setupapi"
 )
 
 // A company whose agents are at every stage of getting their own GitHub App:
@@ -341,8 +339,7 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 		t.Fatalf("point at github = %d: %s", res.Code, res.Body)
 	}
 
-	flow := setupapi.NewAppFlow(s.setup, []string{"test-material"}, nil)
-	s.setup.AttachAppFlow(flow)
+	flow := s.setup.AppFlow()
 
 	// THROUGH THE BEGIN ROUTE, so the state the callback validates is one
 	// this engine actually minted rather than one the test forged.

@@ -268,9 +268,9 @@ the pre-ledger prompt) and logs that it could not read it. Swallowing it in the
 store would make "unreadable" and "nothing said yet" one answer, and a seat
 would run without its history with nothing anywhere to say why.
 
-Without a database the engine wires the in-memory twin, so a single node still
-gets the feature; a seat that moves between nodes simply arrives with no
-history, which is the same fail-open answer.
+The ledger lives in the store of the node running the seat, which every node
+opens, so it is never replicated: a seat that moves between nodes simply arrives
+with no history, which is the same fail-open answer.
 
 ---
 

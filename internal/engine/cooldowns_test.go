@@ -1,11 +1,14 @@
 package engine_test
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/credential"
 	"github.com/crewlet/crewlet/internal/providers/llm"
@@ -158,10 +161,13 @@ func TestABootingNodeInheritsWhatItsPeersBenched(t *testing.T) {
 		"reached the pool, so this node's first calls will rediscover it")
 }
 
-// A NODE WITH NO COORDINATION STORE KEEPS ITS COOLDOWNS AND RUNS. That is the
-// single-node deployment, where there is no peer to tell — and it must not
-// need a store to bench a key at all.
-func TestANodeWithNoFleetStoreStillBenchesLocally(t *testing.T) {
+// A NODE WHOSE FLEET CANNOT BE TOLD STILL BENCHES THE KEY ITSELF.
+//
+// Sharing is best effort: a cooldown that did not reach the fleet costs a peer
+// one wasted call. It must not cost THIS node its own bench, so a coordination
+// store that refuses the write (a blip, a partition) leaves the key benched
+// here and the next lease on another one.
+func TestANodeWhoseFleetCannotBeToldStillBenchesLocally(t *testing.T) {
 	t.Parallel()
 	boot := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
@@ -171,7 +177,7 @@ func TestANodeWithNoFleetStoreStillBenchesLocally(t *testing.T) {
 		t.Fatalf("OpenBackends: %v", err)
 	}
 	t.Cleanup(func() { back.Close(t.Context()) })
-	back.Fleet = nil
+	back.Fleet = unreachableCooldowns{back.Fleet}
 
 	e := newEngine(t, engine.Options{
 		Bootstrap: boot, Backends: back,
@@ -185,6 +191,24 @@ func TestANodeWithNoFleetStoreStillBenchesLocally(t *testing.T) {
 	}
 	lease.Fail(t.Context(), llm.KindRateLimit, 0)
 	if _, ok := pool.Acquire(); ok {
-		t.Fatal("the key stayed live on a node with no fleet store")
+		t.Fatal("the key stayed live because the fleet could not be told")
 	}
+}
+
+// unreachableCooldowns is the fleet with its cooldown ledger refusing every
+// call, as a coordination store that cannot be reached does.
+type unreachableCooldowns struct{ wholeFleet }
+
+// wholeFleet names the embedded fleet by an alias, because coord.Fleet has a
+// method called Fleet and the embedded field would otherwise shadow it.
+type wholeFleet = coord.Fleet
+
+var errUnreachable = errors.New("coordination store unreachable")
+
+func (unreachableCooldowns) Cool(context.Context, string, time.Time) error {
+	return errUnreachable
+}
+
+func (unreachableCooldowns) Since(context.Context, time.Time) (map[string]time.Time, error) {
+	return nil, errUnreachable
 }

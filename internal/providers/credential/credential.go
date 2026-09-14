@@ -315,10 +315,11 @@ func (p *Pool) Stats() []Stat {
 // node. Re-attaching is how a config apply equips the epoch it just built;
 // calling it twice with the same ledger is a no-op in effect.
 //
-// A nil ledger DETACHES, which is what an epoch built on a node with no
-// coordination store gets. It leaves whatever cooldowns are already on the
-// bench alone: forgetting a live bench because sharing went away would hand
-// out a key the vendor is still refusing.
+// A nil ledger DETACHES, leaving the pool as one that was never shared, which
+// is what a pool built with no running node behind it (`crewlet validate`)
+// already is. It leaves whatever cooldowns are already on the bench alone:
+// forgetting a live bench because sharing went away would hand out a key the
+// vendor is still refusing.
 func (p *Pool) Share(scope string, s Shared) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

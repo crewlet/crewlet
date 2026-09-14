@@ -449,6 +449,11 @@ export interface SchedulesAnswer {
  */
 export interface HealthPush {
   status: string;
+  /**
+   * Both are always on the wire. They stay optional here because the client
+   * holds one health value that is NOT a push: the `{status: "unknown"}` it
+   * falls back to while the socket is down, which asserts no count at all.
+   */
   in_flight?: number;
   shutting_down?: boolean;
 }
@@ -457,10 +462,13 @@ export interface EngineHealth {
   status: string;
   node?: string;
   configured?: boolean;
-  engine?: boolean;
   version?: string;
+  /**
+   * When this node's ENGINE started, which is when the node started: the API
+   * is served inside the engine's process, and the fleet view reports the same
+   * instant for this node.
+   */
   started_at?: string;
-  engine_started_at?: string;
   queue?: string;
   clients?: number;
   in_flight?: number;
@@ -750,9 +758,9 @@ export interface ReconcileFinding {
  * What the reconcile loop last found for one surface.
  *
  * The row's `reconcile` is THREE-VALUED like every count beside it: an object
- * is a real finding, and `null` is either a process with no loop to ask (a
- * standalone API) or a surface the loop has not reached yet. Neither is a
- * claim that the surface is healthy.
+ * is a real finding, and `null` is either a node that could not read the
+ * fleet's rows or a surface the loop has not reached yet. Neither is a claim
+ * that the surface is healthy.
  */
 export interface ReconcileStatus {
   /** unconfigured | awaiting_admin | provisioning | activating | degraded | ready */
@@ -1893,7 +1901,7 @@ export interface SetupRequirement {
   value?: string;
   /** The document names something here: a literal or a ${VAR}. */
   present: boolean;
-  /** Three-valued, as everywhere: null is "this process cannot say". */
+  /** Null for a field the document leaves empty: there is nothing to resolve. */
   resolved?: boolean | null;
   seat?: string;
 }
@@ -2288,6 +2296,5 @@ export type QueryErrorCode =
    *  says "ask again in a moment", never "there is nothing": the second is an
    *  answer a person acts on. */
   | "unavailable"
-  | "no_event_store"
   | "timeout"
   | "closed";

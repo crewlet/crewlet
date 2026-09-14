@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,8 +95,8 @@ func TestTheBackupPinsTheLogWhileItCopiesAndReleasesIt(t *testing.T) {
 	fleet := memory.NewFleet()
 	held := &watchedHolds{HoldRegister: fleet}
 
-	s := backup.New(backup.Options{
-		Store: db, NodeID: "node-0", Holds: held,
+	s := build(t, backup.Options{
+		Store: db, NodeID: "node-0", Holds: held, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	if _, err := s.Take(t.Context(), filepath.Join(t.TempDir(), "b")); err != nil {
@@ -140,8 +141,8 @@ func TestABackupThatCannotPinTheLogIsRefused(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedCursor(t, db, "CREWLET_TRACKER_LOG", 1, 5)
-	s := backup.New(backup.Options{
-		Store: db, NodeID: "node-0", Holds: refusingHolds{},
+	s := build(t, backup.Options{
+		Store: db, NodeID: "node-0", Holds: refusingHolds{}, Backups: memory.NewFleet(),
 		Now: func() time.Time { return clock },
 	})
 	dir := filepath.Join(t.TempDir(), "b")
@@ -179,6 +180,12 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, backup.ManifestName)); statErr == nil {
 		t.Fatal("a manifest was written over the hole")
+	}
+	// AND IT SAYS WHERE TO LOOK. The hold is the thing that failed to stop
+	// the trim, and the one line that records a hold going stale is its
+	// renewal warning, so the refusal names it rather than a node shape.
+	if !strings.Contains(err.Error(), "backup_hold_not_renewed") {
+		t.Errorf("the refusal does not say where to look: %v", err)
 	}
 
 	// AND THE BOUNDARY CASE PASSES: a log whose first sequence is exactly
@@ -347,8 +354,8 @@ func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
 	fleet := memory.NewFleet()
 
 	dir := filepath.Join(t.TempDir(), "b")
-	service := backup.New(backup.Options{
-		Store: db, NodeID: "node-0", Backups: fleet,
+	service := build(t, backup.Options{
+		Store: db, NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
 	if _, err := service.Take(t.Context(), dir); err != nil {

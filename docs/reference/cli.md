@@ -543,9 +543,11 @@ broker is embedded in the engine and **binds no socket**, so there is no
 address to give the `nats` CLI. The one process that can reach both is the
 engine, and this asks it to.
 
-The report names what it captured, per estate. A node that holds only one of
-them — an ingress-only node has neither — says so rather than presenting a
-partial copy as a backup.
+The report names what it captured, per estate. Every node holds its own store
+whatever its `node.roles`, and on the embedded topology its own broker too; a
+node that dialled an external NATS cluster copies the store alone and says so,
+naming the cluster as where the stream half is backed up, rather than
+presenting a partial copy as a backup.
 
 `-wait` (default 30 minutes) bounds how long the command waits for the answer,
 not the copy: the engine finishes what it started, so a wait that expires

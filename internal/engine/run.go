@@ -89,10 +89,10 @@ type Engine struct {
 	// survive a restart, which is the opposite property to incarnation's.
 	id string
 
-	// startedAt is when THIS engine started, which on a split deployment
-	// is a different process on a different clock from the API's own
-	// start. Carried on the presence heartbeat so a peer can tell a node
-	// that has been up for a week from one that restarted a minute ago.
+	// startedAt is when THIS engine was built, which is when the node
+	// started: the API this process serves runs inside it and reports this
+	// same instant. Carried on the presence heartbeat so a peer can tell a
+	// node that has been up for a week from one that restarted a minute ago.
 	startedAt time.Time
 
 	// posture reports this node's config lag, from whoever owns the
@@ -108,8 +108,7 @@ type Engine struct {
 	// fact from use: a borrowed Backends is still the one this engine
 	// requeues and pauses through, so holding "the ones I use" and "do I
 	// close them" in one nilable field made the park path reach for a nil
-	// queue on exactly the topology — merged API and engine — that shares
-	// one broker.
+	// queue on exactly the engines that were lent their backends.
 	ownsBackends bool
 
 	// dispatch turns one inbox partition into one turn. Held so a test can
@@ -188,11 +187,13 @@ type Engine struct {
 	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
 	//
-	// Held here and handed OUT to the API rather than built twice: in a
-	// split deployment the API verifies tokens this process minted, and
-	// two receivers would sign with two per-process keys unless a keyring
-	// happens to be configured — which is exactly the case that must not
-	// depend on happening to be configured.
+	// Held here and handed OUT to the API this process serves rather than
+	// built twice: that API verifies the tokens this engine minted, and two
+	// receivers would sign with two per-process keys unless a keyring
+	// happens to be configured, which is exactly the case that must not
+	// depend on happening to be configured. A peer verifies them with its
+	// own receiver, which is why the key is derived from the fleet's
+	// keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
 	// bridge serves a running seat's tool surface to a coding agent over
@@ -398,10 +399,17 @@ type Options struct {
 	// the environment; see [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
-	// Backends may be supplied by a caller that already opened them — the
-	// API process and the engine share one broker when they run merged.
-	// Nil opens them from the bootstrap config, and the engine then owns
-	// their lifetime.
+	// Backends may be supplied by a caller that already opened them and
+	// keeps their lifetime. Nil opens them from the bootstrap config, and
+	// the engine then owns their lifetime.
+	//
+	// `crewlet run` always leaves this nil: the engine opens its own, and
+	// the API the same process serves reads them back through
+	// [Engine.Backends]. The callers that supply a set are the ones that
+	// need the estate before or after the engine that runs on it: a peer's
+	// record written before this node exists, or a failed boot whose
+	// leftovers are inspected. A supplied set must be complete; see
+	// [Backends.Complete].
 	Backends *Backends
 
 	// Dispatch overrides the default dispatcher.
@@ -481,9 +489,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		otel = built
 	}
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
-	// receiver above is built here: a split deployment mints in this
-	// process and verifies in another, so both derive their key from the
-	// fleet's keyring rather than from a per-process random.
+	// receiver above is built here: a fleet mints on one node and may
+	// verify on another, so every node derives its key from the fleet's
+	// keyring rather than from a per-process random.
 	bridge := opts.Bridge
 	if bridge == nil {
 		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
@@ -512,11 +520,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	incarnation := config.NewIncarnation(nodeID)
 
 	// Only what this engine OPENED does it close. A caller that supplied
-	// backends keeps their lifetime — the merged API process outlives the
-	// engine's own shutdown and still needs its broker.
+	// backends keeps their lifetime, and must supply all four: see
+	// [Backends.Complete] for why a partial set is refused rather than run.
 	backends := opts.Backends
 	ownsBackends := false
-	if backends == nil {
+	if backends != nil {
+		if err = backends.Complete(); err != nil {
+			return nil, err
+		}
+	} else {
 		// ASSIGNED, not declared through a temporary: `opened, err :=`
 		// shadows the err the node-id read above already declared, which is
 		// the one shape govet cannot tell from the bug that check is on for.
@@ -561,9 +573,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// because nothing else holds a reference to it. Closing the store and
 	// the broker underneath them is exactly the mid-batch write
 	// [Engine.Stop] orders itself to avoid; and where the CALLER supplied
-	// the backends — the merged API process, an embedded engine, every
-	// test — nothing was closed at all and the loops simply ran on, in a
-	// process whose boot had failed.
+	// the backends, nothing was closed at all and the loops simply ran on,
+	// in a process whose boot had failed.
 	//
 	// Deferred rather than written at each return, for the reason
 	// [Engine.startNative]'s own guard is: the list of things to unwind
@@ -926,13 +937,13 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	// own history, read only by the node running that seat, so they stay
 	// on the node's local database where a long thread costs nothing to
 	// replicate.
-	if backends.Fleet != nil && d.Completions == nil {
+	//
+	// Neither is nil-checked: [New] refuses a Backends without a store or a
+	// fleet, so both are always here by the time this runs.
+	if d.Completions == nil {
 		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
 	}
-	// Nil-checked rather than assumed: a caller-supplied Backends may
-	// carry no store, and the dispatcher already documents nil as the
-	// single-node case where the seat lease is the whole mutual exclusion.
-	if backends.Store != nil && d.Conversations == nil {
+	if d.Conversations == nil {
 		d.Conversations = ledgerstore.NewConversations(backends.Store)
 	}
 	return d
@@ -1145,9 +1156,9 @@ func (e *Engine) Node() *node.Node { return e.node }
 
 // Backends exposes the infrastructure this engine runs on.
 //
-// For the MERGED topology, where one process is both engine and API: the two
-// halves share one broker and one store, and the half that did not open them
-// needs a handle. A second set would be worse than inconvenient — two
+// For the API `crewlet run` serves beside the engine, in the same process: the
+// two share one broker and one store, and the API did not open them, so it
+// needs a handle. A second set would be worse than inconvenient: two
 // connections to one broker fail independently, and the store is exclusive to
 // one process, so a second open is contention with itself.
 func (e *Engine) Backends() *Backends { return e.backends }
@@ -1405,11 +1416,12 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	return status
 }
 
-// StartedAt is when this engine started.
+// StartedAt is when this engine was built, which is when the node started.
 //
-// Its own accessor rather than a field on some larger snapshot: on a split
-// deployment the API is a different process on a different clock, and a
-// merged uptime would report one number for two windows.
+// ONE INSTANT FOR EVERY SURFACE. The API served in this process reports it as
+// the node's `started_at`, and the presence heartbeat carries it to every peer's
+// fleet view, so the node's own health and the fleet's picture of it cannot
+// disagree about how long it has been up.
 func (e *Engine) StartedAt() time.Time { return e.startedAt }
 
 // SetPosture supplies the config-lag reporter the presence heartbeat
@@ -1484,26 +1496,27 @@ func (e *Engine) notifyApplied(ctx context.Context) {
 	}
 }
 
-// OtelReceiver is this node's sandbox telemetry receiver, or nil.
+// OtelReceiver is this node's sandbox telemetry receiver, or nil when
+// CREWLET_SANDBOX_OTEL_RECEIVER_URL is unset.
 //
-// Handed to the API so a merged process mounts the route the engine mints
-// against, and so a SPLIT one is visibly missing it rather than answering 401
-// with a key nobody shares.
+// Handed to the API this process serves, so the route verifies with the
+// receiver the engine mints against rather than with a second one built from a
+// key nobody shares.
 func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
 
 // Bridge is this node's MCP tool bridge, or nil.
 //
-// Exposed for the same reason the receiver is: the API process serves the
-// route, and on a merged deployment it is handed this engine's own — one
-// object, so a session opened by a run is the session the route resolves.
+// Exposed for the same reason the receiver is: the API this process serves
+// mounts the route, and it is handed this engine's own: one object, so a
+// session opened by a run is the session the route resolves.
 func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 
 // keyMaterial is the Tier A keyring, as the OTLP token key is derived from.
 //
 // THE REFERENCES ARE NOT RESOLVED HERE, and must not be: this runs before the
 // secret store is open, and the store's own key is what would resolve them.
-// Two processes reading the same document derive the same key either way —
-// what matters is that they agree, not that the material is the plaintext.
+// Two nodes reading the same document derive the same key either way: what
+// matters is that they agree, not that the material is the plaintext.
 func keyMaterial(boot *config.Bootstrap) []string {
 	if boot == nil {
 		return nil

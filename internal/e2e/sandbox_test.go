@@ -18,10 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
 )
@@ -213,7 +211,7 @@ esac
 	return dir
 }
 
-// bootCompany stands a merged node up over a company document.
+// bootCompany stands a node (an engine and its API) up over a company document.
 //
 // The same assembly startWith does, factored out so a suite whose subject
 // needs its own store directory — one that SURVIVES a restart — can supply it.
@@ -253,31 +251,12 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app := api.New(api.Options{
-		Bootstrap:    &boot,
-		QueueBackend: e.Backends().Queue.Backend(),
-		Sources: queries.Sources{
-			Events:  e.Backends().Store.Events(),
-			Company: func() *config.Company { return cfg },
-			// The DURABLE record, which is what the board must read: a
-			// run parked on a question waits days, and the live
-			// projection sweeps long before that.
-			Sandbox: sandbox.NewCoordStore(e.Backends().Fleet),
-		},
-		HealthInterval: tickInterval,
+	app, srv := serveAPI(t, e, &boot, func(opts *api.Options) {
+		// The DURABLE record, which is what the board must read: a run
+		// parked on a question waits days, and the live projection sweeps
+		// long before that.
+		opts.Sources.Sandbox = sandbox.NewCoordStore(e.Backends().Fleet)
 	})
-	app.SetConfigured(true)
-	app.Start(t.Context())
-	t.Cleanup(app.Stop)
-
-	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
-	if err := projector.Start(t.Context()); err != nil {
-		t.Fatalf("projector: %v", err)
-	}
-	t.Cleanup(func() { projector.Stop(context.Background()) })
-
-	srv := httptest.NewServer(app)
-	t.Cleanup(srv.Close)
 	return &node{engine: e, app: app, server: srv, model: model}
 }
 

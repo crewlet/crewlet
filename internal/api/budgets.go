@@ -38,15 +38,6 @@ type budgetResetter interface {
 // — because the alternative is an operator typing `-scope ""` and being told
 // nothing matched while the counters they meant to clear kept refusing turns.
 func (a *App) serveBudgetReset(w http.ResponseWriter, r *http.Request) {
-	if a.budgets == nil {
-		// A standalone API with no coordination store attached. 503
-		// rather than 404: the route EXISTS on this build, and telling
-		// an operator it does not would send them looking for a version
-		// mismatch that is not there.
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_coordination_store"})
-		return
-	}
 	scope := r.URL.Query().Get("scope")
 
 	// READ FIRST, so the answer NAMES what it cleared. A count alone

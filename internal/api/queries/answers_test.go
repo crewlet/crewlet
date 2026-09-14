@@ -91,14 +91,15 @@ func ask(t *testing.T, r *queries.Registry, what string, params map[string]any) 
 	return out
 }
 
-// --- what a node without a surface answers ------------------------------- //
+// --- what a registry without a source answers ---------------------------- //
 
 func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	t.Parallel()
-	// Unknown rather than a failure, which is the honest answer for a node
-	// that does not have that surface at all — and distinct from an empty
-	// one, because a dashboard drawing "no events" for "this node has no
-	// event log" would report a quiet company during a misconfiguration.
+	// Unknown rather than a failure, which is the honest answer for a
+	// source the registry was never given (a company on the vendor tracker
+	// has no native board), and distinct from an empty one: a dashboard
+	// drawing "no events" for "nothing here reads the event log" would
+	// report a quiet company that is not quiet.
 	r := registryOver(t, queries.Sources{})
 	if got := r.Names(); len(got) != 0 {
 		t.Errorf("names = %v, want none with no sources", got)
@@ -290,11 +291,12 @@ func TestOneRoleCanBeAskedForAlone(t *testing.T) {
 	}
 }
 
-func TestANodeWithNoEventStoreLabelsTheWindowItWasAsked(t *testing.T) {
+func TestAWindowNobodyCanSeeIsLabelledAsAsked(t *testing.T) {
 	t.Parallel()
-	// An empty rollup labelled with the window ASKED for, not the live one
-	// relabelled: a week's heading over an hour's numbers is a lie about
-	// what a reader is looking at.
+	// A registry holding the projection and no event log cannot see a
+	// fourteen-day window. It answers an empty rollup labelled with the
+	// window ASKED for, not the live one relabelled: a week's heading over an
+	// hour's numbers is a lie about what a reader is looking at.
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
 	if got.SinceDays != 14 || got.Totals.Calls != 0 {
@@ -622,7 +624,7 @@ token_budget: 10000
 	}
 }
 
-func TestBudgetsWithNoStoreSayNobodyLooked(t *testing.T) {
+func TestBudgetsWithNoCounterSayNobodyLooked(t *testing.T) {
 	t.Parallel()
 	// `durable: false` means UNREADABLE, never zero. A company drawn at 0%
 	// of its budget when the truth is that nobody looked is the lie this
@@ -643,10 +645,10 @@ token_budget: 10000
 	})
 	got := ask(t, r, "budgets", nil)
 	if got["durable"] != false {
-		t.Error("a node with no counter claimed a durable reading")
+		t.Error("a registry with no counter claimed a durable reading")
 	}
-	// The CAPS are still stated: they are config, and a node without a
-	// store still knows them.
+	// The CAPS are still stated: they are config, and they do not wait on
+	// the counter.
 	orgRow, _ := got["org"].(map[string]any)
 	if orgRow["max_tokens"] != 10000 {
 		t.Errorf("the cap was dropped with the counter: %+v", orgRow)

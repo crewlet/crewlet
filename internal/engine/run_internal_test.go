@@ -233,9 +233,9 @@ func TestANodeWithNoPostureReporterPublishesNone(t *testing.T) {
 	}
 }
 
-// THE START IS THIS ENGINE'S OWN. On a split deployment the API is a
-// different process on a different clock, so a peer reading one uptime for
-// both would report a number that is true of neither.
+// THE START IS THIS ENGINE'S OWN: the instant the API this node serves reports
+// as its started_at, so a peer's fleet view and the node's own health body
+// cannot disagree about how long it has been up.
 func TestTheAdvertisedStartIsTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	e := &Engine{startedAt: time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)}

@@ -59,9 +59,8 @@ type Service struct {
 
 // Options wire the service.
 type Options struct {
-	// Fleet is the coordination backend holding the rows. Nil serves no
-	// surface at all: a process that cannot reach the fleet's store has
-	// nothing to serve, and 404 is the honest answer for that.
+	// Fleet is the coordination backend holding the rows. Required: every
+	// node opens the fleet store, and [New] refuses to build without it.
 	Fleet coord.Secrets
 
 	// Cipher seals and opens a value. Nil is a node with no keyring,
@@ -75,10 +74,16 @@ type Options struct {
 	Now func() time.Time
 }
 
-// New builds the service, or nil when there is no fleet store to serve from.
-func New(opts Options) *Service {
+// New builds the service.
+//
+// A MISSING FLEET IS REFUSED rather than served as an absent surface: `crewlet
+// run` builds this beside an engine whose fleet store is open on every
+// topology, so a nil here is a wiring mistake, and an unregistered /secrets
+// answering 404 would hide it.
+func New(opts Options) (*Service, error) {
 	if opts.Fleet == nil {
-		return nil
+		return nil, errors.New("secretsapi: Options.Fleet is required: the " +
+			"company's credentials live in the fleet's coordination store")
 	}
 	now := opts.Now
 	if now == nil {
@@ -98,17 +103,11 @@ func New(opts Options) *Service {
 		keyID:  opts.ActiveKeyID,
 		cipher: opts.Cipher,
 		now:    now,
-	}
+	}, nil
 }
 
 // Routes registers the surface on the API's mux.
 func (s *Service) Routes(mux *http.ServeMux) {
-	if s == nil {
-		log.Warn("secret_surface_disabled",
-			"hint", "this process cannot reach the fleet's coordination store, "+
-				"so /secrets is not served here")
-		return
-	}
 	mux.HandleFunc("GET /secrets", s.list)
 	// REKEY IS A POST, and that is what keeps it from swallowing a secret
 	// a company legitimately calls "rekey". Registration order is NOT what

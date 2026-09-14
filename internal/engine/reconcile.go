@@ -84,9 +84,10 @@ type Reconciler struct {
 	// one nudge lead to the same place.
 	nudged chan struct{}
 
-	// onApply is called after every apply with the outcome, so the API
-	// half of a merged node learns whether it is configured without
-	// polling the pointer a second time.
+	// onApply is called after every apply with the outcome, for an
+	// observer that wants each one as it happens: the command logs them.
+	// Whether the node is configured is not learned from here; the API
+	// reads the engine's live epoch on every call.
 	onApply func(epoch int64, status configplane.ApplyStatus)
 
 	now func() time.Time

@@ -1049,25 +1049,6 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// refusal is live from the first delivery this node could take.
 	e.SetAdmits(reconciler.Admits)
 
-	// MERGED: one process is both engine and API, sharing one broker and
-	// one store. The API half is what makes the node reachable at all —
-	// every inbound webhook arrives through it — so an engine that ran
-	// without it would hold seats and hear nothing.
-	//
-	// BOUND BEFORE THE ENGINE STARTS, and the order is a fix rather than a
-	// preference. Starting the engine first means claiming seats first, and
-	// a seat is not claimed until its per-role MCP children are up — one
-	// subprocess per server per seat, each a spawn and a handshake and a
-	// tools/list. On the Nimbus example that is 21 children, and the whole
-	// inbound edge (dashboard, REST, every third-party app's webhook) was
-	// dark for as long as they took. Measured at 37 seconds with four seats
-	// and every vendor failing FAST; a company whose vendors actually answer
-	// takes minutes, and it scales with seats times servers.
-	//
-	// Nothing here needs a started engine: the node exists, /health and
-	// /ready report honestly that it holds no seats yet, and a webhook that
-	// arrives in the window is retained rather than dropped because the
-	// mailboxes are created before any claiming — see Node.Start.
 	// THE CONFIG SURFACE IS BUILT HERE, NOT INSIDE serveAPI, and the
 	// difference is a node with `api.port: 0`.
 	//
@@ -1089,22 +1070,46 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// which exist here — so it is built unconditionally and handed to
 	// serveAPI, which shares the ONE instance with the REST routes and the
 	// socket queries.
-	configSurface := configapi.New(configapi.Options{
+	configSurface, err := configapi.New(configapi.Options{
 		Store: e.Backends().Store, Cipher: cipher,
 		// THE POINTER, without which the write routes have nothing to
 		// activate against. It was missing, so every /config write on
-		// this binary reached a nil plane — the live-edit path that is
-		// the whole of Tier B.
+		// this binary reached a nil plane: the live-edit path that is the
+		// whole of Tier B.
 		Plane: e.Backends().Fleet,
 		// And the nudge, so an operator's change lands on every node in
 		// milliseconds rather than at the next reconcile poll.
 		Queue: e.Backends().Queue,
 	})
+	if err != nil {
+		e.Stop(context.WithoutCancel(ctx))
+		return err
+	}
 	// The surface a DISCONNECT removes a block through. Until it is set
 	// the loop refuses a disconnect rather than running the teardown at
 	// the third-party app and leaving the block behind.
 	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 
+	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
+	// and it is the only shape an API is served in. The API half is what
+	// makes the node reachable at all (every inbound webhook arrives
+	// through it), so an engine that ran without it would hold seats and
+	// hear nothing.
+	//
+	// BOUND BEFORE THE ENGINE STARTS, and the order is a fix rather than a
+	// preference. Starting the engine first means claiming seats first, and
+	// a seat is not claimed until its per-role MCP children are up (one
+	// subprocess per server per seat, each a spawn and a handshake and a
+	// tools/list). On the Nimbus example that is 21 children, and the whole
+	// inbound edge (dashboard, REST, every third-party app's webhook) was
+	// dark for as long as they took. Measured at 37 seconds with four seats
+	// and every vendor failing FAST; a company whose vendors actually answer
+	// takes minutes, and it scales with seats times servers.
+	//
+	// Nothing here needs a started engine: the node exists, /health and
+	// /ready report honestly that it holds no seats yet, and a webhook that
+	// arrives in the window is retained rather than dropped because the
+	// mailboxes are created before any claiming (see Node.Start).
 	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
@@ -1166,7 +1171,7 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	return nil
 }
 
-// httpSurface is the API half of a merged node.
+// httpSurface is the HTTP half of a node: the API it serves beside its engine.
 type httpSurface struct {
 	app       *api.App
 	server    *http.Server
@@ -1202,13 +1207,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // supervisor rather than by a constant here.
 const apiShutdownGrace = 5 * time.Second
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
-// companySecrets reads the verification material out of the engine's CURRENT
-// epoch, on every request.
-//
-// Not captured once: a config reload replaces the epoch, and a receiver holding
-// the old one would keep rejecting deliveries signed with a rotated secret —
-// a failure that looks exactly like an attack and resolves only on restart.
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1217,8 +1215,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret, a
+// failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, log *slog.Logger,
@@ -1234,41 +1239,47 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, nil
 	}
 
-	nodeID, err := config.ResolveNodeID(boot, nil)
-	if err != nil {
-		return nil, fmt.Errorf("api: node identity: %w", err)
-	}
+	// THE NAME THE ENGINE RUNS UNDER, not a second resolution of it. The
+	// engine resolved it once, from `node.id` or CREWLET_NODE_ID, and its
+	// presence lease carries exactly this value, so /health, the fleet
+	// answer and a backup's trim hold name this node the way its peers
+	// already do.
+	nodeID := e.Node().ID()
 	// The config surface is the caller's, built before this function so a
-	// node with no HTTP listener still has a config WRITER — see runEngine.
+	// node with no HTTP listener still has a config WRITER (see runEngine).
 	// One instance, shared by the REST routes, the socket queries and the
 	// engine's own disconnect path: sealing and opening with the SAME
 	// keyring the reconciler applies through, because two ciphers over one
 	// store would mean a revision written here is one no node can read.
-	// The fleet's secret store, sealed with the SAME keyring — a value
+	//
+	// The fleet's secret store, sealed with the SAME keyring: a value
 	// written here is one this node and every peer opens with the key
 	// their Tier A names, and a second cipher would make a rotation
 	// readable only on the node that served the request.
-	secretSurface := secretsapi.New(secretsapi.Options{
+	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: e.Backends().Fleet, Cipher: cipher,
 		ActiveKeyID: boot.Secrets.ActiveKeyID,
 	})
+	if err != nil {
+		return nil, err
+	}
+	// The fleet's integration status, which both the reconcile loop and a
+	// pass run from the dashboard write.
+	integrationStatus, err := e.IntegrationStore()
+	if err != nil {
+		return nil, fmt.Errorf("api: integration status: %w", err)
+	}
 	// Connecting an integration from the dashboard. It writes through the
 	// TWO surfaces above rather than reaching for the store and the plane
 	// itself: a credential is sealed by the same store /secrets serves,
 	// and the pointer to it lands through the same merge, validation and
 	// activation PATCH /config performs.
-	// The fleet's integration status, which both the reconcile loop and a
-	// pass run from the dashboard write.
-	integrationStatus, err := e.IntegrationStore()
-	if err != nil {
-		log.Warn("setup_status_unavailable", "error", err,
-			"hint", "a provisioning pass will run and its findings will not reach the screen")
-	}
-	setupSurface := setupapi.New(setupapi.Options{
+	setupSurface, err := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
 		Config:  configSurface,
-		// The fleet's own store. A nil fleet leaves this nil, and every
-		// secret write then answers 503 rather than storing plaintext.
+		// The fleet's own store, sealed with the same keyring. A node with
+		// no secrets.keys still gets one, and every secret write through
+		// it refuses with no_keyring rather than storing plaintext.
 		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
 		// THIS NODE'S resolution chain, so a requirement can say whether
 		// a ${VAR} actually resolved rather than only whether somebody
@@ -1288,27 +1299,62 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// running transport learned it from Slack when it wired the
 		// seat, and this is the only process that holds it.
 		SlackApps: e.SlackApps,
+		// ONE AGENT'S OWN GITHUB APP, which is the one thing here a
+		// reconcile loop cannot do alone: an app is created by POSTing a
+		// manifest from a page carrying the operator's own GitHub session.
+		// The signer ties the browser that comes back to the seat that
+		// started, and it is keyed from the SAME Tier A material every
+		// node reads, so a fleet where the two halves land on different
+		// nodes still agrees.
+		StateKeys: appStateKeyMaterial(boot),
+		// And the fleet's claim registry SPENDS each state, so a link that
+		// reached a log or a browser history cannot be presented a second
+		// time, on this node or any other.
+		StateClaims: e.Backends().Fleet,
 	})
-	// ONE AGENT'S OWN GITHUB APP, which is the one thing here a reconcile
-	// loop cannot do alone: an app is created by POSTing a manifest from a
-	// page carrying the operator's own GitHub session. The signer ties the
-	// browser that comes back to the seat that started, and it is keyed
-	// from the SAME Tier A material every node reads, so a fleet where the
-	// two halves land on different nodes still agrees.
-	//
-	// The fleet's claim registry SPENDS each state, so a link that reached a
-	// log or a browser history cannot be presented a second time. Nil on a
-	// node with no coordination store, which takes a per-process set — the
-	// same single-node trade the key material above makes.
-	appFlow := setupapi.NewAppFlow(setupSurface, appStateKeyMaterial(boot),
-		e.Backends().Fleet)
-	setupSurface.AttachAppFlow(appFlow)
-	if appFlow != nil && len(appStateKeyMaterial(boot)) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(appStateKeyMaterial(boot)) == 0 {
 		log.Warn("github_app_state_key_is_per_process",
 			"detail", "no secrets.keys are configured, so a GitHub App creation "+
 				"begun on one node cannot be finished on another")
 	}
 
+	// What only the engine can answer (in flight, seats, the posture and
+	// the applied epoch, the tool catalogue), read live on every probe
+	// through the reconciler that owns this node's config posture.
+	runtime, err := api.NewEngineRuntime(e, reconciler)
+	if err != nil {
+		return nil, err
+	}
+	backups, err := backup.New(backup.Options{
+		Store: e.Backends().Store,
+		// Nil on a node that dialled an external NATS cluster, whose
+		// streams are backed up at the cluster. See internal/backup.
+		Conn: e.Backends().Conn(),
+		// The trim-hold register. A backup is not a counted node, so
+		// without this the fleet's own trim can delete exactly the records
+		// the artefact's store-to-stream gap needs to be replayable, and
+		// the backup would report success.
+		Holds: e.Backends().Fleet,
+		// And where a finished copy is announced. Without it the trim's
+		// backup term has no input at all and refuses for ever, so a
+		// fleet with a working nightly backup would still never trim its
+		// log.
+		Backups: e.Backends().Fleet,
+		// The engine's own name for this node, never boot.Node.ID: the
+		// raw field is empty on a node named through CREWLET_NODE_ID, and
+		// this id keys the node's trim hold and its announced backup point.
+		NodeID: nodeID,
+		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
+		// duration is a catalogued instrument, and two recorders in one
+		// process would be two sets of series for one fleet.
+		Metrics: e.Recorder(),
+	})
+	if err != nil {
+		return nil, err
+	}
 	// The contextcheck exemption is for the two PUSH TICKS this constructor
 	// registers — the roster re-send and the health frame. Both manufacture
 	// a bounded context of their own instead of inheriting one, which is
@@ -1317,13 +1363,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// inherit, and a read that outlived the interval firing the next tick
 	// would cost a goroutine per tick for the life of the process. Nothing
 	// else reached from here creates a context.
-	app := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
+	app, err := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
 		Bootstrap: boot,
-		Runtime:   engineRuntime{engine: e, reconciler: reconciler},
-		// THE ENGINE'S OWN RECEIVER, not a second one built here. In a
-		// merged process the API verifies tokens the engine minted, and
-		// two receivers would sign with two per-process keys unless a
-		// keyring happened to be configured.
+		Runtime:   runtime,
+		// THE ENGINE'S OWN RECEIVER, not a second one built here. The API
+		// verifies tokens this process's engine minted, and two receivers
+		// would sign with two per-process keys unless a keyring happened
+		// to be configured.
 		OtelReceiver: e.OtelReceiver(),
 		// THE ENGINE'S OWN, not a second one. A run's session lives in
 		// the object that opened it, so an API holding a different
@@ -1331,9 +1377,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// to a box whose run is perfectly healthy.
 		Bridge: e.Bridge(),
 		// The OPERATOR MCP surface. Built here rather than in the engine
-		// because it is an API concern — on a split deployment this is
-		// the externally reachable process — and because its writer
-		// identity comes off an HTTP request's own credential.
+		// because it is an API concern, and because its writer identity
+		// comes off an HTTP request's own credential.
 		Operator:     operatorMCP(e),
 		QueueBackend: e.Backends().Queue.Backend(),
 		// The read surface answers from this node's OWN store. A
@@ -1445,12 +1490,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Retention: nativeRetention(ctx, e),
 			NodeID:    nodeID,
 		},
-		// The inbound edge. It republishes onto THIS node's queue and
-		// dedupes through the FLEET'S coordination store, which is what
-		// makes a delivery that lands on any node wake the seat's owner
-		// exactly once. A third-party app retrying reaches whichever node
-		// the load balancer picks, so a claim only this node could see
-		// would suppress nothing.
 		// The WRITE half of the counter, for POST /budgets/reset. On the
 		// default topology the coordination store is this engine's own
 		// embedded broker, so a node that is running is the only thing
@@ -1478,49 +1517,35 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// Both estates a node holds, reachable only from inside it: the
 		// store is locked to this process and the broker binds no
 		// socket. See internal/backup.
-		Backup: backup.New(backup.Options{
-			Store: e.Backends().Store,
-			Conn:  e.Backends().Conn(),
-			// The trim-hold register. A backup is not a counted node,
-			// so without this the fleet's own trim can delete exactly
-			// the records the artefact's store-to-stream gap needs to
-			// be replayable — and the backup would report success.
-			Holds: e.Backends().Fleet,
-			// And where a finished copy is announced. Without it the
-			// trim's backup term has no input at all and refuses for
-			// ever, so a fleet with a working nightly backup would
-			// still never trim its log.
-			Backups: e.Backends().Fleet,
-			NodeID:  boot.Node.ID,
-			// THE PROCESS'S OWN RECORDER, never a second one: the
-			// copy's duration is a catalogued instrument, and two
-			// recorders in one process would be two sets of series
-			// for one fleet.
-			Metrics: e.Recorder(),
-		}),
+		Backup:  backups,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
+		// The inbound edge. It republishes onto THIS node's queue and
+		// dedupes through the FLEET'S coordination store, which is what
+		// makes a delivery that lands on any node wake the seat's owner
+		// exactly once. A third-party app retrying reaches whichever node
+		// the load balancer picks, so a claim only this node could see
+		// would suppress nothing.
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,
 			Claims:    e.Backends().Fleet,
-			AppFlow:   appFlow,
+			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
 		},
 	})
-	// NOT SET HERE ANY MORE. This used to be an unconditional
-	// SetConfigured(true) justified by "the engine only exists because a
-	// company config parsed" — which stopped being true when a node became
-	// able to boot with no revision at all, and was the reason the whole
-	// unconfigured posture below it was unreachable in the shipped binary:
-	// /health never said unconfigured, /ready never went 503 for it, and
-	// SetConfigured(false) had no caller anywhere.
-	//
-	// [api.App.Configured] now reads the engine's live epoch through the
-	// same Sources.Company seam every other question uses, so an apply that
-	// brings this node its first revision flips it with nothing to
-	// remember to call.
+	if err != nil {
+		return nil, err
+	}
+	// NOTHING PUSHES "CONFIGURED" FROM HERE. [api.App.Configured] reads the
+	// engine's live epoch through the same Sources.Company seam every other
+	// question uses, so an apply that brings this node its first revision
+	// flips it with nothing to remember to call. The flag that used to be
+	// pushed at this point was set true unconditionally and never
+	// corrected, which left the unconfigured posture unreachable in the
+	// shipped binary: /health never said unconfigured and /ready never went
+	// 503 for it.
 	//
 	// It is still not the POSTURE: an apply that FAILS leaves the node
 	// serving the previous epoch, which is a configured node. /ready reads
@@ -1549,6 +1574,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	var listenCfg net.ListenConfig
 	listener, err := listenCfg.Listen(ctx, "tcp", addr)
 	if err != nil {
+		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
+		// already running, on a broadcast subscription to the engine's
+		// queue, and nothing else holds it once this returns.
+		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
 		return nil, fmt.Errorf("api: bind %s: %w", addr, err)
 	}
@@ -1632,76 +1661,6 @@ const apiReadHeaderTimeout = 10 * time.Second
 // request including the body, which would put a ceiling on `crewlet backup`
 // and on a large config import. Body reads are bounded per route instead.
 const apiIdleTimeout = 60 * time.Second
-
-// engineRuntime answers the questions only a co-located engine can.
-type engineRuntime struct {
-	engine     *engine.Engine
-	reconciler *engine.Reconciler
-}
-
-// Tools is the catalogue this node serves, for the dashboard's tool screen.
-//
-// THE EPOCH'S SHARED CATALOGUE, not a seat's. A per-role MCP server gives each
-// seat its own child and its own registry, so there is no single "the tools" a
-// company has — and picking one seat's would render a catalogue that is right
-// for one row of the agent screen and wrong for the rest. The shared surface
-// is the one every seat has, which is the honest answer to "what does this
-// company run".
-func (r engineRuntime) Tools() []api.ToolInfo {
-	company := r.engine.Company()
-	if company == nil || company.Tools == nil {
-		return nil
-	}
-	entries := company.Tools.List()
-	out := make([]api.ToolInfo, 0, len(entries))
-	for _, entry := range entries {
-		source := "builtin"
-		if server, ok := entry.FromMCP(); ok {
-			source = server
-		}
-		out = append(out, api.ToolInfo{
-			Name:        entry.Name(),
-			Description: entry.Tool.Description(),
-			Source:      source,
-		})
-	}
-	return out
-}
-
-func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
-	host := r.engine.Node().Host()
-	state := api.RuntimeState{
-		InFlight:     r.engine.Backends().Queue.InFlightCount(),
-		ShuttingDown: host.Draining(),
-		Seats:        host.Held(),
-		StartedAt:    r.engine.StartedAt().Format(time.RFC3339),
-		// Which integrations have a PARSER, which is the only thing that
-		// makes a verified delivery reach an agent. Read from the notify
-		// service rather than from a list kept here: a hand-maintained
-		// one is exactly what drifts, and it would drift towards
-		// claiming more than the build does.
-		RoutedSources: r.engine.RoutedSources(),
-		// And which of them could actually verify a delivery, from the
-		// RESOLVED secrets rather than from the config text. Same reason:
-		// a list of what the document names would claim more than this
-		// process can do.
-		VerifiableSources: r.engine.VerifiableSources(),
-		// The watchdog's own reading, so a node degrading towards its
-		// self-terminate threshold is visible before it hits it.
-		StallLag: r.engine.StallLag(),
-	}
-	if r.reconciler != nil {
-		// Read live, on every probe, rather than cached: a cached
-		// posture is a node that reports healthy through the whole
-		// window in which it stopped being so — and this is the ONLY
-		// place an operator can see why a node left rotation, since
-		// /ready answers a bare 503 either way and "draining" and
-		// "cannot apply epoch 41" call for opposite responses.
-		state.Posture = string(r.reconciler.Posture(ctx))
-		state.AppliedEpoch = r.reconciler.Applied()
-	}
-	return state
-}
 
 // emitSchema writes a tier's JSON Schema.
 //

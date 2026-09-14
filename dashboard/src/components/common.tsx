@@ -233,10 +233,10 @@ export function Section({
 /**
  * What an empty or failed answer means, said precisely.
  *
- * `no_event_store` and "nothing has happened yet" are the same empty list and
- * completely different problems; so are `unauthorized` and a company with no
- * seats. Every screen routes its failure through here so the distinction is
- * made once.
+ * `unauthorized` and a company with no seats are the same empty list and
+ * completely different problems; so are `unknown_query` and "nothing has
+ * happened yet". Every screen routes its failure through here so the
+ * distinction is made once.
  */
 export function QueryState({
   error,
@@ -265,18 +265,6 @@ export function QueryState({
         <Button size="sm" icon="key" onClick={requestToken}>
           Set token
         </Button>
-      </div>
-    );
-  }
-  if (error === "no_event_store") {
-    return (
-      <div className="banner neutral">
-        <Icon name="database" size="sm" />
-        <span>
-          This node keeps no event log, so there is no history to read. Set{" "}
-          <code className="inline">store.path</code> in <code className="inline">crewlet.yaml</code>{" "}
-          to make it durable.
-        </span>
       </div>
     );
   }

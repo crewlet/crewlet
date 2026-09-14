@@ -18,18 +18,20 @@ import (
 // separate rather than a number silently mixed into the other two.
 //
 // So `durable: false` means UNREADABLE, never zero, and live_used is null
-// rather than 0 on a node with no meter: a zero is a measurement, and printing
-// one for "we could not look" is the lie this shape exists to avoid.
+// rather than 0 where this node's projection holds no meter for the scope
+// (nothing has reported one since the process started): a zero is a
+// measurement, and printing one for "we could not look" is the lie this shape
+// exists to avoid.
 
 // Budgets answers the whole budget surface.
+//
+// Registered only beside a company source, so [Sources.Company] is never nil
+// here; what can be nil is the epoch it returns.
 func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	out := map[string]any{
 		"org":     map[string]any{"durable_used": 0, "max_tokens": 0},
 		"seats":   []any{},
 		"durable": false,
-	}
-	if s.Company == nil {
-		return out, nil
 	}
 	company := s.Company()
 	if company == nil {

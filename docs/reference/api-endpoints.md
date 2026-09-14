@@ -281,9 +281,9 @@ Four rules follow from that:
 
 All `/secrets/*` routes require `Authorization: Bearer <token>`, reads
 included, for the same reason `/config` does: the listing alone says which
-credentials a company holds and when each last changed. They are served only
-by a process that can reach the [coordination store](../concepts/coordination.md)
-— a standalone API with none `404`s rather than answering `503` to everything.
+credentials a company holds and when each last changed. Every node serves
+them, because every node opens the fleet's
+[coordination store](../concepts/coordination.md) that holds the rows.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -444,8 +444,8 @@ writes one: the history stays append-only, so "the credentials were reloaded
 at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
-Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
-is configured, and `503 no_control_plane` on a process that cannot activate.
+Answers `201 {"revision_id", "epoch"}` and `409 no_active_revision` when
+nothing is configured.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.
@@ -518,7 +518,8 @@ reference to anything.
 
 `present` and `resolved` are the same two facts `secret_present` and
 `secret_usable` are, asked per field: written down, and actually usable in
-this process. `resolved` is `null` where nothing resolved the document.
+this process. `resolved` is `null` for a field the document leaves empty,
+since there is nothing to resolve.
 `blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
 that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
@@ -589,7 +590,7 @@ What the route does, in this order:
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 `409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
-`503 no_control_plane`, `503 no_keyring`.
+`503 no_keyring`.
 
 ### Running the provisioning pass
 
@@ -689,12 +690,10 @@ is the deliberate path.
 > signing secret alone, so two sealed per-seat credentials stayed in the store
 > with nothing telling the operator they were there.
 
-Refusals: `503 no_status_store` on a node with no coordination, which has
-nowhere to record the intent — retry against a node that has one, or force it —
-and `503 surface_busy` when a reconcile tick or an operator's own pass is
-writing at this surface right now. Those two are the same status and opposite
-facts: the first will not change however many times it is asked, and the second
-clears on its own, which is why it carries its own code. The request waits a
+Refusals: `503 surface_busy` when a reconcile tick or an operator's own pass is
+writing at this surface right now, which is the one refusal here that clears on
+its own and carries its own code for that reason: a caller that cannot tell a
+race from a fault treats both as terminal. The request waits a
 busy surface out for a few seconds first (a tick a moment from finishing is the
 common collision) and then names it; repeating the request is correct, because
 every step of a disconnect is idempotent. It used to answer `internal_error`,
@@ -876,9 +875,7 @@ organization's own app registration page whenever
 under a person's account cannot be installed on the organization that owns the
 repositories.
 
-Refusals: `503 no_app_flow` (this process holds no signing material, so a
-browser coming back could not be tied to the seat that started),
-`400 bad_body`, `400 seat_required`, `409 no_active_revision`,
+Refusals: `400 bad_body`, `400 seat_required`, `409 no_active_revision`,
 `404 no_such_seat`, and `409 no_public_url` when
 `integrations.public_base_url` is unset. The last one matters more than it
 looks: an app is created with its delivery, redirect and setup addresses baked
@@ -1023,7 +1020,7 @@ opens — before a single turn has run:
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
 | `org` | The role and unit tree, **verbatim** as the company document holds it: root-level `roles` plus `units` nesting to any depth. The client walks it and reads the config's own field names, so it is not reshaped on the way out |
-| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Absent on a standalone API, which has no engine to ask |
+| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it (`builtin`, or the MCP server's name). Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
 A seat carries `state: "idle"` when **this node** is serving it. A seat it
@@ -1040,8 +1037,8 @@ could learn from, and an overlay merge cannot express a row going away.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
-The API process maintains an **in-memory projection** of every agent's
-current state (`internal/api/livestate.LiveState`, owned by
+Every node that serves the API maintains an **in-memory projection** of
+every agent's current state (`internal/api/livestate.LiveState`, owned by
 `internal/api/stream.Service`).  It is fed by the same event stream the
 WebSocket fan-out consumes and read in O(1) thereafter — so `/agents`,
 `/stream/snapshot`, and the WebSocket handshake never re-derive state from a
@@ -1162,41 +1159,43 @@ without the tag every historical failure would read back as a success.
 
 ### The health envelope
 
-One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
-the snapshot's `health` section, and the 5-second push, so those three
-surfaces cannot disagree about whether the engine is healthy — and a
-reconnect restores every field without a second round trip.
+One builder (`api.App.health`) answers `GET /health`, the snapshot's `health`
+section, and the 5-second push, so those three surfaces cannot disagree about
+whether the engine is healthy, and a reconnect restores every field without a
+second round trip.
 
 ```json
 {
   "status": "ok",
+  "node": "core-1",
   "configured": true,
-  "engine": true,
   "version": "0.4.0",
-  "started_at": "2026-04-01T12:00:00+00:00",
+  "started_at": "2026-04-01T11:58:03Z",
   "queue": "jetstream-embedded",
-  "event_store": "durable",
-  "feed_hydrated": true,
   "clients": 3,
   "in_flight": 2,
-  "engine_started_at": "2026-04-01T11:58:03+00:00",
-  "shutting_down": false
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 41,
+  "seats": ["ceo", "cto"]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
-| `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. Precedence is `shutting_down` > that posture > `unconfigured` > `ok`: a draining engine is draining first whatever else is true of it, and the posture outranks `unconfigured` because it names the cause of it. |
+| `node` | This node's resolved id (`node.id`, else `CREWLET_NODE_ID`, else `node-0`), the same name its presence lease carries in the fleet view. The only way a caller can tell which node a load balancer sent it to. |
+| `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` every inbound webhook is answered `503` rather than routed, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
+| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
-| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
-| `clients` | Dashboards currently connected to this API process. |
-| `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `clients` | Dashboards currently connected to this node. |
+| `in_flight` | Handler invocations mid-flight on this node: the deliveries its seats are working on, and the number a drain waits to reach zero. Always present, and a `0` is a real zero. |
+| `shutting_down` | `true` once this node's seat host has begun draining. On a signal, `crewlet run` closes the listener *before* the drain begins, so a probe sees the listener go away rather than this flag; the logs are the drain's live view (see [Watching the drain](../concepts/agent-runtime.md#graceful-shutdown)). |
+| `posture` | What this node concluded about its own config lag: `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
+| `applied_epoch` | The config revision this node is running. |
+| `seats` | The handles this node is serving, `[]` on a node holding none. |
+| `stall_lag_seconds` | How far behind this node's watched duty is, present **only** when it is behind at all. It is the number climbing towards the seat lease TTL, at which the watchdog ends the process, so a node degrading is visible here before the restart rather than only afterwards in the exit code. |
 
 Per-socket facts — how many envelopes *this* connection dropped, how deep
 its queue is — are deliberately **not** here. The tick encodes one JSON
@@ -1230,10 +1229,7 @@ by id); that surface only knows it is done when a page returns zero rows.
 
 The persistent store retains 30 days. Once a cursor crosses that floor
 every page is empty — which is why a client must distinguish it from
-quiet, rather than drawing the gap as silence. A deployment with no
-event store answers **503** (and `no_event_store` on the query channel)
-rather than an empty page, for the same reason: "there is nothing older"
-and "I cannot answer" are different facts.
+quiet, rather than drawing the gap as silence.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
@@ -1255,7 +1251,7 @@ up.
   prior figure is dead, so a consumer must **replace** what it holds
   rather than merge or take a maximum.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
-  **best-effort**: the standalone API reads an ephemeral broadcast
+  **best-effort**: every node's projection reads an ephemeral broadcast
   subscription that takes no acks, starts at the stream's tail on every
   (re)connect, and lets a slow consumer miss frames rather than hold
   them. So a report at or below the held `seq` is dropped rather than
@@ -1264,9 +1260,11 @@ up.
   `used >= max`, is what "exhausted" means: a refused charge increments
   nothing, so the counter stops short of the cap by the size of the round
   that would not fit.
-- `{}` means no engine is reporting one (the standalone API has no meter
-  of its own). Per-agent, `budget: null` means the same, or that the seat
-  has no per-agent cap at all — the engine seeds one only for a non-zero
+- `{}` means no engine has reported one since this node's projection
+  started: the feed begins at the stream's tail, so a node that has just
+  started shows none until the company's next charge on any node.
+  Per-agent, `budget: null` means the same, or that the seat has no
+  per-agent cap at all, because the engine seeds one only for a non-zero
   `token_budget`.
 
 It is deliberately never persisted: replaying a live meter from history
@@ -1321,7 +1319,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* (a projection still catching up after a restart or a fresh join), so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it (a parameter missing, malformed, or outside the set the field accepts), so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -1344,13 +1342,13 @@ REST route calls, so the two surfaces cannot diverge:
 | `turn` | `{turn_id}` | Every event of ONE unit of agent work, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning |
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
-| `schedules` | — | `GET /schedules` |
-| `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
-| `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
-| `budgets` | — | `GET /budgets` |
-| `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
+| `schedules` | `{}` | `GET /schedules` |
+| `fleet` | `{}` | `GET /fleet`. Leases move with no event to push, so the Fleet view polls this rather than waiting for one. `query_failed` when the lease table cannot be read (the REST twin answers `500`), never an empty fleet |
+| `sandbox_runs` | `{}` | `GET /sandbox-runs`. `query_failed` when the fleet's run record cannot be read (the REST twin answers `500`), never an empty list |
+| `budgets` | `{}` | `GET /budgets` |
+| `a2a_channels` | `{}` | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store, which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
-| `integrations` | — | `GET /integrations` |
+| `integrations` | `{}` | `GET /integrations` |
 | `work_items` | `{container, status, status_group, assignee, reporter, watcher, collaborator, tag, type, priority, sprint, parent, root, q, key, removed, blocked, blocking, has_dependencies, has_open_asks, flag, asked_of, asked_by, subtasks, f.<slug>, view, preset, viewer, group_by, group_by2, group, subgroup, group_limit, totals, sort, cursor, limit, …}` | `GET /work`. `container` is the scope — `workspace`, or `project:ENG` (a bare `ENG` works too, and the key is upper-cased because the column is) — and an ABSENT container is neither: the engine refuses to default it, because an omitted key would otherwise be the most expensive query in the system. Every list key is comma-separated, because a socket frame's JSON object cannot carry a repeated key and a filter only one transport can express is exactly the divergence this channel exists to prevent; `status` also takes `!` negation. There is no `open` flag — open and closed are STATUS GROUPS (`not_started`, `active`, `done`, `closed`), which is the level every rule in the tracker is written at. `f.<slug>=<value>` filters on a custom field — resolved against the company's catalogue by slug, id or label, and compared on the column its DECLARED TYPE says, so `f.effort=gt:9` is a numeric comparison and not a lexical one; the seventeen operators are `eq`, `ne`, `lt`, `lte`, `gt`, `gte`, `contains`, `startswith`, `in`, `range`, `any`, `all`, `not_any`, `not_all`, `me`, `null` and `not_null` — and which of them a field admits is a property of its TYPE, so `eq` on a `labels` field is REFUSED naming `any`, `all`, `not_any` and `not_all` rather than compiling to a clause that matches nothing and reads as "no task has this label". `null` and `not_null` are on every type, because "is this set" is a question about the ROW. A bare value is the type's NATURAL comparison — `any` on a set, because naming a value is not claiming the set IS it, and `eq` everywhere else. A set operator takes a comma-separated list (`any:api,ui`, at most 16) and `range` takes both ends (`range:3..8`), because a range with one end is `gte` or `lte`. A value whose text begins `<scheme>://` is a VALUE rather than an operator call, so a `url` field can be filtered by what it holds — anything else before a colon is carried through as an operator, so a typo is refused naming the set rather than silently answered. `f.<slug>=me` is resolved to the reader by the SURFACE before the query is parsed, which is what makes one saved view mean whoever opens it. A ref nothing resolves is REFUSED naming it. `q=` is a FIND rather than a search — a substring of a key (from the front) or a title (anywhere), which is what finds the item somebody half remembers; there is no `mode`, because this grammar has no ranker and ranked search over the company's prose is `search_knowledge`'s. `key=ENG-1,ENG-7` narrows to keys a caller already holds — upper-cased, like `container=` and `references=`, because a key is what somebody pasted and the column it is compared against is minted upper-case — and `removed=true` is the TRASH — the only way to list what a removal hid, which is what a restore is a gesture about. A parameter this grammar does not read is REFUSED naming it, never ignored: a filter nobody parsed is a board showing more than the person asked for, silently. An unknown status or group is refused naming the closed set rather than matching nothing. A custom field VALUE is checked against its own declaration at the write and refused naming the rule — never rounded or coerced to fit; see the coercion table in [the work tracker guide](../guides/work-tracker.md). `flag=` is the ATTENTION queue and its values OR: `cycle`, `too_deep`, `inconsistent_project` and `key_collision` are facts about a task's own row, and `one_sided` and `one_sided_final` are about a DEPENDENCY of it — an authored `waiting_on` whose blocker does not list it, and one whose mirror was refused permanently (the blocker is gone, was removed, or is full). The first is what the `tracker` duty repairs 30 seconds on; the second is what a person resolves. They OR because an attention queue asks "is anything wrong with this", and a conjunction over six flags answers nothing on every company. `totals=<column>:<op>` adds aggregates over the WHOLE matched set rather than the page — a number that changed as somebody scrolled would be the one thing a header must not do. The five ops are `sum`, `avg`, `min`, `max` and `count`; the columns are the summable ones (`points`, `estimate_min`, the `spend_*` family, `reassignments`, `depth`), the date columns for `min`/`max` only (a sum of dates is a number of microseconds nobody meant), `tasks:count`, and `f.<slug>` for a declared number or date field. A total with nothing to add up is ABSENT rather than zero: "nothing is estimated" and "everything is estimated at nothing" are different facts. `sprint=` is a csv that ORs: a NUMBER or a sprint NAME names one, `active` /
 `future` / `closed` name every sprint of the project in that state (resolved
 when the query runs, so a saved board keeps meaning "the sprint that is active
@@ -1426,22 +1424,23 @@ over the incomplete set. That is a different fact from staleness, and a client
 that renders `read_level` and swallows `complete` looks confidently right.
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
-| `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
-| `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
-| `config` | — | `GET /config` *(operator token required)* |
+| `containers` | `{}` | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
+| `stream` | `{}` | Facts about **this** socket: `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
+| `config` | `{}` | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
 | `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 ### Wiring
 
-Both deployment paths feed events into a single `StreamService.ingest`
-entry point.  The standalone API process subscribes to the engine's
-NATS JetStream event stream with an **ephemeral broadcast consumer** (it
-receives every event — this is a broadcast, not a work queue, because a
-dashboard served by one node must show turns that ran on another); the
-embedded API path (engine + API in the same process) wires `ingest` as
-a publish listener directly, no queue round-trip required.  Each event
+Every node that serves the API feeds its projection through one entry
+point, `stream.Service.Ingest`, from an **ephemeral broadcast
+subscription** to the event stream (`observe.Projector`).  It receives
+every event from every node, because a dashboard served by one node must
+show turns that ran on another, and that is why it is not a publish
+listener: a listener sees only what its own node published.  The event
+store takes the other route, a publish listener inline on the publishing
+node, so no two nodes can write one row.  Each event
 updates the live-state projection *and* fans out to connected
 dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
@@ -1733,7 +1732,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 
 | Route | What it does |
 |---|---|
-| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, `404` when the stream is not one this node runs, and `503` on a process running no state log. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
 
@@ -1743,9 +1742,10 @@ its position and its operation id: a gate the caller believes has landed and
 which is only `pending` is the difference between a node that has stopped
 writing and one that is about to.
 
-A process with no coordination store answers `503`, not `404`. The route exists
-on this build, and telling an operator it does not sends them looking for a
-version mismatch that is not there.
+A node whose company runs no native tracker has no eviction gate, and both gate
+routes answer `503 no_tracker` rather than `404`. The routes exist on this
+build, and telling an operator they do not sends them looking for a version
+mismatch that is not there.
 
 ### The capacity window
 
@@ -1890,17 +1890,15 @@ answer would then be partial, it opens a new trust edge, and it duplicates
 the mechanism the lease table already is.
 
 
-**Absent is not zero.** A node that publishes no status — one whose engine
-is not co-located — omits those fields entirely, and the dashboard draws an
+**Absent is not zero.** A node that publishes no status (one running a build
+older than the field) omits those fields entirely, and the dashboard draws an
 em dash. A confident `0` would render an idle row for a process that is
 simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
 node performs, and `unplaceable` lists seats whose `role.placement`
-matches no live node. Without a database configured there is no lease
-table and no fleet; the response says so in `degraded` rather than
-failing.
+matches no live node.
 
 ```json
 {
@@ -1974,9 +1972,10 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 deliberately not returned: it is the largest column in the row and every
 prompt in it is already reachable through the event store.
 
-Without a database the engine cannot park a run at all, so that
-deployment gets `{"runs": [], "degraded": "..."}` rather than an error;
-a store that is configured and unreadable answers `503`.
+The run record lives in the fleet's coordination store, which every node
+opens, so every node answers with the fleet's runs. A record that cannot be
+read answers `500 query_failed` rather than an empty list: "no run is
+parked" is a claim, and a store blip is not evidence for it.
 
 ### `GET /budgets`
 
@@ -2022,10 +2021,11 @@ Two fields carry the honesty. `durable` is `false` when the shared counter
 could not be read — a counter that cannot be read is not a counter that
 reads zero, and without the flag a database blip renders every seat at the
 bottom of its cap, which is the most reassuring possible picture drawn at
-the moment nothing is known. `live_used` / `live_max` are `null`, never
-`0`, on a node with no engine in the process: zero would let a client draw
-an empty bar and call it "nothing spent this run", a claim about a run
-that is not happening.
+the moment nothing is known. `live_used` is `null`, never `0`, where this
+node's projection holds no meter for the scope (nothing has reported one
+since the process started): zero would let a client draw an empty bar and
+call it "nothing spent this run", a claim about a run this process has not
+seen.
 
 Exhaustion is `refused_at`, the moment a charge was turned away — never
 `used >= max`. `TokenBudget` refuses a charge that would exceed the cap
@@ -2058,14 +2058,10 @@ embedded broker, so a running node is the only thing that can reach it —
 which is why `crewlet budgets reset` is a client of this route rather than a
 command that opens a file.
 
-Two refusals, both deliberate:
-
-- **401 without a token.** `allow_anonymous_read` is on by default and opens
-  the whole read surface; a reset is a write, so it is never eligible.
-- **503 with no coordination store.** A standalone API with no counter
-  attached answers `{"error":"no_coordination_store"}` rather than 404: the
-  route exists on this build, and a 404 sends an operator looking for a
-  version mismatch that is not there.
+One refusal, deliberate: **401 without a token.** `allow_anonymous_read` is on
+by default and opens the whole read surface; a reset is a write, so it is never
+eligible. There is no "no counter here" refusal beside it, because every node
+opens the fleet's coordination store that holds the counter.
 
 ### `POST /backup`
 
@@ -2121,10 +2117,10 @@ Three refusals, each pointing somewhere different:
   or a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix.
-- **503 with no state to copy.** A process running neither a store nor a
-  broker answers `{"error":"nothing_to_back_up"}` rather than 404: the route
-  exists on this build, and a 404 sends an operator looking for a version
-  mismatch that is not there.
+- **A copy without the stream estate.** A node that dialled an external NATS
+  cluster has no connection to snapshot the streams over, so its manifest
+  carries the store copies alone and `crewlet backup` says where the rest
+  lives. Back that half up at the cluster, from the same moment.
 
 ### `GET /integrations`
 
@@ -2202,9 +2198,8 @@ third-party app signs with. For Slack, whose material is one signing secret per
 seat, it is lower: **one** seat whose secret resolved makes the surface usable,
 because a delivery addressed to that seat's path would be accepted, and a seat
 whose own secret is unresolved is reported by that seat's identity finding
-rather than by the whole surface. `null` means this process cannot say (a
-standalone API has no engine whose resolution to read), or the surface has no
-secret to resolve.
+rather than by the whole surface. `null` means this node cannot say (nothing has resolved
+yet), or the surface has no secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
 
@@ -2309,9 +2304,9 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 }
 ```
 
-`recent_runs` is empty when no database is configured (the configured
-list and `next_run` still render). Disabled schedules return an empty
-`next_run`.
+`recent_runs` is empty when the dispatch ledger cannot be read (the
+configured list and `next_run` still render). Disabled schedules return an
+empty `next_run`.
 
 ---
 

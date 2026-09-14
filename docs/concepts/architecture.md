@@ -248,11 +248,12 @@ intermediate states of rows it already holds finished, or let a dashboard
 hydrate a dead process's counters and render them as current. What the
 projection shows and what the store keeps are two questions with two answers.
 
-**Embedded and standalone are one wiring with one seam.** The API half runs in
-the engine's process by default and can run as its own; what differs is not the
-routes but what the process can *see*, and that is a single interface. A nil
-runtime is a real answer — "there is no engine here" — rather than a missing
-one, so the engine-only fields are simply absent instead of zero.
+**The API is served inside the engine's process, and only there.** `crewlet run`
+builds it over the engine's own store, broker and coordination plane; a node
+with `api.port: 0` serves none at all. `node.roles` changes what the engine
+*does*, never whether there is one, so every API answers its node's in-flight
+count, seats, posture and applied epoch rather than reporting them as
+unknowable.
 
 **The HTTP surface binds before the engine starts.** A seat is not claimed until
 its per-role MCP children are up — one subprocess per server per seat, each a

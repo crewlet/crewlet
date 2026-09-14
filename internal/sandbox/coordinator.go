@@ -114,9 +114,15 @@ type CoordinatorOptions struct {
 	Pending PendingStore
 	Manager *Manager
 
-	// Resume re-enters a suspended turn. Nil means this node cannot resume
-	// anything, which is a valid build (an API-only process) and is
-	// reported as [ErrResumeUnavailable] rather than silently settling runs.
+	// Resume re-enters a suspended turn. Required: every node that builds a
+	// coordinator runs the engine whose seats a completion resumes into,
+	// and [NewCoordinator] refuses one without it.
+	//
+	// "This node cannot resume this run" is still an answer, and it is the
+	// resumer's to give, by wrapping [ErrResumeUnavailable]: only the engine
+	// knows which seats it holds and which conversation formats it reads.
+	// That answer takes the path every failed resume takes, which gives the
+	// claim back, so the node that does hold the seat can win it.
 	Resume Resumer
 
 	// Account post-charges collected tokens. Nil skips accounting.
@@ -177,10 +183,27 @@ type Coordinator struct {
 	busy map[string]int
 }
 
-// NewCoordinator validates the options and returns the coordinator.
+// NewCoordinator validates the options and returns the coordinator, or refuses
+// a missing collaborator by name.
 func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
-	if opts.Queue == nil || opts.Pending == nil || opts.Manager == nil {
-		return nil, errors.New("sandbox: a coordinator needs a queue, a pending store and a manager")
+	var missing []string
+	for _, field := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Queue", opts.Queue == nil},
+		{"Pending", opts.Pending == nil},
+		{"Manager", opts.Manager == nil},
+		{"Resume", opts.Resume == nil},
+	} {
+		if field.absent {
+			missing = append(missing, "CoordinatorOptions."+field.name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("sandbox: a coordinator needs %s: a detached run is "+
+			"published, recorded, reconnected to and resumed through them",
+			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
@@ -508,10 +531,6 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 				"started it cannot be continued")
 		return nil
 	}
-	if c.resume == nil {
-		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, run.AgentHandle)
-	}
-
 	// Freed only NOW, immediately before the resume, so no queued event can
 	// take the slot first.
 	c.clearBusy(run.AgentHandle)
