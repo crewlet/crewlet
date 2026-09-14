@@ -358,21 +358,37 @@ func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) 
 		t.Fatalf("WriteConfig = %q, %v", path, err)
 	}
 	blob, _ := b.ReadFile(t.Context(), path)
+	// BOTH ARE POINTERS, so an ABSENT key is distinguishable from one written
+	// false. A plain bool decodes a missing `autoupdate` to false and passes —
+	// which is the exact regression this pins, since the CLI then takes its own
+	// default and nothing says so.
 	var cfg struct {
-		Permission any  `json:"permission"`
-		Autoupdate bool `json:"autoupdate"`
+		Permission *string `json:"permission"`
+		Autoupdate *bool   `json:"autoupdate"`
 	}
 	if err := json.Unmarshal(blob, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, blob)
 	}
-	if cfg.Permission != "allow" {
-		t.Errorf("permission = %v, want \"allow\" — a gate nobody can answer is a lost tool call", cfg.Permission)
+	if cfg.Permission == nil || *cfg.Permission != "allow" {
+		t.Errorf("permission = %v, want \"allow\" — a gate nobody can answer is a lost tool call:\n%s",
+			derefOr(cfg.Permission, "(absent)"), blob)
 	}
 	// A CLI that updates itself mid-run swaps the tool under the brief while
 	// the seat's turn is suspended waiting on it.
-	if cfg.Autoupdate {
-		t.Errorf("autoupdate is on:\n%s", blob)
+	if cfg.Autoupdate == nil || *cfg.Autoupdate {
+		t.Errorf("autoupdate = %v, want a written false:\n%s",
+			derefOr(cfg.Autoupdate, "(absent)"), blob)
 	}
+}
+
+// derefOr renders a pointer field for a failure message, naming an absent key
+// as absent rather than as its zero value — which is the distinction the
+// assertions above turn on.
+func derefOr[T any](p *T, absent string) any {
+	if p == nil {
+		return absent
+	}
+	return *p
 }
 
 // The config carries the run's POSTURE, not just its provider and servers, and
