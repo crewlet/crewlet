@@ -49,7 +49,7 @@ import {
   type RefObject,
 } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { plural } from "~/lib/format.ts";
+import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
@@ -101,8 +101,10 @@ import {
   type ConfigTransport,
   type HttpAnswer,
 } from "./model/transport.ts";
-import { browserClock, restTransport } from "./runtime.ts";
+import type { DraftStorage } from "./model/persistence.ts";
+import { browserClock, restTransport, sessionDraftStorage } from "./runtime.ts";
 import { useCheck } from "./useCheck.ts";
+import { useDraftKeeping } from "./useDraftKeeping.ts";
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -338,17 +340,27 @@ export function Builder({
   surfaces,
   transport = restTransport,
   clock = browserClock,
+  storage,
 }: {
   surfaces: BuilderSurfaces;
   /** Injected by a suite; the browser bindings otherwise. */
   transport?: ConfigTransport;
   clock?: Clock;
+  /** Where the draft's log is kept; the tab's session storage otherwise. */
+  storage?: DraftStorage | null;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const [kept] = useState(() => (storage === undefined ? sessionDraftStorage() : storage));
   return (
     <div ref={container} className="org-builder">
       <ToastProvider>
-        <Lens surfaces={surfaces} transport={transport} clock={clock} container={container} />
+        <Lens
+          surfaces={surfaces}
+          transport={transport}
+          clock={clock}
+          storage={kept}
+          container={container}
+        />
       </ToastProvider>
     </div>
   );
@@ -358,11 +370,13 @@ function Lens({
   surfaces,
   transport,
   clock,
+  storage,
   container,
 }: {
   surfaces: BuilderSurfaces;
   transport: ConfigTransport;
   clock: Clock;
+  storage: DraftStorage | null;
   container: RefObject<HTMLDivElement | null>;
 }) {
   const nav = useNavigator();
@@ -496,14 +510,23 @@ function Lens({
 
   const status = check.machine.status;
   const problemsCurrent = state.check.generation === state.generation;
+  const keeping = useDraftKeeping({ state, dispatch: dispatchRaw, loaded, storage, now: Date.now });
+  const { forget } = keeping;
+  // A refused read may be the tab changing hands: the kept draft is not
+  // offered to whoever holds it next.
+  useEffect(() => {
+    if (posture.kind === "guarded") forget();
+  }, [posture.kind, forget]);
+
   const readOnlyReason = useMemo((): string | null => {
+    if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
     if (posture.kind === "guarded") return "the engine refused this browser's token";
     if (status === "guarded") return "the engine refused this browser's token";
     if (status === "readonly") return "this process cannot write the configuration";
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
     return null;
-  }, [posture.kind, status, loaded, state]);
+  }, [keeping.offer, posture.kind, status, loaded, state]);
   const readOnly = !loaded || readOnlyReason !== null;
 
   const dispatch = useCallback(
@@ -955,6 +978,38 @@ function Lens({
           <Banner tone="caution" icon="plug">
             The engine could not be reached to describe this company. Editing starts once it
             answers.
+          </Banner>
+        )}
+        {keeping.offer && (
+          <Banner
+            tone="info"
+            icon="save"
+            action={
+              <span className="row gap-1 wrap">
+                <Button size="sm" onClick={keeping.discard}>
+                  Discard it
+                </Button>
+                <Button size="sm" variant="primary" onClick={keeping.keep}>
+                  Keep the draft
+                </Button>
+              </span>
+            }
+          >
+            This tab kept a draft with {plural(keeping.offer.ops.length, "change")}, last changed{" "}
+            {fmtDateTime(new Date(keeping.offer.savedAt).toISOString())}. Keep it to go on editing,
+            or discard it to start from the saved configuration.
+          </Banner>
+        )}
+        {keeping.notice && (
+          <Banner
+            tone={keeping.notice.tone}
+            action={
+              <Button size="sm" variant="ghost" onClick={keeping.dismissNotice}>
+                Dismiss
+              </Button>
+            }
+          >
+            {keeping.notice.message}
           </Banner>
         )}
         {noProvider && (

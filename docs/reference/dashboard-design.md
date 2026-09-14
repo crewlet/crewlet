@@ -1026,6 +1026,13 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   conflict's revision or a descendant of it, and `UpdateDraftDialog.tsx` shows
   what still applies, what is dropped and every conflict with its three values;
   confirming waits for a choice on each.
+- **Only the operation log is kept, and nothing is written before it is
+  decided.** `useDraftKeeping.ts` reads the kept draft once the base is keyed,
+  offers Keep or Discard for the same revision (read-only until answered),
+  restores through the update flow for another, and discards one kept for the
+  other mode. It writes nothing before that decision, because the plan for an
+  empty log is to clear. A token change or a refused token clears it and
+  withdraws an offer.
 - **A read-only lens records nothing.** The guarded and read-only postures, a
   conflict and a base the engine has not keyed yet all refuse operations at
   the one door every view goes through, and say why in the live region.

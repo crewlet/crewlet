@@ -27,6 +27,7 @@ import {
 import { Builder, type BuilderSurfaces } from "./Builder.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import { allSeats } from "./model/draft.ts";
+import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 
 export class InertWebSocket {
@@ -236,12 +237,14 @@ export function mountBuilder({
   connected = true,
   hash = "#/org?lens=builder&view=canvas",
   surfaces = fakeSurfaces,
+  storage,
 }: {
   engine: Engine;
   org?: OrgProjection | null;
   connected?: boolean;
   hash?: string;
   surfaces?: BuilderSurfaces;
+  storage?: DraftStorage | null;
 }) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
@@ -255,7 +258,7 @@ export function mountBuilder({
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <Builder surfaces={surfaces} />
+        <Builder surfaces={surfaces} storage={storage} />
       </Router>
     </ClientContext.Provider>,
   );

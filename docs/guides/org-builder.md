@@ -70,6 +70,29 @@ agent seat can run without one, and the dashboard does not write providers.
 Add one with `crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
 
+## A draft survives a reload
+
+The builder keeps the draft's list of changes (never the document itself,
+which holds contact identities and policies) in the tab's session storage, so
+a reload or a trip to another screen does not lose the work. When the builder
+opens and finds a kept draft:
+
+- **Made against the revision that is still active:** a banner offers **Keep
+  the draft** or **Discard it**, and nothing can be edited until you choose.
+  Coming back to the lens from another lens of the same page restores the
+  draft without asking.
+- **Made against an older revision:** the draft is restored through the same
+  update described below, and **Discard the kept draft** removes it instead.
+- **Made for creating a company, where a company now exists** (or the other
+  way around): it is discarded, and the lens says so.
+
+The kept draft is removed when you save, when you discard, when the operator
+token changes, and when the engine refuses the token, because each of those
+may mean the tab has changed hands. A browser that refuses session storage (a
+private window, blocked site data) shows a caution: editing works, but the
+draft will not survive a reload. A draft of more than 500 changes is not kept
+either; save it in steps.
+
 ## When somebody else saves first
 
 Every check is conditional on the revision the draft was started from, so a
