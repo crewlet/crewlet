@@ -66,29 +66,15 @@ type BudgetMeter struct {
 	Role       string `json:"role"`
 	UsedTokens int    `json:"used_tokens"`
 	MaxTokens  int    `json:"max_tokens"`
+	// RefusedAt is when the cap last turned a charge away, as RFC 3339 in UTC,
+	// and empty while the scope is not refusing. That, not UsedTokens >=
+	// MaxTokens, is what "exhausted" means: a refused charge increments
+	// nothing, so the counter stops short of the cap by the size of the round
+	// that would not fit. It is the shared counter's own stamp
+	// (coord.Usage.RefusedAt), cleared by the scope's next admitted charge,
+	// so every node reports the same one.
+	RefusedAt string `json:"refused_at"`
 }
-
-// THERE IS NO `refused_at` HERE, and it is not an omission.
-//
-// The field existed on both this meter and the report below, was read by the
-// dashboard to draw a "refusing charges" badge and an alert, and was NEVER
-// WRITTEN — the reporter that builds this payload set neither. That is the
-// defect with no symptom: a permanently empty string renders as "not
-// refusing", which is indistinguishable from the truth on every company that
-// is not refusing, and wrong on exactly the ones that are.
-//
-// It could not have been written correctly from here. This report is built
-// PER NODE from the fleet's shared counter, and a refusal happens inside one
-// node's tool loop — so a node that refused nothing would report no refusal
-// while the company next door was turning charges away. The counter carries a
-// total and an instant it was last moved, and a refusal moves nothing: that is
-// the whole point of it.
-//
-// What a refusal DOES leave is durable and fleet-wide: the phase records its
-// outcome as `budget_exhausted`, which the event log holds with the seat, the
-// turn and the instant. A reader wanting "when did this last refuse" asks the
-// log, which answers for the company rather than for whichever node happened
-// to publish the tick.
 
 // BudgetReported is a snapshot of every live token meter, for the dashboard.
 //
@@ -115,10 +101,12 @@ type BudgetReported struct {
 	// holds only within a topic and a broadcast subscription reads across all
 	// of them, so an older report can arrive after a newer one and walk the
 	// meter backwards.
-	Seq           int           `json:"seq"`
-	OrgUsedTokens int           `json:"org_used_tokens"`
-	OrgMaxTokens  int           `json:"org_max_tokens"`
-	Agents        []BudgetMeter `json:"agents,omitempty"`
+	Seq           int `json:"seq"`
+	OrgUsedTokens int `json:"org_used_tokens"`
+	OrgMaxTokens  int `json:"org_max_tokens"`
+	// OrgRefusedAt is [BudgetMeter.RefusedAt] for the company-wide scope.
+	OrgRefusedAt string        `json:"org_refused_at"`
+	Agents       []BudgetMeter `json:"agents,omitempty"`
 }
 
 // EventType is the "budget_reported" wire type.

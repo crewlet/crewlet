@@ -22,10 +22,10 @@ import (
 // it from a websocket push — a screen that is open while a company works has
 // to move as the company spends, and a thirty-second poll behind it would
 // report the ceiling being hit half a minute after every seat had already
-// stopped. That push has been wired the whole time: the stream service
-// broadcasts a budget frame on its tick, the live projection folds a report
-// into it, and the dashboard has a hook for it. Nothing published the report,
-// so every one of those carried zeroes.
+// stopped. That push has been wired the whole time: the live projection folds a
+// report into its meter, the stream service broadcasts the result the moment a
+// report moves it, and the dashboard has a hook for it. Nothing published the
+// report, so every one of those carried zeroes.
 //
 // # Why a tick rather than a charge hook
 //
@@ -37,10 +37,13 @@ import (
 // BudgetReportInterval is how often a node publishes its snapshot.
 //
 // FIFTEEN SECONDS, from what the screen needs rather than what the counter
-// can bear: the counters are a coordination read, and the question a header
-// answers — "is the company about to run out" — changes over minutes. The
-// stream's own budget frame ticks on the same order, so a shorter interval
-// would publish reports nothing broadcasts.
+// can bear. The question a header answers, "is the company about to run out",
+// changes over minutes, while each report costs a listing of the counter plus
+// one read per scope it holds, and is fanned out to every open dashboard on
+// every node the moment it lands, EVERY node publishing its own. A refusal is
+// carried on the next frame, so a gate that starts turning turns away shows up
+// inside one interval, which is sooner than an operator reading a header acts
+// on it.
 const BudgetReportInterval = 15 * time.Second
 
 // budgetReporter is one node's meter loop.
@@ -123,15 +126,32 @@ func (r *budgetReporter) publish(ctx context.Context) {
 		}
 		return
 	}
-	report := types.BudgetReported{
-		// THE INCARNATION, not the node id: the payload's own rule is
-		// that a new MeterID means every prior figure is dead, and a
-		// restarted process that reused its id would have a consumer
-		// merge two runs' counters. The owner id is this incarnation.
-		MeterID:      e.node.Owner(),
-		Seq:          int(r.seq.Add(1)),
-		OrgMaxTokens: company.Config.TokenBudget,
+	report, metered := budgetSnapshot(company, usage)
+	if !metered {
+		return
 	}
+	// THE INCARNATION, not the node id: see [types.BudgetReported.MeterID].
+	report.MeterID = e.node.Owner()
+	report.Seq = int(r.seq.Add(1))
+	ev := events.New(report, tracing.TraceOf(ctx))
+	ev.Source = e.node.ID()
+	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
+		if ctx.Err() == nil && !strings.Contains(err.Error(), "context canceled") {
+			log.DebugContext(ctx, "budget_report_not_published",
+				"error", err.Error(),
+				"detail", "the live meters keep the last frame they had")
+		}
+	}
+}
+
+// budgetSnapshot is the frame one read of the shared counter makes, and false
+// when nothing in the company is capped.
+//
+// Split from the publish so what a frame SAYS is testable without a broker, a
+// node and a fleet: the reading of the counter is the whole of what can be
+// wrong with it, and it was the half nothing exercised.
+func budgetSnapshot(company *Company, usage []coord.Usage) (types.BudgetReported, bool) {
+	report := types.BudgetReported{OrgMaxTokens: company.Config.TokenBudget}
 	// ONLY METERED SEATS, which is what the payload promises: absence
 	// means "no cap and no meter", and a seat listed at a cap of zero
 	// would be drawn as an empty bar rather than as no bar at all.
@@ -158,14 +178,16 @@ func (r *budgetReporter) publish(ctx context.Context) {
 	for _, row := range usage {
 		if row.Scope == coord.OrgScope {
 			report.OrgUsedTokens = row.Used
+			report.OrgRefusedAt = refusedAt(row)
 			continue
 		}
 		if meter, metered := byScope[row.Scope]; metered {
 			meter.UsedTokens = row.Used
+			meter.RefusedAt = refusedAt(row)
 		}
 	}
-	// IN THE COMPANY'S OWN ORDER, so two frames of an unchanged company
-	// are byte-identical and a consumer diffing them sees nothing move.
+	// SORTED BY SCOPE, so two frames of an unchanged company are
+	// byte-identical and a consumer diffing them sees nothing move.
 	slices.Sort(scopes)
 	for _, scope := range scopes {
 		report.Agents = append(report.Agents, *byScope[scope])
@@ -173,15 +195,20 @@ func (r *budgetReporter) publish(ctx context.Context) {
 	if report.OrgMaxTokens <= 0 && len(report.Agents) == 0 {
 		// NOTHING IS CAPPED, so there is no meter to render and a frame
 		// would be a header bar over an unlimited budget.
-		return
+		return types.BudgetReported{}, false
 	}
-	ev := events.New(report, tracing.TraceOf(ctx))
-	ev.Source = e.node.ID()
-	if err := e.backends.Queue.Publish(ctx, topics.Event(ev.Type), ev); err != nil {
-		if ctx.Err() == nil && !strings.Contains(err.Error(), "context canceled") {
-			log.DebugContext(ctx, "budget_report_not_published",
-				"error", err.Error(),
-				"detail", "the live meters keep the last frame they had")
-		}
+	return report, true
+}
+
+// refusedAt renders a scope's refusal stamp the way the payload carries it:
+// RFC 3339 in UTC, and empty for a scope that is not refusing.
+//
+// EMPTY, never the zero instant spelled out. The dashboard tests the field for
+// presence, so "0001-01-01T00:00:00Z" would put every capped seat in its
+// attention queue as refusing charges since the first century.
+func refusedAt(row coord.Usage) string {
+	if row.RefusedAt.IsZero() {
+		return ""
 	}
+	return row.RefusedAt.UTC().Format(time.RFC3339Nano)
 }
