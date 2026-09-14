@@ -95,6 +95,45 @@ describe("what the strip says", () => {
     });
   });
 
+  // A node records the epoch it ATTEMPTED beside the outcome, so a failure
+  // names the revision it failed on. Read without that match, a node that
+  // refused an earlier revision would be reported as refusing this one.
+  test("a node that refused another epoch is not read as refusing this one", () => {
+    const answer = fleet(
+      [
+        node({ id: "a", config_epoch: 4, config_status: "ok" }),
+        node({
+          id: "b",
+          config_epoch: 3,
+          config_status: "error",
+          config_error: "provider openai: model is required",
+        }),
+      ],
+      4,
+    );
+    expect(applyState(saved, null, answer)).toMatchObject({
+      tone: "info",
+      message: "Applied on 1 of 2 nodes.",
+      resolved: false,
+    });
+  });
+
+  // The strip follows ONE revision. A node reporting a later epoch has passed
+  // this one, so waiting on it would leave the strip applying for ever.
+  test("a node that has moved on to a later epoch has passed this one", () => {
+    const answer = fleet(
+      [
+        node({ id: "a", config_epoch: 4, config_status: "ok" }),
+        node({ id: "b", config_epoch: 5, config_status: "degraded", config_error: "mcp child" }),
+      ],
+      5,
+    );
+    expect(applyState(saved, null, answer)).toMatchObject({
+      message: "Applied.",
+      resolved: true,
+    });
+  });
+
   test("a save whose answer was lost takes the fleet's target as its epoch", () => {
     const answer = fleet([node({ id: "a", config_epoch: 7, config_status: "ok" })], 7);
     expect(applyState({ revisionId: "r-saved", epoch: null }, null, answer)).toMatchObject({

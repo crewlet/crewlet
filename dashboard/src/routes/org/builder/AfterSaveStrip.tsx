@@ -55,7 +55,14 @@ export interface ApplyState {
   readonly showFleet: boolean;
 }
 
-/** A node's own outcome counts only for the epoch it reported it for. */
+/**
+ * A node's own outcome counts only for the epoch it reported it for.
+ *
+ * A node records the epoch it ATTEMPTED beside the outcome
+ * (`engine.Reconciler.record`), so a failure names the revision it failed on.
+ * Without the epoch match, a node that refused an earlier revision and has
+ * since stopped reporting would be read as refusing this one.
+ */
 function refusedBy(fleet: FleetAnswer, epoch: number) {
   return fleet.nodes.filter(
     (n) =>
@@ -94,9 +101,12 @@ export function applyState(
         showFleet: true,
       };
     }
-    const applied = fleet.nodes.filter(
-      (n) => (n.config_epoch ?? 0) >= epoch && n.config_status !== "degraded",
-    );
+    // A NODE THAT HAS REPORTED A LATER EPOCH HAS PASSED THIS ONE, whatever it
+    // made of that later revision: this strip follows one revision, and a
+    // node still converging on a newer one has nothing left to say about it.
+    // A refusal OF THIS EPOCH is the branch above, so nothing is counted
+    // applied here that refused the revision the operator saved.
+    const applied = fleet.nodes.filter((n) => (n.config_epoch ?? 0) >= epoch);
     if (applied.length === fleet.nodes.length) {
       return { tone: "positive", message: "Applied.", resolved: true, showFleet: false };
     }
