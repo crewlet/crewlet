@@ -324,11 +324,15 @@ export interface OrgBudget {
 }
 
 export interface BudgetsAnswer {
+  /**
+   * `durable_updated_at` and `live_used` are absent when no company is
+   * applied: the engine then answers the caps as unknown rather than zero.
+   */
   org: {
     max_tokens: number;
     durable_used: number;
-    durable_updated_at: string;
-    live_used: number;
+    durable_updated_at?: string;
+    live_used?: number | null;
   };
   seats: {
     role: string;
@@ -337,7 +341,12 @@ export interface BudgetsAnswer {
     max_tokens: number;
     durable_used: number;
     durable_updated_at: string;
-    live_used: number;
+    /**
+     * This process's own meter for the seat, or `null` when this node has
+     * none: "nothing spent this run" and "no meter here" are different
+     * facts, and a null read as zero states a measurement nobody took.
+     */
+    live_used: number | null;
   }[];
   /** False means the durable counter could not be READ — never that it is zero. */
   durable: boolean;

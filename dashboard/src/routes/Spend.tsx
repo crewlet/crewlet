@@ -354,7 +354,11 @@ export function Spend() {
                     key: "live",
                     header: "This process",
                     align: "right",
-                    sortValue: (s) => s.live_used,
+                    // AN ABSENT METER SORTS BELOW EVERY MEASUREMENT, zero
+                    // included. Handed to the comparator as null it was
+                    // compared as the word "null", which put every seat this
+                    // node has no meter for above the largest spend.
+                    sortValue: (s) => s.live_used ?? -1,
                     cell: (s) => fmtExact(s.live_used),
                   },
                   {
