@@ -125,8 +125,8 @@ type Engine struct {
 	// nomodels.go.
 	modelHolds modelHolds
 
-	// applying serialises [Engine.Apply] against [Engine.Stop], and stopped,
-	// which it guards, is what refuses an apply once Stop has begun. See
+	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
+	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
 	applying sync.Mutex
 	stopped  bool
@@ -147,6 +147,15 @@ type Engine struct {
 	// held a peer's mail unacked, and was never restarted by an
 	// orchestrator watching for liveness.
 	watchdog *seat.Watchdog
+
+	// shuttingDown is set at the first moment of [Engine.Drain] and never
+	// cleared. See [Engine.ShuttingDown].
+	shuttingDown atomic.Bool
+
+	// drainOnce makes the drain one operation however many callers ask for
+	// it: [Engine.Stop] drains for a caller that did not, and a second run
+	// would announce a second stop for one shutdown.
+	drainOnce sync.Once
 
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
@@ -1063,45 +1072,90 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	}
 }
 
-// Stop drains and shuts down.
+// Drain is the first half of a graceful stop: this node stops taking work,
+// lets the turns already running finish, and hands its seats back. Every
+// backend stays open; [Engine.Stop] is the half that closes them.
+//
+// SPLIT FROM STOP FOR THE HTTP SURFACE, which has to come down between the two
+// halves and nowhere else. Not before the drain: /health and /ready are what an
+// orchestrator reads while the turns finish, and a node that closed its
+// listener first answered neither, so its liveness probe failed while it was
+// doing exactly what it should. Not after the teardown: both probes read the
+// broker and the coordination store the teardown closes.
+//
+// ONCE. A second call, and the drain Stop runs for a caller that did not drain
+// first, wait for the first to finish and do nothing more: one shutdown is
+// announced once, and by then nothing is left to wait for.
+//
+// Bounded only by ctx, for the reason [node.Node.Drain] gives.
+func (e *Engine) Drain(ctx context.Context) {
+	e.drainOnce.Do(func() {
+		// BEFORE ANYTHING THAT CAN BLOCK, so every surface that asks
+		// refuses new work from the moment the drain was decided rather
+		// than from whenever the seat host reaches it: the announcement
+		// below is a broker round trip, and the seat host's own flag is
+		// not set until the drain gets there.
+		e.shuttingDown.Store(true)
+		// FIRST of what does block. The drain below and the teardown
+		// after it reap MCP process trees, join goroutines and wait on
+		// in-flight turns indefinitely: all legitimate, all slow, and all
+		// of it would look to an armed watchdog exactly like the wedge it
+		// exists to end. Exiting through the middle of a drain abandons
+		// the seat release that makes it graceful, and costs every peer a
+		// full TTL of dark seats.
+		if e.watchdog != nil {
+			e.watchdog.Stop()
+		}
+		// NO APPLY RUNS ON A NODE THAT IS STOPPING. The reconcile loop
+		// can be mid-tick when the process is told to stop, and an apply
+		// that went on past this point would start again what the drain
+		// and the teardown after it end: the scheduler re-armed after its
+		// loop was stopped and its duty given back, the background passes
+		// handed to loops that are gone, and on a node's first company
+		// the inbound edge started on a node that is leaving. So the
+		// drain waits out an apply already running, which returns quickly
+		// on the cancelled context that asked for the stop, and every
+		// later one is refused.
+		//
+		// ON THE DRAIN rather than on the teardown, because the drain is
+		// where a stop is decided: an apply admitted during it would
+		// re-arm on a node that is already handing its seats back. It is
+		// also the one gate that sees an apply arriving over the STREAM
+		// from a peer, which the API's own drain gate never does.
+		//
+		// BEFORE the line below, so the company that line names is the
+		// one this node actually stops on: past the gate no apply can
+		// install another.
+		e.applying.Lock()
+		e.stopped = true
+		e.applying.Unlock()
+		// BEFORE THE DRAIN, because the teardown after it is what closes
+		// the broker connection this publishes over: announced
+		// afterwards, the line would be written on a queue that is
+		// already gone, every time.
+		if company := e.Company(); company != nil {
+			e.publishLifecycle(ctx, events.New(
+				types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
+		}
+		e.node.Drain(ctx)
+	})
+}
+
+// ShuttingDown reports whether a drain has begun.
+//
+// True from the first moment of [Engine.Drain] and never false again. It is
+// what the HTTP surface refuses new work on and what /health and /ready
+// report, and it is deliberately not the seat host's own draining flag, which
+// is set later, once the drain has reached the seat host.
+func (e *Engine) ShuttingDown() bool { return e.shuttingDown.Load() }
+
+// Stop drains, unless [Engine.Drain] already has, and shuts down.
 //
 // The DRAIN comes first and is the difference between a restart that resumes
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
 func (e *Engine) Stop(ctx context.Context) {
-	// FIRST, before anything blocks. The drain below reaps MCP process
-	// trees, joins goroutines and waits on in-flight turns indefinitely —
-	// all legitimate, all slow, and all of it would look to an armed
-	// watchdog exactly like the wedge it exists to end. Exiting through
-	// the middle of a drain abandons the seat release that makes it
-	// graceful, and costs every peer a full TTL of dark seats.
-	if e.watchdog != nil {
-		e.watchdog.Stop()
-	}
-	// NO APPLY RUNS ON A NODE THAT IS STOPPING. The reconcile loop can be
-	// mid-tick when the process is told to stop, and an apply that went on
-	// past this point would start again what the teardown below ends: the
-	// scheduler re-armed after its loop was stopped and its duty given
-	// back, the background passes handed to loops that are gone, and on a
-	// node's first company the inbound edge started on a node that is
-	// leaving. So Stop waits out an apply already running, which returns
-	// quickly on the cancelled context that asked for the stop, and every
-	// later one is refused.
-	//
-	// FIRST, so the company the line below names is the one this node
-	// actually stops on: past the gate no apply can install another.
-	e.applying.Lock()
-	e.stopped = true
-	e.applying.Unlock()
-
-	// BEFORE THE DRAIN, because the drain is what closes the broker
-	// connection this publishes over: announced afterwards, the line
-	// would be written on a queue that is already gone, every time.
-	if company := e.Company(); company != nil {
-		e.publishLifecycle(ctx, events.New(
-			types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
-	}
-	e.node.Drain(ctx)
+	e.Drain(ctx)
 	e.teardown(ctx)
 	log.InfoContext(ctx, "engine_stopped")
 }

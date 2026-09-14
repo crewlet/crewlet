@@ -164,11 +164,11 @@ func embeddingWidth(c *Company) int {
 // it, because activation also has to move the pointer, record the outcome and
 // reset the attempt budget, none of which this function does. So there is no
 // second apply to exclude, and the lock taken below is not for one. It is for
-// [Engine.Stop], the one other writer of what an apply builds: an apply that
-// overlapped the teardown restarted the scheduler, the background passes and
-// a first company's inbound edge after Stop had ended them. Stop waits for an
-// apply in flight, and an apply that starts after it is refused with
-// [errStopped].
+// [Engine.Drain], the one other writer of what an apply builds: an apply that
+// overlapped the drain and the teardown after it restarted the scheduler, the
+// background passes and a first company's inbound edge after they had ended
+// them. The drain waits for an apply in flight, and an apply that starts after
+// it is refused with [errStopped].
 //
 // The second return is the subsystems this apply GOT THROUGH, in the order it
 // went through them. On a failure it is what was already mutated when the
@@ -348,7 +348,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	return configplane.StatusOK, applied, nil
 }
 
-// errStopped refuses an apply that reaches a node after [Engine.Stop] began.
+// errStopped refuses an apply that reaches a node after [Engine.Drain] began.
 // The node is leaving, and nothing it would build for the revision could run.
 var errStopped = errors.New("engine: apply: this node is stopping and applies no revision")
 
