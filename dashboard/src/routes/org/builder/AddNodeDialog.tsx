@@ -11,7 +11,8 @@
  * and a name the draft already holds is refused by the check like any other.
  *
  * THE KEY IS MINTED HERE, in the event handler, never in the reducer (see
- * `model/keys.ts`), and the new node goes at the end of its parent's list.
+ * `model/keys.ts`), from the Builder's one key source, and the new node goes
+ * at the end of its parent's list.
  * Nothing is dispatched until the reducer's own recording door has said it
  * will take the operation, so a refusal stays in the dialog.
  */
@@ -31,33 +32,9 @@ import {
 } from "./dialogParts.tsx";
 import { suggestUniqueName } from "./model/document.ts";
 import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
-import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./model/keys.ts";
+import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
-
-/**
- * Random tokens for minted keys: letters, digits and hyphens, well inside the
- * 64 characters a minted key allows.
- *
- * NOT `crypto.randomUUID` ALONE. It is a secure-context API, and the engine
- * serves the dashboard over plain HTTP with no TLS of its own, so a dashboard
- * opened at the node's address rather than as `localhost` has no `randomUUID`
- * at all and every Add would throw where the key is minted.
- * `crypto.getRandomValues` carries no such restriction, so the fallback is
- * sixteen random bytes as hex: the same 128 bits, in characters a key accepts.
- *
- * Exported because every builder view that creates a node mints its key in its
- * own event handler (see `model/keys.ts`), and a second copy of this fallback
- * is how one of them ends up without it.
- */
-export const RANDOM_KEYS: KeySource = {
-  next: () =>
-    typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : [...crypto.getRandomValues(new Uint8Array(16))]
-          .map((byte) => byte.toString(16).padStart(2, "0"))
-          .join(""),
-};
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
@@ -116,7 +93,7 @@ export function AddNodeDialog({
     if (trimmed === "" || api.readOnly || missingParent) return;
     const siblings = siblingsAt(state.draft, parentKey, kind === "unit" ? "unit" : "seat") ?? [];
     const placement = { parent: parentKey, after: siblings.at(-1)?.key ?? null };
-    const key = mintKey(RANDOM_KEYS);
+    const key = mintKey(api.keys);
     let intent: Intent;
     if (kind === "unit") {
       const data: ConfigUnit = { name: trimmed, ...(type.trim() ? { type: type.trim() } : {}) };

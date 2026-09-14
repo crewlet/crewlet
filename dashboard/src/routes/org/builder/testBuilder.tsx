@@ -15,6 +15,7 @@ import { vi } from "vitest";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
 import { BuilderContext, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeKey } from "./model/keys.ts";
+import { countingKeys } from "./model/testkit.ts";
 import { builderReducer, type BuilderAction, type BuilderState } from "./model/reducer.ts";
 
 export interface Harness {
@@ -44,6 +45,9 @@ export function renderInBuilder(
   options: HarnessOptions = {},
 ): Harness & ReturnType<typeof render> {
   let current = initial;
+  // One source for the harness's life, as the Builder has one: a source made
+  // per render would mint the same key for two nodes added in one suite.
+  const keys = countingKeys("test");
   const spies = {
     openEditor: vi.fn(),
     openAdd: vi.fn(),
@@ -87,6 +91,7 @@ export function renderInBuilder(
       readOnly: options.readOnly ?? false,
       agents: options.agents ?? [],
       sandboxes: options.sandboxes ?? [],
+      keys,
       registerView: () => () => {},
     };
     return <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>;

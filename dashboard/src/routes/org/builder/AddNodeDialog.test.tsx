@@ -9,8 +9,8 @@
 
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { AddNodeDialog, RANDOM_KEYS } from "./AddNodeDialog.tsx";
-import { isMintedKey, mintKey } from "./model/keys.ts";
+import { AddNodeDialog } from "./AddNodeDialog.tsx";
+import { isMintedKey } from "./model/keys.ts";
 import { builderReducer, INITIAL_BUILDER } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import type { AddKind } from "./BuilderContext.tsx";
@@ -105,25 +105,17 @@ test("choosing another kind moves an untouched default name along, and a human s
   });
 });
 
-// THE DASHBOARD IS SERVED OVER PLAIN HTTP. `crypto.randomUUID` exists only in
-// a secure context, so on every engine reached by its address rather than as
-// localhost it is absent, and a key source that called it would throw on the
-// first Add.
-test("a key is minted where randomUUID does not exist", () => {
-  // It lives on Crypto.prototype, so hiding it means an own property that
-  // shadows it, and putting it back means deleting that property again.
-  const own = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
-  Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
-  try {
-    expect(crypto.randomUUID).toBeUndefined();
-    const keys = new Set([mintKey(RANDOM_KEYS), mintKey(RANDOM_KEYS)]);
-    expect(keys.size).toBe(2);
-    for (const key of keys) expect(isMintedKey(key)).toBe(true);
-  } finally {
-    if (own) Object.defineProperty(crypto, "randomUUID", own);
-    else delete (crypto as { randomUUID?: unknown }).randomUUID;
-  }
-  expect(typeof crypto.randomUUID).toBe("function");
+// A KEY COMES FROM THE BUILDER'S ONE SOURCE, the same that mints every write
+// id, so a suite that injects a source knows exactly which key an Add mints.
+test("an added node's key is minted from the Builder's key source", () => {
+  const view = open(keyedState(fixtureCompany()), null);
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  // The harness keeps the dialog open, so a second press is a second node.
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  expect(view.state().log.ops.map((op) => op.type === "addSeat" && op.key)).toEqual([
+    "new:test1",
+    "new:test2",
+  ]);
 });
 
 test("a unit that has left the draft takes nothing, and says so", () => {

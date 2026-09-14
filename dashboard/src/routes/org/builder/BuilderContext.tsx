@@ -34,7 +34,7 @@ import type {
   DerivedUnit,
   SandboxEntry,
 } from "~/protocol/index.ts";
-import type { NodeKey } from "./model/keys.ts";
+import type { KeySource, NodeKey } from "./model/keys.ts";
 import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 
 /** What the Add dialog is asked to add. */
@@ -95,6 +95,13 @@ export interface BuilderApi {
   /** Live state, for the StateBadge on saved agent seats. */
   agents: AgentRow[];
   sandboxes: SandboxEntry[];
+  /**
+   * Where a view or dialog that creates a node mints its key, in its own event
+   * handler (see `model/keys.ts`). The Builder's own source, which is the
+   * browser's random one (`runtime.randomKeys`) unless a suite injects
+   * another, so every key and write id the lens makes comes from one place.
+   */
+  keys: KeySource;
   /**
    * Registers the mounted view's handle; the result unregisters it. Views use
    * [useBuilderView] rather than calling this directly. Its identity is stable

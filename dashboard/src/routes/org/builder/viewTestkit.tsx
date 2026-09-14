@@ -27,6 +27,7 @@ import {
   type BuilderViewHandle,
 } from "./BuilderContext.tsx";
 import type { NodeKey } from "./model/keys.ts";
+import { countingKeys } from "./model/testkit.ts";
 import { builderReducer, type BuilderAction, type BuilderState } from "./model/reducer.ts";
 
 /** The spies standing in for what the Builder owns. */
@@ -79,6 +80,8 @@ export function BuilderHarness({
 }) {
   const [state, rawDispatch] = useReducer(builderReducer, initial);
   const [selected, setSelected] = useState<NodeKey | null>(null);
+  // One source for the harness's life, as the Builder has one.
+  const [keys] = useState(() => countingKeys("test"));
   const view = useRef<BuilderViewHandle | null>(null);
   const dispatch = useCallback(
     (action: BuilderAction) => {
@@ -135,9 +138,10 @@ export function BuilderHarness({
       readOnly,
       agents,
       sandboxes,
+      keys,
       registerView,
     }),
-    [state, dispatch, selected, readOnly, agents, sandboxes, registerView, spies],
+    [state, dispatch, selected, readOnly, agents, sandboxes, keys, registerView, spies],
   );
 
   return (

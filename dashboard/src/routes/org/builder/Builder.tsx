@@ -936,6 +936,7 @@ function Lens({
       readOnly,
       agents,
       sandboxes,
+      keys,
       registerView,
     };
   }, [
@@ -950,6 +951,7 @@ function Lens({
     readOnly,
     agents,
     sandboxes,
+    keys,
     registerView,
   ]);
 

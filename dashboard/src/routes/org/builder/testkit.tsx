@@ -27,7 +27,7 @@ import {
 import { Builder, type BuilderSurfaces } from "./Builder.tsx";
 import { useBuilder, type ChartKind } from "./BuilderContext.tsx";
 import { allSeats, allUnits } from "./model/draft.ts";
-import { COMPANY_KEY } from "./model/keys.ts";
+import { COMPANY_KEY, type KeySource } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
@@ -345,6 +345,7 @@ export function mountBuilder({
   hash = "#/org?lens=builder&view=canvas",
   surfaces = fakeSurfaces,
   storage,
+  keys,
   query = () => null,
 }: {
   engine: Engine;
@@ -353,6 +354,8 @@ export function mountBuilder({
   hash?: string;
   surfaces?: BuilderSurfaces;
   storage?: DraftStorage | null;
+  /** Where the lens mints keys and write ids; the browser's random source otherwise. */
+  keys?: KeySource;
   /** What the socket's query channel answers, by name. */
   query?: (what: string) => unknown;
 }) {
@@ -368,7 +371,7 @@ export function mountBuilder({
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <Builder surfaces={surfaces} storage={storage} />
+        <Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />
       </Router>
     </ClientContext.Provider>,
   );

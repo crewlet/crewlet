@@ -14,6 +14,8 @@ import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { DeleteDialog } from "./DeleteDialog.tsx";
 import { MoveDialog } from "./MoveDialog.tsx";
+import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
+import { countingKeys } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
 import { company, Engine, mountBuilder } from "./testkit.tsx";
 
@@ -111,7 +113,11 @@ test("the toolbar offers the selected seat's own card menu: its entries, order a
 });
 
 test("the toolbar offers no screen for a seat that exists only in the draft", async () => {
-  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
+  mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    keys: countingKeys("lens"),
+  });
   await screen.findByText("No problems");
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
@@ -121,6 +127,8 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   // The new seat is selected by the focus the Builder moves to it; select it
   // through the outline, whose rows take the selection with focus.
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  // Minted from the lens's one key source, which a suite injects.
+  await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"new:lens1"'));
   fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
   const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
   const row = within(grid)
