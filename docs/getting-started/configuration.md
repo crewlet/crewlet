@@ -231,9 +231,12 @@ providers:
       api_keys:                         # one or more keys; multiple enables rate-limit rotation
         - "${LLM_API_KEY}"              # supports ${ENV_VAR} references
         # - "${LLM_API_KEY_BACKUP}"     # add more for rate-limit rotation
-                                        # empty list is allowed ONLY if the conventional env var
-                                        # (OPENAI_API_KEY / ANTHROPIC_API_KEY) is set — otherwise the
-                                        # engine fails fast at startup instead of deep in the first turn
+                                        # an empty list takes the conventional variable
+                                        # (OPENAI_API_KEY / ANTHROPIC_API_KEY, from the secret
+                                        # store, then the environment); with neither, the
+                                        # provider still builds and sends no key, and a vendor
+                                        # that needs one refuses its calls as unauthorized
+                                        # (401), each failure naming the provider
       cooldowns:                        # optional — TTL when a key is marked exhausted
         rate_limit_seconds: 3600        #   429 / 402 default cooldown (a Retry-After / x-ratelimit-reset
         auth_seconds: 300               #   401 / 403 default cooldown   header on the error overrides it;
