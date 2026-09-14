@@ -144,7 +144,7 @@ export interface SeatView {
   readonly placedByRef: boolean;
   /** The `unit:` a root seat writes that the engine resolved to no unit. */
   readonly danglingUnitRef: string | null;
-  /** The seat an alert that names nobody wakes (`integrations.datadog.route_to`). */
+  /** The seat an alert that names nobody wakes (`integrations.datadog.route_to`, while enabled). */
   readonly datadogFallback: boolean;
   /**
    * Its primary manager's name; `null` for none; `undefined` until a check
@@ -248,7 +248,13 @@ export function structure(inputs: ChartInputs): Structure {
   const { draft, baseDraft } = inputs;
   const engine = engineOf(inputs);
   const nodes = new Map<NodeKey, NodeView>();
-  const routeTo = text(getPath(draft.company, DATADOG_ROUTE_TO));
+  // THE FALLBACK WAKES A SEAT ONLY WHILE DATADOG IS ENABLED: the engine builds
+  // no Datadog parser otherwise and refuses every alert at the route, so a
+  // `route_to` left in a disabled block names a seat nothing will ever wake.
+  // The engine trims what it reads, and so does the chart.
+  const datadog = getPath(draft.company, DATADOG_ROUTE_TO.slice(0, -1));
+  const routeTo =
+    isRecord(datadog) && datadog.enabled === true ? text(datadog.route_to).trim() : "";
 
   const unitName = new Map<NodeKey, string>();
   for (const { unit } of allUnits(draft)) unitName.set(unit.key, unit.data.name);

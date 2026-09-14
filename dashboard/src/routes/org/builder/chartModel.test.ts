@@ -250,6 +250,14 @@ describe("structure", () => {
       datadogFallback: true,
     });
     expect(seatOf(state, seatKey("dev")).datadogFallback).toBe(false);
+    // Only while Datadog is enabled does the fallback wake anyone, and the
+    // engine reads the handle trimmed.
+    const disabled = fixtureCompany();
+    disabled.integrations = { datadog: { enabled: false, route_to: "sre" } };
+    expect(seatOf(checkedEdit(disabled), seatKey("sre")).datadogFallback).toBe(false);
+    const spaced = fixtureCompany();
+    spaced.integrations = { datadog: { enabled: true, route_to: " sre " } };
+    expect(seatOf(checkedEdit(spaced), seatKey("sre")).datadogFallback).toBe(true);
 
     // Renamed in the draft, the seat still RUNS under its saved name.
     const renamed = record(state, { type: "renameSeat", target: seatKey("dev"), name: "Builder" });

@@ -1146,7 +1146,8 @@ to.
 - **Colour stays state.** A card is neutral whatever it holds. A human seat
   has the dashed edge every human seat on the dashboard has, a problem count
   takes the critical tone, a reference that names nothing takes the caution
-  tone, and the Datadog fallback seat carries a neutral badge.
+  tone, and the Datadog fallback seat carries a neutral badge while Datadog is
+  enabled, the only time the engine routes an alert to it.
 - **A live push never moves a card.** A saved agent seat shows the same
   `StateBadge` as every other screen, in a slot that neither shrinks nor wraps
   while the seat's name truncates beside it, and live state is no input to
