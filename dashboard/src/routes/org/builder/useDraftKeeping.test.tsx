@@ -238,6 +238,23 @@ test("storage that refuses says the draft will not survive a reload", async () =
   );
 });
 
+// A tab whose storage accessor throws has no storage at all, and loses the
+// draft on a reload exactly as a refusing one does, so it says so too.
+test("no storage at all says the draft will not survive a reload", async () => {
+  const engine = new Engine(company());
+  mountBuilder({ engine, storage: null });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await waitFor(() =>
+    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
+  );
+  expect(
+    screen.getByText(
+      "This browser refuses to keep a draft, so unsaved changes will not survive a reload.",
+    ),
+  ).toBeDefined();
+});
+
 test("coming back to the lens restores this page's own draft without asking", async () => {
   const engine = new Engine(company());
   const first = mountBuilder({ engine });

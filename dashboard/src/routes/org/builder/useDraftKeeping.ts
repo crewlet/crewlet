@@ -106,9 +106,13 @@ export function useDraftKeeping({
     const restored = restoreDraft(storage);
     switch (restored.kind) {
       case "none":
-      case "unavailable":
         setDecided(true);
         return;
+      // NO STORAGE IS STORAGE THAT REFUSED. The tab's storage is `null` only
+      // when the browser threw on the accessor itself (a sandboxed frame,
+      // blocked site data), and the operator loses the draft on a reload
+      // exactly as they do when a write is refused, so they are told the same.
+      case "unavailable":
       case "refused":
         setStorageNotice(REFUSED);
         setDecided(true);
@@ -184,7 +188,7 @@ export function useDraftKeeping({
     if (plan.action === "keep" && result === "kept") keptByThisPage = plan.kept.savedAt;
     if (plan.action === "clear" && result === "cleared") keptByThisPage = null;
     setStorageNotice(
-      result === "refused"
+      result === "refused" || result === "unavailable"
         ? REFUSED
         : result === "too_large"
           ? {
