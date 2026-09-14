@@ -423,6 +423,52 @@ test("a view's status groups map back onto the three segments", () => {
   expect(scopeOf(undefined)).toBe("");
 });
 
+// AND THE ROUND TRIP IS WHAT THE SEGMENT IS SEEDED FROM.
+//
+// The tracker reads a view's `status_group` back through [scopeOf] to decide
+// which segment the control shows, and [buildItemsParams] then writes that
+// segment BACK onto `status_group`, overwriting whatever the view spread in.
+// So the two have to be inverses over the groups a view can carry: anywhere
+// they are not, a saved view is answered with a filter nobody saved, and the
+// segment names a scope the rows do not match.
+//
+// Seeded from the view the pair is a round trip; seeded from a constant it
+// was not, which is the whole of the defect — a view saved over closed work
+// opened on the default segment and was answered as OPEN work.
+test("a view's own status group survives being read into the segment and back", () => {
+  for (const group of ["not_started,active", "done,closed"]) {
+    const params = build({
+      view: { status_group: group },
+      filters: { ...NO_FILTERS, scope: scopeOf(group) },
+    });
+    expect(params.status_group).toBe(group);
+  }
+});
+
+// A VIEW WITH NO GROUP LEAVES THE SEGMENT AT ITS OWN DEFAULT, which is `open`
+// — the tracker opens on unfinished work, and a view that says nothing about
+// status is not a view asking for everything.
+test("a view naming no status group is seeded open rather than empty", () => {
+  expect(scopeOf(undefined) || "open").toBe("open");
+  const params = build({ view: {}, filters: { ...NO_FILTERS, scope: "open" } });
+  expect(params.status_group).toBe("not_started,active");
+});
+
+// AND A GROUP THE SEGMENTS CANNOT EXPRESS READS AS ALL, which is the one case
+// where the round trip deliberately does NOT preserve the view: three
+// segments cannot name a fourth set. What matters is that the control and the
+// query still AGREE — the segment says everything and the read filters by
+// nothing — rather than the segment naming `open` over rows that are not.
+test("a group outside the three segments widens honestly rather than lying", () => {
+  const seeded = scopeOf("active");
+  expect(seeded).toBe("");
+  const params = build({
+    view: { status_group: "active" },
+    filters: { ...NO_FILTERS, scope: seeded },
+  });
+  expect(params.status_group).toBeUndefined();
+});
+
 // ---------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------
