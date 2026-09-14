@@ -112,9 +112,11 @@ func TestATurnReadToItsCapSaysItWasCut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// One over the cap, so the read stops at it rather than at the end of
-	// the turn — which is the only way to reach the flag's true branch.
-	for i := range store.MaxTurnEvents + 1 {
+	// Well past the cap, so the read stops at it rather than at the end of
+	// the turn — which is the only way to reach the flag's true branch — and
+	// far enough past that the recovered ending cannot overlap the opening.
+	const extra = 60
+	for i := range store.MaxTurnEvents + extra {
 		if err := log.Append(t.Context(), store.EventRecord{
 			ID:   fmt.Sprintf("e-%04d", i),
 			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
@@ -126,13 +128,83 @@ func TestATurnReadToItsCapSaysItWasCut(t *testing.T) {
 
 	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
 		map[string]any{"turn_id": "long"}))
-	if n := len(rows(t, got["events"])); n != store.MaxTurnEvents {
-		t.Fatalf("%d events, want the cap %d", n, store.MaxTurnEvents)
-	}
 	if got["truncated"] != true {
 		t.Errorf("truncated = %#v on a turn read to its cap; a reader has no "+
 			"way to tell the missing ending from a turn that never ended",
 			got["truncated"])
+	}
+	// THE OPENING PLUS THE ENDING. The head read is the cap; the closing rows
+	// are recovered beside it, so the answer is longer than the cap by the
+	// rows a reader could not otherwise have.
+	events := rows(t, got["events"])
+	if n := len(events); n <= store.MaxTurnEvents {
+		t.Fatalf("%d events, want the cap %d plus the recovered ending",
+			n, store.MaxTurnEvents)
+	}
+	if n := len(events); n > store.MaxTurnEvents+queries.TurnClosingEvents {
+		t.Errorf("%d events, past the cap plus %d closing rows",
+			n, queries.TurnClosingEvents)
+	}
+	// The LAST row of the turn is in the answer — which is the whole point,
+	// because on a real turn it is `turn_completed`.
+	last := fmt.Sprintf("e-%04d", store.MaxTurnEvents+extra-1)
+	if events[len(events)-1]["id"] != last {
+		t.Errorf("the answer ends at %v, want the turn's own last row %q — "+
+			"the record the header reads its outcome off is exactly what a "+
+			"head-only read drops", events[len(events)-1]["id"], last)
+	}
+	// ONE COPY OF EACH. The two reads come from opposite ends of one index,
+	// so a turn that only just reached the cap has them overlapping.
+	seen := map[any]bool{}
+	for _, e := range events {
+		if seen[e["id"]] {
+			t.Fatalf("event %v is in the answer twice; a phase card renders "+
+				"twice and the token totals double", e["id"])
+		}
+		seen[e["id"]] = true
+	}
+	// AND THE SEQUENCE HOLDS ACROSS THE GAP. A turn is read forwards, so the
+	// recovered ending goes after the opening rather than beside it.
+	for i := 1; i < len(events); i++ {
+		if fmt.Sprint(events[i-1]["timestamp"]) > fmt.Sprint(events[i]["timestamp"]) {
+			t.Fatalf("row %d is older than the one before it; the merge lost "+
+				"the order a turn is read in", i)
+		}
+	}
+}
+
+// A TURN THAT FITS IS NOT MERGED WITH ITSELF.
+//
+// The closing read comes from the other end of the same index, so on a turn
+// at or just under the cap it returns rows the head read already has.
+// Concatenating would render those phase cards twice and double their tokens.
+func TestATurnAtTheCapIsNotDoubled(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	payload, err := json.Marshal(map[string]any{"turn_id": "exact", "phase": "execute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// EXACTLY the cap: the head read fills, so the answer reports truncated
+	// and asks for a closing read whose every row the head already holds.
+	for i := range store.MaxTurnEvents {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:   fmt.Sprintf("x-%04d", i),
+			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
+			Category: "lifecycle", Actor: "PM", Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "exact"}))
+	if n := len(rows(t, got["events"])); n != store.MaxTurnEvents {
+		t.Errorf("%d events for a turn of exactly %d; the closing read was "+
+			"concatenated rather than merged", n, store.MaxTurnEvents)
 	}
 }
 

@@ -46,6 +46,27 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// THE READ STOPPED AT THE CAP, not at the end of the turn. EventLog.Turn
+	// is ordered oldest first, because a turn is read forwards — so the rows
+	// a long turn loses are its ENDING, which is where `agent_turn_completed`
+	// and `turn_completed` are: the two records a reader takes the outcome,
+	// the wall clock and the plan summary from. A turn cut at the cap was
+	// therefore indistinguishable from one that died before finishing, and
+	// the screen said so out loud, printing "no turn record" directly above
+	// the rows it did get.
+	//
+	// So a cut view gets its ENDING BACK and reports the gap in the MIDDLE,
+	// which is the part nothing can stand in for. Two cheap seeks on the same
+	// (turn_id, event_time, event_id) index rather than one, and only on the
+	// turns that need it.
+	truncated := len(records) >= store.MaxTurnEvents
+	if truncated {
+		closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
+		if err != nil {
+			return nil, err
+		}
+		records = mergeByID(records, closing)
+	}
 	if records == nil {
 		// A named empty slice, not nil: nil marshals as `null` and the
 		// client reads `.events` off it, which is the exact shape mismatch
@@ -55,19 +76,56 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	return map[string]any{
 		"turn_id": id,
 		"events":  records,
-		// SAYS WHEN IT CUT, exactly as `trace` does — and here the omission
-		// was worse, because of what a turn read loses. EventLog.Turn orders
-		// OLDEST FIRST and stops at store.MaxTurnEvents, so the rows a long
-		// turn loses are its ENDING: `agent_turn_completed` and
-		// `turn_completed`, which are the two records the screen reads its
-		// outcome, its wall clock and its plan summary off. Without this
-		// flag a truncated turn is indistinguishable from a turn that never
-		// finished — the screen printed "no turn record" directly above the
-		// rows it did get, and fell back to an event span it captioned as
-		// the turn's own. Additive, so a client that predates the field is
-		// unaffected.
-		"truncated": len(records) >= store.MaxTurnEvents,
+		// SAYS WHAT IS MISSING, exactly as `trace` does. Additive, so a
+		// client that predates the field is unaffected — and one that has it
+		// can say the gap is the middle rather than warning that the page
+		// cannot answer its own headline question.
+		"truncated": truncated,
 	}, nil
+}
+
+// TurnClosingEvents is how many of a long turn's last rows are recovered
+// beside its opening.
+//
+// Twenty rather than two, because the two records a reader came for are not
+// reliably the last two. A turn ends with its final review phase, then
+// `agent_turn_completed` and `turn_completed` — and then the REFLECTION PASS,
+// which publishes after them: an episode, a persist decision, a counterparty
+// profile, a synthesized, refined or promoted skill, and its own sentinel,
+// each of them a model call that also files its own auxiliary
+// `agent_phase_completed`. Two would be swallowed by that tail on any turn
+// with learning enabled, and the review phase — the one a reader who came for
+// "how did it end" wants beside the words — would go with them.
+//
+// Twenty clears that with headroom while staying small enough that the second
+// read is a seek rather than a scan. The recovered rows replace nothing: they
+// are appended to the head, so a cut view holds MaxTurnEvents opening rows
+// plus at most this many closing ones, which is the same payload budget the
+// cap exists for with a bounded addition.
+const TurnClosingEvents = 20
+
+// mergeByID appends the rows of `tail` that `head` does not already hold.
+//
+// The two reads come from opposite ends of one index, so on a turn that only
+// just reached the cap they OVERLAP — the same rows, read the other way round
+// — and concatenating would render a phase card twice. Order is preserved:
+// head is oldest first and so is tail, so the result stays the sequence a turn
+// is read in, with whatever gap the cap left between them.
+func mergeByID(head, tail []store.EventRecord) []store.EventRecord {
+	if len(tail) == 0 {
+		return head
+	}
+	seen := make(map[string]struct{}, len(head))
+	for _, r := range head {
+		seen[r.ID] = struct{}{}
+	}
+	for _, r := range tail {
+		if _, dup := seen[r.ID]; dup {
+			continue
+		}
+		head = append(head, r)
+	}
+	return head
 }
 
 // phases answers what the models have been doing, company-wide.

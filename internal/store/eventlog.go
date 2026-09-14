@@ -533,9 +533,11 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 // after a restart can span several traces.
 //
 // A caller that gets exactly MaxTurnEvents rows should say the view is
-// truncated. The cap is the trace's, for the same reason: a turn that has
-// self-iterated many times is the one worth reading, and a bound low enough to
-// cut it short would hide exactly that.
+// truncated, and should read [EventLog.TurnClosing] beside it: because this
+// read is ordered forwards, what a cut loses is the turn's own ENDING, which
+// is where the records a reader came for live. The cap is the trace's, for the
+// same reason: a turn that has self-iterated many times is the one worth
+// reading, and a bound low enough to cut it short would hide exactly that.
 func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, error) {
 	return l.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
@@ -546,6 +548,45 @@ func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, erro
 
 // MaxTurnEvents bounds one turn's read.
 const MaxTurnEvents = MaxTraceEvents
+
+// TurnClosing returns the NEWEST rows of one turn, oldest first among
+// themselves, with their payloads.
+//
+// For the one thing a capped [EventLog.Turn] read loses. That read is ordered
+// oldest first, because a turn is read forwards — so what a long turn loses is
+// its ENDING, and the ending is where `agent_turn_completed` and
+// `turn_completed` are: the two records a reader takes the outcome, the wall
+// clock and the plan summary from. A view that shows a turn's opening and
+// cannot say how it ended has lost the one thing somebody opened it for, and
+// it looks exactly like a turn that never finished.
+//
+// Deliberately NOT folded into Turn. Turn answers "this turn, forwards, up to
+// a bound", which is a log's own shape and what its other callers want; a
+// single method that silently returned a head and a tail would make every
+// caller's row count stop meaning what it says, and there would be no honest
+// place left to state the gap. This answers "and how did it end", which is a
+// question about the VIEW, so the view is what asks it and the view is what
+// merges the two.
+//
+// Oldest first among themselves, so a caller appends rather than reverses.
+// The rows may OVERLAP the head read on a turn that only just reached the cap
+// — they are the same rows from the other end — so a caller merges on the
+// event id rather than concatenating.
+func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([]EventRecord, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	out, err := l.scanPayloads(ctx,
+		"SELECT "+listColumns+", payload FROM crewlet_events "+
+			"WHERE turn_id = ? AND event_time >= ? "+
+			"ORDER BY event_time DESC, event_id DESC LIMIT ?",
+		turnID, EncodeTime(now().Add(-EventHistory)), limit)
+	if err != nil {
+		return nil, err
+	}
+	slices.Reverse(out)
+	return out, nil
+}
 
 // ByID returns one event WITH its payload, or ErrNotFound.
 //

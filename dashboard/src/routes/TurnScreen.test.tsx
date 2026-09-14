@@ -108,23 +108,44 @@ test("a phase card shows the duration off the record itself", async () => {
   );
 });
 
-// A CUT VIEW SAYS SO, IN THE HEADER AND ABOVE THE PANELS.
+// A CUT VIEW NAMES THE GAP, IN THE HEADER AND ABOVE THE PANELS.
 //
 // `EventLog.Turn` orders oldest first and stops at the store's per-turn cap,
-// so the rows a long turn loses are its ENDING — the two records this header
-// reads its outcome, its wall clock and its plan summary off. With no flag, a
-// truncated turn was indistinguishable from one that never finished.
-test("a turn read to the store's cap is named as cut, not as unfinished", async () => {
+// so a head-only read lost the turn's ENDING — the two records this header
+// reads its outcome, its wall clock and its plan summary off — and a cut turn
+// was indistinguishable from one that never finished. The answer recovers the
+// ending beside the opening now, so what is missing is the MIDDLE, and the
+// page says that rather than warning it cannot answer its own question.
+test("a cut view names the middle as the gap, not the ending", async () => {
   mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)], truncated: true });
-  expect(await screen.findByText(/oldest 1 shown/)).toBeTruthy();
-  expect(screen.getByText(/what is missing is the/)).toBeTruthy();
-  // The two captions that were making claims the rows do not support: "no
-  // turn record" is about the TURN, and "spanning the turn's first and last
-  // event" describes a window whose far end is wherever the read stopped.
-  expect(screen.getByText("cut off before the turn's own record")).toBeTruthy();
-  expect(screen.getByText("at least this — the turn's end is not in this view")).toBeTruthy();
+  expect(await screen.findByText(/middle not shown/)).toBeTruthy();
+  expect(screen.getByText(/what is missing is the middle/)).toBeTruthy();
+  // Neither caption may state what it used to: "no turn record" is a claim
+  // about the TURN, and "spanning the turn's first and last event" is a claim
+  // about a window this page can no longer assume is whole.
   expect(screen.queryByText("no turn record")).toBeNull();
   expect(screen.queryByText("spanning the turn's first and last event")).toBeNull();
+});
+
+// AND THE RECOVERED ENDING IS READ, so a cut turn reports how it ended.
+//
+// This is the whole reason the answer does a second seek: the outcome is the
+// headline of this page, and a head-only read put an em dash where it goes on
+// exactly the long turns worth opening.
+test("a cut view still reports the outcome, off the recovered record", async () => {
+  mount({
+    truncated: true,
+    events: [
+      phase("2026-09-13T10:01:30Z", 90_000),
+      event({
+        type: "turn_completed",
+        timestamp: "2026-09-13T10:40:00Z",
+        payload: { turn_id: TURN, review_outcome: "done", outcome: "delivered" },
+      }),
+    ],
+  });
+  expect(await screen.findByText("done")).toBeTruthy();
+  expect(screen.getByText("delivered the work")).toBeTruthy();
 });
 
 // AND IT DOES NOT CLAIM THE TURN WAS CLEAN. "Nothing went wrong" is a claim
@@ -146,7 +167,7 @@ test("a cut view withholds the clean badge, and a complete one gives it", async 
 
   cleanup();
   mount({ events: complete, truncated: true });
-  await screen.findByText(/oldest 2 shown/);
+  await screen.findByText(/middle not shown/);
   expect(screen.queryByText("nothing went wrong")).toBeNull();
 });
 

@@ -644,13 +644,18 @@ Four rules replace it, and each one names what it fixes.
    header now, beside the problem count it replaces. It is withheld on a
    **cut** view for the same reason it is withheld on a running turn: the
    `turn` answer carries a `truncated` flag (the `trace` answer always did;
-   this one did not), and because a turn is read oldest first, what a cut
-   loses is its **ending** — including the two records the header reads its
-   outcome, its duration and its plan summary off. Untold, that page printed
-   "no turn record" directly above the rows it did get and captioned a partial
-   event span as the turn's own measurement. It now names what is missing, and
-   the two captions say "cut off before the turn's own record" and "at least
-   this — the turn's end is not in this view".
+   this one did not), so a guard breach among the rows the read could not
+   reach is one this page cannot see.
+
+   Which rows those are changed too, because the original answer was the worse
+   half. A turn is read oldest first, so a head-only read dropped the
+   **ending** — including the two records the header reads its outcome, its
+   duration and its plan summary off — and the page said so out loud, printing
+   "no turn record" directly above the rows it did get and captioning a
+   partial event span as the turn's own measurement. Naming that would have
+   been honest and still useless: the outcome is the headline of this screen.
+   So the answer recovers the turn's last rows beside its first, and what the
+   flag names is a gap in the **middle**. The badge reads "middle not shown".
 
 4. **The feed's row is not this screen's row.** `EventRow` has four columns —
    time, actor, summary, source and category. On a page about ONE turn the

@@ -518,10 +518,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const phaseEvents = usePhaseEvents();
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
-  // THE STORE STOPPED AT ITS CAP, not at the end of the turn — and a turn is
-  // read OLDEST FIRST, so what a cut loses is the ENDING: the two records
-  // every claim in the header below is made from. Everything this screen
-  // derives has to be weakened by it rather than stated over a partial read.
+  // THE STORE STOPPED AT ITS CAP, not at the end of the turn. The answer
+  // recovers the turn's ENDING beside its opening — that is where the two
+  // records this header reads its outcome, its clock and its plan summary off
+  // live, and without them a cut turn was indistinguishable from one that
+  // died — so what is missing is the MIDDLE. Every claim below that is made
+  // over the whole turn rather than over a record has to be weakened anyway:
+  // a guard breach in the gap is one this page cannot see.
   const cut = Boolean(data?.truncated);
 
   // The phases the `turn` query knew about, plus the ones that have landed on
@@ -692,9 +695,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               <Badge
                 tone="caution"
                 icon="alert"
-                title="the store stopped at its per-turn cap; a turn is read oldest first, so what is missing is the end"
+                title="the store stopped at its per-turn cap; this view holds the turn's opening and its ending, and not the middle"
               >
-                oldest {events.length} shown
+                middle not shown
               </Badge>
             )}
           </>
@@ -759,11 +762,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <div className="banner caution">
             <Icon name="alert" size="sm" />
             <span>
-              This turn published more than the store returns for one turn, so only its first{" "}
-              {events.length} events are here. A turn is read oldest first — what is missing is the{" "}
-              <strong>end</strong>, including the two records this page reads the outcome, the
-              duration and the plan summary off. The phases below are the ones that landed early;
-              anything that went wrong later is not on this page.{" "}
+              This turn published more than the store returns for one turn. What is here is its{" "}
+              <strong>opening and its ending</strong> — {events.length} events, so the records below
+              are the turn&rsquo;s own — and what is missing is the middle. Phases from the middle
+              of a long self-iterating turn are not on this page, and neither is anything that went
+              wrong in them.{" "}
               {traceId ? "The trace carries the same work from the trigger down." : ""}
             </span>
           </div>
@@ -798,12 +801,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   : running
                     ? "still running"
                     : cut
-                      ? // NOT "the turn's first and last event". On a cut
-                        // view the last event this page holds is wherever
-                        // the store stopped, so the span is a floor and
-                        // captioning it as the turn's own window is the
-                        // page stating a number it does not have.
-                        "at least this — the turn's end is not in this view"
+                      ? // A CUT VIEW HOLDS BOTH ENDS, so the span is the
+                        // turn's real window — but it is the window rather
+                        // than the engine's own measurement, and on this
+                        // branch the record that carries that measurement is
+                        // missing from a turn that has both its ends. Say
+                        // which of the two the number is.
+                        "spanning the turn's ends — its own record is not among them"
                       : "spanning the turn's first and last event"
               }
             />
@@ -836,11 +840,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 (running
                   ? "still running"
                   : cut
-                    ? // "no turn record" is a claim about the TURN. On a cut
-                      // view it is a claim about the READ, and the two read
-                      // identically to somebody deciding whether their agent
-                      // finished the job.
-                      "cut off before the turn's own record"
+                    ? // "no turn record" is a claim about the TURN, and on a
+                      // cut view it would be a claim about the READ. The
+                      // answer recovers the turn's ending precisely so this
+                      // branch is rare: reaching it means the records are
+                      // genuinely absent from a view that holds both ends.
+                      "no turn record, and this view holds both ends"
                     : "no turn record")
               }
             />
