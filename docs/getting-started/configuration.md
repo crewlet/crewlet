@@ -610,8 +610,8 @@ coordination:
                                     #   Its heartbeat and release budget are
                                     #   fractions of the live value too. So
                                     #   make it agree across the fleet:
-                                    #   changing it takes deleting the bucket
-                                    #   while the fleet is down
+                                    #   changing it requires deleting the
+                                    #   bucket while the fleet is down
 
 api:
   host: "0.0.0.0"

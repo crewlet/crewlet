@@ -120,31 +120,18 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 // waiting for peers would be waiting for something nobody is going to do.
 func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.Stream, error) {
 	// THE RETRY WINDOW IS BOUNDED, NOT THE LOOKUP. Shortening the caller's
-	// context to this would cap each individual read at it too, which is a
+	// context would cap each individual read at it too, which is a
 	// different and worse thing: a metadata read on a busy group is exactly
 	// what is slow here, so truncating it would trade a not-found for a
-	// deadline on the same boot. Each attempt keeps whatever the caller
-	// gave it — for a context with no deadline that is nats.go's own API
-	// timeout — and only the re-asking stops here.
-	deadline := time.Now().Add(jsprovision.ReadBack)
-
-	for {
-		s, err := q.js.Stream(ctx, stream)
-		if err == nil || !jsprovision.NotYetVisible(err) {
-			return s, err
-		}
-		if !time.Now().Before(deadline) {
-			// THE ORIGINAL ERROR, not a deadline of our own:
-			// "stream not found" says what is wrong and names the
-			// stream, which is what the caller has to act on.
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, err
-		case <-time.After(jsprovision.PlacementRetry):
-		}
-	}
+	// deadline on the same boot. [jsprovision.Settle] re-asks; each attempt
+	// keeps whatever deadline the caller gave it.
+	var s jetstream.Stream
+	err := jsprovision.Settle(ctx, func() error {
+		var e error
+		s, e = q.js.Stream(ctx, stream)
+		return e
+	})
+	return s, err
 }
 
 // Append publishes one record.

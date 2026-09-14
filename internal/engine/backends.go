@@ -410,10 +410,10 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 	// own budget and what is left of this one, because WithTimeout only
 	// ever shortens.
 	ctx, cancel := context.WithTimeout(ctx,
-		jsprovision.SequenceBudget(jsprovision.Clustered(b.Stream.Replicas)))
+		jsprovision.Clustered(clusteredStream(b)).SequenceBudget())
 	defer cancel()
 
-	shared, err := openFleet(ctx, conn, b.Stream.Replicas)
+	shared, err := openFleet(ctx, conn, b.Stream.Replicas, clusteredStream(b))
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
 	}
@@ -424,8 +424,9 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 		return nil
 	}
 	leases, err := kv.Open(ctx, conn, kv.Config{
-		TTL:      leaseTTL(b),
-		Replicas: b.Stream.Replicas,
+		TTL:       leaseTTL(b),
+		Replicas:  b.Stream.Replicas,
+		Clustered: clusteredStream(b),
 	})
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)
@@ -440,7 +441,7 @@ func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends,
 // is a BUCKET's age, fixed when the bucket is created, so a silent default
 // would decide it at the moment nobody was looking. Every number is the one
 // the subsystem that reads it already uses, named at its own package.
-func openFleet(ctx context.Context, conn *nats.Conn, replicas int) (coord.Fleet, error) {
+func openFleet(ctx context.Context, conn *nats.Conn, replicas int, clustered bool) (coord.Fleet, error) {
 	return kv.OpenFleet(ctx, conn, kv.FleetConfig{
 		RateWindow:      coord.RateWindow,
 		ClaimTTL:        coord.ClaimTTL,
@@ -449,6 +450,7 @@ func openFleet(ctx context.Context, conn *nats.Conn, replicas int) (coord.Fleet,
 		CooldownMax:     coord.CooldownMax,
 		StatusFreshness: coord.StatusFreshness,
 		Replicas:        replicas,
+		Clustered:       clustered,
 	})
 }
 
@@ -532,4 +534,17 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 		return got
 	}
 	return configured
+}
+
+// clusteredStream is whether this node's broker has PEERS.
+//
+// The one place the engine decides it, so the queue, the lease store and the
+// fleet store cannot disagree about which budget they are on. It is a topology
+// question rather than a replica count: an external NATS is somebody else's
+// cluster, and an embedded member that names peers is one whatever replica
+// count it asks for — see [jsprovision.Clustered].
+func clusteredStream(b *config.Bootstrap) bool {
+	return b.Stream.Type == config.StreamNATS ||
+		b.Stream.Cluster.Name != "" || b.Stream.Cluster.Port != 0 ||
+		len(b.Stream.Cluster.Peers) > 0
 }

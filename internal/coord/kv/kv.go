@@ -194,6 +194,11 @@ type Config struct {
 	// against the store's own clock.
 	TTL time.Duration
 
+	// Clustered is whether this node's broker has PEERS — see the field of
+	// the same name on [FleetConfig], and [jsprovision.Clustered] for why
+	// it is not inferred from Replicas.
+	Clustered bool
+
 	// Replicas is the JetStream replica count for both buckets. Zero means
 	// 1. In a real fleet this should be 3: a coordination store with one
 	// replica makes the whole company's seat ownership depend on one
@@ -297,7 +302,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
-	leases, err := openBucket(ctx, js, jetstream.KeyValueConfig{
+	leases, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket:      cfg.BucketPrefix + leasesSuffix,
 		Description: "Crewlet lease ownership; the bucket TTL is the lease TTL and its expiry is the arbiter",
 		TTL:         cfg.TTL,
@@ -307,7 +312,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+leasesSuffix, err)
 	}
 
-	epochs, err := openBucket(ctx, js, jetstream.KeyValueConfig{
+	epochs, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 		Bucket: cfg.BucketPrefix + epochsSuffix,
 		Description: "Crewlet fencing epochs and placement hints; NO TTL — this must survive " +
 			"the lease key's expiry or the counter resets",
@@ -323,7 +328,16 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	// against a group that has just proven it works.
 	readCtx, cancelRead := context.WithTimeout(ctx, jsprovision.ReadBack)
 	defer cancelRead()
-	status, err := leases.Status(readCtx)
+	// RE-ASKED for the same reason every other read-back on this path is:
+	// a bucket handle can come back before the metadata update that made it
+	// is visible here, so one lookup inside that window fails a clustered
+	// boot over a bucket this node just opened.
+	var status jetstream.KeyValueStatus
+	err = jsprovision.Settle(readCtx, func() error {
+		var e error
+		status, e = leases.Status(readCtx)
+		return e
+	})
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: read %s status: %w", leases.Bucket(), err)
 	}
@@ -334,7 +348,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 
 	// THE TTL IN FORCE, which is the bucket's and not this node's config
 	// whenever a peer created it first. Reported at WARN rather than
-	// reconciled: the remedy is an operator's (align coordination.lease_ttl
+	// reconciled: the remedy is an operator's (align coordination.lease_ttl_seconds
 	// across the fleet, or delete the bucket to re-create it), and a node
 	// that rewrote it here would be the silent-overwrite this package
 	// removed everywhere else.
@@ -345,7 +359,8 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 			"detail", "a peer created this bucket with a different lease TTL and "+
 				"a booting node does not rewrite one; every lease on this node is "+
 				"held to the TTL in force",
-			"remedy", "make coordination.lease_ttl agree across the fleet, or delete "+
+			"remedy", "make coordination.lease_ttl_seconds agree across the fleet, or "+
+				"delete "+
 				"the bucket while the fleet is down so the next boot re-creates it")
 	}
 
@@ -359,7 +374,13 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	}, nil
 }
 
-// TTL reports the configured lease TTL — the one every caller must claim with.
+// TTL reports the lease TTL IN FORCE — the bucket's own age, which is what
+// expires a lease and what [Store.validateTTL] holds every claim to.
+//
+// NOT NECESSARILY THIS NODE'S CONFIGURED VALUE: the bucket is adopted rather
+// than rewritten, so on a fleet it carries whatever the member that created it
+// asked for. See [Open], and [engine.effectiveLeaseTTL] for why the caller
+// must acquire with this rather than with its own.
 func (s *Store) TTL() time.Duration { return s.ttl }
 
 // each walks a whole bucket — see [eachEntry], which is the one implementation

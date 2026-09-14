@@ -143,21 +143,70 @@ func TestASequenceIsBoundedAboveOneCreateAndBelowTheirSum(t *testing.T) {
 	}
 }
 
-// PEERS ARE WHAT MAKES A NODE CLUSTERED, and one replica is not peers. Both
-// callers ask this of their own config, so a disagreement about where the
-// boundary sits would give one subsystem the solo budget and the other the
-// clustered one on the same node.
-func TestOnlyMoreThanOneReplicaIsClustered(t *testing.T) {
+// THE TWO BUDGETS FOLLOW THE TOPOLOGY FACT, and a caller that holds one reads
+// the same numbers the package functions give.
+//
+// It used to be inferred from the replica count, which reported a member
+// naming peers at `replicas: 1` — a configuration this repository permits — as
+// solo, handing a create that waits on a real metadata group the local
+// file-store budget.
+func TestTheBudgetsFollowWhetherTheBrokerHasPeers(t *testing.T) {
 	t.Parallel()
-	for _, replicas := range []int{0, 1} {
-		if Clustered(replicas) {
-			t.Errorf("%d replicas reported as clustered", replicas)
+	for _, clustered := range []bool{false, true} {
+		c := Clustered(clustered)
+		if got, want := c.Budget(), Budget(clustered); got != want {
+			t.Errorf("Clustered(%v).Budget() = %v, want %v", clustered, got, want)
+		}
+		if got, want := c.SequenceBudget(), SequenceBudget(clustered); got != want {
+			t.Errorf("Clustered(%v).SequenceBudget() = %v, want %v", clustered, got, want)
 		}
 	}
-	for _, replicas := range []int{2, 3, 5} {
-		if !Clustered(replicas) {
-			t.Errorf("%d replicas reported as solo", replicas)
+	if Clustered(true).Budget() <= Clustered(false).Budget() {
+		t.Error("a clustered create is no more patient than a solo one")
+	}
+}
+
+// A READ-BACK RE-ASKS while the object is not visible yet, and gives back the
+// ASK'S error rather than a deadline of its own.
+//
+// Four read-backs on the provisioning path had the one-shot form and all four
+// sit inside the window by construction — each is asking whether a create just
+// landed. A single lookup answers at one arbitrary instant inside it.
+func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
+	t.Parallel()
+
+	// NOT VISIBLE, THEN VISIBLE: the answer is the later one.
+	calls := 0
+	err := Settle(t.Context(), func() error {
+		calls++
+		if calls < 3 {
+			return jetstream.ErrStreamNotFound
 		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("an object that appeared on the third look reported %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("asked %d times, want 3", calls)
+	}
+
+	// ANYTHING ELSE IS TERMINAL AT ONCE — waiting out a placement failure
+	// would be waiting for something nobody is going to do.
+	calls = 0
+	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
+	if err := Settle(t.Context(), func() error { calls++; return placement }); err != placement {
+		t.Errorf("a placement failure came back as %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("a terminal error was re-asked %d times", calls)
+	}
+
+	// AND AN OBJECT THAT NEVER APPEARS reports the broker's own not-found,
+	// which names it, rather than a bare deadline.
+	err = Settle(t.Context(), func() error { return jetstream.ErrStreamNotFound })
+	if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Errorf("an absent object reported %v, want the not-found that names it", err)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -70,6 +71,10 @@ import (
 // none of those is in the EventQueue contract because nothing else needs them.
 type domainHost interface {
 	EnsureDomainStream(ctx context.Context, spec jetstream.DomainStream) error
+
+	// Clustered is whether the broker underneath has PEERS, which is what
+	// the provisioning budgets branch on — see [jsprovision.Clustered].
+	Clustered() jsprovision.Clustered
 
 	// StreamBudget is what the broker will actually let this account
 	// store. A ceiling is a RESERVATION the broker refuses if it cannot
@@ -312,9 +317,20 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// and a stream created a moment ago reports a first sequence of 1,
 	// which reads as "nothing was trimmed" for a log the fleet has been
 	// writing to for months.
+	// ONE CEILING OVER ALL THREE DOMAINS, for [jsprovision.SequenceBudget]'s
+	// reason: this loop is three replicated stream creates in a row on the
+	// detached boot context, each of which would otherwise discover a wedged
+	// cluster on its own per-create budget. The queue's own sequence ceiling
+	// covers the engine's streams and not these, so without it the state log
+	// added three more full budgets after that ceiling had already been
+	// spent — and the package's claim to bound a whole bring-up was not true
+	// of all of it.
+	provisionCtx, cancelProvision := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
+	defer cancelProvision()
+
 	logs := map[string]*jetstream.DomainLog{}
 	for _, domain := range registeredDomains() {
-		appendTo, err := s.provision(ctx, host, domain)
+		appendTo, err := s.provision(provisionCtx, host, domain)
 		if err != nil {
 			s.Stop()
 			return nil, err

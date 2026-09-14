@@ -322,7 +322,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 // its own budget and what is left of this one.
 func (q *Queue) ensureStreams(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx,
-		jsprovision.SequenceBudget(jsprovision.Clustered(q.cfg.Replicas)))
+		q.Clustered().SequenceBudget())
 	defer cancel()
 
 	for _, spec := range engineStreams(q.cfg.EventRetention) {
@@ -391,7 +391,21 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 // provisionBudget is how long one stream create on this queue gets, which
 // depends on whether it has peers to agree with — see [jsprovision].
 func (q *Queue) provisionBudget() time.Duration {
-	return jsprovision.Budget(jsprovision.Clustered(q.cfg.Replicas))
+	return q.Clustered().Budget()
+}
+
+// clustered is whether this queue's broker has peers, which is the fact every
+// provisioning budget branches on.
+//
+// THE SAME EXPRESSION [startEmbedded] uses for the server it starts, plus the
+// external case: a URL is somebody else's broker, so its metadata group is
+// remote and a create on it is never the local file-store setup the solo
+// budget is sized for. Read off the topology rather than off Replicas, which
+// is a proxy that reports a single-replica clustered member as solo — see
+// [jsprovision.Clustered].
+func (q *Queue) Clustered() jsprovision.Clustered {
+	return jsprovision.Clustered(q.cfg.URL != "" || q.cfg.ClusterName != "" ||
+		len(q.cfg.ClusterURLs) > 0 || q.cfg.ClusterPort != 0)
 }
 
 // ensureStream provisions one stream, remembering that it did so. Streams
@@ -529,7 +543,15 @@ func (q *Queue) createOrObserveStream(
 	// expired.
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
 	defer cancel()
-	info, err = q.js.Stream(readCtx, spec.name)
+	// RE-ASKED rather than answered once: the winner's create is visible
+	// to this member only on its next metadata update, so a single lookup
+	// inside that window reports not-found for a stream that exists and
+	// fails the boot before [Queue.DomainLog]'s own retry could help.
+	err = jsprovision.Settle(readCtx, func() error {
+		var e error
+		info, e = q.js.Stream(readCtx, spec.name)
+		return e
+	})
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: "no suitable peers" or "deadline exceeded" on the

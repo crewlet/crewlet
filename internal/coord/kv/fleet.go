@@ -68,14 +68,14 @@ const positionsSuffix = "_statelog_positions"
 // it — which is also the honest ownership rule, since a bucket's TTL is a
 // deployment-wide fact and not something each node should re-assert.
 func openBucket(ctx context.Context, js jetstream.JetStream,
-	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// WithTimeout only ever shortens against the parent, so a caller that
 	// already set a tighter deadline keeps it — which is also what makes
 	// the sequence ceiling [OpenFleet] applies effective: each create here
 	// takes the lesser of its own budget and what is left of that one.
 	ctx, cancel := context.WithTimeout(ctx,
-		jsprovision.Budget(jsprovision.Clustered(cfg.Replicas)))
+		jsprovision.Clustered(clustered).Budget())
 	defer cancel()
 
 	// A BREADCRUMB, because without one this is the silent step. A boot
@@ -142,7 +142,15 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 	// expired.
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
 	defer cancel()
-	bucket, err := js.KeyValue(readCtx, cfg.Bucket)
+	// RE-ASKED while it answers not-found, because a peer's create is
+	// visible to this member only on its next metadata update — see
+	// [jsprovision.Settle]. One lookup answers at an arbitrary instant
+	// inside that window and fails a boot over a bucket that exists.
+	err := jsprovision.Settle(readCtx, func() error {
+		var e error
+		bucket, e = js.KeyValue(readCtx, cfg.Bucket)
+		return e
+	})
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: the first says what went wrong and the second only
@@ -270,6 +278,13 @@ type FleetConfig struct {
 
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
+
+	// Clustered is whether this node's broker has PEERS, which is what the
+	// provisioning budgets branch on. Stated by the caller rather than
+	// inferred from Replicas: a member naming peers at one replica is a
+	// real deployment, and every create on it still waits on the same
+	// metadata group. See [jsprovision.Clustered].
+	Clustered bool
 }
 
 // rateBucketFactor is how many windows the rate bucket keeps.
@@ -387,12 +402,12 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 	}
 
 	ctx, cancel := context.WithTimeout(ctx,
-		jsprovision.SequenceBudget(jsprovision.Clustered(cfg.Replicas)))
+		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
 	defer cancel()
 
 	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix
-		bucket, err := openBucket(ctx, js, jetstream.KeyValueConfig{
+		bucket, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
 		})
 		if err != nil {

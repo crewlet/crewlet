@@ -124,11 +124,64 @@ func SequenceBudget(clustered bool) time.Duration {
 	return soloSequenceBudget
 }
 
-// Clustered reports whether a replica count means this node has peers to
-// agree with. Spelled once because both callers ask it of their own config
-// and a disagreement about where the boundary sits would give one subsystem
-// the solo budget and the other the clustered one on the same node.
-func Clustered(replicas int) bool { return replicas > 1 }
+// Settle re-runs ask while it answers [NotYetVisible], for up to [ReadBack].
+//
+// # Why every read-back on this path needs it
+//
+// A clustered create is committed by the metadata leader and becomes visible
+// to each member on its own next metadata update, so there is a window in
+// which the member that just made an object is told it does not exist. Every
+// read-back on the provisioning path runs inside that window BY CONSTRUCTION —
+// each one is asking "did my create, or a peer's, actually land?" — and a
+// single lookup answers the question at one arbitrary instant inside it.
+//
+// It was written out once, for the state log's own stream lookup, and the
+// three sibling read-backs kept the one-shot form: the bucket create's, the
+// lease bucket's status read, and the stream create's peer-race read. All four
+// fail a clustered boot the same way and for the same reason, so the re-asking
+// is here rather than in any of them — which is the argument this whole
+// package exists for.
+//
+// The ERROR IT RETURNS IS THE ASK'S OWN, never a deadline of this function's:
+// "stream not found" names the object and "deadline exceeded" does not.
+func Settle(ctx context.Context, ask func() error) error {
+	deadline := time.Now().Add(ReadBack)
+	for {
+		err := ask()
+		if err == nil || !NotYetVisible(err) {
+			return err
+		}
+		if !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(PlacementRetry):
+		}
+	}
+}
+
+// Clustered is whether this node's broker has peers, which is what decides
+// every budget above.
+//
+// A TOPOLOGY FACT, and deliberately not a replica count. Inferring it from
+// replicas was wrong on a configuration this repository permits: a member that
+// names peers, or an external NATS cluster, with `stream.replicas: 1`. Only
+// `replicas > 1` with no peers is refused (see config.Bootstrap.Validate), so
+// a single-replica clustered broker is a real deployment — and every create on
+// it still waits on the same metadata group, while the replica proxy handed it
+// the solo budget and the solo sequence ceiling.
+//
+// It is a named type rather than a bare bool so a caller cannot pass one of
+// the several other booleans in scope at these call sites by accident.
+type Clustered bool
+
+// Budget is how long ONE replicated create gets.
+func (c Clustered) Budget() time.Duration { return Budget(bool(c)) }
+
+// SequenceBudget is how long a whole bring-up of many creates gets.
+func (c Clustered) SequenceBudget() time.Duration { return SequenceBudget(bool(c)) }
 
 // SlowAfter is how long one create may take before it is worth a line in the
 // log.

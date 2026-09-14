@@ -12,6 +12,8 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsprovision"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -133,6 +135,23 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// created. The applier resumes from its own checkpoint regardless, and
 	// drops anything below it, so a consumer sitting lower costs
 	// redeliveries rather than correctness.
+	// THE PROVISIONING BUDGET AND ITS BREADCRUMB, because this is a
+	// replicated create on the boot path like every other one — and it does
+	// not come through [Queue.ensureDurableConsumer], whose create-or-
+	// read-back shape is wrong here (see the comment above: an existing
+	// consumer is taken as it is). Without them the caller's context
+	// reached nats.go with no deadline and the client's five-second default
+	// decided a clustered boot, silently.
+	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
+			"consumer", name, "waited", after,
+			"detail", "this state-log consumer is still being created; on a "+
+				"fleet that is a metadata group that has not settled")
+	})
+	defer stop()
+
 	cons, err := q.js.Consumer(ctx, stream, name)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):

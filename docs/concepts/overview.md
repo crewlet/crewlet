@@ -222,6 +222,11 @@ internal/
 ├── tokens/               # Token accounting shared by the meter and the API
 ├── hostbox/ procgroup/   # The local sandbox host, and process-tree teardown
 ├── whsec/                # Webhook signing secrets: minting and verification
+├── jsprovision/          # How long a replicated JetStream create gets, and
+│                         #   what "the cluster is still forming" looks like:
+│                         #   one policy for the streams, the consumers and the
+│                         #   coordination buckets, branching on whether this
+│                         #   node's broker has peers
 ├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
