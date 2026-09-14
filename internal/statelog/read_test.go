@@ -666,3 +666,109 @@ func TestTheCallersFloorIsHonouredAtEveryLevel(t *testing.T) {
 		t.Errorf("the wrong-stream read waited %d time(s) before refusing", got)
 	}
 }
+
+// A FLOOR ON ANOTHER STREAM IS REFUSED AT EVERY LEVEL, INCLUDING WHEN IT
+// SORTS LOW.
+//
+// [statelog.Position.Packed] deliberately carries the generation and the
+// sequence and NOT the stream, so a foreign floor compared against a local
+// target is two coordinates from two number spaces. Selecting the maximum
+// first therefore discarded a foreign floor whenever it happened to sort below
+// the level's own target — and the guard that names `wrong_stream` then
+// inspected a purely local position and waved it through. The read was served
+// as though no floor had been named, under the level the caller asked for.
+//
+// The two cases here are the two sides of that comparison: a foreign floor
+// BELOW the barrier (silently dropped before) and one above it (refused
+// before). They must answer the same way, because which side of a local
+// barrier a foreign sequence happens to fall on says nothing about anything.
+func TestAFloorOnAnotherStreamIsRefusedAtEveryLevel(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	index, err := statelog.NewReadIndex(probeDomain{}, h.log, probeEncode, h.gen.Load, nil)
+	if err != nil {
+		t.Fatalf("NewReadIndex: %v", err)
+	}
+	for _, floor := range []statelog.Position{
+		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1},
+		{Stream: "SOME_OTHER_LOG", Generation: 1, Seq: 1 << 30},
+	} {
+		for _, level := range []statelog.ReadLevel{
+			statelog.ReadLinearizable, statelog.ReadSession,
+			statelog.ReadStale, statelog.ReadConsistentPrefix,
+		} {
+			w := &stubWaiter{at: healthy().Position}
+			r := newReader(t, &stubStore{}, healthy, w, index)
+			q := pointQuery(level)
+			q.MinPosition = floor
+			_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+			var refusal *statelog.Refused
+			if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseWrongStream {
+				t.Errorf("a %s read floored at %s answered %v, want a "+
+					"wrong_stream refusal", level, floor, err)
+				continue
+			}
+			if got := w.waited.Load(); got != 0 {
+				t.Errorf("a %s read floored at %s waited %d time(s) before "+
+					"refusing — a sequence from another log is a caller bug "+
+					"rather than a position this node can reach", level, floor, got)
+			}
+		}
+	}
+}
+
+// THE STALENESS BOUND IS ENFORCED AGAINST THE ANSWER'S OWN MOMENT, NOT A
+// SNAPSHOT FROM BEFORE THE WAIT.
+//
+// A read may now wait for the caller's own floor for up to the read budget,
+// and what ends that wait is this node reaching a position — which says
+// nothing about how far the log ran on meanwhile. Checking the bound only
+// before the wait served answers past it and printed the pre-wait lag beside
+// the post-wait rows, so the number and the rows described different moments.
+func TestAStalenessBoundIsRecheckedAfterTheFloorWait(t *testing.T) {
+	t.Parallel()
+	// The node is close behind when the read arrives and far behind by
+	// the time its floor is reached.
+	var reads atomic.Int64
+	drifting := func() statelog.Health {
+		hp := healthy()
+		lag := uint64(1)
+		if reads.Add(1) > 1 {
+			lag = 5_000
+		}
+		hp.Lag = &lag
+		return hp
+	}
+	w := &stubWaiter{at: healthy().Position}
+	r := newReader(t, &stubStore{}, drifting, w, nil)
+
+	q := pointQuery(statelog.ReadStale)
+	q.MinPosition = statelog.Position{Stream: probeStream, Generation: 1, Seq: 42}
+	q.MaxLagSeq = 250
+	_, err := r.Read(t.Context(), q, func(*sql.Tx) error { return nil })
+	var refusal *statelog.Refused
+	if !errors.As(err, &refusal) || refusal.Code != statelog.RefuseTooStale {
+		t.Fatalf("a floored read that fell 5000 records behind while it waited "+
+			"answered %v, want too_stale — the bound was checked against a "+
+			"snapshot from before the wait", err)
+	}
+	if got := w.waited.Load(); got != 1 {
+		t.Errorf("the read waited %d time(s), want 1 — the refusal must come "+
+			"from re-reading health after the wait, not from skipping it", got)
+	}
+
+	// AND THE ANSWER REPORTS THE POST-WAIT LAG when it is served, so the
+	// figure beside the rows describes the moment they were read.
+	reads.Store(0)
+	within := pointQuery(statelog.ReadStale)
+	within.MinPosition = q.MinPosition
+	answer, err := r.Read(t.Context(), within, func(*sql.Tx) error { return nil })
+	if err != nil {
+		t.Fatalf("an unbounded floored read: %v", err)
+	}
+	if answer.Lag == nil || *answer.Lag != 5_000 {
+		t.Errorf("the answer reports lag %v, want the post-wait 5000 — a lag "+
+			"from before the wait describes a different moment from the rows "+
+			"it is printed beside", answer.Lag)
+	}
+}
