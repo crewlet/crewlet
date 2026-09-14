@@ -33,19 +33,29 @@ So every call returns `(value, error)`, never a bare bool — and **each contrac
 
 **A listing obeys the same rule**, and it is the place it is easiest to lose.
 Reading a whole bucket — the fleet's node statuses, the open channels, every
-node's log position — is one pass that carries each key together with its
-value, and a pass that ends early is `unknown`, never a shorter list. The
-alternative is not hypothetical: a listing that reports what it managed to
-read, with no error, hands every caller "there are no more records" when the
-truth is "the store stopped answering". For the trim's published floor that
-reads as a fleet needing nothing, which deletes records a node is still
-replaying.
+node's log position — carries each key together with its value, ends on one
+explicit marker and only on it, and a read that stops before that marker is
+`unknown`, never a shorter list. The alternative is not hypothetical: a listing
+that reports what it managed to read, with no error, hands every caller "there
+are no more records" when the truth is "the store stopped answering". For the
+trim's published floor that reads as a fleet needing nothing, which deletes
+records a node is still replaying.
 
 It is also why a listing is not a name list followed by a fetch per name. That
 shape costs a round trip per key on top of an ephemeral consumer created and
 destroyed per call — paid continuously, since several of a node's fifteen-second
 duty loops read a bucket on every tick and the state-log write fence reads the
 position register on every first write to a subject.
+
+**Where the broker can answer it, a whole bucket is ONE REQUEST and no
+consumer at all** — a batched direct get, which asks for the latest record on
+every key in a single request/reply. The embedded broker always can. An
+external cluster older than NATS 2.11 cannot, and neither can a bucket adopted
+from an older client without direct access enabled, or one holding more than
+1024 keys; each of those is something the broker says explicitly, and the read
+falls back to an ordered pass over a temporary consumer rather than reporting
+an outage that is not happening. Nothing above that layer can tell which one
+answered — the difference is what it cost, not what it said.
 
 ---
 

@@ -78,12 +78,15 @@
 // older ones were never gated — that is a faithful degradation and a
 // deliberate difference, not an oversight.
 //
-// # Every listing is ONE pass, and never the client's ListKeys
+// # Every listing is ONE REQUEST, and never the client's ListKeys
 //
-// Reading a whole bucket goes through [eachEntry], which walks the latest
-// revision of every live key and hands over the KEY AND THE VALUE TOGETHER.
-// Nothing here lists names and then fetches them one at a time, and the
-// reasons are worth stating because the obvious shape is the other one.
+// Reading a whole bucket goes through [eachEntry], which hands over the KEY
+// AND THE VALUE TOGETHER and, where the broker can answer it, asks for the
+// whole bucket in a single `$JS.API.DIRECT.GET` carrying `multi_last` — no
+// consumer, no metadata proposal, no second round trip. walk.go is the
+// authority on that, including why the ordered walk beside it is not a
+// fallback waiting to be deleted; what follows is why NEITHER of them is the
+// obvious shape.
 //
 // A key listing is not a cheap read. The client implements ListKeys as a
 // watcher, so each call CREATES AND DELETES AN ORDERED EPHEMERAL CONSUMER —
@@ -102,12 +105,13 @@
 // not be reached" are three different facts, and a short list with no error
 // collapses the third into the second at every caller at once. For the trim's
 // published floor it is not a degraded read but a delete of records a node
-// still needs. eachEntry ends a walk on the nil entry and ONLY on the nil
-// entry; a closed channel is [coord.ErrUnavailable], named as such.
+// still needs. Both walks end on one explicit marker and ONLY on it — the nil
+// entry, or the broker's end-of-batch — and anything else is
+// [coord.ErrUnavailable], named as such.
 //
-// It also owns the watcher, so there is no early-return path that leaks one —
-// the abandoned-listing case the client's blocking 256-entry handoff could
-// park a goroutine and a server-side consumer on for ever.
+// The ordered walk also owns its watcher, so there is no early-return path
+// that leaks one — the abandoned-listing case the client's blocking 256-entry
+// handoff could park a goroutine and a server-side consumer on for ever.
 package kv
 
 import (
@@ -307,6 +311,15 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 
 // TTL reports the configured lease TTL — the one every caller must claim with.
 func (s *Store) TTL() time.Duration { return s.ttl }
+
+// each walks a whole bucket — see [eachEntry], which is the one implementation
+// and which both backends reach through a method of their own only so that a
+// call site reads as a walk rather than as connection plumbing.
+func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	return eachEntry(ctx, s.js.Conn(), kv, visit)
+}
 
 // --- the lease surface ----------------------------------------------------
 
@@ -932,7 +945,7 @@ func (s *Store) readOne(ctx context.Context, resource string) (*entry, error) {
 // cost grow with the company.
 func (s *Store) scanLeases(ctx context.Context) ([]entry, error) {
 	byResource := map[string]entry{}
-	err := eachEntry(ctx, s.leases, func(kve jetstream.KeyValueEntry) error {
+	err := s.each(ctx, s.leases, func(kve jetstream.KeyValueEntry) error {
 		e, ok := decodeEntry(kve)
 		if !ok {
 			// A listing that invented a resource name would put a seat
@@ -966,7 +979,7 @@ func (s *Store) scanLeases(ctx context.Context) ([]entry, error) {
 // scanResources reads every persistent resource record.
 func (s *Store) scanResources(ctx context.Context) ([]resourceValue, error) {
 	byResource := map[string]resourceValue{}
-	err := eachEntry(ctx, s.epochs, func(kve jetstream.KeyValueEntry) error {
+	err := s.each(ctx, s.epochs, func(kve jetstream.KeyValueEntry) error {
 		resource, ok := decodeKey(kve.Key())
 		if !ok {
 			log.WarnContext(ctx, "coord_kv_undecodable_key", "bucket", s.epochs.Bucket(), "key", kve.Key())
@@ -990,63 +1003,6 @@ func (s *Store) scanResources(ctx context.Context) ([]resourceValue, error) {
 	}
 	slices.SortFunc(out, func(a, b resourceValue) int { return strings.Compare(a.Resource, b.Resource) })
 	return out, nil
-}
-
-// eachEntry walks the latest revision of every LIVE key in a bucket, handing
-// each entry — its key AND its value together — to visit.
-//
-// # ONE PASS, never a key listing plus a Get per key
-//
-// The obvious shape is [jetstream.KeyValue.ListKeys] and then Get for each
-// name it yields, and it is wrong twice over.
-//
-// It costs N+1 round trips where this costs one, and the listing half is not
-// free either: the client implements ListKeys as a watcher, so every call
-// CREATES AND DELETES AN ORDERED EPHEMERAL CONSUMER — two JetStream metadata
-// proposals on a clustered bucket, for a question a single pass already
-// answers while carrying the values with it.
-//
-// And it CANNOT REPORT A SHORT ANSWER. The client's key lister ends its
-// goroutine on a nil entry (nats.go jetstream/kv.go), and a receive from the
-// channel its own subscription closes on failure yields exactly that nil — so
-// a listing cut off half way returns a TRUNCATED SET WITH A NIL ERROR. This
-// package's whole rule is that "held", "definitively not held" and "the store
-// could not be reached" are three different facts; a short list with no error
-// collapses the third into the second at every caller at once. For the trim's
-// published floor that is not a degraded read, it is a delete of records a
-// node still needs.
-//
-// So here the nil entry — and ONLY the nil entry — ends the walk, and a
-// CLOSED CHANNEL is a failure named as one. A visit that returns an error
-// stops the walk and that error is returned unwrapped, so a caller keeps its
-// own vocabulary rather than having this function guess at it.
-//
-// Deletes are filtered by the broker ([jetstream.IgnoreDeletes]), so a
-// tombstoned key is never visited and no caller has to recognise one.
-func eachEntry(ctx context.Context, kv jetstream.KeyValue, visit func(jetstream.KeyValueEntry) error) error {
-	w, err := kv.WatchAll(ctx, jetstream.IgnoreDeletes())
-	if err != nil {
-		return unavailable("list "+kv.Bucket(), err)
-	}
-	defer func() { _ = w.Stop() }()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return unavailable("list "+kv.Bucket(), ctx.Err())
-		case kve, ok := <-w.Updates():
-			if !ok {
-				return unavailable("list "+kv.Bucket(), errors.New("listing ended early"))
-			}
-			// nil marks the end of the initial values.
-			if kve == nil {
-				return nil
-			}
-			if err := visit(kve); err != nil {
-				return err
-			}
-		}
-	}
 }
 
 func decodeEntry(kve jetstream.KeyValueEntry) (entry, bool) {

@@ -489,7 +489,7 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	fn func(key string, value []byte) error) error {
 
-	return eachEntry(ctx, f.positions, func(kve jetstream.KeyValueEntry) error {
+	return f.each(ctx, f.positions, func(kve jetstream.KeyValueEntry) error {
 		segments, ok := coord.DocumentSegments(kve.Key())
 		if !ok || len(segments) < 2 || segments[0] != class {
 			return nil

@@ -295,6 +295,19 @@ in the fleet store holding the shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
+**NATS 2.11 or newer is worth having, and nothing breaks below it.** A node
+reads a whole coordination bucket constantly — several fifteen-second duty
+loops on every tick, and the state-log write fence on every first write to a
+subject — and from 2.11 it does that with a single *batched direct get*: one
+request, one reply, no consumer. Below that the broker says so, and the read
+falls back to a temporary consumer per call, which on a replicated bucket is
+two metadata-raft proposals each time. The company is correct either way; the
+older cluster simply does more work per read. The same fallback covers a
+bucket the cluster will not serve that way — one adopted from an older client
+without `allow_direct`, or one holding more than 1024 keys — and an account
+whose permissions do not include `$JS.API.DIRECT.GET.>`, which is worth
+granting alongside the rest of `$JS.API` for the same reason.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it

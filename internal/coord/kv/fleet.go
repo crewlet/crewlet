@@ -450,6 +450,15 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 	return store, nil
 }
 
+// each walks a whole bucket — see [eachEntry], which is the one implementation
+// and which both backends reach through a method of their own only so that a
+// call site reads as a walk rather than as connection plumbing.
+func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	return eachEntry(ctx, f.js.Conn(), kv, visit)
+}
+
 // ---- the rate valve ---------------------------------------------------- //
 
 // rateRecord is one window's count.
@@ -669,7 +678,7 @@ func (f *FleetStore) Cool(ctx context.Context, key string, until time.Time) erro
 // Since returns every cooldown that has not yet lapsed.
 func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
-	err := eachEntry(ctx, f.cooldowns, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.cooldowns, func(kve jetstream.KeyValueEntry) error {
 		until, err := time.Parse(time.RFC3339Nano, string(kve.Value()))
 		if err != nil || !until.After(now) {
 			return nil
@@ -852,7 +861,7 @@ func (f *FleetStore) Used(ctx context.Context, scope string) (int, error) {
 // Usage returns every counter, org first then seats by scope.
 func (f *FleetStore) Usage(ctx context.Context) ([]coord.Usage, error) {
 	var out []coord.Usage
-	err := eachEntry(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
 		var record budgetRecord
 		if err := json.Unmarshal(kve.Value(), &record); err != nil {
 			return unavailable("decode the budget", err)
@@ -895,7 +904,7 @@ func (f *FleetStore) Reset(ctx context.Context, scope string) (int, error) {
 	// the records its own listing is still delivering. The set is one key
 	// per counted scope, so holding it costs nothing worth the hazard.
 	var keys []string
-	if err := eachEntry(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
+	if err := f.each(ctx, f.budgets, func(kve jetstream.KeyValueEntry) error {
 		keys = append(keys, kve.Key())
 		return nil
 	}); err != nil {
@@ -1139,7 +1148,7 @@ func (f *FleetStore) RecordApply(ctx context.Context, status coord.NodeApply) er
 // Fleet returns every node's last status, freshest first.
 func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 	var out []coord.NodeApply
-	err := eachEntry(ctx, f.status, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.status, func(kve jetstream.KeyValueEntry) error {
 		var record applyRecord
 		if err := json.Unmarshal(kve.Value(), &record); err != nil {
 			return nil
@@ -1212,7 +1221,7 @@ func (f *FleetStore) SecretValues(ctx context.Context) ([]coord.SecretRecord, er
 	// RAISED rather than skipped, for the same reason Secret raises and more
 	// sharply: this listing IS the engine's boot snapshot, so a value
 	// silently dropped here becomes an empty ${VAR} everywhere at once.
-	err := eachEntry(ctx, f.secrets, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.secrets, func(kve jetstream.KeyValueEntry) error {
 		if _, ok := decodeKey(kve.Key()); !ok {
 			return nil
 		}
@@ -1438,7 +1447,7 @@ func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply f
 // OpenChannels returns every channel still open, by id.
 func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) {
 	var out []coord.Channel
-	err := eachEntry(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
 		id, ok := decodeKey(kve.Key())
 		if !ok {
 			return nil
@@ -1473,7 +1482,7 @@ func (f *FleetStore) PurgeChannels(ctx context.Context, cutoff time.Time) (int64
 		revision uint64
 	}
 	var candidates []doomed
-	err := eachEntry(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
 		id, ok := decodeKey(kve.Key())
 		if !ok {
 			return nil
@@ -1565,7 +1574,7 @@ func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
 	// failure this bucket exists to end. eachEntry raises on a short answer
 	// rather than returning one, which is what makes that true.
 	var out []coord.Record
-	err := eachEntry(ctx, f.runs, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.runs, func(kve jetstream.KeyValueEntry) error {
 		turnID, ok := decodeKey(kve.Key())
 		if !ok {
 			return nil
@@ -1637,7 +1646,7 @@ func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, versio
 // IntegrationStatuses returns every recorded status, keyed by surface.
 func (f *FleetStore) IntegrationStatuses(ctx context.Context) (map[string][]byte, error) {
 	out := map[string][]byte{}
-	err := eachEntry(ctx, f.integrations, func(kve jetstream.KeyValueEntry) error {
+	err := f.each(ctx, f.integrations, func(kve jetstream.KeyValueEntry) error {
 		kind, ok := decodeKey(kve.Key())
 		if !ok {
 			// A key this backend did not write. Skipped rather than
