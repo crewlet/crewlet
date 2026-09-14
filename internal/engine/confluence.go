@@ -241,8 +241,7 @@ func seatConfluenceClient(env *config.Resolver, base string) confluence.SeatClie
 // delivery's goroutine, so a slow wiki never holds the inbound consumer.
 func (e *Engine) noteConfluencePage(ctx context.Context, change confluence.PageChange) error {
 	return e.skillSync.PageChanged(ctx, skillsync.Change{
-		Backend: confluence.Backend, Container: change.Space,
-		PageID: change.PageID, Removed: change.Removed,
+		Backend: confluence.Backend, Container: change.Space, PageID: change.PageID,
 	})
 }
 

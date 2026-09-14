@@ -165,6 +165,15 @@ type PageRead struct {
 }
 
 // Change is one page that moved in a knowledge backend.
+//
+// IT NAMES A PAGE AND SAYS NOTHING ABOUT WHAT BECAME OF IT, a deletion
+// included. Whoever reports a change reports what happened at some moment;
+// the backend says what is true now, so the loop reads the page back whatever
+// the change was, and a page the backend no longer serves is dropped on that
+// answer. A removal acted on without the read would drop a skill the backend
+// serves again after a restore (which no subscribed event announces), or one a
+// late nudge describes, and nothing but the next periodic walk would bring it
+// back.
 type Change struct {
 	// Backend is the backend the page lives in.
 	Backend string
@@ -175,9 +184,6 @@ type Change struct {
 
 	// PageID is the backend's id for the page.
 	PageID string
-
-	// Removed is true for a page that was deleted or trashed.
-	Removed bool
 }
 
 // Stream is the event-stream surface a fleet nudge needs: publishing one, and
@@ -452,8 +458,7 @@ func (s *Syncer) PageChanged(ctx context.Context, change Change) error {
 		return nil
 	}
 	ev := events.New(types.ToolSkillPageChanged{
-		Backend: change.Backend, Container: change.Container,
-		PageID: change.PageID, Removed: change.Removed,
+		Backend: change.Backend, Container: change.Container, PageID: change.PageID,
 	}, tracing.TraceOf(ctx))
 	ev.Source = s.node
 	if err := s.stream.Publish(ctx, nudgeTopic, ev); err != nil {
@@ -478,8 +483,7 @@ func (s *Syncer) hear(ctx context.Context, _ string, ev *events.Event) {
 		return
 	}
 	change := Change{
-		Backend: payload.Backend, Container: payload.Container,
-		PageID: payload.PageID, Removed: payload.Removed,
+		Backend: payload.Backend, Container: payload.Container, PageID: payload.PageID,
 	}
 	if s.concerns(change) {
 		s.note(change)
@@ -650,28 +654,28 @@ func (s *Syncer) walked(ctx context.Context, generation uint64, src Source,
 }
 
 // applyChange reads one changed page into the registry.
+//
+// READ WHATEVER THE CHANGE WAS, a deletion included (see [Change]): the page's
+// fate is the backend's answer, never the report's.
 func (s *Syncer) applyChange(ctx context.Context, generation uint64, src Source, change Change) {
-	if !change.Removed && src.Page == nil {
+	if src.Page == nil {
 		s.walkInstead(generation)
 		return
 	}
-	read := PageRead{Exists: false}
-	if !change.Removed {
-		var err error
-		if read, err = src.Page(ctx, change.PageID); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			// A WALK, not a retry of this page. A read that failed is
-			// most often a wiki that is down, and a walk is what the
-			// failure path already knows how to back off; it also covers
-			// every other change that arrives before the wiki answers.
-			log.WarnContext(ctx, "tool_skill_page_read_failed", "page", change.PageID,
-				"error", err.Error(),
-				"detail", "the whole container is walked instead")
-			s.walkInstead(generation)
+	read, err := src.Page(ctx, change.PageID)
+	if err != nil {
+		if ctx.Err() != nil {
 			return
 		}
+		// A WALK, not a retry of this page. A read that failed is most
+		// often a wiki that is down, and a walk is what the failure path
+		// already knows how to back off; it also covers every other change
+		// that arrives before the wiki answers.
+		log.WarnContext(ctx, "tool_skill_page_read_failed", "page", change.PageID,
+			"error", err.Error(),
+			"detail", "the whole container is walked instead")
+		s.walkInstead(generation)
+		return
 	}
 
 	s.mu.Lock()
@@ -707,7 +711,7 @@ func (s *Syncer) applyChange(ctx context.Context, generation uint64, src Source,
 
 	log.InfoContext(ctx, "tool_skill_page_synced", "backend", src.Backend,
 		"container", src.Container, "page", change.PageID,
-		"removed", change.Removed, "skill_before", result.Before,
+		"exists", read.Exists, "skill_before", result.Before,
 		"skill_after", result.After, "shadowed", result.Shadowed)
 	s.changed()
 }

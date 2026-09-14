@@ -588,8 +588,8 @@ func TestTheSkillsSpaceIsIndexedAndNotRouted(t *testing.T) {
 // the space it moved to, and only the index knows it used to hold a skill.
 // Page changes only, because a comment or a blog post never changes what a
 // page says, and reading the page again for one would spend a request per
-// comment across the whole wiki. A removal says so, because a page in the
-// trash cannot be read back to find out.
+// comment across the whole wiki. A trash or a delete is a page change like any
+// other: the index reads the page back and the wiki's answer drops it.
 func TestTheIndexerHearsPageChangesOnly(t *testing.T) {
 	t.Parallel()
 	var indexed []confluence.PageChange
@@ -606,12 +606,7 @@ func TestTheIndexerHearsPageChangesOnly(t *testing.T) {
 	} {
 		route(t, p, pageEvent(event, "ENG", "<p>x</p>", acctWriter))
 	}
-	want := []confluence.PageChange{
-		{PageID: "1001", Space: "ENG"},
-		{PageID: "1001", Space: "ENG"},
-		{PageID: "1001", Space: "ENG", Removed: true},
-		{PageID: "1001", Space: "ENG", Removed: true},
-	}
+	want := slices.Repeat([]confluence.PageChange{{PageID: "1001", Space: "ENG"}}, 4)
 	if !slices.Equal(indexed, want) {
 		t.Fatalf("the indexer saw %+v, want %+v", indexed, want)
 	}

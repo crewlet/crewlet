@@ -24,9 +24,10 @@ func init() {
 //
 // # Deliberately thin, and a nudge rather than a record
 //
-// It names the page and never carries its content: each node reads the page
-// from the backend, which is the one authority on what it now says, so a
-// nudge that arrives late cannot install a stale body. Losing one costs
+// It names the page and never carries its content, nor whether the page is
+// gone: each node reads the page from the backend, which is the one authority
+// on what it now says and on whether it is there, so a nudge that arrives late
+// can install neither a stale body nor a stale removal. Losing one costs
 // staleness until the periodic walk every node runs, never a divergence that
 // lasts.
 type ToolSkillPageChanged struct {
@@ -41,24 +42,17 @@ type ToolSkillPageChanged struct {
 
 	// PageID is the backend's own id for the page.
 	PageID string `json:"page_id"`
-
-	// Removed is true when the page was deleted or trashed, so a node
-	// drops it without asking the backend for a page that is gone.
-	Removed bool `json:"removed"`
 }
 
 // EventType is the "tool_skill_page_changed" wire type.
 func (ToolSkillPageChanged) EventType() string { return "tool_skill_page_changed" }
 
-// Summary names the page and what happened to it; the envelope's source says
-// which node heard the delivery.
+// Summary names the page; the envelope's source says which node heard the
+// delivery.
 func (e ToolSkillPageChanged) Summary() string {
 	page := e.PageID
 	if page == "" {
 		page = "(unnamed)"
-	}
-	if e.Removed {
-		return "Tool skill page " + page + " removed"
 	}
 	return "Tool skill page " + page + " changed"
 }
