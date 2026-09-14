@@ -480,6 +480,31 @@ describe("problems", () => {
     );
   });
 
+  // A problem that reaches the top is usually about something the builder does
+  // not author, so the link it carries is the only thing on screen saying
+  // where it is fixed. A human seat draws no schedules panel at all.
+  test("a problem the form cannot place keeps the link that says where it is fixed", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1] = {
+      name: "Dev",
+      kind: "human",
+      contact: { github_login: "dev" },
+      schedules: [{ name: "digest", cron: "0 8 * * *", task: "Digest" }],
+    };
+    const state = checkWithProblems(keyedState(doc), [
+      problemAt(
+        ["units", 0, "roles", 1, "schedules"],
+        "units[0].roles[1]: a human seat must not carry schedules",
+      ),
+    ]);
+    edit(state, "seat:dev");
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("must not carry schedules");
+    expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
+      "#/schedules",
+    );
+  });
+
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {
     const state = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(["units", 0, "roles", 1, "goal"], "units[0].roles[1].goal: too vague to act on"),

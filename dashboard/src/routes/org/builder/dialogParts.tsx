@@ -15,7 +15,7 @@ import { Banner } from "~/ui/primitives.tsx";
 import { Problems } from "~/ui/Problems.tsx";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
-import type { PlacedProblem } from "./model/problems.ts";
+import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
 
@@ -294,13 +294,39 @@ export function placeOnFields(
   };
 }
 
-/** The problems a form could not place on a field, at its top. */
+/** Where a problem the builder cannot fix is fixed instead. */
+const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
+  integrations: "Open Integrations",
+  schedules: "Open Schedules",
+};
+
+/**
+ * The problems a form could not place on a field, at its top.
+ *
+ * WITH THE LINK EACH ONE CARRIES. A problem that names a field the form draws
+ * sits beside that field, so what reaches the top is usually about something
+ * the builder does not author at all: a schedule on a seat that may not have
+ * one, a company integration block. The problem's own link is then the only
+ * thing on screen that says where it is fixed.
+ */
 export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] }) {
   if (problems.length === 0) return null;
   const critical = problems.some((p) => p.severity === "problem");
+  const links = [...new Set(problems.map((p) => p.link))].filter(
+    (link): link is ProblemLink => link !== null,
+  );
   return (
     <Banner tone={critical ? "critical" : "caution"}>
       <Problems detail={problems.map((p) => p.message).join("\n")} />
+      {links.length > 0 && (
+        <p className="row wrap gap-3">
+          {links.map((link) => (
+            <ScreenLink key={link} to={[link]}>
+              {PROBLEM_LINKS[link]}
+            </ScreenLink>
+          ))}
+        </p>
+      )}
     </Banner>
   );
 }
