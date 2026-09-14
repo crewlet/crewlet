@@ -44,7 +44,28 @@ type Session struct {
 	// against a changed surface would silently restate history.
 	Calls string `json:"tool_calls,omitempty"`
 
-	Reply    string `json:"reply,omitempty"`
+	// Reply is what the turn said, and it is set ONLY when the turn
+	// actually put something where the waiting party can see it.
+	//
+	// The distinction is the field beside it. Both carry the same value —
+	// the turn's final artifact — and which one holds it is the whole
+	// record of whether anybody received it.
+	Reply string `json:"reply,omitempty"`
+
+	// Unsent is the turn's artifact when NOTHING reached the waiting party.
+	//
+	// Kept rather than dropped, because the conclusion is real context for
+	// the next turn ("last time I decided to file LEAD-1") and losing it
+	// would trade one wrong answer for a blank. What it must never do is
+	// read as a reply: this was filed as one, so a seat re-reading its own
+	// history saw that it had already announced work it had in fact
+	// announced to nobody, and the next turn on that thread answered a
+	// follow-up against it. A turn can end with real work done and no way
+	// to say so — the round budget ran out, the loop broke, the reviewer
+	// closed it — and the history has to show that, or the failure repairs
+	// itself in the record and nowhere else.
+	Unsent string `json:"unsent,omitempty"`
+
 	Decision string `json:"decision,omitempty"`
 
 	// CompletedWork is the reviewer's prose on what already landed —
@@ -73,6 +94,10 @@ type SessionInput struct {
 	Reply         string
 	Decision      string
 	CompletedWork string
+
+	// Delivered says which of [Session.Reply] and [Session.Unsent] the
+	// Reply value belongs in. The caller knows; this package cannot.
+	Delivered bool
 }
 
 // BuildSession assembles one entry.
@@ -84,16 +109,24 @@ type SessionInput struct {
 // read-side concern (see HistoryOptions), and applying one at write time
 // answered a display question by destroying data.
 func BuildSession(in SessionInput) Session {
-	return Session{
+	s := Session{
 		TurnID:        in.TurnID,
 		At:            in.At,
 		Trigger:       in.Trigger,
 		Intent:        in.Intent,
 		Calls:         FormatCalls(in.Calls, Format(in.Skip, in.Reads)),
-		Reply:         in.Reply,
 		Decision:      in.Decision,
 		CompletedWork: in.CompletedWork,
 	}
+	// ONE VALUE, TWO FIELDS, and the branch is the record. Writing it to
+	// both would make the undelivered case indistinguishable from the
+	// delivered one for any reader that checks Reply first.
+	if in.Delivered {
+		s.Reply = in.Reply
+	} else {
+		s.Unsent = in.Reply
+	}
+	return s
 }
 
 // InjectedMaxChars bounds the block a TURN is given, by dropping whole entries.
@@ -195,6 +228,14 @@ func renderSession(e Session) string {
 	}
 	if e.Reply != "" {
 		lines = append(lines, "You replied: "+e.Reply)
+	}
+	// SPELLED OUT, not implied by the absence of a reply. The reader is a
+	// model deciding what this thread still owes, and "no reply line" is
+	// something it has to notice; "nobody received this" is something it
+	// has to answer. The two readings produce opposite next turns.
+	if e.Unsent != "" {
+		lines = append(lines, "You did NOT reply — this never reached anyone. "+
+			"What the turn concluded: "+e.Unsent)
 	}
 	if e.CompletedWork != "" {
 		lines = append(lines, "Reviewer, on what landed: "+e.CompletedWork)

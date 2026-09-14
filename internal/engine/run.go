@@ -1229,6 +1229,20 @@ func (e *Engine) pause(ctx context.Context, handle, reason string) error {
 	return e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
 }
 
+// turnInputFor renders a dispatched [Request] as the loop's own [turn.Input].
+//
+// A NAMED MAPPING rather than a literal at the call site, because every field
+// here is one the loop cannot derive for itself and degrades SILENTLY without:
+// a missing Depth checks the delegation cap against a constant zero, and a
+// missing Reply skips every delivery gate the turn has. Both were omitted from
+// that literal at different times, and neither omission had a symptom — the
+// cap bounded nothing, and a turn closed `done` having answered nobody on the
+// surface it was asked from. A literal drops a field quietly; a function with
+// a test does not.
+func turnInputFor(req Request, reply turn.Reply) turn.Input {
+	return turn.Input{TurnID: req.WorkKey, Depth: req.Depth, Reply: reply}
+}
+
 // runTurn is the default turn: build the seat's runner and drive the loop.
 func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) {
 	// THE TURN'S OWN SPAN, opened before anything else so every phase, LLM
@@ -1328,13 +1342,8 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		log.InfoContext(ctx, "onboarding_pass_ran", "handle", req.Handle)
 	}
 
-	// THE DEPTH REACHES THE GUARD. turn.Run checks it against
-	// delegation_depth_limit before anything runs, and this argument was
-	// omitted — so the check ran against a constant zero and the limit
-	// bounded nothing.
-	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds), turn.Input{
-		TurnID: req.WorkKey, Depth: req.Depth,
-	})
+	res, err := turn.Run(ctx, r, company.TurnSettings(req.TimeoutSeconds),
+		turnInputFor(req, reply))
 	// The moment the turn returns, and before its frame unwinds: the runner
 	// holds the suspended conversation only until then, and a row without
 	// one is a detached run nothing can ever resume.

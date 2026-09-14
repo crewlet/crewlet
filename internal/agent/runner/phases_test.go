@@ -156,7 +156,7 @@ func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedPro
 // no_action is a legitimate submission rather than one the decoder refuses.
 func unaddressedFixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedProvider) {
 	t.Helper()
-	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}}, turn.ReplyNone)
+	r, _ := build(t, []phase.Entry{{Key: "default", Provider: prov}}, turn.NoReply())
 	return r, prov
 }
 
@@ -183,7 +183,7 @@ type buildOpts struct {
 
 func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Runner, *tools.Registry) {
 	t.Helper()
-	waiting := turn.ReplyTool
+	waiting := turn.ToolReply("")
 	if len(reply) > 0 {
 		waiting = reply[0]
 	}
@@ -193,8 +193,8 @@ func build(t *testing.T, entries []phase.Entry, reply ...turn.Reply) (*runner.Ru
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
 	t.Helper()
 	waiting := opts.reply
-	if waiting == "" {
-		waiting = turn.ReplyTool
+	if waiting.Kind == turn.ReplyUnset {
+		waiting = turn.ToolReply("")
 	}
 	reg := tools.NewRegistry()
 	for _, tl := range []stubTool{{name: "lookup_colleague"}, {name: "reflect"}} {
@@ -289,8 +289,11 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 	// The surface handed back is what the delivery check judges against, so
 	// it must describe the whole catalogue and not just what was offered.
-	if !slices.Contains(surface.Deliverables, "slack_post") {
-		t.Errorf("surface deliverables = %v", surface.Deliverables)
+	// And WHERE each one lands, which is what the gate compares against the
+	// surface the ask arrived on.
+	if surface.Deliveries["slack_post"] != "slack" {
+		t.Errorf("surface deliveries = %v, want slack_post on its own server",
+			surface.Deliveries)
 	}
 	if !slices.Equal(surface.KnownReads, []string{"slack_history"}) {
 		t.Errorf("surface known reads = %v", surface.KnownReads)

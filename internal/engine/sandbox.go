@@ -349,7 +349,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	company := e.Company()
 	tel := e.describeResume(ctx, company, in)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), turn.Reply(in.Run.Reply))
+		in.Run.DelegationChain, resumeTask(in), turn.ParseReply(in.Run.Reply))
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
 			Task:      resumeTask(in),
@@ -412,7 +412,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// resumed turn never sees its trigger, so without this a turn
 		// somebody asked for would come back from a coding run free to
 		// end in silence.
-		Reply: turn.Reply(in.Run.Reply),
+		Reply: turn.ParseReply(in.Run.Reply),
 	})
 	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
 	if err != nil {

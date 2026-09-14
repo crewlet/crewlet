@@ -434,7 +434,7 @@ func TestAPhaseThatRanHereReportsTheNativeBackend(t *testing.T) {
 		text("done"),
 	}}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
-		buildOpts{reply: turn.ReplyNone, pub: pub})
+		buildOpts{reply: turn.NoReply(), pub: pub})
 
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)

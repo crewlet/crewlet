@@ -69,9 +69,11 @@ const ExecutorHeader = "\n## Your turn" +
 	"direct ping looks like the message was lost; a one-liner closes the " +
 	"loop." +
 	"\n" +
-	"\n**`deliveries` must name calls you actually made.** The engine " +
-	"checks them against its own log of this turn, and a claim it cannot " +
-	"find comes straight back to you." +
+	"\n**`deliveries` must name calls you actually made, on the surface " +
+	"this arrived from.** The engine checks them against its own log of " +
+	"this turn, and a claim it cannot find comes straight back to you. " +
+	"Work filed somewhere else is not a reply: creating the ticket is " +
+	"the work, and the requester still has to be told it exists." +
 	"\n" +
 	"\nMission, vision, policies, your role profile, your unit context, " +
 	"and your team roster are already in this prompt -- no lookup " +

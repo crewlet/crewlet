@@ -91,20 +91,43 @@ type Review struct {
 type Surface struct {
 	// Catalogue is every tool name the phase could reach.
 	Catalogue []string
-	// Deliverables is every tool whose successful call could reach
-	// somebody outside this turn — see [Deliverable].
-	Deliverables []string
+	// Deliveries is every tool whose successful call could reach
+	// somebody outside this turn, MAPPED TO THE SURFACE it reaches them on
+	// — see [Deliverable] and [DeliveredTo].
+	//
+	// A map rather than a set, because "did this turn reach anybody" and
+	// "did the person waiting get told" are different questions and only
+	// the second one matters to the asker. A flat set can only answer the
+	// first, and answering the first is how a seat closed out a founder's
+	// chat thread by writing a row in the tracker.
+	Deliveries map[string]string
 	// KnownReads is every tool POSITIVELY annotated read-only.
 	KnownReads []string
 	// KnownOpenWorld is every tool POSITIVELY annotated open-world — one
 	// whose own annotations say it reaches outside this process.
 	//
-	// Separate from Deliverables because the two answer different halves of
+	// Separate from Deliveries because the two answer different halves of
 	// the same question and neither contains the other: a deliverable is a
 	// tool whose call reaches somebody WAITING on this turn, and `a2a_ask`
 	// and `run_sandbox` leave the process without answering anybody — one
 	// wakes a colleague, the other starts a billed box.
 	KnownOpenWorld []string
+}
+
+// Reaches reports whether this surface holds any tool that delivers to the
+// named surface.
+//
+// What makes [DeliveredTo] safe to narrow. A seat holding no tool for the
+// surface an ask arrived on cannot answer there at all, so a gate that
+// insisted would spend the turn's whole budget on a delivery that was never
+// available — an operator's missing integration turned into a failing seat.
+func (s Surface) Reaches(surface string) bool {
+	for _, on := range s.Deliveries {
+		if on == surface {
+			return true
+		}
+	}
+	return false
 }
 
 // Phases is the model-facing work the loop drives. Everything that needs a
@@ -249,6 +272,30 @@ type Result struct {
 	// [Run]'s results are unnamed and a deferred write to `res` would be
 	// discarded at every `return res, …` in this file.
 	Acted bool
+
+	// Delivered reports whether the party waiting on this turn has its
+	// answer, as of the LAST round — see [Answered], which is not simply
+	// [DeliveredTo]: an A2A ask is answered by the engine and an
+	// unprompted turn has nobody to answer, so neither is a question the
+	// tool record can settle.
+	//
+	// THE LAST ROUND'S, not the turn's, and that is the whole point of it
+	// being a separate field from [Result.Acted]. Acted accumulates,
+	// because its question is "would a redelivery repeat something
+	// irreversible" and an earlier round's write is irreversible forever.
+	// This one must NOT, because its question is "does the waiting party
+	// know how the turn ENDED" — and a turn that answered a question in
+	// round one and then changed the answer in round two has left them
+	// holding the wrong one. Accumulating it would report that turn as
+	// having communicated its outcome.
+	//
+	// It exists for the conversation ledger, which files the turn's
+	// artifact as the seat's own "You replied" and had no way to ask. On a
+	// turn that delivered nothing it wrote a reply that never happened into
+	// the one record the seat's NEXT turn on that thread reads back — so
+	// the failure sealed itself, and a follow-up asking "did you do it?"
+	// was answered against a fiction.
+	Delivered bool
 }
 
 // Run drives the turn.
@@ -261,6 +308,19 @@ type Result struct {
 func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error) {
 	if ph == nil {
 		return Result{}, fmt.Errorf("turn: no phases")
+	}
+	// REFUSED RATHER THAN DEFAULTED, because there is no safe default: see
+	// [ReplyUnset]. Every delivery gate below turns on this field, so a
+	// caller that omits it does not get a weaker turn — it gets a turn with
+	// no delivery gate at all, and nothing about the result says so. That
+	// shipped: the ordinary dispatch path omitted it while this package's
+	// suite set it on every case.
+	if !in.Reply.Valid() {
+		return Result{}, fmt.Errorf(
+			"turn: Input.Reply is %q, which is not one of %q, %q or %q — the "+
+				"caller must derive it from the trigger (engine.ReplyFor) and "+
+				"pass it, because every delivery check reads it",
+			in.Reply, ReplyNone, ReplyTool, ReplyEngine)
 	}
 	if err := CheckDepth(in.Depth, set.DelegationDepthLimit); err != nil {
 		//nolint:nilerr // A breach is a turn OUTCOME, not a broken process — the
@@ -322,6 +382,9 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// Accumulated with ||, never assigned: a round that read nothing
 		// must not un-say what round one posted.
 		res.Acted = res.Acted || Acted(work.Calls, surface)
+		// ASSIGNED, never accumulated — the opposite of the line above, and
+		// see [Result.Delivered] for why the two questions differ.
+		res.Delivered = Answered(work.Calls, surface, in.Reply)
 		if err != nil {
 			return res, fmt.Errorf("turn: %s round %d: %w", entered, round, err)
 		}

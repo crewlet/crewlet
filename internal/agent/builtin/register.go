@@ -206,13 +206,18 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 			continue
 		}
 		opts := []tools.Option{}
-		if slices.Contains(WorkWrites(), c.tool.Name()) ||
-			slices.Contains(PageWrites(), c.tool.Name()) {
-			// A DELIVERY. A turn woken by an assignment answers by moving
-			// the item, commenting on it, or filing the follow-up — and
-			// without this the gate sees only builtins, concludes the
-			// turn reached nobody, and corrects it into another round.
-			opts = append(opts, tools.Delivers())
+		// A DELIVERY, AND WHERE IT LANDS. A turn woken by an assignment
+		// answers by moving the item, commenting on it, or filing the
+		// follow-up — and without this the gate sees only builtins,
+		// concludes the turn reached nobody, and corrects it into another
+		// round. The SURFACE is what stops the opposite error: these reach
+		// the engine's own tracker and knowledge base, and a founder
+		// waiting in a chat thread is on neither of them.
+		switch {
+		case slices.Contains(WorkWrites(), c.tool.Name()):
+			opts = append(opts, tools.DeliversTo(tools.SurfaceTracker))
+		case slices.Contains(PageWrites(), c.tool.Name()):
+			opts = append(opts, tools.DeliversTo(tools.SurfacePages))
 		}
 		if err := reg.RegisterWith(c.tool, tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {

@@ -187,14 +187,18 @@ func TestThePageWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
-	deliverables := reg.Deliverables()
+	deliveries := reg.Deliveries()
 	for _, name := range builtin.PageWrites() {
-		if !slices.Contains(deliverables, name) {
-			t.Errorf("%s does not count as a delivery", name)
+		// AND ON THE KNOWLEDGE BASE, not just "somewhere". A page write
+		// answers a turn asked to document something; it does not answer
+		// somebody waiting in a chat thread, and the surface is what keeps
+		// those two apart.
+		if deliveries[name] != tools.SurfacePages {
+			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], tools.SurfacePages)
 		}
 	}
 	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {
-		if slices.Contains(deliverables, name) {
+		if _, ok := deliveries[name]; ok {
 			t.Errorf("%s counts as a delivery, so a turn that only read would pass", name)
 		}
 	}

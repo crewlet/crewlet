@@ -73,23 +73,35 @@ type Entry struct {
 	// fence.
 	Annotations Annotations
 
-	// Delivers is a FIRST-PARTY declaration that calling this tool can put
-	// something in front of somebody outside this turn.
+	// Surface is a FIRST-PARTY declaration that calling this tool can put
+	// something in front of somebody outside this turn, and names WHERE.
 	//
-	// It exists because the delivery gate used to key on ORIGIN — a tool
-	// delivered if an MCP server served it — and that was a proxy for the
-	// real question, correct only while every shared surface was somebody
-	// else's product. A native tracker breaks the proxy: commenting on a
-	// work item reaches the person who asked, and it is a builtin.
+	// A NAME RATHER THAN A BOOLEAN, because "did this turn reach anybody"
+	// was never the operational question — "did the party who is waiting
+	// get told" is. A boolean answers the first, and a seat woken by a
+	// Mattermost DM could satisfy it by writing a work item: the founder
+	// was asked to wait, the tracker got a row, and the turn closed having
+	// answered nobody who was listening. The surface is what makes the two
+	// questions distinguishable.
+	//
+	// Empty means the tool delivers nowhere. For an MCP-served tool this
+	// field is unset and the surface is its SERVER — see [deliverySurface].
+	//
+	// A first-party declaration at all because the gate used to key on
+	// ORIGIN — a tool delivered if an MCP server served it — and that was a
+	// proxy for the real question, correct only while every shared surface
+	// was somebody else's product. A native tracker breaks the proxy:
+	// commenting on a work item reaches the person who asked, and it is a
+	// builtin.
 	//
 	// Deriving it from Annotations instead was considered and refused. The
 	// classifier reads a write as ReadOnly==No && OpenWorld!=No, which is
 	// exactly the shape of reflect_and_persist — so a derived rule would
 	// let a turn satisfy "did this reach anybody" by writing its own
 	// diary, and a2a_ask (OpenWorld:Yes) would count although the engine
-	// itself carries that answer back. A positive flag set at registration
+	// itself carries that answer back. A positive value set at registration
 	// is the only form that says what it means.
-	Delivers bool
+	Surface string
 }
 
 // Name is the tool's catalogue name.
@@ -165,12 +177,17 @@ func (r *Registry) Register(tool Callable, origin string) error {
 }
 
 // Option is a registration detail that is neither the tool, its origin nor
-// its annotations — today only [Delivers].
+// its annotations — today only [DeliversTo].
 type Option func(*Entry)
 
-// Delivers marks a first-party tool as one whose successful call reaches
-// somebody outside the engine. See [Entry.Delivers].
-func Delivers() Option { return func(e *Entry) { e.Delivers = true } }
+// DeliversTo marks a first-party tool as one whose successful call reaches
+// somebody outside the engine, on the named surface. See [Entry.Surface].
+//
+// The surface name has to be the SAME vocabulary the trigger's own source is
+// reported in, because the delivery gate compares the two: an engine builtin
+// says `tracker` or `pages`, and a vendor's tool takes its MCP server's name,
+// which is what an inbound notification reports itself as.
+func DeliversTo(surface string) Option { return func(e *Entry) { e.Surface = surface } }
 
 // RegisterWith adds a tool together with its annotations.
 func (r *Registry) RegisterWith(tool Callable, origin string, ann Annotations, opts ...Option) error {
@@ -271,8 +288,8 @@ func (r *Registry) Names() []string {
 // MCPNames returns the names of every MCP-served tool.
 //
 // The tool ROOM groups on this. The delivery gate does not — see
-// [Registry.Deliverables], which asks whether a tool reaches anybody rather
-// than who serves it.
+// [Registry.Deliveries], which asks whether a tool reaches anybody and where
+// rather than who serves it.
 func (r *Registry) MCPNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -285,39 +302,54 @@ func (r *Registry) MCPNames() []string {
 	return out
 }
 
-// Deliverables returns the names of every tool whose successful call can put
-// something in front of somebody outside this turn.
+// Deliveries maps every tool whose successful call can put something in front
+// of somebody outside this turn to the SURFACE it puts it on.
 //
 // TWO KINDS, one question. An MCP-served tool delivers unless its own
 // annotations POSITIVELY say it is a read — the fail-closed direction, because
-// treating unannotated as read would exempt most of a fresh server. A
-// first-party tool delivers only when it was registered with [Delivers],
-// because the engine ships its own tools and knows which of them reach
-// anybody: a native work-item comment does, a diary write does not.
+// treating unannotated as read would exempt most of a fresh server — and it
+// delivers to its own SERVER, which is the name an inbound notification from
+// that vendor reports itself under. A first-party tool delivers only when it
+// was registered with [DeliversTo], because the engine ships its own tools and
+// knows which of them reach anybody and where: a native work-item comment
+// reaches the tracker, a diary write reaches nobody.
 //
 // This replaced an origin test. The rule "a delivery only ever comes from an
 // MCP server" was true of a company whose every shared surface was a vendor's,
 // and false the moment the tracker moved in-process — a seat that answered its
 // assignment natively was judged to have reached nobody and looped to failure.
-func (r *Registry) Deliverables() []string {
+// Widening it to a flat set of NAMES then bought the opposite error: every
+// deliverable satisfied every obligation, so the tracker write that fixed the
+// first incident discharged a Mattermost DM in the second. A name and a
+// destination are what answer both.
+func (r *Registry) Deliveries() map[string]string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.order))
+	out := make(map[string]string, len(r.order))
 	for _, name := range r.order {
-		if delivers(r.byName[name]) {
-			out = append(out, name)
+		if s := deliverySurface(r.byName[name]); s != "" {
+			out[name] = s
 		}
 	}
 	return out
 }
 
-// delivers is the one predicate both the registry and a snapshot answer with,
-// so a tool cannot deliver through one view and not the other.
-func delivers(e Entry) bool {
-	if _, fromMCP := e.FromMCP(); fromMCP {
-		return !mcp.ReadOnlyProven(e.Annotations)
+// deliverySurface is the one predicate both the registry and a snapshot answer
+// with, so a tool cannot deliver through one view and not the other. It
+// returns "" for a tool that reaches nobody.
+func deliverySurface(e Entry) string {
+	if server, fromMCP := e.FromMCP(); fromMCP {
+		if mcp.ReadOnlyProven(e.Annotations) {
+			return ""
+		}
+		// THE SERVER IS THE SURFACE. Nothing else about an MCP tool says
+		// where its call lands, and the server name is already the
+		// vocabulary the rest of the company uses for that vendor — it
+		// keys `role.mcp_env`, it is what `list_mcp_server_tools` takes,
+		// and it is what an inbound notification reports as its source.
+		return server
 	}
-	return e.Delivers
+	return e.Surface
 }
 
 // KnownReads returns the names POSITIVELY annotated read-only.
@@ -471,13 +503,13 @@ func (s Snapshot) Names() []string {
 	return out
 }
 
-// Deliverables returns the snapshot's names that reach somebody outside the
-// turn — the same predicate [Registry.Deliverables] answers.
-func (s Snapshot) Deliverables() []string {
-	out := make([]string, 0, len(s.entries))
+// Deliveries maps the snapshot's names that reach somebody outside the turn to
+// the surface they reach — the same predicate [Registry.Deliveries] answers.
+func (s Snapshot) Deliveries() map[string]string {
+	out := make(map[string]string, len(s.entries))
 	for _, e := range s.entries {
-		if delivers(e) {
-			out = append(out, e.Name())
+		if surface := deliverySurface(e); surface != "" {
+			out[e.Name()] = surface
 		}
 	}
 	return out
@@ -566,3 +598,20 @@ func (s Snapshot) With(e Entry) (Snapshot, error) {
 	out.byName[e.Name()] = e
 	return out, nil
 }
+
+// The engine's OWN delivery surfaces, in the vocabulary [DeliversTo] and the
+// delivery gate share with an inbound notification's reported source.
+//
+// A vendor's surface is its MCP server's name and needs no constant — the
+// operator chose it and the notification reports it. These two are the
+// surfaces the engine ships itself, so it is the engine that has to name them,
+// and they are here rather than beside the builtins because the gate in
+// internal/agent/turn compares against the same strings.
+const (
+	// SurfaceTracker is the engine's own work tracker: the item, its
+	// comments, its assignment.
+	SurfaceTracker = "tracker"
+
+	// SurfacePages is the engine's own knowledge base.
+	SurfacePages = "pages"
+)

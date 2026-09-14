@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
@@ -316,5 +317,51 @@ func TestTheAdvertisedInFlightCountIsTheBrokerClients(t *testing.T) {
 	}
 	if got != 1 {
 		t.Errorf("in flight = %d, want the handler this node is running", got)
+	}
+}
+
+// THE SEAM THE LOOP'S OWN SUITE CANNOT REACH. internal/agent/turn exercises
+// every delivery gate with a Reply set, and that suite stayed green for as
+// long as the dispatch path built its Input without one — the value was
+// derived correctly, handed to the runner, and dropped before the loop. What
+// was missing was never a test of the gate; it was a test that the gate is
+// wired. turn.Run now refuses an unset Reply, and this covers the other half:
+// that the fields it needs survive the mapping.
+func TestTheDispatchedRequestCarriesEveryFieldTheLoopGatesOn(t *testing.T) {
+	t.Parallel()
+	req := Request{
+		WorkKey: "wk-1",
+		Depth:   3,
+		Handle:  "ceo",
+	}
+	in := turnInputFor(req, turn.ToolReply("mattermost"))
+
+	if in.TurnID != "wk-1" {
+		t.Errorf("TurnID = %q, want the work key", in.TurnID)
+	}
+	// The delegation cap reads this. Zero here bounds nothing at all.
+	if in.Depth != 3 {
+		t.Errorf("Depth = %d, want 3 — the cap would be checked against zero",
+			in.Depth)
+	}
+	// Check's two corrections and OverrideDone all read this. Unset here is
+	// not a weaker gate, it is no gate.
+	if in.Reply != turn.ToolReply("mattermost") {
+		t.Errorf("Reply = %q, want %q — the turn would run with no delivery gate",
+			in.Reply, turn.ToolReply(""))
+	}
+	if !in.Reply.Valid() {
+		t.Error("the mapping produced a Reply turn.Run will refuse")
+	}
+}
+
+// And every value ReplyFor can derive survives the mapping, so no class of
+// trigger reaches the loop with an obligation the gates cannot read.
+func TestEveryDerivableReplyReachesTheLoop(t *testing.T) {
+	t.Parallel()
+	for _, want := range []turn.Reply{turn.NoReply(), turn.ToolReply("slack"), turn.EngineReply()} {
+		if got := turnInputFor(Request{WorkKey: "wk"}, want).Reply; got != want {
+			t.Errorf("Reply = %q, want %q", got, want)
+		}
 	}
 }
