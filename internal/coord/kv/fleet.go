@@ -786,17 +786,7 @@ func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgL
 		// COMPENSATE, which is what a single SQL transaction used to do
 		// for free: charging the company for a turn that never ran lets
 		// it exhaust its budget on work it did not do.
-		if _, _, undo := f.bump(ctx, coord.OrgScope, -tokens, 0); undo != nil {
-			// Logged rather than returned: the caller's answer is
-			// already decided, and a compensation that failed leaves
-			// the org over-stated, which trips the cap EARLY. That is
-			// the safe direction, and it is worth a line saying so
-			// rather than a drift nobody can later explain.
-			log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
-				"tokens", tokens, "error", undo,
-				"detail", "the org counter is over-stated by this charge and will refuse "+
-					"early; clear it with `crewlet budgets reset`")
-		}
+		f.unwindOrg(ctx, tokens)
 		if err != nil {
 			return coord.Spend{}, err
 		}
@@ -815,6 +805,28 @@ func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgL
 		}
 	}
 	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
+}
+
+// unwindOrg takes back the org's half of a charge whose seat half did not land.
+//
+// On a context that OUTLIVES the caller's. The failure being undone is often
+// the caller's own cancellation (a turn stopped mid-charge, a node draining),
+// and an unwind that inherited that dead context failed with it: the company
+// was billed for a round that never ran, and refused early until an operator
+// reset the counter. It cannot hang in the caller's place: the client bounds
+// every request made on a context with no deadline by its own API timeout.
+//
+// Logged rather than returned: the caller's answer is already decided, and a
+// compensation that failed leaves the org over-stated, which trips the cap
+// EARLY. That is the safe direction, and it is worth a line saying so rather
+// than a drift nobody can later explain.
+func (f *FleetStore) unwindOrg(ctx context.Context, tokens int) {
+	if _, _, undo := f.bump(context.WithoutCancel(ctx), coord.OrgScope, -tokens, 0); undo != nil {
+		log.ErrorContext(ctx, "coord_kv_budget_compensation_failed", "scope", coord.OrgScope,
+			"tokens", tokens, "error", undo,
+			"detail", "the org counter is over-stated by this charge and will refuse "+
+				"early; clear it with `crewlet budgets reset`")
+	}
 }
 
 // refuse stamps a refusal on the scope that made it and answers with it.
