@@ -388,7 +388,7 @@ box ──MCP/streamable-HTTP──▶  POST /mcp/{token}  ──▶  the seat's
 
 **Every call is written down where a resume can read it.** A native tool loop keeps its calls in memory and the turn writes them at the end; a bridged run's calls are made by a process outside the engine, minutes apart, possibly across a restart. Each one is appended to the run's own coordination row, bounded, dropping from the *middle* rather than the start — how a run began and how it ended are what explain it. Without that, the reviewer of a resumed run judges a turn whose entire tool log is gone, which the delivery check reads as a turn that acted on nothing.
 
-**A split deployment works** because the token is signed rather than stored: the engine opens the session and mints the endpoint, and whichever process is externally reachable verifies. Both derive the signing key from Tier A `secrets.keys`, under a domain that separates bridge tokens from telemetry tokens. With no keyring the key is per-process — fine merged, and logged loudly, because a split API would then reject every token the engine minted.
+**A fleet works** because the token is signed rather than stored: the node that opened the session minted the endpoint, and the node the box reaches verifies. Every node derives the signing key from Tier A `secrets.keys`, under a domain that separates bridge tokens from telemetry tokens. With no keyring the key is per-process, which is fine on one node and logged loudly otherwise: a peer then reads a perfectly good token as forged rather than as a call that reached the wrong node.
 
 ---
 

@@ -261,7 +261,7 @@ GET /query/integrations
 
 `reconcile` is **three-valued**, like `routes` and `secret_usable` beside it:
 
-- **`null`** means this process cannot say. A standalone API has no loop to ask, and reporting that as "nothing has been reconciled" would put an alarming claim on a screen that had simply asked the wrong node. A surface the loop has not reached yet is also `null`.
+- **`null`** means this node cannot say. A node that could not read the fleet's rows has nothing to report, and rendering that as "nothing has been reconciled" would put an alarming claim on a screen over a coordination store that was briefly unreachable. A surface the loop has not reached yet is also `null`.
 - An object is a real finding.
 
 The **findings list travels as well as the report**, because the two answer different questions. The report says what to do next; the findings say what is actually wrong. A company with a broken webhook and four under-granted seats reports the webhook, and an operator who fixes it should not have to wait a full pass to discover there were four more things behind it.

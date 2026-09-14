@@ -227,8 +227,8 @@ without it agent mode is **refused** at launch rather than started — a
 coding agent with none of the seat's tools cannot answer anybody, cannot
 touch a ticket and cannot submit its work.
 
-> **In a fleet, that URL must address the node itself — not a load
-> balancer in front of several, and not a standalone API process.** A
+> **In a fleet, that URL must address the node itself, not a load
+> balancer in front of several.** A
 > session is a live tool surface: the seat's MCP children, its skill
 > guard, its per-turn recording, all objects in the process that claimed
 > the seat. Signing shares *authentication* across a fleet; it does not

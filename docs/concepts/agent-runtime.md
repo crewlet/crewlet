@@ -302,15 +302,15 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** Not on the dashboard: the embedded API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view** — the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that view to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `drain_complete` is in it.
+**Watching the drain.** Not on the dashboard: this node's API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view**, and the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that view to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `drain_complete` is in it.
 
-On a **split deployment** the standalone API process is a separate process and keeps serving while an engine node drains, but it has no engine reference, so it reports the fleet rather than that node's in-flight count.
+On a fleet, a node that is not draining keeps serving and answers for **itself**: its `/health` carries its own in-flight count, and the draining node has already left the fleet view, because a drain gives up its presence lease at once. The draining node's logs are the view of its own drain.
 
 The count is available programmatically up to the moment the surface closes:
 
 - the engine's in-flight turn count
 - `engine.shutting_down` — `True` from the first moment of `stop()` (unlike `is_running`, which only flips once teardown completes)
-- `GET /health` — JSON includes `in_flight` and `shutting_down`, and `status` reads `"shutting_down"` during the drain (embedded API only; the standalone API process omits these fields because it has no engine reference)
+- `GET /health`: the JSON includes `in_flight` and `shutting_down`, and `status` reads `"shutting_down"` during the drain. Every process that serves the API runs the engine beside it, so both fields are always there
 
 The console shows the same story: the first Ctrl+C prints what is being waited for and how to escalate, and the engine logs `drain_in_progress` with the in-flight count every 10 seconds until the drain converges (`drain_complete`).
 

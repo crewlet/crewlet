@@ -26,9 +26,11 @@ bucket crewlet_budgets   streams/KV_crewlet_budgets.snapshot   512 B      3 mess
 ```
 
 The path is on the **engine's host**, not yours — this writes files where the
-node runs and downloads nothing. Run it against a node with `seats` or
-`workers` in its roles: an ingress-only node holds neither estate and says so
-rather than writing a backup of nothing.
+node runs and downloads nothing. Any node produces one, whatever its roles:
+every node holds its own store and, on the embedded topology, its own broker.
+A node that dialled an **external** NATS cluster is the exception, and it says
+so: its copy carries the store estates alone, and the stream half is backed up
+at the cluster (`nats account backup`) from the same moment.
 
 ## What state exists, and where
 

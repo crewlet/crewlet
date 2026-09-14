@@ -281,9 +281,9 @@ Four rules follow from that:
 
 All `/secrets/*` routes require `Authorization: Bearer <token>`, reads
 included, for the same reason `/config` does: the listing alone says which
-credentials a company holds and when each last changed. They are served only
-by a process that can reach the [coordination store](../concepts/coordination.md)
-— a standalone API with none `404`s rather than answering `503` to everything.
+credentials a company holds and when each last changed. Every node serves
+them, because every node opens the fleet's
+[coordination store](../concepts/coordination.md) that holds the rows.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -444,8 +444,8 @@ writes one: the history stays append-only, so "the credentials were reloaded
 at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
-Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
-is configured, and `503 no_control_plane` on a process that cannot activate.
+Answers `201 {"revision_id", "epoch"}` and `409 no_active_revision` when
+nothing is configured.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.
@@ -589,7 +589,7 @@ What the route does, in this order:
 Answers `201 {"revision_id", "epoch", "wrote_secrets", "reloaded", "state"}`.
 Refusals: `400 invalid_input`, `400 validation_error`, `404 unknown_kind`,
 `409 revision_advanced`, `409 literal_in_config`, `409 no_active_revision`,
-`503 no_control_plane`, `503 no_keyring`.
+`503 no_keyring`.
 
 ### Running the provisioning pass
 
@@ -689,12 +689,10 @@ is the deliberate path.
 > signing secret alone, so two sealed per-seat credentials stayed in the store
 > with nothing telling the operator they were there.
 
-Refusals: `503 no_status_store` on a node with no coordination, which has
-nowhere to record the intent — retry against a node that has one, or force it —
-and `503 surface_busy` when a reconcile tick or an operator's own pass is
-writing at this surface right now. Those two are the same status and opposite
-facts: the first will not change however many times it is asked, and the second
-clears on its own, which is why it carries its own code. The request waits a
+Refusals: `503 surface_busy` when a reconcile tick or an operator's own pass is
+writing at this surface right now, which is the one refusal here that clears on
+its own and carries its own code for that reason: a caller that cannot tell a
+race from a fault treats both as terminal. The request waits a
 busy surface out for a few seconds first (a tick a moment from finishing is the
 common collision) and then names it; repeating the request is correct, because
 every step of a disconnect is idempotent. It used to answer `internal_error`,
@@ -876,9 +874,7 @@ organization's own app registration page whenever
 under a person's account cannot be installed on the organization that owns the
 repositories.
 
-Refusals: `503 no_app_flow` (this process holds no signing material, so a
-browser coming back could not be tied to the seat that started),
-`400 bad_body`, `400 seat_required`, `409 no_active_revision`,
+Refusals: `400 bad_body`, `400 seat_required`, `409 no_active_revision`,
 `404 no_such_seat`, and `409 no_public_url` when
 `integrations.public_base_url` is unset. The last one matters more than it
 looks: an app is created with its delivery, redirect and setup addresses baked
@@ -1023,7 +1019,7 @@ opens — before a single turn has run:
 |---|---|
 | `agents` | The company's agent seats, each merged with its live overlay. Every seat in the company, not the ones this node runs, because the dashboard is a view of the company. Human seats are excluded — they have no turn, no phase and no spend; they appear in `org` with `"kind": "human"` |
 | `org` | The role and unit tree, **verbatim** as the company document holds it: root-level `roles` plus `units` nesting to any depth. The client walks it and reads the config's own field names, so it is not reshaped on the way out |
-| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it — `builtin` or the MCP server's name. Absent on a standalone API, which has no engine to ask |
+| `tools` | The catalogue this node serves, each entry tagged with the `source` that registered it (`builtin`, or the MCP server's name). Empty on a node with no active revision, which has no catalogue yet |
 | `events`, `sandboxes`, `tokens`, `budget`, `health` | The live projection: what has happened |
 
 A seat carries `state: "idle"` when **this node** is serving it. A seat it
@@ -1162,41 +1158,43 @@ without the tag every historical failure would read back as a success.
 
 ### The health envelope
 
-One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
-the snapshot's `health` section, and the 5-second push, so those three
-surfaces cannot disagree about whether the engine is healthy — and a
-reconnect restores every field without a second round trip.
+One builder (`api.App.health`) answers `GET /health`, the snapshot's `health`
+section, and the 5-second push, so those three surfaces cannot disagree about
+whether the engine is healthy, and a reconnect restores every field without a
+second round trip.
 
 ```json
 {
   "status": "ok",
+  "node": "core-1",
   "configured": true,
-  "engine": true,
   "version": "0.4.0",
-  "started_at": "2026-04-01T12:00:00+00:00",
+  "started_at": "2026-04-01T11:58:03Z",
   "queue": "jetstream-embedded",
-  "event_store": "durable",
-  "feed_hydrated": true,
   "clients": 3,
   "in_flight": 2,
-  "engine_started_at": "2026-04-01T11:58:03+00:00",
-  "shutting_down": false
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 41,
+  "seats": ["ceo", "cto"]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
-| `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. Precedence is `shutting_down` > a diverged posture > `unconfigured` > `ok`: a draining engine is draining first whatever else is true of it, and a diverged posture outranks `unconfigured` because it names the cause of it. |
+| `node` | This process's `node.id`, which is the only way a caller can tell which node a load balancer sent it to. |
+| `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` every inbound webhook is answered `503` rather than routed, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
+| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. There is no second `engine_started_at` beside it, because there was never a second process to have one. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
-| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
-| `clients` | Dashboards currently connected to this API process. |
-| `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `clients` | Dashboards currently connected to this node. |
+| `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
+| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens. The API server keeps serving until the engine has fully stopped. |
+| `posture` | What this node concluded about its own config lag: `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
+| `applied_epoch` | The config revision this node is running. |
+| `seats` | The handles this node is serving, `[]` on a node holding none. |
+| `stall_lag_seconds` | How far behind this node's watched duty is, present **only** when it is behind at all. It is the number climbing towards the seat lease TTL, at which the watchdog ends the process, so a node degrading is visible here before the restart rather than only afterwards in the exit code. |
 
 Per-socket facts — how many envelopes *this* connection dropped, how deep
 its queue is — are deliberately **not** here. The tick encodes one JSON
@@ -1255,7 +1253,7 @@ up.
   prior figure is dead, so a consumer must **replace** what it holds
   rather than merge or take a maximum.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
-  **best-effort**: the standalone API reads an ephemeral broadcast
+  **best-effort**: every node's projection reads an ephemeral broadcast
   subscription that takes no acks, starts at the stream's tail on every
   (re)connect, and lets a slow consumer miss frames rather than hold
   them. So a report at or below the held `seq` is dropped rather than
@@ -1264,10 +1262,10 @@ up.
   `used >= max`, is what "exhausted" means: a refused charge increments
   nothing, so the counter stops short of the cap by the size of the round
   that would not fit.
-- `{}` means no engine is reporting one (the standalone API has no meter
-  of its own). Per-agent, `budget: null` means the same, or that the seat
-  has no per-agent cap at all — the engine seeds one only for a non-zero
-  `token_budget`.
+- `{}` means no engine has reported one yet, which is a node whose first
+  charge has not happened. Per-agent, `budget: null` means the same, or
+  that the seat has no per-agent cap at all, because the engine seeds one
+  only for a non-zero `token_budget`.
 
 It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
@@ -1435,13 +1433,14 @@ that renders `read_level` and swallows `complete` looks confidently right.
 
 ### Wiring
 
-Both deployment paths feed events into a single `StreamService.ingest`
-entry point.  The standalone API process subscribes to the engine's
-NATS JetStream event stream with an **ephemeral broadcast consumer** (it
-receives every event — this is a broadcast, not a work queue, because a
-dashboard served by one node must show turns that ran on another); the
-embedded API path (engine + API in the same process) wires `ingest` as
-a publish listener directly, no queue round-trip required.  Each event
+Every node that serves the API feeds its projection through one entry
+point, `stream.Service.Ingest`, from an **ephemeral broadcast
+subscription** to the event stream (`observe.Projector`).  It receives
+every event from every node, because a dashboard served by one node must
+show turns that ran on another, and that is why it is not a publish
+listener: a listener sees only what its own node published.  The event
+store takes the other route, a publish listener inline on the publishing
+node, so no two nodes can write one row.  Each event
 updates the live-state projection *and* fans out to connected
 dashboards.  Backpressure is per-WebSocket: a stalled tab drops the
 oldest queued envelope so it cannot stall the publish path or other
@@ -1890,17 +1889,15 @@ answer would then be partial, it opens a new trust edge, and it duplicates
 the mechanism the lease table already is.
 
 
-**Absent is not zero.** A node that publishes no status — one whose engine
-is not co-located — omits those fields entirely, and the dashboard draws an
+**Absent is not zero.** A node that publishes no status (one running a build
+older than the field) omits those fields entirely, and the dashboard draws an
 em dash. A confident `0` would render an idle row for a process that is
 simply not saying.
 
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
 node performs, and `unplaceable` lists seats whose `role.placement`
-matches no live node. Without a database configured there is no lease
-table and no fleet; the response says so in `degraded` rather than
-failing.
+matches no live node.
 
 ```json
 {
@@ -2058,14 +2055,10 @@ embedded broker, so a running node is the only thing that can reach it —
 which is why `crewlet budgets reset` is a client of this route rather than a
 command that opens a file.
 
-Two refusals, both deliberate:
-
-- **401 without a token.** `allow_anonymous_read` is on by default and opens
-  the whole read surface; a reset is a write, so it is never eligible.
-- **503 with no coordination store.** A standalone API with no counter
-  attached answers `{"error":"no_coordination_store"}` rather than 404: the
-  route exists on this build, and a 404 sends an operator looking for a
-  version mismatch that is not there.
+One refusal, deliberate: **401 without a token.** `allow_anonymous_read` is on
+by default and opens the whole read surface; a reset is a write, so it is never
+eligible. There is no "no counter here" refusal beside it, because every node
+opens the fleet's coordination store that holds the counter.
 
 ### `POST /backup`
 
@@ -2121,10 +2114,10 @@ Three refusals, each pointing somewhere different:
   or a path the database engine mishandles. The reason is returned in `detail`
   rather than only logged, unlike every other route here, because it is the
   caller's own command to fix.
-- **503 with no state to copy.** A process running neither a store nor a
-  broker answers `{"error":"nothing_to_back_up"}` rather than 404: the route
-  exists on this build, and a 404 sends an operator looking for a version
-  mismatch that is not there.
+- **A copy without the stream estate.** A node that dialled an external NATS
+  cluster has no connection to snapshot the streams over, so its manifest
+  carries the store copies alone and `crewlet backup` says where the rest
+  lives. Back that half up at the cluster, from the same moment.
 
 ### `GET /integrations`
 
@@ -2202,9 +2195,8 @@ third-party app signs with. For Slack, whose material is one signing secret per
 seat, it is lower: **one** seat whose secret resolved makes the surface usable,
 because a delivery addressed to that seat's path would be accepted, and a seat
 whose own secret is unresolved is reported by that seat's identity finding
-rather than by the whole surface. `null` means this process cannot say (a
-standalone API has no engine whose resolution to read), or the surface has no
-secret to resolve.
+rather than by the whole surface. `null` means this node cannot say (nothing has resolved
+yet), or the surface has no secret to resolve.
 
 Only the booleans are ever returned; no secret value leaves the process.
 
