@@ -119,26 +119,17 @@ func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error
 // failure is deliberately NOT waited out here: nothing is being placed, so
 // waiting for peers would be waiting for something nobody is going to do.
 func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.Stream, error) {
-	// THE RETRY WINDOW IS BOUNDED, NOT THE LOOKUP. Shortening the caller's
-	// context would cap each individual read at it too, which is a
-	// different and worse thing: a metadata read on a busy group is exactly
-	// what is slow here, so truncating it would trade a not-found for a
-	// deadline on the same boot. [jsprovision.Settle] re-asks; each attempt
-	// keeps whatever deadline the caller gave it.
 	// THE CEILING IS REAL, which means it bounds the LOOKUPS and not only
-	// the gaps between them: [jsprovision.Settle] limits how long it keeps
-	// re-asking, so a single metadata request that blocks would otherwise
-	// outlive the window this function documents and hang until the boot
-	// context expired. Derived from the caller's context rather than
-	// detached from it, because nothing here is recovering from an expired
-	// deadline — an operator who cancels a boot is answered at once.
-	readCtx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
-	defer cancel()
-
+	// the gaps between them — and that is [jsprovision.Settle]'s to own
+	// rather than this caller's: it hands each attempt a context carrying
+	// the window, so a single metadata request that blocked cannot outlive
+	// the window this function documents and hang until the boot context
+	// expired. ctx goes in undiminished, which is what lets an operator who
+	// cancels a boot be answered at once.
 	var s jetstream.Stream
-	err := jsprovision.Settle(ctx, func() error {
+	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
 		var e error
-		s, e = q.js.Stream(readCtx, stream)
+		s, e = q.js.Stream(ctx, stream)
 		return e
 	})
 	return s, err

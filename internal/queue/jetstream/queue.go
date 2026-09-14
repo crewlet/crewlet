@@ -431,21 +431,6 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
 		storage = jetstream.MemoryStorage
 	}
-	// ITS OWN DEADLINE, because the client's default is not sized for this
-	// call. nats.go applies a five-second API timeout to a context with no
-	// deadline, which is right for an ordinary request and wrong for the
-	// one that provisions a REPLICATED stream: the engine has just waited
-	// up to a minute for the metadata group precisely because that group
-	// is slow to form, and then gave the call that depends on it five
-	// seconds. Measured: a three-member cluster under load fails here
-	// about one boot in six, reported as a bare "context deadline
-	// exceeded" with nothing to say which deadline.
-	//
-	// WithTimeout only ever shortens against the parent, so a caller with
-	// a tighter deadline of its own still wins.
-	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
-	defer cancel()
-
 	config := jetstream.StreamConfig{
 		Name:              spec.name,
 		Subjects:          spec.subjects,
@@ -485,6 +470,12 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	// otherwise silent until its budget expires, and the one progress line
 	// below it covers only the placement-retry path — not the case that
 	// actually hangs, where the API request itself never returns.
+	//
+	// On the BOOT's context, which is this function's, so the watch spans
+	// the read-back that follows a lost create as well as the create — the
+	// one stretch where a stalled member says nothing is exactly the one
+	// that outlived the per-create deadline. The deferred stop is what
+	// ends it either way.
 	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_stream_slow", "stream", spec.name,
 			"replicas", config.Replicas, "waited", after,
@@ -514,10 +505,32 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 // create. That is fine and deliberate — the loser gets "stream name already in
 // use", which is not an error here but the other node having won, so it falls
 // through to the same comparison the observe path makes.
+//
+// ctx IS THE BOOT'S and the per-create deadline is derived below rather than
+// by the caller, because the read-back at the end runs precisely when that
+// deadline has expired — see [jsprovision.Settle]. Handed the expired one it
+// would ask once and give up, which is the retry being dead on the one path it
+// was written for.
 func (q *Queue) createOrObserveStream(
 	ctx context.Context, spec streamSpec, config jetstream.StreamConfig,
 ) error {
-	info, err := q.js.Stream(ctx, spec.name)
+	// ITS OWN DEADLINE, because the client's default is not sized for this
+	// call. nats.go applies a five-second API timeout to a context with no
+	// deadline, which is right for an ordinary request and wrong for the
+	// one that provisions a REPLICATED stream: the engine has just waited
+	// up to a minute for the metadata group precisely because that group
+	// is slow to form, and then gave the call that depends on it five
+	// seconds. Measured: a three-member cluster under load fails here
+	// about one boot in six, reported as a bare "context deadline
+	// exceeded" with nothing to say which deadline.
+	//
+	// WithTimeout only ever shortens against the parent, so a caller with
+	// a tighter deadline of its own still wins — which is also what makes
+	// the sequence ceiling [Queue.ensureStreams] applies effective.
+	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
+
+	info, err := q.js.Stream(createCtx, spec.name)
 	switch {
 	case err == nil:
 		return q.observeStream(spec, config, info)
@@ -525,7 +538,7 @@ func (q *Queue) createOrObserveStream(
 		return fmt.Errorf("ensure stream %s: %w", spec.name, err)
 	}
 
-	createErr := q.createStream(ctx, config)
+	createErr := q.createStream(createCtx, config)
 	if createErr == nil {
 		return nil
 	}
@@ -546,18 +559,17 @@ func (q *Queue) createOrObserveStream(
 	// So the question is re-asked rather than assumed either way: does
 	// the stream exist now? A read-back is one round trip, it answers
 	// exactly that, and it holds whatever it finds to the same comparison
-	// a stream this node found on the first look gets. The read gets its
-	// OWN context, because the one above is the deadline that just
-	// expired.
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
-	defer cancel()
+	// a stream this node found on the first look gets.
+	//
 	// RE-ASKED rather than answered once: the winner's create is visible
 	// to this member only on its next metadata update, so a single lookup
 	// inside that window reports not-found for a stream that exists and
-	// fails the boot before [Queue.DomainLog]'s own retry could help.
-	err = jsprovision.Settle(ctx, func() error {
+	// fails the boot before [Queue.DomainLog]'s own retry could help. ON
+	// ctx AND NOT createCtx, because createCtx is the deadline that just
+	// expired — [jsprovision.Settle] owns this read's own short window.
+	err = jsprovision.Settle(ctx, func(ctx context.Context) error {
 		var e error
-		info, e = q.js.Stream(readCtx, spec.name)
+		info, e = q.js.Stream(ctx, spec.name)
 		return e
 	})
 	if err != nil {
@@ -842,7 +854,19 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 
 	// Reporting whether THIS call created it is part of the contract, so
 	// look first rather than inferring from an upsert.
-	_, getErr := q.js.Consumer(ctx, stream, name)
+	//
+	// ITS OWN DEADLINE, for the reason ensureDurableConsumer gives, and
+	// this is the call that reaches the metadata group FIRST. With no
+	// deadline of its own — an engine boot's context has none — it reached
+	// nats.go under the client's five-second default, so on a clustered
+	// boot the lookup expired before the create it precedes ever ran. A
+	// [context.DeadlineExceeded] is not [jetstream.ErrConsumerNotFound],
+	// so it does not fall through to the create either: it returns
+	// `inspect consumer …: context deadline exceeded` and fails the boot,
+	// which is the exact shape the budget below was added to remove.
+	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancelLookup()
+	_, getErr := q.js.Consumer(lookupCtx, stream, name)
 	existed := getErr == nil
 	if getErr != nil && !errors.Is(getErr, jetstream.ErrConsumerNotFound) {
 		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
@@ -892,41 +916,45 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 			"given no durable name — an ephemeral consumer is this caller's "+
 			"alone and races nobody, so it does not belong here", stream)
 	}
-	// ITS OWN DEADLINE, for the reason ensureStream gives — and this call
-	// needed it more, not less. A durable consumer is a replicated object
-	// on the same metadata group, but nothing here set a budget, so the
-	// caller's context reached nats.go with no deadline of its own (an
-	// engine boot's has none) and the client's FIVE-SECOND default applied.
-	// That is shorter than the clustered budget by a factor of twenty-four,
-	// and shorter than [jsprovision.SlowAfter] — so the breadcrumb below
-	// could never fire and the retry window it describes did not exist.
-	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	// ITS OWN DEADLINE, for the reason createOrObserveStream gives — and
+	// this call needed it more, not less. A durable consumer is a
+	// replicated object on the same metadata group, but nothing here set a
+	// budget, so the caller's context reached nats.go with no deadline of
+	// its own (an engine boot's has none) and the client's FIVE-SECOND
+	// default applied. That is shorter than the clustered budget by a
+	// factor of twenty-four, and shorter than [jsprovision.SlowAfter] — so
+	// the breadcrumb below could never fire and the retry window it
+	// describes did not exist.
+	//
+	// NOT SHADOWING ctx, because the read-back at the end runs when THIS
+	// deadline has expired and must not inherit it.
+	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancel()
 
 	// THE SAME BREADCRUMB the stream and bucket creates carry, and this
 	// call needs it for the same reason: a durable consumer is a replicated
 	// object too, and `open consumer …: context deadline exceeded` on a
 	// silent member is one of the shapes a clustered boot failed in.
-	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", cfg.Durable, "waited", after,
 			"detail", "this durable consumer is still being created; on a fleet "+
 				"that is a metadata group that has not settled")
 	})
-	cons, createErr := q.js.CreateConsumer(ctx, stream, cfg)
+	cons, createErr := q.js.CreateConsumer(createCtx, stream, cfg)
 	stop()
 	if createErr == nil {
 		return cons, nil
 	}
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
-	defer cancel()
 	// RE-ASKED, like the stream and bucket read-backs: a peer's create is
 	// visible to this member only on its next metadata update, so one
 	// lookup answers at an arbitrary instant inside that window and fails
-	// a boot over a consumer that exists.
-	err := jsprovision.Settle(ctx, func() error {
+	// a boot over a consumer that exists. ON ctx AND NOT createCtx, for
+	// the reason [jsprovision.Settle] gives: createCtx may be the deadline
+	// that just expired.
+	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
 		var e error
-		cons, e = q.js.Consumer(readCtx, stream, cfg.Durable)
+		cons, e = q.js.Consumer(ctx, stream, cfg.Durable)
 		return e
 	})
 	if err != nil {

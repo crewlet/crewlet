@@ -323,19 +323,18 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	}
 
 	// Resolved once, here, where nothing is concurrent yet — see the
-	// leaseStream field for why it is not read per call. ITS OWN DEADLINE,
-	// short for [jsprovision.ReadBack]'s reason: an ordinary metadata read
-	// against a group that has just proven it works.
-	readCtx, cancelRead := context.WithTimeout(ctx, jsprovision.ReadBack)
-	defer cancelRead()
+	// leaseStream field for why it is not read per call.
+	//
 	// RE-ASKED for the same reason every other read-back on this path is:
 	// a bucket handle can come back before the metadata update that made it
 	// is visible here, so one lookup inside that window fails a clustered
-	// boot over a bucket this node just opened.
+	// boot over a bucket this node just opened. [jsprovision.Settle] owns
+	// the short deadline each attempt runs under, for its own reason: an
+	// ordinary metadata read against a group that has just proven it works.
 	var status jetstream.KeyValueStatus
-	err = jsprovision.Settle(ctx, func() error {
+	err = jsprovision.Settle(ctx, func(ctx context.Context) error {
 		var e error
-		status, e = leases.Status(readCtx)
+		status, e = leases.Status(ctx)
 		return e
 	})
 	if err != nil {

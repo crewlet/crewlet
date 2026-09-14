@@ -67,6 +67,10 @@ const positionsSuffix = "_statelog_positions"
 // won. A booting peer then READS what the winner made instead of writing over
 // it — which is also the honest ownership rule, since a bucket's TTL is a
 // deployment-wide fact and not something each node should re-assert.
+//
+// ctx IS THE BOOT'S, and the per-create deadline is derived below rather than
+// taken from the caller, because the read-back at the end runs precisely when
+// that deadline has expired — see [jsprovision.Settle].
 func openBucket(ctx context.Context, js jetstream.JetStream,
 	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
@@ -74,7 +78,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// already set a tighter deadline keeps it — which is also what makes
 	// the sequence ceiling [OpenFleet] applies effective: each create here
 	// takes the lesser of its own budget and what is left of that one.
-	ctx, cancel := context.WithTimeout(ctx,
+	createCtx, cancel := context.WithTimeout(ctx,
 		jsprovision.Clustered(clustered).Budget())
 	defer cancel()
 
@@ -82,7 +86,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// opens fifteen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
-	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
 			"replicas", cfg.Replicas, "waited", after,
 			"detail", "this bucket is still being created; on a fleet that is "+
@@ -91,39 +95,22 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	})
 	defer stop()
 
-	for {
-		bucket, err := createOrObserveBucket(ctx, js, cfg)
-		if err == nil || !jsprovision.Unplaceable(err) {
-			return bucket, err
-		}
-		select {
-		case <-ctx.Done():
-			// THE ORIGINAL ERROR, not the context's: "no suitable
-			// peers" says what is wrong and "deadline exceeded"
-			// does not.
-			return nil, err
-		case <-time.After(jsprovision.PlacementRetry):
-		}
-	}
-}
-
-// createOrObserveBucket is one attempt at that.
-func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
-	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
-
-	switch bucket, err := js.KeyValue(ctx, cfg.Bucket); {
+	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
 	case err == nil:
 		return bucket, nil
 	case !errors.Is(err, jetstream.ErrBucketNotFound):
 		return nil, err
 	}
-	bucket, createErr := js.CreateKeyValue(ctx, cfg)
+	bucket, createErr := createKeyValue(createCtx, js, cfg)
 	if createErr == nil {
+		// THIS NODE MADE IT, at the count it asked for. Nothing to
+		// observe, and no round trip spent observing it.
 		return bucket, nil
 	}
 	if jsprovision.Unplaceable(createErr) {
-		// STILL FORMING, which is the caller's loop to wait out rather
-		// than a race to read back.
+		// STILL FORMING and it stayed that way for the whole budget,
+		// which createKeyValue has already waited out. Nothing was
+		// placed, so there is nothing to read back.
 		return nil, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this
@@ -137,18 +124,15 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 	// the loser never heard so, and reporting that as a failure is a node
 	// refusing to boot because a peer beat it.
 	//
-	// So the question is re-asked rather than assumed. The read gets its
-	// OWN context, because the one above may be the deadline that just
-	// expired.
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
-	defer cancel()
-	// RE-ASKED while it answers not-found, because a peer's create is
-	// visible to this member only on its next metadata update — see
-	// [jsprovision.Settle]. One lookup answers at an arbitrary instant
-	// inside that window and fails a boot over a bucket that exists.
-	err := jsprovision.Settle(ctx, func() error {
+	// So the question is re-asked rather than assumed, and RE-ASKED while
+	// it answers not-found, because a peer's create is visible to this
+	// member only on its next metadata update — see [jsprovision.Settle].
+	// One lookup answers at an arbitrary instant inside that window and
+	// fails a boot over a bucket that exists. ON ctx AND NOT createCtx,
+	// because createCtx is the deadline that just expired.
+	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
 		var e error
-		bucket, e = js.KeyValue(readCtx, cfg.Bucket)
+		bucket, e = js.KeyValue(ctx, cfg.Bucket)
 		return e
 	})
 	if err != nil {
@@ -158,6 +142,40 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
 	return bucket, nil
+}
+
+// createKeyValue makes the bucket, waiting out a cluster that has not yet seen
+// enough members to place it.
+//
+// THE LOOP IS AROUND THE CREATE ALONE, which is the shape
+// [internal/queue/jetstream]'s createStream already has and the reason
+// [jsprovision] exists: an unplaceable create means nothing was placed, so
+// re-running the lookup that preceded it would re-ask a question whose answer
+// cannot have changed. Written the other way round, the retry re-issued that
+// lookup every 250ms for the whole provisioning budget.
+func createKeyValue(ctx context.Context, js jetstream.JetStream,
+	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+
+	for attempt := 0; ; attempt++ {
+		bucket, err := js.CreateKeyValue(ctx, cfg)
+		if err == nil || !jsprovision.Unplaceable(err) {
+			return bucket, err
+		}
+		if attempt == 0 {
+			log.InfoContext(ctx, "coord_kv_bucket_awaiting_peers",
+				"bucket", cfg.Bucket, "replicas", cfg.Replicas,
+				"detail", "the cluster has not yet seen enough members to place "+
+					"this bucket; retrying until the provisioning deadline")
+		}
+		select {
+		case <-ctx.Done():
+			// THE ORIGINAL ERROR, not the context's: "no suitable
+			// peers" says what is wrong and "deadline exceeded"
+			// does not.
+			return nil, err
+		case <-time.After(jsprovision.PlacementRetry):
+		}
+	}
 }
 
 // The fleet-shared state on JetStream KV.

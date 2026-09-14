@@ -142,21 +142,58 @@ func SequenceBudget(clustered bool) time.Duration {
 // is here rather than in any of them — which is the argument this whole
 // package exists for.
 //
+// # ctx IS THE BOOT'S, NEVER THE CREATE'S
+//
+// Two of these read-backs run because a create's own deadline EXPIRED — that
+// is what the timeout half of the peer-race looks like — so handing this
+// function that deadline is handing it a context that is already done. It
+// would ask once, find the select below already closed, and return the
+// not-found it exists to wait out; the retry would be dead code on exactly the
+// paths it was written for, and only the two read-backs whose caller had a
+// live context would ever re-ask at all. So a caller derives its per-create
+// deadline into a SEPARATE variable and passes the one that bounds the boot.
+//
+// # And the window is this function's, not the caller's
+//
+// It owns the [ReadBack] deadline and hands each attempt a context carrying
+// it, which is the only arrangement where both halves are bounded: a window
+// the caller built separately would still be running when a lookup blocked
+// past it, and a lookup with no deadline of its own would outlive the window
+// entirely and hang until the boot's context expired.
+//
+// One window across all the attempts rather than one per attempt, because what
+// is being waited out is a single propagation delay and not N independent
+// requests: a per-attempt budget would multiply the time a genuinely absent
+// object takes to be reported by however many times it was re-asked.
+//
 // The ERROR IT RETURNS IS THE ASK'S OWN, never a deadline of this function's:
-// "stream not found" names the object and "deadline exceeded" does not.
-func Settle(ctx context.Context, ask func() error) error {
-	deadline := time.Now().Add(ReadBack)
+// "stream not found" names the object and "deadline exceeded" does not. That
+// holds for the last attempt too — the one the window interrupts — so the
+// answer a caller wraps is what the object said, not what this function's
+// patience did.
+func Settle(ctx context.Context, ask func(context.Context) error) error {
+	window, cancel := context.WithTimeout(ctx, ReadBack)
+	defer cancel()
+
+	var absent error
 	for {
-		err := ask()
-		if err == nil || !NotYetVisible(err) {
-			return err
-		}
-		if !time.Now().Before(deadline) {
+		switch err := ask(window); {
+		case err == nil:
+			return nil
+		case NotYetVisible(err):
+			absent = err
+		case absent != nil && errors.Is(err, context.DeadlineExceeded):
+			// THE WINDOW CLOSED MID-ASK, so what came back describes
+			// this function's patience rather than the object. The
+			// last thing the object said is the honest answer, and
+			// it is the one that names it.
+			return absent
+		default:
 			return err
 		}
 		select {
-		case <-ctx.Done():
-			return err
+		case <-window.Done():
+			return absent
 		case <-time.After(PlacementRetry):
 		}
 	}

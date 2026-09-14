@@ -177,7 +177,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 
 	// NOT VISIBLE, THEN VISIBLE: the answer is the later one.
 	calls := 0
-	err := Settle(t.Context(), func() error {
+	err := Settle(t.Context(), func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return jetstream.ErrStreamNotFound
@@ -195,7 +195,10 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 	// would be waiting for something nobody is going to do.
 	calls = 0
 	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
-	if err := Settle(t.Context(), func() error { calls++; return placement }); !errors.Is(err, placement) {
+	if err := Settle(t.Context(), func(context.Context) error {
+		calls++
+		return placement
+	}); !errors.Is(err, placement) {
 		t.Errorf("a placement failure came back as %v", err)
 	}
 	if calls != 1 {
@@ -204,7 +207,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 
 	// AND AN OBJECT THAT NEVER APPEARS reports the broker's own not-found,
 	// which names it, rather than a bare deadline.
-	err = Settle(t.Context(), func() error { return jetstream.ErrStreamNotFound })
+	err = Settle(t.Context(), func(context.Context) error { return jetstream.ErrStreamNotFound })
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		t.Errorf("an absent object reported %v, want the not-found that names it", err)
 	}
@@ -327,12 +330,13 @@ func TestAConsumerNotYetVisibleIsAPropagationDelay(t *testing.T) {
 	}
 }
 
-// A CANCELLED CALLER STOPS THE RE-ASKING AT ONCE, even though the lookups
-// themselves run on a context detached from that cancellation.
+// A CANCELLED CALLER STOPS THE RE-ASKING AT ONCE.
 //
-// The read-backs deliberately survive the deadline that just expired — that is
-// what they exist for — but detaching the LOOP as well meant an operator who
-// cancelled a boot waited out the whole window for an answer nobody wanted.
+// Which is also exactly why a caller must hand this the context that bounds
+// its BOOT and never the one that bounds its create: given a deadline that has
+// already expired — which is the state the timeout half of a peer race leaves
+// it in — this asks once, finds the window closed and gives up, so the
+// re-asking is dead on the very paths it was written for.
 func TestCancellingTheCallerStopsTheReAsking(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
@@ -340,7 +344,10 @@ func TestCancellingTheCallerStopsTheReAsking(t *testing.T) {
 
 	calls := 0
 	start := time.Now()
-	err := Settle(ctx, func() error { calls++; return jetstream.ErrStreamNotFound })
+	err := Settle(ctx, func(context.Context) error {
+		calls++
+		return jetstream.ErrStreamNotFound
+	})
 	if !errors.Is(err, jetstream.ErrStreamNotFound) {
 		t.Errorf("reported %v, want the ask's own error", err)
 	}
@@ -350,5 +357,87 @@ func TestCancellingTheCallerStopsTheReAsking(t *testing.T) {
 	if waited := time.Since(start); waited > ReadBack/2 {
 		t.Errorf("a cancelled caller waited %v, close to the whole %v window",
 			waited, ReadBack)
+	}
+}
+
+// THE WINDOW BOUNDS THE LOOKUPS, NOT ONLY THE GAPS BETWEEN THEM — and what
+// comes back at the end of it still names the object.
+//
+// # Why both halves are one case
+//
+// Because the second is what the first costs if nobody arranges it. A window
+// the CALLER built separately left each attempt free to block past it: the one
+// metadata read that hangs is exactly what is slow on a group that has not
+// settled, so the function documented as bounded by [ReadBack] would sit there
+// until the boot's own context expired.
+//
+// Bounding the attempts fixes that and introduces the other half: the attempt
+// the window interrupts comes back with a DEADLINE, and a deadline says
+// nothing about the object. `stream not found` is what tells an operator which
+// stream; `context deadline exceeded` sends them to look at the cluster.
+func TestTheWindowBoundsEachLookupAndTheAnswerStillNamesTheObject(t *testing.T) {
+	t.Parallel()
+
+	// EVERY ATTEMPT CARRIES A DEADLINE, and it is this function's window
+	// rather than the caller's: the caller here has none at all.
+	var seen time.Time
+	if err := Settle(t.Context(), func(ctx context.Context) error {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("an attempt ran with no deadline of its own, so one " +
+				"blocked lookup outlives the whole window")
+		}
+		seen = deadline
+		return nil
+	}); err != nil {
+		t.Fatalf("a visible object reported %v", err)
+	}
+	if got := time.Until(seen); got > ReadBack {
+		t.Errorf("an attempt got %v, more than the %v window it runs inside", got, ReadBack)
+	}
+
+	// AND THE ANSWER IS THE OBJECT'S. This ask says not-found, then
+	// blocks until the window closes and reports what its context says —
+	// which is the shape a real metadata read takes when the group is
+	// slow. The not-found is the last thing anything said about the
+	// stream, so it is what comes back.
+	calls := 0
+	err := Settle(t.Context(), func(ctx context.Context) error {
+		calls++
+		if calls == 1 {
+			return jetstream.ErrStreamNotFound
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("an absent object reported this function's own patience (%v) "+
+			"rather than the not-found that names it", err)
+	}
+	if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Errorf("reported %v, want the broker's own not-found", err)
+	}
+}
+
+// A CALLER'S OWN DEADLINE STILL WINS when it is shorter than the window.
+//
+// [context.WithTimeout] only ever shortens, and this is the property that
+// makes a sequence ceiling mean anything: a read-back that could extend past
+// the budget its caller is working inside would be a hole in every aggregate
+// bound above it.
+func TestTheCallersDeadlineWinsWhenItIsShorter(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := Settle(ctx, func(context.Context) error { return jetstream.ErrStreamNotFound })
+	if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Errorf("reported %v, want the ask's own error", err)
+	}
+	if waited := time.Since(start); waited >= ReadBack {
+		t.Errorf("a caller with a %v deadline was held for %v, the whole %v window",
+			20*time.Millisecond, waited, ReadBack)
 	}
 }
