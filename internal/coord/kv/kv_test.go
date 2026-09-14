@@ -744,3 +744,65 @@ func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
 			"was refused: %v", err)
 	}
 }
+
+// AN ADMITTED CHARGE CLEARS ONLY THE REFUSAL IT SAW.
+//
+// The contract suite cannot reach this interleaving: a charge is admitted
+// while the scope carries a refusal, another caller is refused and stamps a
+// newer one, and only then does the first caller clear. Its stamp is stale by
+// then, and the newer refusal is still true, so a clear that ignored which
+// stamp it saw would hide a scope that is refusing right now.
+func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("f%d", bucketSeq.Add(1))
+	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		LedgerRetention: time.Minute, FireRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		BucketPrefix: prefix,
+	})
+	if err != nil {
+		t.Fatalf("OpenFleet: %v", err)
+	}
+	ctx := t.Context()
+	stamp := func() time.Time {
+		t.Helper()
+		rows, err := store.Usage(ctx)
+		if err != nil {
+			t.Fatalf("Usage: %v", err)
+		}
+		for _, row := range rows {
+			if row.Scope == coord.OrgScope {
+				return row.RefusedAt
+			}
+		}
+		t.Fatal("the org scope is not listed")
+		return time.Time{}
+	}
+
+	if err := store.stampRefusal(ctx, coord.OrgScope); err != nil {
+		t.Fatalf("stampRefusal: %v", err)
+	}
+	seen := stamp()
+	// A distinct instant, so the two stamps cannot compare equal by
+	// landing in the same clock tick.
+	time.Sleep(2 * time.Millisecond)
+	if err := store.stampRefusal(ctx, coord.OrgScope); err != nil {
+		t.Fatalf("stampRefusal: %v", err)
+	}
+	newer := stamp()
+	if !newer.After(seen) {
+		t.Fatalf("setup: the second stamp %v is not after the first %v", newer, seen)
+	}
+
+	store.clearRefusal(ctx, coord.OrgScope, seen)
+	if got := stamp(); !got.Equal(newer) {
+		t.Fatalf("refusal stamp = %v, want the newer %v: a stale clear erased a "+
+			"refusal that is still true", got, newer)
+	}
+
+	store.clearRefusal(ctx, coord.OrgScope, newer)
+	if got := stamp(); !got.IsZero() {
+		t.Fatalf("refusal stamp = %v, want it cleared by a caller that saw it", got)
+	}
+}
