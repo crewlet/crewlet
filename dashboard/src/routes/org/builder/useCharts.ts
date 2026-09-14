@@ -39,19 +39,19 @@ import type { OpenScreen } from "./nodeActions.tsx";
  * pending update leaves it (and every layout built on it) as it was.
  */
 export function useStructure(state: BuilderState): Structure {
-  const { draft, baseDraft, check } = state;
+  const { draft, baseDraft, check, generation } = state;
   return useMemo(
-    () => structure(chartInputs({ draft, baseDraft, check })),
-    [draft, baseDraft, check],
+    () => structure(chartInputs({ draft, baseDraft, check, generation })),
+    [draft, baseDraft, check, generation],
   );
 }
 
 /** The reporting chart of the current draft, on the same terms as [useStructure]. */
 export function useReporting(state: BuilderState): Reporting {
-  const { draft, baseDraft, check } = state;
+  const { draft, baseDraft, check, generation } = state;
   return useMemo(
-    () => reporting(chartInputs({ draft, baseDraft, check })),
-    [draft, baseDraft, check],
+    () => reporting(chartInputs({ draft, baseDraft, check, generation })),
+    [draft, baseDraft, check, generation],
   );
 }
 

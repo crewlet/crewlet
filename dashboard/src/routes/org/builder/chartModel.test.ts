@@ -5,10 +5,12 @@
  * What these protect: a root seat is drawn in a unit only where the engine
  * placed it and the draft still names that unit, and a reference the engine
  * resolved to nothing is drawn at the root and marked; an inherited lead is
- * the engine's, and is never shown after the unit declares or clears its own;
- * a seat's handle, running identity and Datadog fallback are read from the
- * right source; and the reporting chart is the model's forest with every
- * seat under its current name, keyed by node, with the cycle group last.
+ * the engine's, and is never shown after the unit declares or clears its own
+ * or moves under another parent; a seat's handle, running identity and
+ * Datadog fallback are read from the right source; a seat's manager is read
+ * only from a check of the draft as it stands; and the reporting chart is the
+ * model's forest with every seat under its current name, keyed by node, with
+ * the cycle group last.
  */
 
 import { describe, expect, test } from "vitest";
@@ -180,7 +182,14 @@ describe("structure", () => {
     const derived = fixtureDerived(doc, PLACED);
     const checkedDraft = fromDocument(doc, derived);
     const sent = toDocument(checkedDraft);
-    const inputs = (draft: Draft) => ({ draft, baseDraft: checkedDraft, sent, derived });
+    // Not `current`: the drafts below are compared with a check of another.
+    const inputs = (draft: Draft) => ({
+      draft,
+      baseDraft: checkedDraft,
+      sent,
+      derived,
+      current: false,
+    });
     const rewrite = (data: Partial<Record<string, string>>) => ({
       ...checkedDraft,
       roles: checkedDraft.roles.map((s) =>
@@ -301,19 +310,40 @@ describe("structure", () => {
     expect(seatOf(unreachable, seatKey("sre")).handle).toBe("sre");
   });
 
-  test("a manager is named as the draft names that seat now", () => {
+  test("a manager is read only from a check of the draft as it stands, and named as the draft names it", () => {
     const doc = fixtureCompany();
-    const state = checkedEdit(doc, {
+    const overrides = {
       seats: { ...PLACED.seats, "units[0].roles[1]": { manager: "vp-engineering" } },
-    });
+    };
+    const state = checkedEdit(doc, overrides);
     expect(seatOf(state, seatKey("dev")).manager).toBe("VP Engineering");
     expect(seatOf(state, seatKey("sre")).manager).toBeNull();
+
+    // Any edit can move a reporting line (here: VP Engineering stops
+    // managing Dev), so until the next check answers nobody is named.
+    const edited = record(state, {
+      type: "setManages",
+      target: seatKey("vp-engineering"),
+      manages: [],
+    });
+    expect(seatOf(edited, seatKey("dev")).manager).toBeUndefined();
+    expect(seatOf(edited, seatKey("sre")).manager).toBeUndefined();
+
+    // Once that check answers, the manager takes the name the draft gives it.
     const renamed = record(state, {
       type: "renameSeat",
       target: seatKey("vp-engineering"),
       name: "Head of Engineering",
     });
-    expect(seatOf(renamed, seatKey("dev")).manager).toBe("Head of Engineering");
+    expect(seatOf(renamed, seatKey("dev")).manager).toBeUndefined();
+    const rechecked = answered(renamed, {
+      status: "clean",
+      warnings: [],
+      derived: fixtureDerived(toDocument(renamed.draft).document, {
+        seats: { ...PLACED.seats, "units[0].roles[1]": { manager: "vp-engineering" } },
+      }),
+    });
+    expect(seatOf(rechecked, seatKey("dev")).manager).toBe("Head of Engineering");
   });
 });
 

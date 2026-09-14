@@ -26,8 +26,12 @@
  * inherited lead is shown only while the unit still declares none and every
  * unit above it still sits and declares as it did, because the engine hands
  * a unit its parent's lead, and a unit moved under another parent inherits
- * another one. When the draft has moved past what the check saw, the fact is
- * left out until the next check answers, rather than shown stale.
+ * another one. A seat's primary manager follows from the whole organization
+ * (every `manages` list with its unit references expanded, every lead and
+ * the order the engine walks seats in), so no field says it still holds: it
+ * is shown only from a check of the draft as it stands. When the draft has
+ * moved past what the check saw, the fact is left out until the next check
+ * answers, rather than shown stale.
  */
 
 import type { Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
@@ -54,6 +58,8 @@ export interface ChartInputs {
   readonly sent: IndexedDocument | null;
   /** The engine's derivation of `sent`, when that check answered with one. */
   readonly derived: Derived | null;
+  /** Whether that derivation describes the draft as it stands: no change since that check. */
+  readonly current: boolean;
 }
 
 /**
@@ -62,13 +68,16 @@ export interface ChartInputs {
  * other (see the module doc).
  */
 export function chartInputs(
-  state: Pick<BuilderState, "draft" | "baseDraft" | "check">,
+  state: Pick<BuilderState, "draft" | "baseDraft" | "check" | "generation">,
 ): ChartInputs {
+  const sent = state.check.derived ? state.check.sent : null;
+  const derived = state.check.sent ? state.check.derived : null;
   return {
     draft: state.draft,
     baseDraft: state.baseDraft,
-    sent: state.check.derived ? state.check.sent : null,
-    derived: state.check.sent ? state.check.derived : null,
+    sent,
+    derived,
+    current: derived !== null && state.check.generation === state.generation,
   };
 }
 
@@ -137,7 +146,10 @@ export interface SeatView {
   readonly danglingUnitRef: string | null;
   /** The seat an alert that names nobody wakes (`integrations.datadog.route_to`). */
   readonly datadogFallback: boolean;
-  /** Its primary manager's name; `null` for none, `undefined` while unknown. */
+  /**
+   * Its primary manager's name; `null` for none; `undefined` until a check
+   * of the draft as it stands says (see the module doc).
+   */
   readonly manager: string | null | undefined;
   /** The node it is drawn under: the company or a unit. */
   readonly parent: NodeKey;
@@ -265,14 +277,16 @@ export function structure(inputs: ChartInputs): Structure {
     else placedIn.set(unit, [...(placedIn.get(unit) ?? []), seat.key]);
   }
 
+  // A PRIMARY MANAGER IS READ ONLY FROM A CHECK OF THIS VERY DRAFT. Any edit
+  // (a manages list, a lead, a move, a reorder, a rename a reference follows)
+  // can change it, and deciding which ones do would be the engine's rules
+  // written again, so until the next check answers it is unknown.
   const managerName = (key: NodeKey): string | null | undefined => {
-    const derived = engine.seatByKey.get(key);
+    const derived = inputs.current ? engine.seatByKey.get(key) : undefined;
     if (!derived) return undefined;
     if (!derived.manager) return null;
     const managerKey = engine.keyOfHandle.get(derived.manager);
     const found = managerKey === undefined ? undefined : locate(draft, managerKey);
-    // A manager removed since the check: who manages the seat now is the
-    // next check's to say.
     return found?.kind === "seat" ? found.node.data.name : undefined;
   };
 

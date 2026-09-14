@@ -1109,8 +1109,11 @@ to.
   unit stays at the root marked with the engine's warning, a unit with no lead
   of its own shows the lead it inherits, and a seat shows its primary manager.
   A derived fact is shown only while the draft still holds the values the
-  check saw; after an edit the chart says it is waiting for the check rather
-  than showing a placement or a lead the engine has not confirmed.
+  check saw (for an inherited lead, that includes where each unit above sits);
+  after an edit the chart says it is waiting for the check rather than showing
+  a placement or a lead the engine has not confirmed. A seat's primary
+  manager follows from the whole organization, so no single field says it
+  still holds: it is shown only from a check of the draft as it stands.
 - **The canvas is a tree of cards.** The structure chart has the company card
   at the root, root seats as cards and units as cards with their seats
   stacked inside as rows. The reporting chart is the engine's forest: seats
