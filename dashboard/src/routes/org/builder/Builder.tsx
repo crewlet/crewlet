@@ -135,6 +135,13 @@ export interface AddDialogProps {
 }
 
 /**
+ * Which chart the canvas draws. The Builder owns the `chart` section param
+ * (its toolbar is where it is chosen), so the canvas is HANDED the answer
+ * rather than reading the URL a second time, where the two could disagree.
+ */
+export type BuilderChart = "structure" | "reporting";
+
+/**
  * The views and dialogs the Builder hosts. They read and act through
  * `BuilderContext`; the Builder decides which is mounted.
  *
@@ -142,7 +149,7 @@ export interface AddDialogProps {
  * it would have drawn it rather than drawing nothing.
  */
 export interface BuilderSurfaces {
-  canvas: ComponentType | null;
+  canvas: ComponentType<{ chart: BuilderChart }> | null;
   outline: ComponentType | null;
   editor: ComponentType<NodeDialogProps> | null;
   add: ComponentType<AddDialogProps> | null;
@@ -892,7 +899,8 @@ function Lens({
   // attribute, because `.org-builder-toolbar` sets `display: flex` and an
   // author rule beats the user agent's `[hidden] { display: none }`.
   const startingCompany = creating && !templateApplied;
-  const viewSurface = view === "canvas" ? surfaces.canvas : surfaces.outline;
+  const Canvas = surfaces.canvas;
+  const Outline = surfaces.outline;
   const fill = view === "canvas";
   const providers = state.base.document?.providers;
   const llm = isRecord(providers) ? providers.llm : undefined;
@@ -1289,10 +1297,12 @@ function Lens({
           <TabPanel id={viewPanel} value={view}>
             {view === "canvas" ? (
               <TabPanel id={chartPanel} value={chart}>
-                <Surface component={viewSurface} name="The canvas" />
+                {Canvas ? <Canvas chart={chart} /> : <MissingSurface name="The canvas" />}
               </TabPanel>
+            ) : Outline ? (
+              <Outline />
             ) : (
-              <Surface component={viewSurface} name="The outline" />
+              <MissingSurface name="The outline" />
             )}
           </TabPanel>
         )}
@@ -1440,23 +1450,15 @@ function isTextEntry(el: HTMLElement): boolean {
   );
 }
 
-function Surface({
-  component: Component,
-  name,
-}: {
-  component: ComponentType | null;
-  name: string;
-}) {
-  if (!Component) {
-    return (
-      <Empty
-        icon="sitemap"
-        title={`${name} is not part of this build`}
-        hint="Open the Chart or Directory lens to read the organization."
-      />
-    );
-  }
-  return <Component />;
+/** Where a view this build does not carry would have been drawn. */
+function MissingSurface({ name }: { name: string }) {
+  return (
+    <Empty
+      icon="sitemap"
+      title={`${name} is not part of this build`}
+      hint="Open the Chart or Directory lens to read the organization."
+    />
+  );
 }
 
 function DialogHost({

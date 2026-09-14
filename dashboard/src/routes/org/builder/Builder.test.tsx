@@ -142,6 +142,18 @@ describe("the posture table", () => {
   });
 });
 
+describe("the views the lens hosts", () => {
+  test("the canvas is handed the chart the toolbar chooses", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    expect(await screen.findByText("Drawing the structure chart")).toBeDefined();
+    fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
+    expect(await screen.findByText("Drawing the reporting chart")).toBeDefined();
+    // A section, so the chart on screen is in the URL and a link opens it.
+    expect(location.hash).toContain("chart=reporting");
+  });
+});
+
 describe("checking the draft", () => {
   test("an edit is checked as the merge patch a save would send", async () => {
     const engine = new Engine(company());

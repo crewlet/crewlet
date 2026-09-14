@@ -1006,6 +1006,9 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
   plus `dry_run=true` and without the audit summary. A draft that changes
   moves its generation, and an answer for an older generation is dropped.
+- **The canvas is handed the chart it draws.** `chart=structure|reporting` is
+  the Builder's own section param, chosen in its toolbar, so the canvas is
+  given the answer as a prop rather than reading the URL a second time.
 - **The canvas view fills the screen.** With `view=canvas` the lens is a flex
   column of definite height (`.screen-inner:has(.org-builder-body.fill)`), so
   the canvas takes what is left under the toolbar and `.screen` has nothing to
