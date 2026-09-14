@@ -825,7 +825,7 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 // expectedSeq resolves the caller's expectation to the KV sequence to
 // compare-and-set against, or reports the race.
 //
-// Zero means unconditional — see [coord.ActivationRequest.Expect] — and it is
+// Zero means unconditional (see [coord.ActivationRequest.Expect]), and it is
 // also what a create-only write compares against, since there is no entry to
 // take a sequence from.
 func (f *FleetStore) expectedSeq(ctx context.Context, req coord.ActivationRequest) (uint64, error) {

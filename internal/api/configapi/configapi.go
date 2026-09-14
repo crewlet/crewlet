@@ -825,7 +825,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// HEADER ONLY, and no [takeSummary]: this route reads no body, so there
 	// is no `_summary` to lift and nothing to refuse for. A revert also
 	// already knows what it did, so an unset header defaults rather than
-	// answering 400 — the one write here that can name itself.
+	// answering 400, the one write here that can name itself.
 	summary := r.Header.Get("X-Summary")
 	if summary == "" {
 		summary = "revert to " + target.ID

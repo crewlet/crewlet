@@ -400,9 +400,17 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	// The TTL is shortened so the lapse would happen inside a test rather
 	// than in forty-five seconds. The heartbeat follows it, which is what
 	// makes a short TTL workable at all.
+	//
+	// THREE SECONDS, not the 0.9 this carried: the beat is a third of the
+	// TTL, so at 0.9 one beat delayed by a second (a loaded machine running
+	// several packages at once, which is what `make check` is) lapsed a
+	// lease on an engine that was renewing exactly as it should, and the
+	// failure read as the regression this guards. At three the same jitter
+	// has to be three times worse to be mistaken for it, and the lapse it
+	// does catch still happens a second before the assertion.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		b.Coordination.LeaseTTLSeconds = 0.9
+		b.Coordination.LeaseTTLSeconds = 3
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b})
 
@@ -417,7 +425,7 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	cancel()
 	// Comfortably past the lease TTL: an engine whose loops died with the
 	// context has stopped renewing, so the leases have expired.
-	time.Sleep(2 * time.Second)
+	time.Sleep(4 * time.Second)
 
 	if got := e.Node().Host().Held(); len(got) != 2 {
 		t.Errorf("held seats = %v after the start context was cancelled, want both: "+
