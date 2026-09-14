@@ -98,6 +98,20 @@ type fileLock struct {
 	// map entry have to move together, or a release racing an open would
 	// drop a lock the opener is about to depend on.
 	holds int
+
+	// writes orders the write transactions every one of those handles
+	// runs on this file. See writelock.go.
+	writes writeQueue
+}
+
+// queue is the write queue a handle on this file takes its place in. An
+// in-memory database has no claim and no file to share, so it gets a queue of
+// its own.
+func (l *fileLock) queue() *writeQueue {
+	if l == nil {
+		return &writeQueue{}
+	}
+	return &l.writes
 }
 
 // locksHeld is this process's claims, one per database path.

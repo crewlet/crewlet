@@ -207,9 +207,6 @@ func extractTags(payload []byte) map[string]string {
 	return tags
 }
 
-// jsonString reads a JSON value as a string, yielding "" for anything that is
-// not one — including absent, null, and a number that happens to sit in a
-// field a tag names.
 // jsonInt reads a number out of a raw JSON field.
 //
 // json.Number rather than float64, so a token count past 2^53 is not silently
@@ -229,6 +226,9 @@ func jsonInt(raw json.RawMessage) int {
 	return int(v)
 }
 
+// jsonString reads a JSON value as a string, yielding "" for anything that is
+// not one: absent, null, and a number that happens to sit in a field a tag
+// names.
 func jsonString(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

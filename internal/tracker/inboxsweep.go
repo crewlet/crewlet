@@ -63,15 +63,15 @@ func InboxJobs(db *store.DB, retention time.Duration) []maintenance.Job {
 // exactly a row a replay would decline to write. Comparing on the effective
 // instant instead would make the two disagree, and an inbox would grow back on
 // every reanchor by the width of that disagreement.
+//
+// A POOLED TRANSACTION, NOT A PIN. Every pinned writer the replicated estate
+// declares is held for the life of the process by a domain's applier, so a
+// sweep that asked for one was refused on every tick of a running node. A
+// pooled write transaction takes the same lock through the same queue, which
+// is all this needs.
 func purgeInbox(ctx context.Context, db *store.DB, cutoff time.Time) (int64, error) {
-	w, err := db.Replicated().Writer(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("tracker: take the writer to sweep the inbox: %w", err)
-	}
-	defer func() { _ = w.Close() }()
-
 	var swept int64
-	err = w.Tx(ctx, func(tx *sql.Tx) error {
+	err := db.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		res, err := tx.ExecContext(ctx,
 			`DELETE FROM tracker_notifications WHERE created_at < ?`,

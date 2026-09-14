@@ -49,8 +49,8 @@
 //
 // The rows a record produces, the record's operation id, and the checkpoint
 // that covers it commit in ONE transaction. The acknowledgement is OUTSIDE
-// it, because the store re-runs a conflicted transaction's body and a publish
-// inside one would happen twice. Two properties follow: a node can only be
+// it, because the store may re-run a transaction's body and a publish inside
+// one would happen twice. Two properties follow: a node can only be
 // BEHIND, never inconsistent; and a transaction ends at a RECORD boundary,
 // never inside one.
 //

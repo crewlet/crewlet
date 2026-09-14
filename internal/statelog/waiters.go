@@ -108,9 +108,9 @@ func (w *waiters) drop(item *waiter) {
 
 // release wakes every waiter at or below checkpoint.
 //
-// Called AFTER the transaction commits, never inside it: the store re-runs a
-// conflicted transaction's body, so a wake from inside one can announce a
-// position that was then rolled back.
+// Called AFTER the transaction commits, never inside it: the store may re-run
+// a transaction's body, so a wake from inside one can announce a position that
+// was then rolled back.
 func (w *waiters) release(checkpoint Position) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
