@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,9 +53,8 @@ func TestPendingReportsABrokenLibraryCacheInsteadOfPanicking(t *testing.T) {
 	cmd := exec.Command(os.Args[0], //nolint:gosec // os.Args[0] is this test binary
 		"-test.run=^TestPendingWithABrokenLibraryCacheInAChildProcess$", "-test.count=1")
 	cmd.Env = append(os.Environ(), pendingChildEnv+"=1", tursoCacheEnv+"="+root)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("Pending did not report the broken cache: %v\n%s", err, out)
-	}
+	out, err := cmd.CombinedOutput()
+	requireChildRan(t, "Pending did not report the broken cache", out, err)
 }
 
 // TestPendingWithABrokenLibraryCacheInAChildProcess is the child half.
@@ -69,6 +69,7 @@ func TestPendingWithABrokenLibraryCacheInAChildProcess(t *testing.T) {
 	if !strings.Contains(err.Error(), os.Getenv(tursoCacheEnv)) {
 		t.Fatalf("error = %v; it must name the cache an operator has to look at", err)
 	}
+	fmt.Println(childRan)
 }
 
 // PENDING REFUSES A DATABASE ANOTHER PROCESS HOLDS, with the same sentinel
