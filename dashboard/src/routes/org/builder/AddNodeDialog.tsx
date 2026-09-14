@@ -2,8 +2,8 @@
  * Adding a unit, an agent seat or a human seat under the company or a unit.
  *
  * A NAME THAT IS FREE FROM THE START. Seat names are unique and so are unit
- * names, because a lead, a unit reference and a `manages` entry name exactly
- * one of each. People routinely want several seats with one role title, and
+ * names, because a lead or a `manages` entry names exactly one seat, and a
+ * `manages` entry or a unit reference exactly one unit. People routinely want several seats with one role title, and
  * learning the rule from the next check means inventing a second name after
  * the fact. So the name is pre-filled with one not yet taken, and a typed
  * name that is taken offers the next free one ("Software Engineer 2"). That
@@ -22,7 +22,13 @@ import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { Button, Segmented } from "~/ui/primitives.tsx";
 import { useBuilder, type AddKind } from "./BuilderContext.tsx";
-import { ContactField, ReadOnlyNote, Refusal, UnitTypeField } from "./dialogParts.tsx";
+import {
+  ContactField,
+  ReadOnlyNote,
+  Refusal,
+  UNIQUE_NAME_HELP,
+  UnitTypeField,
+} from "./dialogParts.tsx";
 import { suggestUniqueName } from "./model/document.ts";
 import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
 import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./model/keys.ts";
@@ -177,11 +183,7 @@ export function AddNodeDialog({
           setRefusal(null);
         }}
         autoFocus
-        help={
-          kind === "unit"
-            ? "Unit names are unique: a lead, a unit reference and a manages entry name exactly one unit."
-            : "Seat names are unique: a lead or a manages entry names exactly one seat."
-        }
+        help={UNIQUE_NAME_HELP[kind === "unit" ? "unit" : "seat"]}
       />
       {/* BESIDE THE FIELD, NOT INSIDE ITS DESCRIPTION: the way out of a
           collision is a control, and a button inside the text a screen reader

@@ -133,6 +133,19 @@ export function ReadOnlyFact({
   );
 }
 
+/**
+ * Why a name has to be free, said where one is typed.
+ *
+ * WHAT NAMES WHAT. A unit's lead and a `manages` entry name a seat, so a seat
+ * name must pick out one seat; a `manages` entry and a root seat's `unit:`
+ * reference name a unit, so a unit name must pick out one unit. A lead never
+ * names a unit, so it is no reason for a unit's name to be unique.
+ */
+export const UNIQUE_NAME_HELP = {
+  seat: "Seat names are unique: a lead or a manages entry names exactly one seat.",
+  unit: "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
+} as const;
+
 /** The unit types the engine knows by name. Any other string is accepted as a custom type. */
 export const UNIT_TYPES = [
   "division",

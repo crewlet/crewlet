@@ -67,6 +67,12 @@ test("a taken name offers the next free one, with the rule that makes names uniq
 
 test("a unit is added with its type at the company root; its names are checked against units", () => {
   const view = open(keyedState(fixtureCompany()), null, "unit");
+  // A lead names a seat, never a unit, so it is no reason a unit's name is unique.
+  expect(
+    screen.getByText(
+      "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
+    ),
+  ).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Sales" } });
   expect(screen.getByRole("button", { name: "Use Sales 2" })).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Legal" } });

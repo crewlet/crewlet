@@ -74,6 +74,7 @@ import {
   ReadOnlyFact,
   Refusal,
   ScreenLink,
+  UNIQUE_NAME_HELP,
   UnitTypeField,
   placeOnFields,
 } from "./dialogParts.tsx";
@@ -585,7 +586,7 @@ function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void })
         value={form.name}
         onChange={(name) => set({ name })}
         disabled={disabled}
-        help="Unit names are unique: a lead, a unit reference and a manages entry name exactly one unit."
+        help={UNIQUE_NAME_HELP.unit}
         error={errorFor(["name"])}
       />
       {renamed && <RenameUnitPreflight unit={key} stored={!isMintedKey(key)} />}
@@ -777,7 +778,7 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
         value={form.name}
         onChange={(name) => set({ name })}
         disabled={disabled}
-        help="Seat names are unique: a lead or a manages entry names exactly one seat."
+        help={UNIQUE_NAME_HELP.seat}
         error={errorFor(["name"])}
       />
       {minted ? (
