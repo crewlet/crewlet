@@ -1181,9 +1181,10 @@ its own `failed` field (a phase or turn that died) and for an event type that
 failures without re-deriving them from a type list of its own.
 
 The flag survives a restart: the event-store writer stamps a `failed` tag on
-those events, and the projection reads it back when it hydrates its feed from
-history.  `list_events` deliberately never selects the payload column, so
-without the tag every historical failure would read back as a success.
+those events, and the projection reads it back when it seeds its feed from the
+store at startup. The store's listing (`EventLog.List`) deliberately never
+selects the payload column, so without the tag every historical failure would
+read back as a success.
 
 ### The health envelope
 
@@ -1225,7 +1226,7 @@ the route and the snapshot carry all of them.
 | `clients` | Dashboards currently connected to this API process. |
 | `in_flight` | Turns this node is running. |
 | `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
-| `posture` | What this node is doing about the company revision the fleet has activated: `serve`, `wait`, `shed` or `stuck`. See [the control plane](../concepts/control-plane.md). |
+| `posture` | What this node is doing about the company revision the fleet has activated: `serve`, `wait`, `shed`, `stuck` or `isolated`. See [the control plane](../concepts/control-plane.md). |
 | `applied_epoch` | The activation epoch this node has applied, which is what a `wait` or a `shed` is measured against. |
 | `seats` | The seat handles this node currently holds. |
 | `stall_lag_seconds` | How far behind this node's watched duty is, present **only** when it is behind at all: the number climbs towards the seat lease TTL, at which the watchdog ends the process. A field that was always present and usually zero would train a reader to skip the one line that must be read when it appears. |

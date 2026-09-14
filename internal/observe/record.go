@@ -86,7 +86,7 @@ func tagsFrom(body map[string]any) map[string]string {
 	}
 	// Whether the work this event reports actually FAILED. A tag rather
 	// than a payload read for the same reason as the rest: a feed
-	// hydrating from history never sees the payload, and one that renders
+	// seeded from history never sees the payload, and one that renders
 	// a failed turn identically to a successful one is the whole problem
 	// this dimension exists to close. Set only when true, so it doubles as
 	// a filter.

@@ -194,18 +194,18 @@ func TestRecordsOlderThanTheWindowAreDropped(t *testing.T) {
 func TestPruningSurvivesAnOutOfOrderHead(t *testing.T) {
 	t.Parallel()
 	// Popping from the front is only correct while the slice is
-	// timestamp-ordered, and it is not reliably: the API subscribes to the
-	// stream before it hydrates, so a live event can land ahead of the
-	// older records hydration then appends behind it. One recent record at
-	// the head is enough to make a head-popping loop exit immediately and
-	// never prune again — the window would silently stop being a window.
+	// timestamp-ordered, and the live path does not keep it so: events on
+	// different topics arrive in no order between them, and a fleet's
+	// clocks disagree. One recent record at the head is enough to make a
+	// head-popping loop exit immediately and never prune again, and the
+	// window would silently stop being a window.
 	s := livestate.New()
 	s.Apply(phaseSpend("live", "2026-06-14T12:00:00Z", 10))
-	s.Apply(phaseSpend("hydrated-old", "2026-06-12T00:00:00Z", 20))
+	s.Apply(phaseSpend("late-old", "2026-06-12T00:00:00Z", 20))
 	s.Apply(phaseSpend("trigger", "2026-06-14T12:30:00Z", 5))
 
 	for _, record := range s.SpendRecords() {
-		if record.EventID == "hydrated-old" {
+		if record.EventID == "late-old" {
 			t.Error("a record behind a recent head was never pruned")
 		}
 	}

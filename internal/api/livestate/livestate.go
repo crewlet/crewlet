@@ -52,8 +52,8 @@ const (
 	// EventFeedLimit is how many persisted-category events the projection
 	// retains for the activity feed — and the number a snapshot ships.
 	//
-	// ONE number: the ring, the hydration read and the snapshot all derive
-	// from it. They used to be three (400 retained, 150 sent, 250 kept
+	// ONE number: the ring, the startup seed's read and the snapshot all
+	// derive from it. They used to be three (400 retained, 150 sent, 250 kept
 	// client-side), so a tab streamed its feed up to 250 rows and then a
 	// refresh visibly snapped it back to 150, while 250 of the server's
 	// rows could never be delivered at all.

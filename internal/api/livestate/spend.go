@@ -54,11 +54,12 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 // pruneSpend drops records that have aged out of the live window.
 //
 // ORDER-INDEPENDENT by construction. Popping from the front is only correct
-// while the slice is timestamp-ordered, and it is not reliably: the API
-// subscribes to the stream before it hydrates, so a live event can land ahead
-// of the older records hydration then appends behind it. One recent record at
-// the head is enough to make a head-popping loop exit immediately and never
-// prune again — the window would silently stop being a window.
+// while the slice is timestamp-ordered, and the live path does not keep it so:
+// a broadcast subscription reads across topics with no order between them, and
+// a fleet's nodes stamp their events with clocks that disagree, so an older
+// record can land behind a newer one. One recent record at the head is enough
+// to make a head-popping loop exit immediately and never prune again, and the
+// window would silently stop being a window.
 //
 // The sweep runs only when there is something to drop, so the common case costs
 // one pass of comparisons and no allocation.
