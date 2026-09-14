@@ -2,6 +2,8 @@ package builtin
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -158,7 +160,13 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		if raw == nil {
 			out.Cleared["estimate_minutes"] = true
 		} else {
-			minutes := argInt(args, "estimate_minutes", 0)
+			minutes, ok := scheduleInt(raw)
+			if !ok {
+				return out, fmt.Sprintf("%s could not read `estimate_minutes`: "+
+					"%s. It is a whole number of MINUTES — 90, not \"90m\" and "+
+					"not \"an hour and a half\". Pass null to clear it.",
+					tool, argString(args, "estimate_minutes"))
+			}
 			if minutes < 0 {
 				return out, fmt.Sprintf("%s was given a negative "+
 					"`estimate_minutes`; an estimate is a duration.", tool)
@@ -170,7 +178,12 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		if raw == nil {
 			out.Cleared["points"] = true
 		} else {
-			points := argFloat(args, "points")
+			points, ok := scheduleFloat(raw)
+			if !ok {
+				return out, fmt.Sprintf("%s could not read `points`: %s. It is "+
+					"a number — 3 or 0.5, not a word. Pass null to clear it.",
+					tool, argString(args, "points"))
+			}
 			if points < 0 {
 				return out, fmt.Sprintf("%s was given negative `points`; a "+
 					"size is not negative.", tool)
@@ -182,7 +195,13 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		if raw == nil {
 			out.Cleared["sprint"] = true
 		} else {
-			number := argInt(args, "sprint", 0)
+			number, ok := scheduleInt(raw)
+			if !ok {
+				return out, fmt.Sprintf("%s could not read `sprint`: %s. It is "+
+					"the sprint's NUMBER — `sprint_report` lists the ones this "+
+					"project has. Pass null to take the task out of its sprint.",
+					tool, argString(args, "sprint"))
+			}
 			if number <= 0 {
 				return out, fmt.Sprintf("%s was given sprint %d, and sprints "+
 					"are numbered from 1 — `sprint_report` lists the ones this "+
@@ -193,6 +212,59 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		}
 	}
 	return out, ""
+}
+
+// scheduleInt and scheduleFloat read a number, reporting whether they COULD.
+//
+// # Why not [argInt] and [argFloat]
+//
+// Because both answer a fallback for a value they cannot read, and every field
+// here is a pointer precisely because its zero is a SETTING rather than an
+// absence: zero minutes and zero points both mean UNESTIMATED. So an
+// unreadable value became `&0` and the write succeeded — `estimate_minutes:
+// "two hours"` answered `applied` and wiped the estimate, which is the exact
+// failure this function's own header says it exists to prevent, in the half of
+// it that was not written to the rule. [argFloat]'s doc states the condition
+// under which its zero is right — "every caller of this one has a field whose
+// zero IS its default" — and these three are the callers that broke it.
+//
+// The parse is the WHOLE string rather than [fmt.Sscanf]'s prefix, which is
+// the other half of the same bug: `Sscanf("%d")` reads "2 days" as 2, so a
+// two-day estimate was stored as two MINUTES and nothing was refused.
+func scheduleInt(raw any) (int, bool) {
+	switch v := raw.(type) {
+	case float64:
+		// JSON has one number type, so a whole number arrives here. A
+		// fraction is not a whole number of minutes and is refused
+		// rather than truncated to one nobody typed.
+		if v != math.Trunc(v) {
+			return 0, false
+		}
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		return n, err == nil
+	}
+	return 0, false
+}
+
+func scheduleFloat(raw any) (float64, bool) {
+	switch v := raw.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // applyToTask writes what a CREATE was given. A create clears nothing: there

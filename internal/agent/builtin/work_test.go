@@ -1492,6 +1492,14 @@ func TestAnUpdateSetsAndClearsTheSchedule(t *testing.T) {
 	if cleared.Sprint == nil || *cleared.Sprint != 0 {
 		t.Errorf("a cleared sprint is %v, want 0", cleared.Sprint)
 	}
+	// AND TAKING A TASK OUT IS A SPRINT CHANGE, like putting one in. The
+	// gate read only the SET half, so a removal was filed as `fields` — and
+	// a removal is the half a sprint's team most needs to hear, since it is
+	// commitment leaving their window. The writer's own rollover already
+	// files a cleared sprint under this kind.
+	if kind := trk.kinds[len(trk.kinds)-1]; kind != tracker.ChangeSprint {
+		t.Errorf("a sprint CLEAR was filed as %q, want %q", kind, tracker.ChangeSprint)
+	}
 }
 
 // A SIZE IS NOT NEGATIVE AND A SPRINT IS NUMBERED FROM ONE, and both are
@@ -1510,5 +1518,89 @@ func TestTheSchedulingValuesAreRefusedRatherThanStoredWrong(t *testing.T) {
 		if got := callWork(t, reg, builtin.CreateWorkItemTool, args); !got.Failed {
 			t.Errorf("create(%v) was accepted, want a refusal naming the rule", args)
 		}
+	}
+}
+
+// AN UNREADABLE SIZE IS REFUSED, NOT READ AS ZERO.
+//
+// This is the date rule above applied to the half of `readSchedule` that was
+// not written to it. Every one of these fields is a POINTER because its zero
+// is a setting — zero minutes and zero points both mean UNESTIMATED — so a
+// value the parser could not read became `&0`, the write succeeded, and the
+// answer said `applied` while the estimate had been WIPED. A model reads that
+// as having set one.
+//
+// `"2 days"` is the case that makes it more than a missed refusal: the reader
+// was `fmt.Sscanf("%d")`, which takes the leading integer and stops, so a
+// two-day estimate was stored as two MINUTES with nothing to say so.
+func TestAnUnreadableSizeIsRefusedRatherThanReadAsZero(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		field string
+		value any
+	}{
+		{"an estimate in words", "estimate_minutes", "two hours"},
+		{"an estimate with a unit", "estimate_minutes", "2 days"},
+		{"a fractional minute", "estimate_minutes", 1.5},
+		{"points in words", "points", "five"},
+		{"a sprint by name", "sprint", "next"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+			got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+				"title": "sized wrong", "project": "ENG", tc.field: tc.value,
+			})
+			if !got.Failed {
+				t.Fatalf("%s=%v was accepted; the task was filed as "+
+					"UNESTIMATED and the answer said it worked", tc.field, tc.value)
+			}
+			// AND THE REFUSAL NAMES THE FIELD, which is the whole of the
+			// repair: a model cannot fix what it is not told about.
+			if !strings.Contains(got.Output, tc.field) {
+				t.Errorf("the refusal does not name `%s`: %s", tc.field, got.Output)
+			}
+		})
+	}
+}
+
+// AND A NUMBER THAT READS IS STILL TAKEN, so the guard above refuses the
+// unreadable rather than the unfamiliar. A JSON number, a whole float and a
+// numeric string are all the same estimate.
+func TestAReadableSizeIsStillTakenInEverySpelling(t *testing.T) {
+	t.Parallel()
+	for _, value := range []any{90, 90.0, "90"} {
+		trk := newFakeTracker()
+		reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+		got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+			"title": "sized", "project": "ENG", "estimate_minutes": value,
+		})
+		if got.Failed {
+			t.Fatalf("estimate_minutes=%v (%T) was refused: %s", value, value, got.Output)
+		}
+		if trk.created[0].EstimateMinutes != 90 {
+			t.Errorf("estimate_minutes=%v (%T) stored %d, want 90",
+				value, value, trk.created[0].EstimateMinutes)
+		}
+	}
+}
+
+// AND ZERO IS STILL A VALUE somebody can set, which is what distinguishes this
+// from refusing falsy input: "this takes no time" is a statement, and the
+// pointer is what carries it.
+func TestAnExplicitZeroEstimateIsSet(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "free", "project": "ENG", "estimate_minutes": 0,
+	})
+	if got.Failed {
+		t.Fatalf("an explicit zero estimate was refused: %s", got.Output)
 	}
 }
