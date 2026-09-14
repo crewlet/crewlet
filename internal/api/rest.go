@@ -59,6 +59,12 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
 	{method: "GET", pattern: "/work/projects", what: "work_projects"},
 	{method: "GET", pattern: "/work/sprints", what: "work_sprints"},
+	// THE SERIES, beside the figures. Documented since the query shipped
+	// and never wired, which is the one way a missing route is worse than
+	// no route at all: /work/{id} below matches the path, so a reader
+	// following the published table got a 404 about a TASK called
+	// "burndown" rather than anything naming the endpoint they asked for.
+	{method: "GET", pattern: "/work/burndown", what: "work_burndown"},
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
