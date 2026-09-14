@@ -300,6 +300,24 @@ seat goes:
   and a seat added later under the same handle reattaches to it. See
   [Seat Ownership](../concepts/seat-ownership.md#the-removed-seat).
 
+## Changing a seat's kind
+
+**Change to a human seat** and **Change to an agent seat** are their own step,
+because the change removes fields: the engine refuses a human seat every
+runtime field (models, token budget, workers, learning, schedules, chat app
+blocks, Jira and Confluence ownership, tool credentials, behavioral guidelines
+and its own GitHub App), and refuses an agent seat `contact` and
+`availability`. The dialog lists the fields by name before anything is
+recorded, and calls out the ones that hold credentials: the builder never shows
+a credential, so it cannot type one back in and the value is gone for good once
+the change is saved.
+
+Becoming a human seat needs one contact identity, and cannot be done to the
+Datadog fallback without choosing the agent seat that takes over. The
+schedules the change would strand, and a turn the seat is running now, are
+named first. A seat that becomes human stops running; its memory is kept but
+unused while it is a human seat.
+
 ## Reviewing and saving
 
 **Review and save** opens once the draft has changes, and says what the save
