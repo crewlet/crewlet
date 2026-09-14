@@ -626,7 +626,11 @@ func (l *EventLog) countEvents(ctx context.Context, column, id string) (int, err
 // event id rather than concatenating.
 func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([]EventRecord, error) {
 	if limit <= 0 {
-		return nil, nil
+		// ALLOCATED, like every other list read here — asking for no rows is
+		// still a read that succeeded, and the contract on [EventLog] does
+		// not have a second exception. Reachable only from a caller passing
+		// a computed limit; today's one caller passes a constant.
+		return []EventRecord{}, nil
 	}
 	out, err := l.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
@@ -994,7 +998,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []tokens.Record
+	out := []tokens.Record{}
 	for rows.Next() {
 		var (
 			at  int64

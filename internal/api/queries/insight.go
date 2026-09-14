@@ -66,23 +66,33 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// a little past the cap ends up whole on the page, under a banner saying
 	// part of it is missing. The count runs only on a read that filled, which
 	// is the only case where a cut is possible at all.
+	//
+	// THE SECOND READ DEGRADES, it does not fail the first. The rows are
+	// already in hand and they are what the reader came for; discarding a
+	// successful 500-row read because a follow-up count could not be taken
+	// turns the largest turns — the only ones that reach this branch at all,
+	// and the ones most worth opening — into `query_failed`. So a failure
+	// here leaves `truncated` false and logs: the page renders, and the worst
+	// case is a missing caution badge rather than a missing screen.
 	truncated := false
 	if len(records) >= store.MaxTurnEvents {
 		total, err := s.Events.TurnEventCount(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		if total > len(records) {
+		switch {
+		case err != nil:
+			log.WarnContext(ctx, "turn_extent_unavailable", "turn", id, "error", err)
+		case total > len(records):
 			closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
 			if err != nil {
-				return nil, err
+				log.WarnContext(ctx, "turn_ending_unavailable", "turn", id, "error", err)
+			} else {
+				records = mergeByID(records, closing)
 			}
-			records = mergeByID(records, closing)
+			// AFTER the merge, because the merge is what decides it: the
+			// recovered ending closes the gap outright on a turn only a
+			// little past the cap, and leaves one on a turn that is
+			// genuinely long.
+			truncated = total > len(records)
 		}
-		// AFTER the merge, because the merge is what decides it: the
-		// recovered ending closes the gap outright on a turn only a little
-		// past the cap, and leaves one on a turn that is genuinely long.
-		truncated = total > len(records)
 	}
 	return map[string]any{
 		"turn_id": id,
@@ -126,12 +136,34 @@ func mergeByID(head, tail []store.EventRecord) []store.EventRecord {
 	if len(tail) == 0 {
 		return head
 	}
-	seen := make(map[string]struct{}, len(head))
+	// KEYED ON THE STORE'S OWN IDENTITY, (event_time, event_id), which is the
+	// events table's PRIMARY KEY — the id alone is indexed but NOT unique, and
+	// the schema says so in as many words. [store.EventLog.ByID] already reads
+	// it as "take the newest match", which is only a meaningful thing to say
+	// because more than one row can carry one id.
+	//
+	// A key narrower than the table's drops a row the two reads legitimately
+	// both carry, and the drop is not where it would be noticed: `truncated`
+	// below is `total > len(records)`, so a wrongly dropped row leaves the
+	// page one short of the count and reports a gap in the middle of a turn
+	// that is whole on the screen.
+	//
+	// Microseconds rather than the time.Time, because a time.Time carries a
+	// monotonic reading and a location and is not a safe map key; micros is
+	// exactly what the column holds.
+	type identity struct {
+		At int64
+		ID string
+	}
+	keyOf := func(r store.EventRecord) identity {
+		return identity{At: store.EncodeTime(r.Time), ID: r.ID}
+	}
+	seen := make(map[identity]struct{}, len(head))
 	for _, r := range head {
-		seen[r.ID] = struct{}{}
+		seen[keyOf(r)] = struct{}{}
 	}
 	for _, r := range tail {
-		if _, dup := seen[r.ID]; dup {
+		if _, dup := seen[keyOf(r)]; dup {
 			continue
 		}
 		head = append(head, r)

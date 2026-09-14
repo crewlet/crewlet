@@ -694,13 +694,19 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	// reports it cut. That is a caution badge on a complete trace, which is
 	// the same class of lie as the note's absence and costs one indexed count
 	// on the reads that filled.
+	//
+	// DEGRADES like `turn`'s does: the rows are in hand, and failing the
+	// whole answer because a follow-up count could not be taken would turn
+	// the largest traces — the only ones that reach this branch — into
+	// `query_failed`. A missing caution badge beats a missing screen.
 	truncated := false
 	if len(rows) >= store.MaxTraceEvents {
 		total, err := s.Events.TraceEventCount(ctx, id)
 		if err != nil {
-			return nil, err
+			log.WarnContext(ctx, "trace_extent_unavailable", "trace", id, "error", err)
+		} else {
+			truncated = total > len(rows)
 		}
-		truncated = total > len(rows)
 	}
 	return map[string]any{
 		"trace_id":  id,

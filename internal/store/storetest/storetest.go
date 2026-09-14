@@ -52,6 +52,7 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"TraceIsOldestFirst", testTrace},
 		{"TraceKeepsTheOldestRowsAtTheCap", testTraceCap},
 		{"TurnClosingAnswersTheEndAOneEndedReadLoses", testTurnClosing},
+		{"ListReadsAreNeverNil", testListReadsAreNeverNil},
 		{"ByID", testByID},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
@@ -558,6 +559,46 @@ func testTurnClosing(t *testing.T, db *store.DB) {
 	}
 	if len(none) != 0 {
 		t.Errorf("a limit of 0 returned %d rows", len(none))
+	}
+	// AND IT IS ALLOCATED, which `len` cannot tell you. [store.EventLog]
+	// states that every list read here answers a non-nil slice, naming one
+	// deliberate exception — nil marshals as `null` where empty marshals as
+	// `[]`, and a JSON surface forwarding this would hand a client the shape
+	// it crashes on. A second silent exception is how that contract stops
+	// being true.
+	if none == nil {
+		t.Error("a limit of 0 answered nil, which serializes as null rather than []")
+	}
+}
+
+// EVERY LIST READ ANSWERS AN ALLOCATED SLICE, on the empty case too.
+//
+// The distinction exists in exactly one place — the JSON — and that is the
+// place all of these end up. It is invisible to `len`, so nothing catches a
+// read that quietly goes back to `var out []T` except a case that asks.
+func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+
+	if got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}); err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	} else if got == nil {
+		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
+	}
+	if got, err := log.Turn(ctx, "tn-nothing-wrote-this"); err != nil {
+		t.Fatalf("turn: %v", err)
+	} else if got == nil {
+		t.Error("Turn answered nil for a turn with no rows, which serializes as null")
+	}
+	if got, err := log.Trace(ctx, "tr-nothing-shares-this"); err != nil {
+		t.Fatalf("trace: %v", err)
+	} else if got == nil {
+		t.Error("Trace answered nil for a trace with no rows, which serializes as null")
+	}
+	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5); err != nil {
+		t.Fatalf("turn closing: %v", err)
+	} else if got == nil {
+		t.Error("TurnClosing answered nil for a turn with no rows, which serializes as null")
 	}
 }
 
