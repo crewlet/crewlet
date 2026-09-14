@@ -259,7 +259,7 @@ export function OrgScreen() {
                 inline
                 icon="shield"
                 title="No policies are set"
-                hint="Policies render into every planner's prompt in full. They are the company's standing instructions."
+                hint="Policies render into every executor's prompt in full. They are the company's standing instructions."
               />
             )}
           </Panel>

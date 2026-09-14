@@ -82,10 +82,10 @@ export interface QueryOptions {
  * catching up, or its coordination store did not answer. The banner for it
  * tells a person the screen fills in on its own, and a query with no poll
  * behind it never asked again, so a screen opened during a restart held that
- * banner until somebody reloaded. Five seconds is the engine's own Retry-After when it has
- * no better hint, which is its shared health tick (`stream.HealthInterval`):
- * sooner asks before anything could have changed, later leaves a recovered
- * node looking broken.
+ * banner until somebody reloaded. Five seconds is the engine's own
+ * Retry-After when it has no better hint, which is its shared health tick
+ * (`stream.HealthInterval`): sooner asks before anything could have changed,
+ * later leaves a recovered node looking broken.
  */
 export const UNAVAILABLE_RETRY_MS = 5_000;
 
