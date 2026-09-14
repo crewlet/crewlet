@@ -64,13 +64,13 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 // The sweep runs only when there is something to drop, so the common case costs
 // one pass of comparisons and no allocation.
 func (s *LiveState) pruneSpend(nowISO string) {
-	if len(s.spend) > spendRecordLimit {
+	if len(s.spend) > SpendRecordLimit {
 		// The count cap binds before the window for an org emitting more
 		// than the cap in a day. Truncating the OLDEST is what makes a
 		// rollup past the cap cover slightly less than a window rather
 		// than report a wrong total.
-		s.spend = append(make([]spendEntry, 0, spendRecordLimit),
-			s.spend[len(s.spend)-spendRecordLimit:]...)
+		s.spend = append(make([]spendEntry, 0, SpendRecordLimit),
+			s.spend[len(s.spend)-SpendRecordLimit:]...)
 	}
 	now := newStamp(nowISO)
 	if !now.valid {

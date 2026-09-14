@@ -1341,7 +1341,9 @@ completed record when the phase finishes. Progress envelopes carry
 stream-only and never persisted to the event store.
 
 The **spend rollup** is maintained by the projection too. It HOLDS the
-per-phase records for its own 24-hour window and folds them with
+per-phase records for its own 24-hour window (the newest 8 000 of them, so a
+company past that many phases in a day sees a rollup covering slightly less
+than a day rather than a wrong total) and folds them with
 `internal/tokens`, which is the same aggregation the event store's wider
 windows are folded with, so changing the window on screen cannot change
 what a phase is counted as. It ships in the snapshot and is re-pushed on
@@ -1354,8 +1356,8 @@ its own.
 **The projection is seeded from the event store when the process starts**,
 after the broadcast subscription is attached and before the HTTP listener
 binds. Two bounded reads, each bound the projection's own: the newest 400
-persisted events for the feed, and every phase record inside the 24-hour
-spend window. Without it every one of these surfaces started at this
+persisted events for the feed, and the newest 8 000 phase records inside the
+24-hour spend window. Without it every one of these surfaces started at this
 process's boot, so a restart, a deploy or a node joining a fleet showed an
 operator a company that had apparently done nothing beside a store that
 said otherwise. An event that arrives both ways is recognised by its id and
