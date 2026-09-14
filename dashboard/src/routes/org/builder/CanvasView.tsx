@@ -235,6 +235,15 @@ function ReportingChart({
       />
     );
   }
+  if (chart.roots.length === 0 && chart.cycles.length === 0) {
+    return (
+      <Empty
+        icon="sitemap"
+        title="No seats to report on"
+        hint="Who reports to whom is drawn here once the organization has a seat."
+      />
+    );
+  }
   const stale = api.state.check.generation !== api.state.generation;
   return (
     <TreeCanvas

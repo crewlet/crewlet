@@ -484,6 +484,12 @@ describe("the reporting chart", () => {
     ]);
   });
 
+  test("says there is nobody to draw when the checked draft holds no seat", () => {
+    mount(checkedEdit({ name: "Fresh" }, {}), { chart: "reporting" });
+    expect(screen.getByText("No seats to report on")).toBeDefined();
+    expect(screen.queryByRole("tree")).toBeNull();
+  });
+
   test("says it is waiting for the engine before any check has described the draft", () => {
     const loaded = checkedEdit(loop, derivedLoop);
     const unchecked: BuilderState = { ...loaded, check: { ...loaded.check, derived: null } };
