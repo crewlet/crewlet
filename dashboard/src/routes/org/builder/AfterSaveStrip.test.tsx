@@ -189,6 +189,9 @@ describe("in the builder", () => {
     const dialog = await screen.findByRole("dialog", { name: "The company as YAML" });
     expect(await within(dialog).findByText(/name: Acme/)).toBeDefined();
     expect(within(dialog).getByRole("button", { name: "Copy" })).toBeDefined();
+    // The caption reads as a sentence: JSX drops the line break before an
+    // element, and "keeps its${NAME} form" is what it rendered.
+    expect(dialog.textContent).toContain("a reference keeps its ${NAME} form.");
   });
 
   test("Copy as YAML says when what it read is a later revision", async () => {

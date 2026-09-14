@@ -315,7 +315,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
           )}
           <p className="t-caption">
             Credentials are redacted, as every configuration read is: a value the engine holds reads
-            as <code className="inline">__redacted__</code>, and a reference keeps its
+            as <code className="inline">__redacted__</code>, and a reference keeps its{" "}
             <code className="inline">${"{NAME}"}</code> form.
           </p>
           <Code selectable label="The company as YAML">
