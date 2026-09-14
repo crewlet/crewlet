@@ -1749,8 +1749,8 @@ version mismatch that is not there.
 
 ### The capacity window
 
-`stream.max_bytes` is not a live setting, and these routes are the window in
-which it changes. The
+A log's Tier A ceiling is only the value its stream is created with, and these
+routes are the window in which a running log's ceiling changes. The
 [procedure is documented once](../guides/retention.md#changing-a-logs-ceiling);
 what follows is the wire surface.
 

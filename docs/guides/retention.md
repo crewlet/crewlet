@@ -25,9 +25,9 @@ Three figures per domain, and no others:
 | `headroom_fraction` | how much of the ceiling is unused |
 
 `max_bytes` is read from the stream's own configuration and never from the
-Tier A field, because Tier A is per node and takes effect at restart: between
-an edit and a restart the field names a ceiling nothing is applying, and this
-is the number you divide by.
+Tier A field, because Tier A is per node and is only the value a stream is
+created with: once the stream exists, an edit to the field names a ceiling
+nothing is applying, restart or not, and this is the number you divide by.
 
 There is deliberately **no growth rate and no projected-full date.** A
 24-hour rate false-pages on the one excursion this system is designed for — a
@@ -281,11 +281,29 @@ make.
 
 ## Changing a log's ceiling
 
-`stream.max_bytes` is not a live setting. Raising it is a **fleet-wide
+A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
+`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`) is not a live
+setting: it is the value the log's stream is created with, sized with the
+other logs inside what the broker can grant (see
+[Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
+running log's ceiling, raising it or lowering it, is a **fleet-wide
 maintenance window**, and the reason is not caution:
 
 - A resize is decided against the usage the log is at, and a publisher makes
-  that a moving quantity.
+  that a moving quantity. The verb decides it before the window opens: a
+  target at or below what the log already holds is refused, naming both,
+  because that ceiling would refuse every append the moment it applied.
+  Anything above the usage is fair, including a target under the current
+  ceiling, which is how a log created larger than its budget gives the
+  reservation back.
+- A raise is a reservation too, and the broker refuses one it cannot honour.
+  Where the node can read the limit the broker holds an update to (a lone
+  embedded node, or a NATS account's own JetStream limit on any topology), a
+  raise past it is refused before the window opens, naming what it reserves
+  and what the broker has left. A clustered member cannot read that limit,
+  because the member leading the cluster checks an update against its own
+  reservations, so there the broker refuses such a raise when the window
+  applies it, and the seal retires the attempt.
 - What retires a configuration request the broker has already queued is the
   **broker process restarting**, not a client closing its connection. So an
   apply whose outcome is unknown can only be resolved by everything restarting.

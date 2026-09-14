@@ -69,11 +69,12 @@ type native struct {
 	// need it after boot and the bootstrap it came from is not kept.
 	nodeID string
 
-	// log is this node's state-log runtime: the tracker's domain and the
-	// vector domain, each with its own apply loop and write authority.
-	// Nil when the company runs the vendor tracker instead, which is the
-	// whole switch — a company on Jira runs no domain at all rather than
-	// an empty one.
+	// log is this node's state-log runtime: every registered domain, each
+	// with its own apply loop and write authority. A native tracker or a
+	// native knowledge base starts it ([config.Company.RunsStateLog]) and
+	// it runs the whole register or none, so a company on Jira whose pages
+	// are the engine's own runs every domain. A company on vendors for both
+	// has no native at all.
 	log *stateLog
 
 	// It adopts the state log in its own step; until then this node runs
@@ -138,12 +139,15 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// error: it serves what it can see.
 		return nil
 	}
-	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
-	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
-	if !runTracker && !wiki {
+	// AN IN-MEMORY STREAM NEVER GETS THIS FAR. [Engine.New] refused a
+	// company that runs the log on one ([config.CheckTiers]): its first
+	// restart recreates the log empty and the node never serves again, so
+	// the error line once logged here was printed on the way to that state.
+	if !c.Config.RunsStateLog() {
 		return nil
 	}
-	e.warnIfEphemeral(ctx, boot, runTracker, wiki)
+	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
+	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
 
 	// THE RESOLVED ID, not the raw field. `node.id` may be absent, a
 	// `${VAR}` reference, or come from the environment — and the value
@@ -1303,73 +1307,6 @@ func (m seatMentions) Mentions(text string) []string {
 		}
 	}
 	return out
-}
-
-// warnIfEphemeral says out loud when the company's own records will not
-// survive a restart.
-//
-// # Why a warning and not a refusal
-//
-// `stream.store_dir` unset selects an in-memory embedded broker, which is
-// exactly what a test wants and what a stateless ingress-only node can use.
-// The engine cannot tell one of those from an operator who left the field out
-// of a deployment, so refusing here would break the two legitimate cases to
-// catch the mistake.
-//
-// # Why it is worth a line at all
-//
-// The STAKES changed under this field. It has always meant "queued events do
-// not survive a restart", which is recoverable — a vendor retries, a schedule
-// fires again. With a native backend it means the company's tracker and its
-// knowledge base are in that stream: every item ever filed, every page ever
-// written, gone on the next restart, with nothing anywhere reporting a loss
-// because from the engine's side the company simply has no work.
-//
-// So the line names what is at stake rather than restating the field, and it
-// is an ERROR level rather than a warning: this is data loss on a timer, and
-// the only thing standing between an operator and it is noticing.
-func (e *Engine) warnIfEphemeral(ctx context.Context, boot *config.Bootstrap, tracker, wiki bool) {
-	at := EphemeralRisk(boot, tracker, wiki)
-	if at == "" {
-		return
-	}
-	log.ErrorContext(ctx, "native_backend_on_an_ephemeral_stream",
-		"at_risk", at,
-		"detail", "stream.store_dir is unset, so this node's embedded broker "+
-			"keeps its streams in memory — and the company's own records live "+
-			"there. "+at+" this company writes is lost on the next restart, "+
-			"with nothing reporting a loss because the company will simply "+
-			"appear to have no work",
-		"fix", "set stream.store_dir in crewlet.yaml, or run tracker.backend "+
-			"and knowledge.backend against a vendor that keeps the record")
-}
-
-// EphemeralRisk names what an in-memory stream would lose, or "" for none.
-//
-// SPLIT FROM THE LOG LINE so the rule is testable as a value rather than by
-// capturing a logger — which is what the codebase does everywhere the
-// question "would this configuration lose data" has a yes/no answer somebody
-// might change by accident.
-func EphemeralRisk(boot *config.Bootstrap, tracker, wiki bool) string {
-	switch {
-	case boot == nil:
-		return ""
-	case boot.Stream.Type == config.StreamNATS:
-		// An EXTERNAL cluster persists on its own terms, and this process
-		// has no way to know them. Claiming a risk here would train an
-		// operator to ignore the line.
-		return ""
-	case boot.Stream.StoreDir != "":
-		// The operator answered the question.
-		return ""
-	case tracker && wiki:
-		return "every work item and every page"
-	case tracker:
-		return "every work item"
-	case wiki:
-		return "every page"
-	}
-	return ""
 }
 
 // nudgeSkills asks the sync worker to re-read the tool-skill container.

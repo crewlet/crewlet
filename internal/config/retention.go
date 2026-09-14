@@ -79,6 +79,24 @@ const (
 	TrackerVectorsMaxBytesFloor   int64 = 1 << 30
 	TrackerVectorsMaxBytesCeiling int64 = 256 << 30
 
+	// PagesLogMaxBytesFloor and PagesLogMaxBytesCeiling bound the
+	// knowledge base's log. The floor is every log's, and the ceiling is a
+	// quarter of the mutation log's for the corpus ratio
+	// DerivedPagesLogDivisor states.
+	PagesLogMaxBytesFloor   int64 = 1 << 30
+	PagesLogMaxBytesCeiling int64 = 256 << 30
+
+	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
+	// is than the mutation log's derived ceiling.
+	//
+	// FOUR, and the ratio is the corpus rather than a guess: the reference
+	// company files 100 000 tasks and 300 000 comments a year against a
+	// knowledge base of a few thousand pages, and a page's records are
+	// dominated by saves rather than creates. So the knowledge base's log
+	// grows at about a quarter of the tracker's rate, and at a quarter of
+	// the tracker's ceiling a blocked trim fills both in the same time.
+	DerivedPagesLogDivisor = 4
+
 	// DerivedLogMaxBytesFraction is the share of a volume's free space an
 	// unset TrackerLogMaxBytes takes, and DerivedLogMaxBytesFloor /
 	// DerivedLogMaxBytesCeiling clamp the result.
@@ -233,13 +251,26 @@ func DerivedLogMaxBytes(free int64) int64 {
 }
 
 // LogMaxBytes is the configured ceiling, or the value derived from free, and
-// whether it was derived. The second return is what the engine records on the
-// stream so a node can say where its ceiling came from.
+// whether it was derived. The second return is what the engine logs when it
+// sizes the stream, so a node can say where its ceiling came from.
 func (s Stream) LogMaxBytes(free int64) (int64, bool) {
 	if s.TrackerLogMaxBytes > 0 {
 		return s.TrackerLogMaxBytes, false
 	}
 	return DerivedLogMaxBytes(free), true
+}
+
+// PagesMaxBytes is the knowledge base's log ceiling, and whether it was
+// derived.
+//
+// DERIVED FROM THE MUTATION LOG'S DERIVED VALUE rather than from the disk
+// directly, so the two stay in the ratio their corpora grow at on every volume:
+// 1 GiB beside the tracker's 4 GiB floor, 16 GiB beside its 64 GiB clamp.
+func (s Stream) PagesMaxBytes(free int64) (int64, bool) {
+	if s.PagesLogMaxBytes > 0 {
+		return s.PagesLogMaxBytes, false
+	}
+	return DerivedLogMaxBytes(free) / DerivedPagesLogDivisor, true
 }
 
 // VectorsMaxBytes is the vector changelog's ceiling, and whether it was

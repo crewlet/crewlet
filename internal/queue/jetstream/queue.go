@@ -355,6 +355,11 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 		// configuration at boot is how a ceiling an operator raised gets
 		// silently lowered".
 		_, err := q.js.CreateStream(ctx, config)
+		if refusedStorage(err) {
+			// NAMED, because the broker's own words name no number: see
+			// [ErrInsufficientStorage].
+			return fmt.Errorf("%w: %w", ErrInsufficientStorage, err)
+		}
 		if err == nil || !unplaceable(err) {
 			return err
 		}
@@ -415,10 +420,7 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		return nil
 	}
 
-	storage := jetstream.FileStorage
-	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
-		storage = jetstream.MemoryStorage
-	}
+	storage := q.storage()
 	// ITS OWN DEADLINE, because the client's default is not sized for this
 	// call. nats.go applies a five-second API timeout to a context with no
 	// deadline, which is right for an ordinary request and wrong for the
@@ -482,6 +484,16 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	return nil
 }
 
+// storage is the class every stream this queue creates is stored in: memory on
+// an embedded server given no store directory, which is what an in-memory
+// server means, and the file store everywhere else.
+func (q *Queue) storage() jetstream.StorageType {
+	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
+		return jetstream.MemoryStorage
+	}
+	return jetstream.FileStorage
+}
+
 // createOrObserveStream creates the stream when it is absent and COMPARES when
 // it is present, writing nothing either way to a stream that already exists.
 //
@@ -507,26 +519,24 @@ func (q *Queue) createOrObserveStream(
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
 	//
-	// The tidy shape is [jetstream.ErrStreamNameAlreadyInUse]: this
-	// node's create arrived after the winner's had committed.
+	// The first is [jetstream.ErrStreamNameAlreadyInUse], and it does
+	// NOT mean the winner's create has committed. In a cluster the
+	// metadata leader refuses a second assignment whose configuration
+	// differs from one still in flight, and two members sizing a ceiling
+	// from two brokers always differ by a few bytes: the loser is told
+	// the name is taken while the stream is seconds from existing.
 	//
-	// The other shape is a TIMEOUT, and it is the one a fleet booting
-	// together actually produces. Two members create the same stream in
-	// the same instant; the server commits one and holds the other while
-	// the metadata group settles, and the held request outlives the
-	// caller's deadline. The stream is there — the loser simply never
-	// heard so. Reported as a failure, that is a node refusing to boot
-	// because a peer beat it, on a cluster where everything worked.
+	// The other is a TIMEOUT. Two members create the same stream in the
+	// same instant; the server commits one and holds the other while the
+	// metadata group settles, and the held request outlives the caller's
+	// deadline. The stream is there, and the loser simply never heard so.
 	//
-	// So the question is re-asked rather than assumed either way: does
-	// the stream exist now? A read-back is one round trip, it answers
-	// exactly that, and it holds whatever it finds to the same comparison
-	// a stream this node found on the first look gets. The read gets its
-	// OWN context, because the one above is the deadline that just
-	// expired.
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
-	defer cancel()
-	info, err = q.js.Stream(readCtx, spec.name)
+	// Reported as a failure, either is a node refusing to boot because a
+	// peer beat it, on a cluster where everything worked. So the
+	// question is re-asked rather than assumed: does the stream exist
+	// now? Whatever the read-back finds is held to the same comparison a
+	// stream this node found on the first look gets.
+	info, err = q.readBack(ctx, spec.name, createErr)
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: "no suitable peers" or "deadline exceeded" on the
@@ -541,6 +551,46 @@ func (q *Queue) createOrObserveStream(
 			"exists, which is a peer having won the race; its configuration "+
 			"is compared here exactly as one found on the first look would be")
 	return q.observeStream(spec, config, info)
+}
+
+// readBack asks whether a stream this node's create did not make exists
+// anyway, because a peer made it.
+//
+// WAITED FOR after a name already in use: that answer says a peer's create is
+// in flight, and a replicated stream takes seconds to commit under load, so one
+// read finds nothing and the node refuses to boot over a stream that exists a
+// moment later (measured: every loser of three members creating one stream at
+// three ceilings). The read repeats until the stream is there or the
+// provisioning deadline passes, and a peer's create that fails after all
+// leaves nothing to find, which the deadline then reports.
+//
+// EACH ATTEMPT HAS ITS OWN SHORT DEADLINE, because a read sent before the new
+// stream's group has a leader is answered by nobody, not refused: a single
+// read under the provisioning deadline waited out all of it for a reply that
+// was never coming, while a read sent a moment later would have found the
+// stream. Measured, that was every loser still failing after thirty seconds.
+//
+// Read ONCE after any other failure, on a context of its own, because the
+// deadline that just expired may be the create's.
+func (q *Queue) readBack(ctx context.Context, name string, createErr error) (jetstream.Stream, error) {
+	if !errors.Is(createErr, jetstream.ErrStreamNameAlreadyInUse) || ctx.Err() != nil {
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+		defer cancel()
+		return q.js.Stream(readCtx, name)
+	}
+	for {
+		readCtx, cancel := context.WithTimeout(ctx, streamReadBack)
+		info, err := q.js.Stream(readCtx, name)
+		cancel()
+		if err == nil {
+			return info, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(streamPlacementRetry):
+		}
+	}
 }
 
 // streamReadBack bounds the one read that asks whether a peer won the race.

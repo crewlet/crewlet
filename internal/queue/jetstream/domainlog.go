@@ -217,10 +217,11 @@ type LogStats struct {
 	Messages uint64
 
 	// Bytes is what the stream holds and MaxBytes the ceiling the BROKER
-	// is enforcing — read from the stream's own configuration rather than
-	// from the Tier A field, because Tier A is per node and takes effect
-	// at restart: between an edit and a restart the field names a ceiling
-	// nothing is applying, and this is the number an operator divides by.
+	// is enforcing, read from the stream's own configuration rather than
+	// from the Tier A field, because Tier A is per node and is only the
+	// value a stream is created with: once the stream exists an edit to the
+	// field names a ceiling nothing is applying, restart or not, and this
+	// is the number an operator divides by.
 	//
 	// MaxBytes is zero when the stream declares no ceiling, which is a
 	// real setting rather than a full log.

@@ -175,8 +175,8 @@ func TestTheLogCeilingIsDerivedFromTheVolume(t *testing.T) {
 	}
 
 	// A CONFIGURED VALUE WINS AND SAYS SO. The second return is what a node
-	// records on the stream, so it can answer "where did this ceiling come
-	// from" a year later.
+	// logs when it sizes the stream, so it can answer "where did this
+	// ceiling come from" a year later.
 	var s config.Stream
 	if got, derived := s.LogMaxBytes(200 * gib); got != 50*gib || !derived {
 		t.Errorf("unset = (%d, %v), want the derived value", got, derived)
@@ -184,6 +184,31 @@ func TestTheLogCeilingIsDerivedFromTheVolume(t *testing.T) {
 	s.TrackerLogMaxBytes = 32 * gib
 	if got, derived := s.LogMaxBytes(200 * gib); got != 32*gib || derived {
 		t.Errorf("set = (%d, %v), want the configured value", got, derived)
+	}
+}
+
+// THE KNOWLEDGE BASE'S LOG IS DERIVED BESIDE THE MUTATION LOG'S, at a quarter
+// of it on every volume. It was a fixed 4 GiB once, reserved on top of a budget
+// the other two logs had already been scaled to fill, and on a small disk that
+// was the one reservation the broker refused.
+func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
+	t.Parallel()
+	const gib = int64(1) << 30
+	for _, free := range []int64{0, 8 * gib, 200 * gib, 4000 * gib} {
+		got, derived := config.Stream{}.PagesMaxBytes(free)
+		if want := config.DerivedLogMaxBytes(free) / config.DerivedPagesLogDivisor; got != want || !derived {
+			t.Errorf("unset on %d free = (%d, derived %v), want (%d, true)", free, got, derived, want)
+		}
+		// NEVER BELOW WHAT TIER A WOULD ACCEPT AS A VALUE, or a node
+		// could derive a ceiling its own validation refuses to be told.
+		if got < config.PagesLogMaxBytesFloor {
+			t.Errorf("unset on %d free derives %d, under the floor %d",
+				free, got, config.PagesLogMaxBytesFloor)
+		}
+	}
+	s := config.Stream{PagesLogMaxBytes: 3 * gib}
+	if got, derived := s.PagesMaxBytes(200 * gib); got != 3*gib || derived {
+		t.Errorf("set = (%d, derived %v), want the configured value", got, derived)
 	}
 }
 
@@ -254,6 +279,10 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"vectors below a gibibyte": {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = gib - 1 }, false, "tracker_vectors_max_bytes"},
 		"vectors at 256 GiB":       {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 256 * gib }, true, ""},
 		"vectors past 256 GiB":     {func(b *config.Bootstrap) { b.Stream.TrackerVectorsMaxBytes = 257 * gib }, false, "tracker_vectors_max_bytes"},
+		"pages below a gibibyte":   {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib - 1 }, false, "pages_log_max_bytes"},
+		"pages at a gibibyte":      {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = gib }, true, ""},
+		"pages at 256 GiB":         {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256 * gib }, true, ""},
+		"pages past 256 GiB":       {func(b *config.Bootstrap) { b.Stream.PagesLogMaxBytes = 256*gib + 1 }, false, "pages_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
