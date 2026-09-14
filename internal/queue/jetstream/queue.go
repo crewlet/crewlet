@@ -393,6 +393,13 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 		// configuration at boot is how a ceiling an operator raised gets
 		// silently lowered".
 		_, err := q.js.CreateStream(ctx, config)
+		if refusedStorage(err) {
+			// NAMED, because the broker's own words name no number: see
+			// [ErrInsufficientStorage]. Named INSIDE the placement
+			// retry rather than around it, so the refusal that is not
+			// a placement failure still leaves at once.
+			return fmt.Errorf("%w: %w", ErrInsufficientStorage, err)
+		}
 		return err
 	}, func() {
 		q.log.Info("jetstream_stream_awaiting_peers", "stream", config.Name,
@@ -450,10 +457,7 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 		return nil
 	}
 
-	storage := jetstream.FileStorage
-	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
-		storage = jetstream.MemoryStorage
-	}
+	storage := q.storage()
 	config := jetstream.StreamConfig{
 		Name:              spec.name,
 		Subjects:          spec.subjects,
@@ -519,6 +523,16 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	q.streams[spec.name] = struct{}{}
 	q.mu.Unlock()
 	return nil
+}
+
+// storage is the class every stream this queue creates is stored in: memory on
+// an embedded server given no store directory, which is what an in-memory
+// server means, and the file store everywhere else.
+func (q *Queue) storage() jetstream.StorageType {
+	if q.cfg.StoreDir == "" && q.cfg.URL == "" {
+		return jetstream.MemoryStorage
+	}
+	return jetstream.FileStorage
 }
 
 // createOrObserveStream creates the stream when it is absent and COMPARES when

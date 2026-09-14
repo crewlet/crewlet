@@ -872,8 +872,15 @@ type Stream struct {
 	// of its free space, clamped to 4 GiB..64 GiB. A fixed default is
 	// wrong in both directions — the same number is five years of history
 	// on the modelled write rate and one boot on a small disk — and the
-	// value is recorded on the stream when it is created, so a node that
-	// derived it can say what it derived it from.
+	// boot that creates the stream logs what it derived the value from
+	// (`statelog_ceilings`).
+	//
+	// EVERY STATE LOG SHARES ONE BUDGET, and a derived value is only what
+	// this log asks for within it. The broker reserves each ceiling in full
+	// when it creates the stream, so the derived ceilings of every state
+	// log are scaled down together to fit half of what the broker can
+	// grant them; a value set here is never scaled, and a boot that cannot
+	// reserve it fails naming this field.
 	//
 	// WHAT THIS FIELD DOES IS NARROWER THAN IT LOOKS. It is the value the
 	// stream is CREATED with, and thereafter a DECLARATION the engine
@@ -900,6 +907,23 @@ type Stream struct {
 	// Sizing this field from the steady state would refuse the one
 	// operation it exists to survive.
 	TrackerVectorsMaxBytes int64 `yaml:"tracker_vectors_max_bytes,omitempty" json:"tracker_vectors_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the vector changelog; default 16 GiB, sized for a model change rather than the steady state."`
+
+	// PagesLogMaxBytes is the byte ceiling on the knowledge base's log, the
+	// ordered stream every native page write goes through.
+	//
+	// UNSET DERIVES IT beside the mutation log's, at a quarter of that
+	// derived value (1 GiB..16 GiB). The ratio is the corpus rather than a
+	// guess: a knowledge base is a few thousand pages against a tracker's
+	// hundreds of thousands of items and comments, and a page's records
+	// are dominated by saves, so its log grows at about a quarter of the
+	// rate and a blocked trim reaches either ceiling in the same time.
+	//
+	// It shares the state logs' one budget, and what the mutation log's
+	// field says about it holds here unchanged: the value is the one the
+	// stream is CREATED with, a derived value is scaled with the others to
+	// fit the broker and a set one is not, and crossing it refuses the
+	// append rather than shedding history.
+	PagesLogMaxBytes int64 `yaml:"pages_log_max_bytes,omitempty" json:"pages_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -1157,6 +1181,8 @@ func (s *Stream) validate(path Path) error {
 		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
 	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
+	bytesInRange(&p, path, "pages_log_max_bytes", s.PagesLogMaxBytes,
+		PagesLogMaxBytesFloor, PagesLogMaxBytesCeiling)
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
 	// advertise address while STARTING, logs it and shuts the server down

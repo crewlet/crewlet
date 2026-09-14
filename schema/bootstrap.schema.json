@@ -298,6 +298,12 @@
           "minimum": 0,
           "type": "number"
         },
+        "pages_log_max_bytes": {
+          "description": "Byte ceiling on the knowledge base's log; unset derives a quarter of the mutation log's derived value, 1 GiB..16 GiB.",
+          "maximum": 274877906944,
+          "minimum": 1073741824,
+          "type": "integer"
+        },
         "replicas": {
           "description": "Stream replica count: 1 solo, 3 in a fleet.",
           "minimum": 0,

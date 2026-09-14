@@ -498,7 +498,21 @@ stream:
                                     #   not shed: there is no age bound on this
                                     #   stream, so a full log drops no history —
                                     #   the append is refused, loudly, naming
-                                    #   whatever is blocking the trim
+                                    #   whatever is blocking the trim. ONE
+                                    #   BUDGET FOR ALL THREE LOGS: the broker
+                                    #   reserves each ceiling in full when it
+                                    #   creates the stream, so the derived
+                                    #   ceilings of this field and the two below
+                                    #   are scaled down together to fit half of
+                                    #   what the broker can grant them (never
+                                    #   below 1 GiB each). A value you set is
+                                    #   never scaled, and a boot that cannot
+                                    #   reserve it fails naming the field, the
+                                    #   bytes it needed and the bytes the broker
+                                    #   had. Every one of the three is the value
+                                    #   a stream is CREATED with: editing it
+                                    #   later changes nothing until
+                                    #   `crewlet retention set-capacity` does
   # tracker_vectors_max_bytes: 17179869184
                                     #   the vector changelog's ceiling (default
                                     #   16 GiB). SIZED FOR THE PEAK: the stream
@@ -510,6 +524,17 @@ stream:
                                     #   ceiling sized from the steady state would
                                     #   refuse the one operation it exists to
                                     #   survive
+  # pages_log_max_bytes: 4294967296 #   the knowledge base's log, the ordered
+                                    #   stream every native page write goes
+                                    #   through (1..256 GiB). UNSET DERIVES a
+                                    #   quarter of the mutation log's derived
+                                    #   value, so 1..16 GiB: a knowledge base is
+                                    #   a few thousand pages against a tracker's
+                                    #   hundreds of thousands of items, so its
+                                    #   log grows at about a quarter of the rate
+                                    #   and a blocked trim fills either one in
+                                    #   the same time. Crossing it refuses the
+                                    #   append, like the mutation log's
   # tracker_retention:              # when the log may be trimmed. Every term
                                     #   here is a statement about the OPERATOR's
                                     #   estate rather than the company's policy,
