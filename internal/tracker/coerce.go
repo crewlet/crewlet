@@ -541,10 +541,18 @@ func coerceURL(field FieldDef, raw json.RawMessage) (coerced, error) {
 		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q is not "+
 			"one: %v", field.Slug, clip(text), err)
 	case parsed.Scheme == "":
-		// THE PRESCRIPTION IS THE WHOLE VALUE. It is an address the caller
-		// is being told to write, so a shortened one is a dead link rather
-		// than a hint — see [MaxRefusalQuote], which is wider than this
-		// field's own cap for exactly this line.
+		// THE PRESCRIPTION IS THE WHOLE VALUE — the `text` argument
+		// below, deliberately not the `clip(text)` beside it. It is an
+		// address the caller is being told to write, so a shortened one
+		// is a dead link rather than a hint, and composing it from the
+		// quote is the exact bug [MaxRefusalQuote] records.
+		//
+		// The quote is uncut here too, but by a narrower margin than that
+		// doc used to claim: `text` came back from [coerceText] at
+		// [MaxFieldValueBytes] above, and [MaxRefusalQuote] is EQUAL to
+		// that cap rather than wider, so [textcut.Ellipsis] returns it
+		// unchanged. Equal is the whole requirement — a longer value is
+		// refused by size before it can reach this line.
 		return coerced{}, fmt.Errorf("tracker: field %q is a url and %q has no "+
 			"scheme — write https://%s", field.Slug, clip(text), text)
 	case parsed.Host == "" && parsed.Opaque == "":
@@ -612,10 +620,33 @@ func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
 
 // MaxRefusalQuote is how much of a rejected value a refusal echoes.
 //
-// [MaxFieldValueBytes], which is the largest value any of these fields would
-// have stored — so the quote holds anything that could have been accepted and
-// the cut only ever fires on a value that was never a candidate. It is a
-// guard against a caller pasting a document into a scalar field, not a budget.
+// [MaxFieldValueBytes] — which is NOT the largest value these fields hold: a
+// [FieldTextarea] stores four times it, [MaxTextareaBytes]. The cap on its own
+// therefore guarantees nothing about a quote surviving whole, and what does is
+// a property of each call site. There are two kinds of them:
+//
+//   - A refusal that PRESCRIBES a value quotes one [coerceText] has already
+//     accepted at [MaxFieldValueBytes] — [coerceURL] and [coerceEmail] are the
+//     two that parse a value the text cap has bounded. Their input is at most
+//     this cap, so [textcut.Ellipsis] returns it unchanged. EQUAL is the whole
+//     requirement; a wider cap would buy nothing, because a longer value never
+//     reaches those lines — [coerceText] refuses it first, naming the size.
+//   - Every other site quotes a value that was never a candidate for the field
+//     it arrived on: a string that is no number, no date, no declared option,
+//     no work item and no colleague, or — through [clipRaw] — a JSON value
+//     that is not a string at all. NOTHING bounds those. Bytes are capped only
+//     where [coerceText] runs, and [MaxFieldValues] and [MaxFieldValueSeq]
+//     bound counts rather than sizes, so a megabyte of prose on a number field
+//     reaches [clip] intact and the cut is real. It costs recognisability and
+//     nothing else, because these refusals only IDENTIFY what was sent and
+//     prescribe no value to write back.
+//
+// The larger textarea ceiling never lands in a quote for the same reason: an
+// oversized textarea value is refused by [coerceText] naming its size, and a
+// value that passed it is not refused at all.
+//
+// So this is a guard against a caller pasting a document into a scalar field,
+// not a budget.
 //
 // IT WAS 64 BYTES, on the reasoning that a fragment is enough to recognise
 // what was sent. It is not, and internal/agent/builtin's own `clip`
@@ -631,8 +662,11 @@ func clip(s string) string { return textcut.Ellipsis(s, MaxRefusalQuote) }
 // so a URL past the old cap was answered with an instruction to store a
 // truncated address with an ellipsis inside it. That value then PARSES, and
 // lands on the board as a dead link nobody typed. Any refusal that prescribes
-// a value has to build it from the whole one, which is what this cap being
-// wider than the field's own now guarantees.
+// a value has to build it from the whole one, which [coerceURL] now does
+// EXPLICITLY, from the unclipped value — rather than resting on this cap being
+// generous enough, since a cap is a number somebody will tune and a
+// prescription that is only correct while it stays large is that dead link
+// waiting for the next edit.
 const MaxRefusalQuote = MaxFieldValueBytes
 
 // settleFields runs the table inside the decide, against the declarations this
