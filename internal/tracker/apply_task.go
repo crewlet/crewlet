@@ -441,12 +441,6 @@ func mergeTask(current Task, held bool, c applyContext) (Task, error) {
 	return Task{}, fmt.Errorf("tracker: %s is not an operation on a task", c.record.Op)
 }
 
-// applyPatch is the pointer-semantics merge.
-//
-// A NIL FIELD IS UNCHANGED and a non-nil one carries its COMPLETE new value —
-// which is what tells "set this to empty" from "leave it alone". Every
-// collection is a pointer to a slice for the same reason: an absent tag list
-// means the write did not touch tags, and an empty one means it cleared them.
 // clearableInstant is a patched date, with the zero value read as a clear.
 func clearableInstant(at *time.Time) *time.Time {
 	if at == nil || at.IsZero() {
@@ -455,6 +449,12 @@ func clearableInstant(at *time.Time) *time.Time {
 	return at
 }
 
+// applyPatch is the pointer-semantics merge.
+//
+// A NIL FIELD IS UNCHANGED and a non-nil one carries its COMPLETE new value —
+// which is what tells "set this to empty" from "leave it alone". Every
+// collection is a pointer to a slice for the same reason: an absent tag list
+// means the write did not touch tags, and an empty one means it cleared them.
 func applyPatch(task Task, patch TaskPatch) Task {
 	setString(&task.Title, patch.Title)
 	setString(&task.Body, patch.Body)

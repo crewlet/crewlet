@@ -17,14 +17,7 @@ import type { MouseEvent, ReactNode } from "react";
 import { Avatar, Badge, cx, type Tone } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { fmtDateCompact, fmtDateTime, relTime } from "~/lib/format.ts";
-import {
-  fmtMinutes,
-  PRIORITY_TONE,
-  statusLabel,
-  STATUS_TONE,
-  typeIcon,
-  typeName,
-} from "~/lib/work.ts";
+import { fmtMinutes, statusLabel, STATUS_TONE, typeIcon, typeName } from "~/lib/work.ts";
 import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
 
 export interface RowChrome {

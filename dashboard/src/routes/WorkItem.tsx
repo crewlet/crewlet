@@ -16,7 +16,7 @@
  * is not a person and cannot be asked why.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
@@ -30,7 +30,7 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Badge, Banner, Button, Panel, Skeleton, Tabs } from "~/ui/primitives.tsx";
+import { Badge, Button, Panel, Skeleton, Tabs } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";

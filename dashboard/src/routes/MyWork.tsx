@@ -30,7 +30,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Badge, Banner, Empty, Panel, Select, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Banner, Empty, Panel, Select, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
