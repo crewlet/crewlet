@@ -1793,12 +1793,20 @@ func patchFromArgs(args map[string]any, actor Actor, now time.Time,
 	if refusal != "" {
 		return patch, kind, refusal
 	}
-	if plan.applyToPatch(&patch) && plan.Sprint != nil {
+	if plan.applyToPatch(&patch) && (plan.Sprint != nil || plan.Cleared["sprint"]) {
 		// A SPRINT MOVE IS ITS OWN KIND, because it is what the change is
 		// TO everybody downstream: the sprint's team is told their
 		// commitment moved, where `fields` would tell them a column
 		// changed. The dates and the sizing stay `fields`, which is what
 		// they are.
+		//
+		// AND TAKING A TASK OUT IS A MOVE, which the set-only gate missed:
+		// `sprint: null` leaves [schedule.Sprint] nil and records the
+		// clear, so a removal — the change a sprint's team most needs to
+		// hear, since it is commitment leaving the window — was filed as
+		// `fields`. The writer's own rollover already spells a clear as
+		// sprint zero under [tracker.ChangeSprint], so this is the tool
+		// path agreeing with it rather than a new rule.
 		kind = tracker.ChangeSprint
 	}
 
