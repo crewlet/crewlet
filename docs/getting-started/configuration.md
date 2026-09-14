@@ -407,7 +407,13 @@ stream:
                                     #   nothing to replicate to
   # cluster:                        # an EMBEDDED server joining its peers, which
   #   name: crewlet                 #   is the fleet topology: every node embeds
-  #   port: 6222                    #   one member of one cluster. `node.id` is
+                                    #   one member of one cluster. REQUIRED once
+                                    #   anything else here is set — the server
+                                    #   reads none of these fields from an
+                                    #   unnamed cluster, so a block without it
+                                    #   starts a solo node that forms no cluster
+                                    #   at all, and Tier A refuses that
+  #   port: 6222                    #   `node.id` is
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
   #     - "nats://node-2:6222"      #   this member's replicas every time

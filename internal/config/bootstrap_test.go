@@ -29,10 +29,16 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 
 		{"unknown stream type", "stream:\n  type: kafka\n", "stream.type", ErrUnknownValue},
 		// A CLUSTER BLOCK WITHOUT A NAME CONFIGURES NOTHING: the embedded
-		// server takes its route port and its peers only from a NAMED
-		// cluster, so a node written this way starts solo, binds no route
-		// listener and forms no cluster — while every other reading of the
-		// same file calls it clustered.
+		// server takes its route port, its bind interface, its advertise
+		// address and its peers only from a NAMED cluster, so a node
+		// written this way starts solo, binds no route listener and forms
+		// no cluster — while every other reading of the same file calls it
+		// clustered.
+		//
+		// EVERY FIELD, because the guard first shipped naming two of them:
+		// host and advertise, the two an operator reaches for after
+		// reading this block's own warnings about unauthenticated cluster
+		// access and about NAT, were the two it silently accepted.
 		{
 			"cluster port with no cluster name",
 			"stream:\n  cluster:\n    port: 6222\n",
@@ -41,6 +47,16 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{
 			"cluster peers with no cluster name",
 			"stream:\n  cluster:\n    peers: [\"nats://a:6222\"]\n",
+			"stream.cluster.name", ErrMissing,
+		},
+		{
+			"cluster host with no cluster name",
+			"stream:\n  cluster:\n    host: 10.0.0.4\n",
+			"stream.cluster.name", ErrMissing,
+		},
+		{
+			"cluster advertise with no cluster name",
+			"stream:\n  cluster:\n    advertise: nat.example.com:6222\n",
 			"stream.cluster.name", ErrMissing,
 		},
 		{"external stream with no url", "stream:\n  type: nats\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},

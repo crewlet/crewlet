@@ -1085,19 +1085,28 @@ func (s *Stream) validate(path string) error {
 	// SILENTLY is what this refuses.
 	//
 	// The embedded server's options are built only when the cluster is
-	// NAMED: without it the route port and the peer list are dropped on the
-	// floor, so a node configured with both still starts solo, binds no
-	// route listener and forms no cluster — while every other reading of
-	// the same file (the provisioning budgets, the topology validation
-	// below) calls it clustered. An operator who wrote a port and a peer
-	// list did not ask for a solo node, and the only honest answers are to
-	// cluster or to say why not.
-	if s.Cluster.Name == "" && (s.Cluster.Port != 0 || len(s.Cluster.Peers) > 0) {
+	// NAMED: without it the route port, the bind interface, the advertise
+	// address and the peer list are all dropped on the floor, so a node
+	// configured with them still starts solo, binds no route listener and
+	// forms no cluster — while every other reading of the same file (the
+	// provisioning budgets, the topology validation below) calls it
+	// clustered. An operator who wrote that block did not ask for a solo
+	// node, and the only honest answers are to cluster or to say why not.
+	//
+	// ASKED AS "is anything else set", THROUGH IsZero, rather than as a
+	// list of the fields that matter. Written as a list it named two of
+	// the four and the other two — cluster.host, which is the answer to
+	// this block's own warning about publishing unauthenticated cluster
+	// access, and cluster.advertise, which a NAT'd member cannot cluster
+	// without — went silently unvalidated. IsZero is the one place that
+	// enumerates this struct, so a field added later is covered by having
+	// been added there.
+	if s.Cluster.Name == "" && !s.Cluster.IsZero() {
 		p.add(at(path, "cluster.name"), ErrMissing,
-			"is required once cluster.port or cluster.peers is set: the "+
-				"embedded server takes its route port and its peers only from a "+
-				"NAMED cluster, so this node would start solo and form no cluster "+
-				"at all")
+			"is required once anything else under cluster is set (port, peers, "+
+				"host or advertise): the embedded server takes all of them only "+
+				"from a NAMED cluster, so this node would start solo and form no "+
+				"cluster at all")
 	}
 	// Refused here rather than at the broker. nats-server validates an
 	// advertise address while STARTING, logs it and shuts the server down
