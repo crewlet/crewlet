@@ -235,6 +235,54 @@ export function WorkingNotes({ names }: { names: readonly string[] }) {
   );
 }
 
+/** One seat's presence outside the chart, by name: what the vendors hold and what it references. */
+export interface LeftBehind {
+  readonly key: string;
+  readonly name: string;
+  /** What exists for it at the vendors (see `vendorIdentities`). */
+  readonly made: readonly string[];
+  /** The secret store entries its fields reference, by name. */
+  readonly references: readonly string[];
+}
+
+/**
+ * What stays at the vendors and in the secret store once a seat is deleted or
+ * stops being an agent. Removing configuration tears nothing down at a
+ * vendor, so each is named, never by value, with the screens that
+ * decommission them.
+ */
+export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBehind[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="col gap-2">
+      <p className="t-body">
+        These stay until you decommission them.{" "}
+        <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>{" "}
+        <ScreenLink to={["secrets"]}>Open Secrets</ScreenLink>
+      </p>
+      <ul className="builder-list">
+        {entries.map(({ key, name, made, references }) => (
+          <li key={key}>
+            {name}
+            {made.length > 0 && `: ${made.join(", ")}`}
+            {references.length > 0 && (
+              <>
+                {made.length > 0 ? "; " : ": "}secret store entries{" "}
+                {references.map((ref, i) => (
+                  <span key={ref}>
+                    {i > 0 && ", "}
+                    <code className="inline">{ref}</code>
+                  </span>
+                ))}
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** Why the reducer refused an operation, kept on screen beside what caused it. */
 export function Refusal({ message }: { message: string | null }) {
   if (!message) return null;

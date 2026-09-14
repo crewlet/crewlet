@@ -20,7 +20,7 @@ import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
 import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
-import { keyedState } from "./testState.ts";
+import { keyedState, recheck } from "./testState.ts";
 
 afterEach(cleanup);
 
@@ -135,6 +135,7 @@ describe("outside the chart", () => {
       ...doc.integrations,
       atlassian: { org_id: "acme" },
       mattermost: { enabled: true, url: "https://chat.example.com", team: "acme" },
+      datadog: { enabled: true, route_to: "sre", provisioning: { site: "datadoghq.eu" } },
     };
     doc.units![0]!.roles![1] = {
       name: "Dev",
@@ -142,13 +143,18 @@ describe("outside the chart", () => {
         github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
         mattermost: { bot_token: "${DEV_MM_TOKEN}", username: "dev-bot" },
       },
-      mcp_env: { tracker: { TOKEN: "__redacted__" } },
+      mcp_env: {
+        gitlab: { GITLAB_TOKEN: "${DEV_GITLAB_TOKEN}" },
+        datadog: { DD_APP_KEY: "${DEV_DD_KEY}" },
+        jira: { JIRA_API_TOKEN: "__redacted__" },
+      },
     };
     const view = open(keyedState(doc), "seat:dev");
     expect(screen.getByText(/These stay until you decommission them./)).toBeDefined();
     const entry = screen.getByText(/the GitHub App acme-dev/);
     expect(entry.textContent).toContain("its Mattermost bot");
     expect(entry.textContent).toContain("its GitLab service account");
+    expect(entry.textContent).toContain("its Datadog service account");
     expect(entry.textContent).toContain("its Atlassian account");
     expect(entry.textContent).toContain("DEV_GITHUB_KEY");
     expect(entry.textContent).toContain("DEV_MM_TOKEN");
@@ -157,6 +163,46 @@ describe("outside the chart", () => {
     expect(screen.getByRole("link", { name: "Open Secrets" }).getAttribute("href")).toBe(
       "#/secrets",
     );
+  });
+
+  // The provisioners make an account only for a seat enrolled with the vendor
+  // (a credential for its mcp_env server), so a connected tool is not an
+  // account for every seat, and nothing was ever made for a seat this draft
+  // created.
+  test("an account is named only where the seat is enrolled for it, and never for a new seat", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      atlassian: { org_id: "acme" },
+      datadog: { enabled: true, route_to: "sre", provisioning: { site: "datadoghq.eu" } },
+    };
+    // Dev holds only the unit's tracker credential; GitLab provisioning and
+    // Atlassian are connected in this company all the same.
+    open(keyedState(doc), "seat:dev");
+    expect(screen.queryByText(/service account|Atlassian account/)).toBeNull();
+    cleanup();
+
+    // Enrolled through its unit's mcp_env, which every direct member receives.
+    const unitDoc = fixtureCompany();
+    unitDoc.units![1]!.mcp_env = { gitlab: { GITLAB_TOKEN: "${SALES_GITLAB}" } };
+    open(keyedState(unitDoc), "seat:account-executive");
+    expect(screen.getByText(/its GitLab service account/)).toBeDefined();
+    cleanup();
+
+    const added = builderReducer(keyedState(unitDoc), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:closer",
+        placement: { parent: "unit:Sales", after: "seat:account-executive" },
+        data: { name: "Closer", mcp_env: { gitlab: { GITLAB_TOKEN: "${CLOSER_GITLAB}" } } },
+      },
+    });
+    // Checked, so the removal records (the company keeps GitLab access levels
+    // by handle) and the dialog has the seat to describe.
+    open(recheck(added, { seats: { "units[1].roles[1]": { handle: "closer" } } }), "new:closer");
+    expect(screen.getByText(/Deletes the agent seat Closer./)).toBeDefined();
+    expect(screen.queryByText(/These stay until you decommission them/)).toBeNull();
   });
 
   test("the mailbox is retired after the grace period and the memory reattaches by handle", () => {

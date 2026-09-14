@@ -11,6 +11,7 @@
 
 import { describe, expect, test } from "vitest";
 import type { AgentRow, CompanyDocument, SandboxEntry } from "~/protocol/index.ts";
+import { locate } from "./model/draft.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import {
@@ -30,6 +31,7 @@ import {
   toolCredentialNames,
   unitsLedBy,
   unpinnedProvider,
+  vendorIdentities,
 } from "./nodeFacts.ts";
 import { keyedState, recheck } from "./testState.ts";
 
@@ -170,6 +172,51 @@ describe("credentials", () => {
         nested: [{ key: " ${PADDED} " }, "${SLACK_BOT}"],
       }),
     ).toEqual(["PADDED", "SLACK_BOT"]);
+  });
+
+  // An account exists at a provisioning vendor only for a seat enrolled with
+  // it, by a credential for the vendor's mcp_env server, its own or its home
+  // unit's; and nothing exists anywhere for a seat this draft created.
+  test("a vendor account is named only for an enrolled, saved seat", () => {
+    const doc = fixtureCompany();
+    doc.integrations = {
+      ...doc.integrations,
+      atlassian: { org_id: "acme" },
+      datadog: { route_to: "sre", provisioning: { site: "datadoghq.eu" } },
+    };
+    doc.units![0]!.roles![1]!.mcp_env = {
+      confluence: { CONFLUENCE_API_TOKEN: "${DEV_WIKI}" },
+      datadog: { DD_APP_KEY: "${DEV_DD}" },
+    };
+    doc.units![1]!.mcp_env = { gitlab: { GITLAB_TOKEN: "${SALES_GITLAB}" } };
+    const state = keyedState(doc);
+    const seat = (key: string) => {
+      const found = locate(state.draft, key);
+      if (found?.kind !== "seat") throw new Error(key);
+      return found.node;
+    };
+    expect(vendorIdentities(state, seat("seat:dev"))).toEqual([
+      "its Datadog service account",
+      "its Atlassian account",
+    ]);
+    // Through the unit's mcp_env, which every direct member receives.
+    expect(vendorIdentities(state, seat("seat:account-executive"))).toEqual([
+      "its GitLab service account",
+    ]);
+    // Connected tools, no enrolment.
+    expect(vendorIdentities(state, seat("seat:sre"))).toEqual([]);
+
+    const added = builderReducer(state, {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA", integrations: { slack: { channel: "C9" } } },
+      },
+    });
+    const qa = locate(added.draft, "new:qa");
+    expect(qa?.kind === "seat" && vendorIdentities(added, qa.node)).toEqual([]);
   });
 
   test("tool credentials are server and variable names only", () => {

@@ -37,9 +37,9 @@ import {
   currentCheck,
   derivedSeatOf,
   derivedUnitOf,
+  homeUnitOf,
   nameOfHandle,
-  toolCredentialNames,
-  type CurrentCheck,
+  toolServersOf,
 } from "./nodeFacts.ts";
 
 /** A lead or a channel a moved unit resolves to, before and after. */
@@ -102,13 +102,6 @@ function chainNames(draft: Draft, unit: NodeKey): string[] {
   return out;
 }
 
-/** The key of the unit an authored unit path names in the checked document. */
-function unitKeyAt(check: CurrentCheck, path: string | undefined): NodeKey | undefined {
-  if (path === undefined) return undefined;
-  if (path === "") return COMPANY_KEY;
-  return check.sent.index.byPath.get(path);
-}
-
 /** What moving `target` to the end of `destination` changes, from the current check. */
 export function movePreview(
   state: BuilderState,
@@ -131,16 +124,12 @@ export function movePreview(
     if (!seat) return NOTHING;
     const agent = kindOf(found.node.data) === "agent";
     const leadsDestination = destUnit?.lead !== undefined && destUnit.lead === seat.handle;
-    const home = unitKeyAt(check, seat.unit_path);
-    const homeData = home === undefined || home === COMPANY_KEY ? undefined : locate(draft, home);
-    const destData = destination === COMPANY_KEY ? undefined : locate(draft, destination);
-    const servers = (unit: ReturnType<typeof locate>) =>
-      new Set([
-        ...toolCredentialNames(found.node.data).map((s) => s.server),
-        ...(unit?.kind === "unit" ? toolCredentialNames(unit.node.data).map((s) => s.server) : []),
-      ]);
-    const had = agent ? servers(homeData) : new Set<string>();
-    const has = agent ? servers(destData) : new Set<string>();
+    const home = homeUnitOf(state, target);
+    const dest = destination === COMPANY_KEY ? undefined : locate(draft, destination);
+    const had = agent ? toolServersOf(found.node.data, home) : new Set<string>();
+    const has = agent
+      ? toolServersOf(found.node.data, dest?.kind === "unit" ? dest.node : undefined)
+      : new Set<string>();
     // Automatic, as the engine reported it: the manager's own automatic
     // reports name this seat.
     const manager = seat.manager
@@ -150,10 +139,7 @@ export function movePreview(
     return {
       known: true,
       reportsTo: seat.manager ? nameOfHandle(state, seat.manager) : null,
-      endsAsLeadOf:
-        automatic && homeData?.kind === "unit" && home !== destination
-          ? homeData.node.data.name
-          : null,
+      endsAsLeadOf: automatic && home && home.key !== destination ? home.data.name : null,
       destinationLead: leadsDestination ? null : destLeadName,
       leads: [],
       channels: [],
@@ -196,8 +182,8 @@ export function movePreview(
     : [...allSeats(draft)]
         .filter(({ seat }) => kindOf(seat.data) === "agent")
         .filter(({ seat }) => {
-          const home = unitKeyAt(check, derivedSeatOf(state, seat.key)?.unit_path);
-          return home !== undefined && inside.has(home);
+          const home = homeUnitOf(state, seat.key);
+          return home !== undefined && inside.has(home.key);
         })
         .map(({ seat }) => seat.data.name);
 

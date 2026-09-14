@@ -310,11 +310,13 @@ seat goes:
 - **A GitLab access level.** The per-handle override is removed with the seat,
   because an entry left behind would grant its level to the next seat that
   derives the same handle.
-- **Vendor identities and sealed credentials.** The GitHub App, Slack app,
-  Mattermost bot, GitLab service account and Atlassian account the engine made
-  for the seat, and the secret store entries its config references, stay until
+- **Vendor identities and sealed credentials.** The seat's GitHub App, Slack
+  app and Mattermost bot, the GitLab, Datadog and Atlassian accounts it is
+  enrolled for (it holds a credential for that tool's `mcp_env` server, or its
+  unit does), and the secret store entries its config references, stay until
   you decommission them. They are listed by name, never by value, with links to
-  **Integrations** and **Secrets**.
+  **Integrations** and **Secrets**. A seat added in this draft was never saved,
+  so nothing exists for it outside the chart.
 - **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
   the mail still addressed to it, is kept for 24 hours after the engine applies
   the change and then retired, together with any coding runs it still has. Its
@@ -332,7 +334,9 @@ and its own GitHub App), and refuses an agent seat `contact` and
 `availability`. The dialog lists the fields by name before anything is
 recorded, and calls out the ones that hold credentials: the builder never shows
 a credential, so it cannot type one back in and the value is gone for good once
-the change is saved.
+the change is saved. Removing a field tears nothing down at a vendor, so the
+seat's apps, bots and accounts, and the secret store entries the removed fields
+referenced, are listed as they are for a deleted seat.
 
 Becoming a human seat needs one contact identity, and cannot be done to the
 Datadog fallback without choosing the agent seat that takes over. Where the

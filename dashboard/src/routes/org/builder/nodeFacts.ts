@@ -42,8 +42,15 @@ import type {
 } from "~/protocol/index.ts";
 import { runState } from "~/lib/seats.ts";
 import type { IndexedDocument } from "./model/document.ts";
-import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
-import { allSeats, allUnits, locate, type Draft, type DraftUnit } from "./model/draft.ts";
+import { COMPANY_KEY, handleOfKey, isMintedKey, type NodeKey } from "./model/keys.ts";
+import {
+  allSeats,
+  allUnits,
+  locate,
+  type Draft,
+  type DraftSeat,
+  type DraftUnit,
+} from "./model/draft.ts";
 import { getPath, isRecord } from "./model/json.ts";
 import type { BuilderState } from "./model/reducer.ts";
 
@@ -114,6 +121,21 @@ export function nameOfHandle(state: BuilderState, handle: string): string {
   if (found?.kind === "seat") return found.node.data.name;
   const reported = currentCheck(state)?.derived.seats?.find((s) => s.handle === handle);
   return reported?.name ?? handle;
+}
+
+/**
+ * The unit a seat is a direct member of, as the current check reported it:
+ * the unit it sits in, or the one a root seat's `unit:` reference places it
+ * in. `undefined` at the top level, and while no current check describes the
+ * seat.
+ */
+export function homeUnitOf(state: BuilderState, key: NodeKey): DraftUnit | undefined {
+  const check = currentCheck(state);
+  const path = derivedSeatOf(state, key)?.unit_path;
+  if (check === undefined || path === undefined || path === "") return undefined;
+  const unit = check.sent.index.byPath.get(path);
+  const found = unit === undefined ? undefined : locate(state.draft, unit);
+  return found?.kind === "unit" ? found.node : undefined;
 }
 
 /** The units whose DECLARED lead names this seat, in the document's order. */
@@ -302,6 +324,72 @@ export function toolCredentialNames(
     server,
     variables: isRecord(vars) ? Object.keys(vars) : [],
   }));
+}
+
+/**
+ * The tool servers a seat holds credentials for, by name: its own `mcp_env`
+ * and its home unit's, which the engine layers under every direct member
+ * (`org.inheritMCPEnv`).
+ */
+export function toolServersOf(seat: ConfigRole, home: DraftUnit | undefined): Set<string> {
+  return new Set(
+    [...toolCredentialNames(seat), ...(home ? toolCredentialNames(home.data) : [])].map(
+      (entry) => entry.server,
+    ),
+  );
+}
+
+/**
+ * The `mcp_env` servers each provisioning vendor reads a seat's own account
+ * from, as the engine names them: `gitlab.SeatEnv`, `datadog.SeatEnv`, and
+ * Atlassian's shared server with its two product servers
+ * (`atlassian.ProductAny.servers`). A seat is enrolled with a vendor by
+ * holding credentials for one of its servers, and a seat that holds none
+ * has no account there, whatever the company has connected.
+ */
+const VENDOR_SERVERS = {
+  gitlab: ["gitlab"],
+  datadog: ["datadog"],
+  atlassian: ["atlassian", "jira", "confluence"],
+} as const;
+
+/**
+ * What exists at the vendors for a seat, by name, never by value: its own
+ * GitHub App, Slack app and Mattermost bot, and the GitLab, Datadog and
+ * Atlassian accounts it is enrolled for. Each stays when the seat is deleted
+ * or stops being an agent, until somebody decommissions it.
+ *
+ * NOTHING FOR A SEAT THIS DRAFT CREATED: it was never saved, so no engine
+ * made anything for it anywhere. And an account is named only where the seat
+ * is enrolled for it (see [VENDOR_SERVERS]), because the provisioners create
+ * accounts for enrolled agent seats only; naming one for every seat of a
+ * company that connected the tool sends somebody to decommission an account
+ * that does not exist.
+ */
+export function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
+  if (isMintedKey(seat.key)) return [];
+  const company = state.draft.company;
+  const servers = toolServersOf(seat.data, homeUnitOf(state, seat.key));
+  const enrolled = (vendor: keyof typeof VENDOR_SERVERS) =>
+    VENDOR_SERVERS[vendor].some((server) => servers.has(server));
+  const out: string[] = [];
+  const github = getPath(seat.data, ["integrations", "github"]);
+  if (isRecord(github) && typeof github.app_slug === "string" && github.app_slug !== "") {
+    out.push(`the GitHub App ${github.app_slug}`);
+  }
+  if (isRecord(getPath(seat.data, ["integrations", "slack"]))) out.push("its Slack app");
+  if (isRecord(getPath(seat.data, ["integrations", "mattermost"]))) out.push("its Mattermost bot");
+  if (hasGitLabProvisioning(company) && enrolled("gitlab")) {
+    out.push("its GitLab service account");
+  }
+  if (
+    isRecord(getPath(company, ["integrations", "datadog", "provisioning"])) &&
+    enrolled("datadog")
+  ) {
+    out.push("its Datadog service account");
+  }
+  if (isConnected(company, "atlassian") && enrolled("atlassian")) out.push("its Atlassian account");
+  return out;
 }
 
 // ---------------------------------------------------------------------------

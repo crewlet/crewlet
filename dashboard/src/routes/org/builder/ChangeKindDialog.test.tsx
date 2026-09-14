@@ -14,7 +14,7 @@ import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
 import { locate } from "./model/draft.ts";
 import { getPath } from "./model/json.ts";
-import type { BuilderState } from "./model/reducer.ts";
+import { builderReducer, type BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
 import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
@@ -64,6 +64,36 @@ test("the fields the change removes are named, the credential ones as gone for g
     screen.getByText("Dev stops running. Its memory is kept but unused while it is a human seat."),
   ).toBeDefined();
   expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
+});
+
+// Stripping a field tears nothing down at a vendor: the seat's app and bot
+// stay, and so do the entries its removed fields referenced, exactly as for a
+// deleted seat. A seat this draft created was never saved and has none.
+test("what stays at the vendors and in the secret store is named, and nothing for a new seat", () => {
+  const view = open(keyedState(withFields()), "seat:dev");
+  const entry = screen.getByText(/the GitHub App acme-dev/);
+  expect(entry.textContent).toContain("its Slack app");
+  for (const name of ["DEV_KEY", "DEV_SLACK", "DEV_SIGN"])
+    expect(entry.textContent).toContain(name);
+  expect(screen.getByText(/These stay until you decommission them./)).toBeDefined();
+  expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
+  cleanup();
+
+  const added = builderReducer(keyedState(fixtureCompany()), {
+    type: "record",
+    intent: {
+      type: "addSeat",
+      key: "new:qa",
+      placement: { parent: "unit:Sales", after: null },
+      data: {
+        name: "QA",
+        mcp_env: { tracker: { TOKEN: "${QA_TRACKER}" } },
+        integrations: { slack: { channel: "C9" } },
+      },
+    },
+  });
+  open(added, "new:qa");
+  expect(screen.queryByText(/These stay until you decommission them/)).toBeNull();
 });
 
 test("a human seat is not made without a contact identity, and the change records one operation", () => {

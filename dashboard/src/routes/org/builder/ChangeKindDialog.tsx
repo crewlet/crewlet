@@ -20,6 +20,11 @@
  * seat that is the Datadog fallback cannot become human (an alert would wake
  * nobody), so a replacement is chosen here too, and the schedules the change
  * strands are named as they are for a move or a removal.
+ *
+ * WHAT IT LEAVES BEHIND. Stripping a field tears nothing down at a vendor:
+ * the seat's GitHub App, its chat bots and the accounts it was enrolled for
+ * stay where they are, and so do the secret store entries the removed fields
+ * referenced, the same as for a deleted seat. They are named, never by value.
  */
 
 import { useState } from "react";
@@ -34,14 +39,22 @@ import {
   ReadOnlyNote,
   Refusal,
   ScreenLink,
+  StaysUntilDecommissioned,
   StrandedNotes,
   WorkingNotes,
+  type LeftBehind,
 } from "./dialogParts.tsx";
 import { allSeats, locate } from "./model/draft.ts";
 import { isMintedKey, type NodeKey } from "./model/keys.ts";
 import { fieldName, isCredentialField, kindOf, type Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
-import { datadogFallback, handleOf, isWorking } from "./nodeFacts.ts";
+import {
+  datadogFallback,
+  handleOf,
+  isWorking,
+  referenceNames,
+  vendorIdentities,
+} from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -93,6 +106,17 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
     credential: isCredentialField(field.path),
   }));
   const stranded = preview.ok ? newlyStranded(state.draft, preview.after) : [];
+  const leftBehind: LeftBehind[] =
+    becoming === "human" && !isMintedKey(nodeKey)
+      ? [
+          {
+            key: nodeKey,
+            name,
+            made: vendorIdentities(state, seat),
+            references: referenceNames((op?.stripped ?? []).map((field) => field.before)),
+          },
+        ].filter((entry) => entry.made.length > 0 || entry.references.length > 0)
+      : [];
   const working =
     becoming === "human" && isWorking(handle, api.agents, api.sandboxes) ? [name] : [];
 
@@ -161,6 +185,12 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
               </li>
             ))}
           </ul>
+        </EditorSection>
+      )}
+
+      {leftBehind.length > 0 && (
+        <EditorSection title="Outside the chart">
+          <StaysUntilDecommissioned entries={leftBehind} />
         </EditorSection>
       )}
 

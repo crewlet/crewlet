@@ -14,10 +14,11 @@
  * - A removed seat's GitLab access level is removed with it: the entry is
  *   keyed by handle, and left behind it would grant its level to the next
  *   seat the engine gives that handle.
- * - What the engine made for the seat at the vendors (a GitHub App, a Slack
- *   app, a Mattermost bot, a GitLab or Atlassian account) and the secret
- *   store entries it references stay until someone decommissions them, and
- *   the dialog lists them by name.
+ * - What exists for the seat at the vendors (a GitHub App, a Slack app, a
+ *   Mattermost bot, the GitLab, Datadog or Atlassian account it is enrolled
+ *   for) and the secret store entries it references stay until someone
+ *   decommissions them, and the dialog lists them by name
+ *   (`vendorIdentities`).
  * - The seat's mailbox is retired 24 hours after the engine applies the
  *   removal, its coding runs are ended then, and its memory is kept and
  *   reattaches to a seat added later under the same handle
@@ -42,21 +43,22 @@ import {
   ReadOnlyNote,
   Refusal,
   ScreenLink,
+  StaysUntilDecommissioned,
   StrandedNotes,
   WorkingNotes,
+  type LeftBehind,
 } from "./dialogParts.tsx";
 import { allSeats, locate, type DraftSeat } from "./model/draft.ts";
-import { getPath, isRecord } from "./model/json.ts";
+import { isRecord } from "./model/json.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
 import { kindOf, type Intent, type ReferenceEffect } from "./model/operations.ts";
 import { recordIntent, type BuilderState } from "./model/reducer.ts";
 import {
   datadogFallback,
   handleOf,
-  hasGitLabProvisioning,
-  isConnected,
   isWorking,
   referenceNames,
+  vendorIdentities,
 } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 
@@ -262,21 +264,6 @@ function ClearedReferences({
   );
 }
 
-/** What the engine made for a removed agent seat at the vendors, by name. */
-function vendorIdentities(state: BuilderState, seat: DraftSeat): string[] {
-  const company = state.draft.company;
-  const out: string[] = [];
-  const github = getPath(seat.data, ["integrations", "github"]);
-  if (isRecord(github) && typeof github.app_slug === "string" && github.app_slug !== "") {
-    out.push(`the GitHub App ${github.app_slug}`);
-  }
-  if (isRecord(getPath(seat.data, ["integrations", "slack"]))) out.push("its Slack app");
-  if (isRecord(getPath(seat.data, ["integrations", "mattermost"]))) out.push("its Mattermost bot");
-  if (hasGitLabProvisioning(company)) out.push("its GitLab service account");
-  if (isConnected(company, "atlassian")) out.push("its Atlassian account");
-  return out;
-}
-
 function OutsideTheChart({
   state,
   agents,
@@ -294,10 +281,13 @@ function OutsideTheChart({
   onRouteTo: (handle: string) => void;
   accessLevels: readonly { handle: string; before?: string }[];
 }) {
+  // A seat this draft created was never saved: nothing exists for it at a
+  // vendor, no entry was written for it, and it has no mailbox.
   const saved = agents.filter((seat) => !isMintedKey(seat.key));
-  const identities = agents
+  const identities: LeftBehind[] = saved
     .map((seat) => ({
-      seat,
+      key: seat.key,
+      name: seat.data.name,
       made: vendorIdentities(state, seat),
       references: referenceNames(seat.data),
     }))
@@ -342,34 +332,7 @@ function OutsideTheChart({
     );
   }
   if (identities.length > 0) {
-    parts.push(
-      <div key="vendors" className="col gap-2">
-        <p className="t-body">
-          These stay until you decommission them.{" "}
-          <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>{" "}
-          <ScreenLink to={["secrets"]}>Open Secrets</ScreenLink>
-        </p>
-        <ul className="builder-list">
-          {identities.map(({ seat, made, references }) => (
-            <li key={seat.key}>
-              {seat.data.name}
-              {made.length > 0 && `: ${made.join(", ")}`}
-              {references.length > 0 && (
-                <>
-                  {made.length > 0 ? "; " : ": "}secret store entries{" "}
-                  {references.map((ref, i) => (
-                    <span key={ref}>
-                      {i > 0 && ", "}
-                      <code className="inline">{ref}</code>
-                    </span>
-                  ))}
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
-      </div>,
-    );
+    parts.push(<StaysUntilDecommissioned key="vendors" entries={identities} />);
   }
   if (saved.length > 0) {
     const one = saved.length === 1;
