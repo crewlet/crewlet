@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -811,5 +812,95 @@ func seedPhases(t *testing.T, log *store.EventLog, role, agentID string) {
 		}); err != nil {
 			t.Fatalf("append %s: %v", row.id, err)
 		}
+	}
+}
+
+// A DEAD LINK IS NOT A BROKEN NODE.
+//
+// `EventLog.ByID` answers `store.ErrNotFound`, which is not `queries.ErrNotFound`
+// — so an id the log simply does not hold used to reach the API classifier as a
+// plain failure and come back as `query_failed`. That is the one classification
+// an operator acts on by going to look for a fault, and there is none: every
+// event id on the dashboard is a link somebody can follow after the 30-day
+// window has closed over it.
+func TestAMissingEventIsNotFoundRatherThanAFailure(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	seedEvents(t, db.Events(), 1, nil)
+	r := registryOver(t, queries.Sources{Events: db.Events()})
+
+	_, err := r.Answer(t.Context(), "event", map[string]any{"id": "ev-nobody-published"}, "")
+	if !errors.Is(err, queries.ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+	// The id is IN the message, because the surface that renders this shows it
+	// to a person who pasted or followed it.
+	if !strings.Contains(err.Error(), "ev-nobody-published") {
+		t.Errorf("error %q does not name the id that was not found", err)
+	}
+}
+
+// AN EMPTY LIST ANSWERS `[]`, NEVER `null`.
+//
+// The two differ in exactly one place — the JSON — and it is the place every
+// one of these answers ends up: a client reading `.events.length` off `null`
+// crashes for "nothing matched" and works for everything else, which is how
+// the Trace screen came to report "not found" for an empty trace. Asserted on
+// the marshalled bytes rather than on the Go value, because a non-nil empty
+// slice is the only thing that fixes it and `len(rows) == 0` cannot tell the
+// two apart.
+func TestAnEmptyTraceAnswersAnArrayNotNull(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	seedEvents(t, db.Events(), 1, nil)
+	r := registryOver(t, queries.Sources{Events: db.Events()})
+
+	for _, tc := range []struct {
+		what  string
+		param map[string]any
+	}{
+		{"trace", map[string]any{"trace_id": "tr-nothing-shares-this"}},
+		{"turn", map[string]any{"turn_id": "turn-nothing-shares-this"}},
+	} {
+		got := ask(t, r, tc.what, tc.param)
+		raw, err := json.Marshal(got["events"])
+		if err != nil {
+			t.Fatalf("%s: marshal: %v", tc.what, err)
+		}
+		if string(raw) != "[]" {
+			t.Errorf("%s: events marshalled as %s, want []", tc.what, raw)
+		}
+	}
+}
+
+// AN EMPTY HISTORY IS NOT A PANIC.
+//
+// `phaseHistory` echoes the last row's key as the paging cursor, and it used to
+// reach for that row behind a nil check — which is not the same question. The
+// event log answers a nil slice for a seat it cannot name and an allocated
+// empty one for a seat that simply has not run yet, and `records[len-1]` is out
+// of range on both: the second walked straight past the guard and took the
+// whole seat screen down with a 500, on the one seat state every new company
+// starts in.
+func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	// Seeded, so the log is readable and non-empty — the empty result has to
+	// come from this seat having no phases, not from an empty table.
+	seedEvents(t, db.Events(), 3, nil)
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: db.Events()})
+
+	got := ask(t, r, "agent", map[string]any{"role": "NobodyHasThisRole"})
+	rows, ok := got["llm_history"].([]store.EventRecord)
+	if !ok {
+		t.Fatalf("llm_history = %#v, want a slice", got["llm_history"])
+	}
+	if len(rows) != 0 {
+		t.Errorf("llm_history = %d rows, want none for a role nothing published under", len(rows))
+	}
+	// And the cursor is withheld rather than pointing at a row that is not
+	// there, which is what makes a client stop paging.
+	if got["next"] != "" {
+		t.Errorf("next = %#v on an empty page, want the empty string", got["next"])
 	}
 }

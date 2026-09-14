@@ -455,16 +455,22 @@ func (s Sources) phaseHistory(ctx context.Context, seat, role string, p Params) 
 		log.WarnContext(ctx, "agent_history_unavailable", "seat", seat, "error", err)
 		return []store.EventRecord{}, ""
 	}
-	if records == nil {
+	if len(records) == 0 {
+		// EMPTINESS, not nil-ness, and the two are not interchangeable here:
+		// `AgentPhases` answers a nil slice for a seat it cannot name, an
+		// allocated empty one for a seat with no phases yet, and the index
+		// below is out of range on BOTH. Testing for nil alone left a seat
+		// whose history read came back empty indexing a slice of length zero.
 		return []store.EventRecord{}, ""
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it
 	// from a rendered timestamp would lose the sub-second precision the
-	// tiebreak depends on.
-	last := records[len(records)-1]
+	// tiebreak depends on. Offered only on a FULL page — a short one is the
+	// end of the record, and a cursor there would page for ever.
 	next := ""
 	if len(records) == store.AgentPhaseLimit {
+		last := records[len(records)-1]
 		next = last.Time.UTC().Format(time.RFC3339Nano) + "|" + last.ID
 	}
 	return records, next
@@ -653,6 +659,16 @@ func (s Sources) event(ctx context.Context, p Params) (any, error) {
 	}
 	rec, err := s.Events.ByID(ctx, id)
 	if err != nil {
+		// A DEAD LINK IS NOT A BROKEN NODE. `store.ErrNotFound` is not
+		// [ErrNotFound], so passing it through untranslated classified an id
+		// that simply is not in the log as `query_failed` — which tells a
+		// reader the server is faulty and tells an operator to go looking for
+		// a fault there is none of. Every event id on the dashboard is a link
+		// somebody can follow after the 30-day window has closed over it, so
+		// this is the ordinary case rather than the exotic one.
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("%w: event %s", ErrNotFound, id)
+		}
 		return nil, err
 	}
 	return rec, nil

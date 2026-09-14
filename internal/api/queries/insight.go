@@ -84,12 +84,6 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// past the cap, and leaves one on a turn that is genuinely long.
 		truncated = total > len(records)
 	}
-	if records == nil {
-		// A named empty slice, not nil: nil marshals as `null` and the
-		// client reads `.events` off it, which is the exact shape mismatch
-		// that made the Trace screen answer "not found" for every trace.
-		records = []store.EventRecord{}
-	}
 	return map[string]any{
 		"turn_id": id,
 		"events":  records,
@@ -169,9 +163,6 @@ func (s Sources) phases(ctx context.Context, p Params) (any, error) {
 	records, err := s.Events.Phases(ctx, p.String("role"), limit, before)
 	if err != nil {
 		return nil, err
-	}
-	if records == nil {
-		records = []store.EventRecord{}
 	}
 	// The cursor is the LAST row's key, echoed rather than left for a client
 	// to assemble: (time, id) is the table's key, and a client rebuilding it

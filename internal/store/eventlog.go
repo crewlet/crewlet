@@ -195,6 +195,15 @@ type ListQuery struct {
 }
 
 // EventLog is the audit and observability event store.
+//
+// EVERY LIST READ HERE ANSWERS AN ALLOCATED SLICE, never nil, because every one
+// of them has a JSON surface above it and that is the only place the two
+// differ: nil marshals as `null` and empty as `[]`, so a client doing the
+// obvious thing with the answer crashes on "nothing matched" and works on
+// everything else. The one deliberate exception is [EventLog.AgentPhases],
+// which answers nil for a seat it cannot name at all — a question it did not
+// understand, rather than one whose answer is empty. A caller that needs to
+// know whether there are rows asks `len`, which is right either way.
 type EventLog struct{ db *DB }
 
 // Events returns the audit log backed by this database.
@@ -730,7 +739,16 @@ func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, arg
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []EventRecord
+	// ALLOCATED EMPTY, never nil. Every one of these reads has a JSON surface
+	// above it, and that is the only place the two differ: a nil slice
+	// marshals as `null` and an empty one as `[]`, so a client doing the
+	// obvious thing with the answer — reading `.length`, iterating it — gets a
+	// crash for "nothing matched" and a working screen for everything else.
+	// The Trace screen answered "not found" for every empty trace on exactly
+	// that, and patching it at the one answer that noticed left the same nil
+	// reaching six other reads. There is nothing a caller can do with the
+	// distinction here that `len` does not already do.
+	out := []EventRecord{}
 	for rows.Next() {
 		var rec EventRecord
 		var micros int64
