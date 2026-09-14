@@ -140,7 +140,8 @@ While a check is out, Save waits for it. If the engine could not be reached to
 check, saving is still allowed: the write itself is validated.
 
 The **audit summary** is prefilled from the changes and recorded with the
-revision, followed by a write id such as `(write 4f1c...)`. A save is the
+revision, followed by a write id such as
+`(write 4f1c9a0b2e7d4c81a3b5f6e7d8c9b0a1)`. A save is the
 same request as its checks: a `PATCH /config` merge patch of what changed,
 with `If-Match` naming the revision the draft was started from, so a newer
 revision is refused (and offered as an update) rather than overwritten.
@@ -159,8 +160,9 @@ land is recognized as yours rather than replayed on top of itself.
 ### After saving
 
 A save stores and activates a revision. It does not apply it: every node
-applies on its own reconcile tick (fifteen seconds at most), and a node can
-refuse a revision and go on serving the previous one. Until this node has
+applies on its own reconcile tick (about every fifteen seconds, spread a
+little per node so a fleet does not apply at once), and a node can refuse a
+revision and go on serving the previous one. Until this node has
 applied it, the Chart, Directory and Charter lenses still draw the previous
 organization, and say so.
 
@@ -180,6 +182,29 @@ since a first revision has nothing to differ from), and **Copy as YAML**,
 which reads the active company as YAML (credentials redacted, as every
 configuration read is) so a `company.yaml` kept in a repository can be
 brought back in step. `crewlet config import company.yaml` writes it back.
+
+### Keeping a company file in sync
+
+A company kept as `company.yaml` in a repository and a company edited in the
+builder are two writers of one document, and the flag a node starts with
+decides which one wins a restart
+([Configuration](../concepts/configuration.md)):
+
+- `crewlet run -company company.yaml` only fills an empty store. Once a
+  company exists the file is ignored, so a restart never undoes a builder
+  save.
+- `crewlet run -import-company company.yaml` makes the file the company again
+  at every start. A restart with it replaces whatever the builder saved since
+  the file last changed.
+
+So after a save, **Copy as YAML** and commit it to the file, and the next
+import writes back what the builder wrote rather than undoing it. Credentials
+in the copy read as `__redacted__` (a whole `${NAME}` reference is shown as it
+is). Importing the file over the running company restores each masked value
+from the active revision by the identity of what holds it (a seat by its
+handle, a unit by its name); a store with no active revision has nothing to
+restore from, which is one more reason a file kept in a repository should
+hold `${NAME}` references rather than values.
 
 ## A draft survives a reload
 
@@ -225,9 +250,14 @@ now, and sorts every change into one of three outcomes:
   now and yours, and you choose **Keep mine** or **Keep theirs** for each. A
   change is never replayed over somebody else's value without that choice.
 
-A seat or unit that was removed and created again under the same name is a
-different entity to the builder, so a change made to the original is dropped
-rather than applied to the new one.
+"The same seat" means what it means to the engine: a seat is its handle and a
+unit is its name, because those are what its memory, mailbox, schedules and
+credentials attach to. A seat removed and created again with a different
+handle is a different seat, and a change made to the original is dropped
+rather than applied to it. One created again under the same handle, or a unit
+under the same name, is the same one to the engine, so a change made to it is
+held to the values it recorded like any other: a field somebody set
+differently is a conflict for you to decide.
 
 If this node still serves the older revision (it has not applied the newer one
 yet, or a load balancer sent the read to a node that has not), the update

@@ -367,6 +367,16 @@ curl -X PUT http://localhost:8000/config \
   --data-binary @company.yaml
 ```
 
+Or create the company from the dashboard: open **Org chart** and its
+**Builder** lens (`#/org?lens=builder`). With no configuration active it opens
+on a form that starts the company from a template, has the engine check it,
+and creates it with `PUT /config`. The builder reads and writes `/config`, so
+it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
+dashboard writes no model provider, so one step stays outside it: add
+`providers.llm` afterwards with `crewlet config import` or `PATCH /config`,
+as the builder's next steps show
+([The Org Builder](../guides/org-builder.md#creating-the-company)).
+
 ## Split deployment (optional)
 
 Run ingress as its own node when you want webhooks to keep arriving while
