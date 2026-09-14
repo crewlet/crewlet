@@ -218,6 +218,12 @@ var publicKeys = func() map[string]bool {
 		reflect.TypeFor[api.OrgProjection](),
 		reflect.TypeFor[api.OrgSeat](),
 		reflect.TypeFor[api.OrgUnit](),
+		// The derived hierarchy is the values above, resolved: handles,
+		// names, unit names and the effective lead and channel. Its own
+		// keys belong to the public shape for that reason.
+		reflect.TypeFor[config.Derived](),
+		reflect.TypeFor[config.DerivedSeat](),
+		reflect.TypeFor[config.DerivedUnit](),
 	} {
 		for field := range fieldsOf(typ) {
 			out[jsonName(field)] = true

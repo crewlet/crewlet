@@ -52,6 +52,24 @@ type OrgProjection struct {
 	Policies []string  `json:"policies,omitempty"`
 	Roles    []OrgSeat `json:"roles,omitempty"`
 	Units    []OrgUnit `json:"units,omitempty"`
+
+	// Derived is the hierarchy the engine derives from the document above:
+	// each seat's handle, its effective unit, its primary manager and
+	// reports, and each unit's effective type, lead and channel.
+	//
+	// THE ENGINE SAYS IT RATHER THAN A CLIENT WORKING IT OUT. Every rule
+	// here is one a second implementation gets wrong, and the dashboard's
+	// TypeScript had already diverged from the engine on three of them and
+	// on the handle of a name with a dotted capital I; see [config.Derive].
+	// The fields above stay as WRITTEN, so a reader can still tell a
+	// declared lead from an inherited one.
+	//
+	// WITHOUT PATHS, which is the one difference from the guarded answers:
+	// an anonymous reader is given no document to point into, and membership
+	// is in each unit's seats. Nothing else here is a fact the fields above
+	// do not already carry, so it needs no classification of its own beyond
+	// this: it is those values, resolved.
+	Derived *config.Derived `json:"derived,omitempty"`
 }
 
 // OrgSeat is the public half of one seat: who it is and what it is for.
@@ -102,6 +120,7 @@ func orgProjection(company func() *config.Company) OrgProjection {
 	if c == nil {
 		return OrgProjection{}
 	}
+	derived := config.Derive(c).WithoutPaths()
 	return OrgProjection{
 		Name:     c.Name,
 		Mission:  c.Mission,
@@ -109,6 +128,7 @@ func orgProjection(company func() *config.Company) OrgProjection {
 		Policies: slices.Clone(c.Policies),
 		Roles:    orgSeats(c.Roles),
 		Units:    orgUnits(c.Units),
+		Derived:  &derived,
 	}
 }
 
