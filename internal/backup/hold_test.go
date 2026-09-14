@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,12 @@ func TestATrimmedLogRefusesTheManifest(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, backup.ManifestName)); statErr == nil {
 		t.Fatal("a manifest was written over the hole")
+	}
+	// AND IT SAYS WHERE TO LOOK. The hold is the thing that failed to stop
+	// the trim, and the one line that records a hold going stale is its
+	// renewal warning, so the refusal names it rather than a node shape.
+	if !strings.Contains(err.Error(), "backup_hold_not_renewed") {
+		t.Errorf("the refusal does not say where to look: %v", err)
 	}
 
 	// AND THE BOUNDARY CASE PASSES: a log whose first sequence is exactly

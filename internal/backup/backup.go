@@ -157,12 +157,14 @@ type Manifest struct {
 	// what lets an operator see that before trying.
 	EngineVersion string `json:"engine_version"`
 
-	// Store describes the database copy, absent on a node running without
-	// one.
+	// Stores describes the database copies, one per estate: the node's own
+	// store and the replicated estate beside it, which every node opens
+	// together.
 	Stores []StoreArtifact `json:"stores,omitempty"`
 
 	// Streams is every stream captured, coordination buckets included.
-	// Absent on a node with no broker reachable.
+	// Absent on a node that dialled an external NATS cluster, whose streams
+	// are backed up at that cluster (see [Options.Conn]).
 	Streams []StreamArtifact `json:"streams,omitempty"`
 
 	// Domains is where each state-log domain's applier stood IN THE COPY,
@@ -496,8 +498,8 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 	return manifest, nil
 }
 
-// estates is every database handle a node holds, in copy order, and empty on
-// a node running without a store.
+// estates is every database handle a node holds, in copy order: its own store,
+// then the replicated estate beside it.
 func estates(db *store.DB) []*store.DB {
 	out := []*store.DB{db}
 	if peer := db.Replicated(); peer != nil {
@@ -729,11 +731,12 @@ func assertReplayable(m Manifest) error {
 		}
 		if state.FirstSeq > at.Seq+1 {
 			return fmt.Errorf("backup: the store copy stands at %s sequence %d "+
-				"and the captured log starts at %d — the records between them "+
+				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+
-				"prefix with a hole in it and report nothing. Check that the "+
-				"trim hold was taken (a node with no coordination cannot take "+
-				"one) and take the backup again",
+				"prefix with a hole in it and report nothing. The trim hold did "+
+				"not cover the copy; look for backup_hold_not_renewed in this "+
+				"node's log (a hold that misses its renewals is read as "+
+				"abandoned), then take the backup again",
 				artifact.Name, at.Seq, state.FirstSeq)
 		}
 	}
