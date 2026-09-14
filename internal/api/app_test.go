@@ -24,6 +24,10 @@ type fakeRuntime struct {
 func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
 func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
 
+// ShuttingDown answers from the same state Snapshot does, which is the
+// contract: one fact, two ways to read it.
+func (f *fakeRuntime) ShuttingDown() bool { return f.state.ShuttingDown }
+
 func newApp(t *testing.T, opts api.Options) *api.App {
 	t.Helper()
 	if opts.Bootstrap == nil {
@@ -195,9 +199,8 @@ func TestUnconfiguredOutranksAPosture(t *testing.T) {
 
 func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	t.Parallel()
-	// The only place an operator can see WHY a node left rotation: /ready
-	// reports a bare 503 either way, and "draining" and "cannot apply
-	// epoch 41" call for opposite responses.
+	// WHY a node left rotation, on the probe that stays 200: "draining"
+	// and "cannot apply epoch 41" call for opposite responses.
 	for _, posture := range []string{"shed", "stuck", "isolated"} {
 		a := newApp(t, api.Options{Runtime: &fakeRuntime{
 			state: api.RuntimeState{Posture: posture},
@@ -251,6 +254,48 @@ func TestADrainLeavesRotationImmediately(t *testing.T) {
 	}
 	if body["draining"] != true {
 		t.Errorf("body = %v", body)
+	}
+}
+
+// A REFUSED /ready SAYS WHY, in one field, in the precedence the health status
+// uses. Three fields that each say part of it leave a load balancer's log of a
+// failed probe to be decoded by whoever reads it, and they decode it wrong the
+// day a node is both draining and diverged.
+func TestARefusedReadinessNamesItsReason(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		configured bool
+		state      api.RuntimeState
+		want       string
+	}{
+		{"draining outranks everything", false,
+			api.RuntimeState{ShuttingDown: true, Posture: "stuck"}, api.ReasonDraining},
+		{"unconfigured outranks a posture", false,
+			api.RuntimeState{Posture: "shed"}, api.ReasonUnconfigured},
+		{"a diverged posture names itself", true,
+			api.RuntimeState{Posture: "shed"}, "shed"},
+		{"stuck names itself", true,
+			api.RuntimeState{Posture: "stuck"}, "stuck"},
+		{"a ready node names nothing", true,
+			api.RuntimeState{Posture: "wait"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a := newApp(t, api.Options{Runtime: &fakeRuntime{state: tc.state}})
+			a.SetConfigured(tc.configured)
+			status, body := get(t, a, "/ready")
+			got, present := body["reason"]
+			if tc.want == "" {
+				if present || status != http.StatusOK {
+					t.Errorf("status %d, reason %v, want 200 and no reason", status, got)
+				}
+				return
+			}
+			if got != tc.want || status != http.StatusServiceUnavailable {
+				t.Errorf("status %d, reason %v, want 503 and %q", status, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -115,11 +115,32 @@ var unguardedExact = map[string]struct{}{
 	"/": {}, "/dashboard": {}, "/favicon.ico": {}, "/health": {}, "/ready": {},
 }
 
-var unguardedPrefixes = []string{"/webhooks/", "/otlp/", mcpbridge.PathPrefix, "/static/"}
+var unguardedPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, "/static/"}
+
+// WebhookPrefix and OTLPPrefix are the two exempt edges a second rule also
+// reads. Named here, beside the exemption, for the reason [SocketPath] is: the
+// API's drain gate refuses the first and serves the second, and a prefix it
+// spelled for itself could stop matching the one this guard exempts without
+// either rule looking wrong on its own.
+const (
+	WebhookPrefix = "/webhooks/"
+	OTLPPrefix    = "/otlp/"
+)
 
 // readMethods are treated as reads for allow_anonymous_read.
 var readMethods = map[string]struct{}{
 	http.MethodGet: {}, http.MethodHead: {}, http.MethodOptions: {},
+}
+
+// IsRead reports whether a method is a read: GET, HEAD or OPTIONS.
+//
+// Exported because a read is a read to more than the guard. The drain gate
+// serves reads for the same reason allow_anonymous_read may open them: a read
+// changes nothing and starts nothing, and a second list of which methods those
+// are would be a second answer to one question.
+func IsRead(method string) bool {
+	_, ok := readMethods[strings.ToUpper(method)]
+	return ok
 }
 
 // loopbackHosts are bind addresses no other machine can reach. Anonymous reads
@@ -309,8 +330,7 @@ func (g *Guard) Requires(path, method string) bool {
 		return true
 	}
 	if g.anonymousRead {
-		_, isRead := readMethods[strings.ToUpper(method)]
-		return !isRead
+		return !IsRead(method)
 	}
 	return true
 }

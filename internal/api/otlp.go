@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -42,7 +43,7 @@ func (a *App) mountOTLP(mux *http.ServeMux, receiver *sandbox.OtelReceiver) {
 	if receiver == nil {
 		return
 	}
-	mux.Handle("POST /otlp/{token}/v1/{signal}", http.HandlerFunc(
+	mux.Handle("POST "+auth.OTLPPrefix+"{token}/v1/{signal}", http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			a.serveOTLP(w, r, receiver)
 		}))
