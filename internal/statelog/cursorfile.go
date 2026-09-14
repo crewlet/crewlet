@@ -31,29 +31,54 @@ import (
 // The file is opened as ONE ESTATE. [store.Open] would treat it as a node —
 // applying the node estate's whole migration sequence into this copy of the
 // replicated file and opening a second file beside it.
-func CursorsInFile(ctx context.Context, path string) (map[string]Position, error) {
+// FileCursor is one stream's committed checkpoint AS A COPY KEEPS IT: where
+// the applier had got to, and which stream it was applying.
+//
+// THE IDENTITY TRAVELS WITH THE POSITION for the reason [CursorFor]'s own doc
+// gives about the same three values — "reading them separately is how one of
+// them ends up describing a different checkpoint from the other two". This
+// read used to take the generation and the sequence and leave the instant in
+// the row, so a manifest stamped from it paired a position out of the FILE
+// with an identity out of the donor's live broker handle. Those are two
+// different streams the moment one is recreated, and the artefact that
+// resulted was self-consistent enough to pass every check a recipient made.
+type FileCursor struct {
+	// Position is the checkpoint the copy committed.
+	Position Position
+
+	// StreamCreatedAt is the broker's creation instant for the stream the
+	// applier was reading when it committed that position. Zero where the
+	// row predates the column, which is a claim about nothing rather than
+	// a claim about a stream created at the epoch.
+	StreamCreatedAt time.Time
+}
+
+func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, error) {
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {
 		return nil, fmt.Errorf("statelog: open %s: %w", path, err)
 	}
 	defer func() { _ = db.Close() }()
 
-	out := map[string]Position{}
+	out := map[string]FileCursor{}
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
-			`SELECT stream, generation, seq FROM statelog_cursor`)
+			`SELECT stream, generation, seq, stream_created_at FROM statelog_cursor`)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var stream string
-			var generation, seq int64
-			if err := rows.Scan(&stream, &generation, &seq); err != nil {
+			var generation, seq, created int64
+			if err := rows.Scan(&stream, &generation, &seq, &created); err != nil {
 				return err
 			}
-			out[stream] = Position{
-				Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
+			out[stream] = FileCursor{
+				Position: Position{
+					Stream: stream, Generation: uint32(generation), Seq: uint64(seq),
+				},
+				StreamCreatedAt: store.DecodeTime(created),
 			}
 		}
 		return rows.Err()

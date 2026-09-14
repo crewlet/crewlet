@@ -1209,7 +1209,7 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		return false, nil
 	}
 
-	behind, need, generations, err := s.replayable(ctx, logs)
+	behind, want, err := s.replayable(ctx, logs)
 	if err != nil {
 		return false, err
 	}
@@ -1228,8 +1228,8 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		LivePath: e.backends.Store.ReplicatedPath(),
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
-		Need: func(context.Context) (map[string]uint64, map[string]uint32, error) {
-			return need, generations, nil
+		Need: func(context.Context) (statelog.OfferRequest, error) {
+			return want, nil
 		},
 		StillUsable: func(ctx context.Context, m statelog.Manifest) error {
 			return s.stillUsable(ctx, logs, m)
@@ -1371,30 +1371,40 @@ func (s *stateLog) requestRejoin(now time.Time) {
 // travels beside it because a bare sequence from before a reanchor names a
 // dead number space and would compare as if it were current.
 func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.DomainLog) (
-	behind []string, need map[string]uint64, generations map[string]uint32, err error) {
+	behind []string, want statelog.OfferRequest, err error) {
 
-	need = map[string]uint64{}
-	generations = map[string]uint32{}
+	want = statelog.OfferRequest{
+		Need:            map[string]uint64{},
+		Generations:     map[string]uint32{},
+		StreamCreatedAt: map[string]time.Time{},
+	}
 	for _, domain := range registeredDomains() {
 		name := domain.Name()
 		appendTo, held := logs[name]
 		if !held {
-			return nil, nil, nil, fmt.Errorf("engine: %s's log was not "+
+			return nil, statelog.OfferRequest{}, fmt.Errorf("engine: %s's log was not "+
 				"provisioned before the join asked what it holds", name)
 		}
-		first, _, err := appendTo.Bounds(ctx)
+		// ONE ROUND TRIP FOR EVERY TERM THE STREAM ANSWERS, which is
+		// also the only way they describe one moment: the first
+		// sequence decides whether this node is behind and the creation
+		// instant decides whether the stream is even the one it was
+		// behind ON, and read separately they can straddle a rebuild.
+		stats, err := appendTo.Stats(ctx)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, statelog.OfferRequest{}, err
 		}
+		first := stats.FirstSeq
 		at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, statelog.OfferRequest{}, err
 		}
 		floor, err := s.trimFloor(name, func() uint32 { return at.Generation })(ctx)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, statelog.OfferRequest{}, err
 		}
-		generations[name] = at.Generation
+		want.Generations[name] = at.Generation
+		want.StreamCreatedAt[name] = stats.CreatedAt
 
 		// WHAT AN ARTEFACT MUST COVER is one below the HIGHER of the
 		// two: the stream's first surviving sequence is what is gone
@@ -1403,7 +1413,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		// that accepted an artefact chosen from `first` alone would
 		// install one the trim was about to pass.
 		if usable := max(first, floor); usable > 0 {
-			need[name] = usable - 1
+			want.Need[name] = usable - 1
 		}
 
 		// WHETHER THIS NODE IS BEHIND is a different question, and it
@@ -1424,7 +1434,7 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 			behind = append(behind, name)
 		}
 	}
-	return behind, need, generations, nil
+	return behind, want, nil
 }
 
 // stillUsable re-checks, after the transfer, that every position the artefact
@@ -1443,13 +1453,29 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 		if !named {
 			return fmt.Errorf("the artefact names no position for %s", name)
 		}
-		first, _, err := logs[name].Bounds(ctx)
+		stats, err := logs[name].Stats(ctx)
 		if err != nil {
 			return err
 		}
+		first := stats.FirstSeq
 		floor, err := s.trimFloor(name, func() uint32 { return at.Generation })(ctx)
 		if err != nil {
 			return err
+		}
+		// THE IDENTITY IS RE-CHECKED HERE TOO, and for the same reason
+		// the floor is: the offer was judged against the stream as it
+		// was when this node asked, and a rebuild during the transfer
+		// leaves an artefact whose sequences name a history this node's
+		// stream no longer has. A generation cannot see it — a rebuilt
+		// stream comes back at generation 0 counting from 1.
+		if statelog.IdentityOf(at.StreamCreatedAt, stats.CreatedAt, true) ==
+			statelog.StreamRecreated {
+
+			return fmt.Errorf("%s's artefact was taken against the stream "+
+				"created at %s and this node's stream was created at %s, so "+
+				"adopting it would install a history this log does not have",
+				name, at.StreamCreatedAt.UTC().Format(time.RFC3339Nano),
+				stats.CreatedAt.UTC().Format(time.RFC3339Nano))
 		}
 		// THE FLOOR IS INCLUDED HERE, unlike the behind test above, and
 		// the asymmetry is the point: this asks whether the artefact is
@@ -1691,7 +1717,11 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 		Dial:   func(context.Context) (*nats.Conn, error) { return broker.DialOwned() },
 		Newest: func() (statelog.Manifest, bool) { return newestSnapshot(dir) },
 		Path: func(m statelog.Manifest) string {
-			return filepath.Join(dir, fmt.Sprintf("snapshot-%d.db", newestSeqOf(m)))
+			// THE NAME THE MANIFEST CARRIES. Deriving it here was one
+			// of three independent derivations that had to agree, and
+			// the derivation is what let a second take land on the
+			// previous pair's name — see [statelog.Manifest.Artifact].
+			return filepath.Join(dir, m.Artifact)
 		},
 		Logger: log,
 	})
@@ -1930,7 +1960,7 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 		// away describes a transfer that would fail after the recipient
 		// had already chosen it over every other offer.
 		if _, err := os.Stat(filepath.Join(dir,
-			fmt.Sprintf("snapshot-%d.db", newestSeqOf(m)))); err != nil {
+			m.Artifact)); err != nil {
 			continue
 		}
 		if !found || m.TakenAt.After(newest.TakenAt) {
@@ -1938,20 +1968,6 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 		}
 	}
 	return newest, found
-}
-
-// newestSeqOf is the sequence a manifest's file name is built from — the
-// highest position it names, which is what [statelog.Snapshotter] names it
-// after. Derived rather than stored, so the two cannot disagree about which
-// file a manifest describes.
-func newestSeqOf(m statelog.Manifest) uint64 {
-	var newest uint64
-	for _, at := range m.Domains {
-		if at.Seq > newest {
-			newest = at.Seq
-		}
-	}
-	return newest
 }
 
 // startPositionHeartbeat publishes this node's row in the fleet's position

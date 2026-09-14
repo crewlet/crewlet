@@ -179,6 +179,7 @@ answer rather than a silence:
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
+| `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
 | `recent` | the newest artefact is younger than `snapshot_interval` — but see below |
 | `failed` | the copy was attempted and errored; the engine log carries the error |
 

@@ -165,7 +165,10 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func() (statelog.Manifest, bool) { return manifest, true },
 		Path: func(m statelog.Manifest) string {
-			return filepath.Join(snapDir, "snapshot-"+itoaU(newestSeqOf(m))+".db")
+			// THE NAME THE MANIFEST CARRIES, which is what the engine's
+			// own donor does: a name derived here would be a fourth
+			// independent derivation of what the file is called.
+			return filepath.Join(snapDir, m.Artifact)
 		},
 	})
 	if err != nil {
