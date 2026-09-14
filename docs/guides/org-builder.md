@@ -83,7 +83,12 @@ in the URL, so a link opens the builder where it was.
 Selecting a unit or a seat names it in the URL (`unit=` and `seat=`), and the
 toolbar carries that node's own actions, so every one of them is reachable
 from the keyboard. A rename rewrites the name in the URL rather than leaving a
-link pointing at something that no longer exists.
+link pointing at something that no longer exists. Selecting the company itself
+carries the charter's **Edit** and the same **Add** menu; it names no filter,
+because the lens is already about that company. Where the builder cannot
+write (a guarded or read-only posture, or a draft waiting to be updated) the
+actions stay in the menu and are marked unavailable, so what the builder does
+is still legible.
 
 The check status beside the view controls says what the engine made of the
 current draft:
