@@ -100,6 +100,28 @@ func StartDirectMesh(t *testing.T, n int) *Relays {
 	return &Relays{ports: freePorts(t, n), direct: true}
 }
 
+// Stop releases everything this mesh holds — the relay listeners, and with
+// them the right to the ports it reserved.
+//
+// # Why a caller needs this rather than the test's own cleanup
+//
+// A harness that RETRIES a cluster start has to reserve fresh ports for each
+// attempt, because the whole reason an attempt lost is that somebody else took
+// a number this one was given, and asking for the same number again is asking
+// for the same answer (see [clusterStartAttempts], whose remedy is explicitly
+// "trying again with different numbers"). A mesh per attempt means the failed
+// attempt's relays have to go down when that attempt does — `t.Cleanup` runs
+// when the TEST ends, which is after every attempt, so it is the wrong moment
+// by exactly the interval that matters.
+//
+// Safe to call twice and safe on a direct mesh, which holds no listeners at
+// all: the cleanup registered at construction calls it again.
+func (r *Relays) Stop() {
+	if r.c != nil {
+		r.c.shutdown()
+	}
+}
+
 // RelayClusterName is the cluster name every member shares.
 const RelayClusterName = "crewlet-test"
 
