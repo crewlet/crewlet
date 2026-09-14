@@ -59,12 +59,23 @@ import (
 // were actually in, both at zero.
 func scheduleSchema(update bool) map[string]any {
 	clears := ""
+	// THE TYPE ADMITS THE NULL THE DESCRIPTION PROMISES. An update's five
+	// fields are cleared by passing null — [readSchedule] reads it, and
+	// `clears` below tells the model so — but the type said `string` and
+	// `integer` alone, and a caller that VALIDATES against this schema
+	// refuses the null before the tool is ever reached. The gesture was
+	// documented, implemented, and unreachable through any strict client.
+	//
+	// The union is on the UPDATE only: a create has nothing to clear, so
+	// a null there is a value nobody meant rather than an instruction.
+	nullable := func(t string) any { return t }
 	if update {
 		clears = " null clears it."
+		nullable = func(t string) any { return []string{t, "null"} }
 	}
 	return map[string]any{
 		"due": map[string]any{
-			"type": "string",
+			"type": nullable("string"),
 			"description": "When this is due: a date (2031-04-16), an instant, " +
 				"or one of the relative words `due=` filters on — today, " +
 				"tomorrow, eow (the week's end: midnight ending Sunday, " +
@@ -72,23 +83,23 @@ func scheduleSchema(update bool) map[string]any {
 				"month), or an offset like +7d." + clears,
 		},
 		"start": map[string]any{
-			"type": "string",
+			"type": nullable("string"),
 			"description": "When work on this should start, in the same " +
 				"spellings as `due`." + clears,
 		},
 		"estimate_minutes": map[string]any{
-			"type": "integer",
+			"type": nullable("integer"),
 			"description": "How long this is expected to take, in minutes. " +
 				"Sprint figures are summed in whichever of this and `points` " +
 				"the project's own measure names." + clears,
 		},
 		"points": map[string]any{
-			"type": "number",
+			"type": nullable("number"),
 			"description": "How big this is on the team's own scale. The " +
 				"other half of the measure above." + clears,
 		},
 		"sprint": map[string]any{
-			"type": "integer",
+			"type": nullable("integer"),
 			"description": "The sprint number this is planned into — " +
 				"`sprint_report` lists the ones a project has. Setting it " +
 				"opens the task's membership of that sprint, which is what " +
@@ -237,7 +248,14 @@ func scheduleInt(raw any) (int, bool) {
 		// JSON has one number type, so a whole number arrives here. A
 		// fraction is not a whole number of minutes and is refused
 		// rather than truncated to one nobody typed.
-		if v != math.Trunc(v) {
+		//
+		// FINITE FIRST, because the fraction test does not cover it: an
+		// infinity IS its own truncation, so it passed, and `int(+Inf)`
+		// is not defined by the language — it lands on the platform's
+		// minimum int, which the negative check below then refuses as a
+		// NEGATIVE estimate. Right answer, wrong reason, and a message
+		// naming a sign nobody typed.
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) {
 			return 0, false
 		}
 		return int(v), true
@@ -255,17 +273,29 @@ func scheduleInt(raw any) (int, bool) {
 func scheduleFloat(raw any) (float64, bool) {
 	switch v := raw.(type) {
 	case float64:
-		return v, true
+		return v, finite(v)
 	case int:
 		return float64(v), true
 	case int64:
 		return float64(v), true
 	case string:
+		// [strconv.ParseFloat] ACCEPTS "NaN", "Inf" and "infinity" in
+		// every casing, which is why the check is here rather than left
+		// to the caller: a size of NaN passed the `points < 0` guard
+		// below — every comparison with NaN is false — and an infinity
+		// passed it honestly, so both reached the writer. Downstream
+		// neither is a number a sprint can be summed with, and JSON
+		// cannot even encode them, so the failure surfaced as a broken
+		// answer somewhere with no memory of who typed it.
 		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return n, err == nil
+		return n, err == nil && finite(n)
 	}
 	return 0, false
 }
+
+// finite is what a size has to be: a real number a sprint's figures can be
+// summed from, which NaN and the infinities are not.
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 // applyToTask writes what a CREATE was given. A create clears nothing: there
 // is no previous value for a null to take back.
