@@ -9,8 +9,8 @@
 
 import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import { AddNodeDialog } from "./AddNodeDialog.tsx";
-import { isMintedKey } from "./model/keys.ts";
+import { AddNodeDialog, RANDOM_KEYS } from "./AddNodeDialog.tsx";
+import { isMintedKey, mintKey } from "./model/keys.ts";
 import { builderReducer, INITIAL_BUILDER } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import type { AddKind } from "./BuilderContext.tsx";
@@ -84,6 +84,27 @@ test("choosing another kind moves an untouched default name along, and a human s
     type: "addSeat",
     data: { name: "New human seat", kind: "human", contact: { github_login: "pat" } },
   });
+});
+
+// THE DASHBOARD IS SERVED OVER PLAIN HTTP. `crypto.randomUUID` exists only in
+// a secure context, so on every engine reached by its address rather than as
+// localhost it is absent, and a key source that called it would throw on the
+// first Add.
+test("a key is minted where randomUUID does not exist", () => {
+  // It lives on Crypto.prototype, so hiding it means an own property that
+  // shadows it, and putting it back means deleting that property again.
+  const own = Object.getOwnPropertyDescriptor(crypto, "randomUUID");
+  Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true });
+  try {
+    expect(crypto.randomUUID).toBeUndefined();
+    const keys = new Set([mintKey(RANDOM_KEYS), mintKey(RANDOM_KEYS)]);
+    expect(keys.size).toBe(2);
+    for (const key of keys) expect(isMintedKey(key)).toBe(true);
+  } finally {
+    if (own) Object.defineProperty(crypto, "randomUUID", own);
+    else delete (crypto as { randomUUID?: unknown }).randomUUID;
+  }
+  expect(typeof crypto.randomUUID).toBe("function");
 });
 
 test("a refusal keeps the dialog open and adds nothing", () => {

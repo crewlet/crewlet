@@ -29,8 +29,29 @@ import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./model/keys
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
 
-/** Random tokens for minted keys: a UUID is letters, digits and hyphens, well inside the limit. */
-const RANDOM_KEYS: KeySource = { next: () => crypto.randomUUID() };
+/**
+ * Random tokens for minted keys: letters, digits and hyphens, well inside the
+ * 64 characters a minted key allows.
+ *
+ * NOT `crypto.randomUUID` ALONE. It is a secure-context API, and the engine
+ * serves the dashboard over plain HTTP with no TLS of its own, so a dashboard
+ * opened at the node's address rather than as `localhost` has no `randomUUID`
+ * at all and every Add would throw where the key is minted.
+ * `crypto.getRandomValues` carries no such restriction, so the fallback is
+ * sixteen random bytes as hex: the same 128 bits, in characters a key accepts.
+ *
+ * Exported because every builder view that creates a node mints its key in its
+ * own event handler (see `model/keys.ts`), and a second copy of this fallback
+ * is how one of them ends up without it.
+ */
+export const RANDOM_KEYS: KeySource = {
+  next: () =>
+    typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : [...crypto.getRandomValues(new Uint8Array(16))]
+          .map((byte) => byte.toString(16).padStart(2, "0"))
+          .join(""),
+};
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
