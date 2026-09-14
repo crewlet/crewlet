@@ -202,8 +202,9 @@ node: {id: "${CREWLET_NODE_ID}"}          # all roles, on each
 ```
 
 ```yaml
-# Ingress split out: two API nodes behind a load balancer, three
-# engines. The API nodes still need the stream and a store of their own.
+# Ingress split out: two ingress nodes behind a load balancer, three
+# running the seats and the duties. Every node runs the engine, so the
+# ingress nodes hold the stream and a store of their own like the rest.
 node: {id: "${CREWLET_NODE_ID}", roles: [ingress]}
 node: {id: "${CREWLET_NODE_ID}", roles: [seats, workers]}
 ```
