@@ -128,6 +128,11 @@ func (a *App) health(ctx context.Context) Health {
 	switch {
 	case state.ShuttingDown:
 		body.Status = StatusShuttingDown
+	case !configured:
+		// Already unconfigured, and that outranks a posture: a node whose
+		// first apply failed has no revision, so it discards every inbound
+		// webhook, which is the fact its status has to name. The posture
+		// still travels in its own field.
 	case state.Posture != "" && state.Posture != "serve" && state.Posture != "wait":
 		body.Status = state.Posture
 	}
