@@ -1616,6 +1616,12 @@ kbd {
   left: auto;
   right: 0;
 }
+/* The answers of a choice, grouped for assistive technology; laid out as the
+   menu itself lays out its items, so the group adds no box of its own. */
+.menu-group {
+  display: flex;
+  flex-direction: column;
+}
 .menu-item {
   display: flex;
   align-items: center;

@@ -983,8 +983,9 @@ rendered idle from the first phase to the last.
   item already opens, such as a unit's lead chosen from its chart card: a
   select there would be a second control inside the item and a second click
   after the first. Its answers are `menuitemradio` entries (`checked` on a
-  `ui/Menu.tsx` item) that say which one is current, and the form that edits
-  the same value still uses the select.
+  `ui/Menu.tsx` item) that say which one is current, nested in one `group`
+  apart from the menu's actions so a screen reader counts them among
+  themselves, and the form that edits the same value still uses the select.
 - **The layout is measured, never assumed.** A chart card's width is the
   `--org-card-w` token; its height is measured in the browser
   (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout

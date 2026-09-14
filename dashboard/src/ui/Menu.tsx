@@ -46,8 +46,12 @@
  *   that says whether it is the current value (`aria-checked`) and draws a
  *   check where the others draw nothing, so a menu that picks one value (a
  *   unit's lead) reads as a choice with an answer rather than a list of
- *   actions that all look alike. Every item of such a menu should say
- *   `checked`, true or false, so the check column lines up.
+ *   actions that all look alike. Every answer of such a choice should say
+ *   `checked`, true or false, so the check column lines up. The answers that
+ *   stand together are nested in one `group`, as the pattern asks of radio
+ *   items sharing a menu with actions, so a screen reader counts "2 of 3"
+ *   among the answers rather than among every item; a separator divides the
+ *   group from the actions.
  * - IT CAN BE OPENED FROM OUTSIDE (`open`, `onOpenChange`), because a tree item
  *   that holds focus opens its card's menu from the keyboard while the
  *   trigger itself is out of the tab order (`triggerTabIndex={-1}`).
@@ -99,6 +103,28 @@ const GAP = 4;
 
 /** Every item the arrows walk: actions and the answers of a choice alike. */
 const ITEM_SELECTOR = "[role='menuitem'],[role='menuitemradio']";
+
+/** A menu's entries as it draws them: an action, a separator, or a run of answers. */
+type Run =
+  | { kind: "action"; item: MenuItem }
+  | { kind: "separator"; key: string }
+  | { kind: "answers"; key: string; items: MenuItem[] };
+
+/** Gathers each run of consecutive answers (items given `checked`) into one group. */
+function runs(entries: readonly MenuEntry[]): Run[] {
+  const out: Run[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "separator") {
+      out.push({ kind: "separator", key: entry.key });
+      continue;
+    }
+    const last = out[out.length - 1];
+    if (entry.checked === undefined) out.push({ kind: "action", item: entry });
+    else if (last?.kind === "answers") last.items.push(entry);
+    else out.push({ kind: "answers", key: `${entry.key}:answers`, items: [entry] });
+  }
+  return out;
+}
 
 export function Menu({
   label,
@@ -302,6 +328,28 @@ export function Menu({
     item.onSelect();
   }
 
+  const item = (entry: MenuItem) => (
+    <button
+      key={entry.key}
+      type="button"
+      role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
+      aria-checked={entry.checked}
+      tabIndex={-1}
+      className={cx("menu-item", entry.danger && "danger")}
+      aria-disabled={entry.disabled || undefined}
+      onClick={() => activate(entry)}
+    >
+      {entry.checked !== undefined && (
+        <span className="menu-item-check" aria-hidden="true">
+          {entry.checked && <Icon name="check" size="sm" />}
+        </span>
+      )}
+      {entry.icon && <Icon name={entry.icon} size="sm" />}
+      <span className="menu-item-label">{entry.label}</span>
+      {entry.hint && <span className="menu-item-hint">{entry.hint}</span>}
+    </button>
+  );
+
   const list = open ? (
     <div
       className={cx("popover", "menu", !layer && align === "end" && "end")}
@@ -317,29 +365,15 @@ export function Menu({
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      {items.map((entry) =>
-        entry.kind === "separator" ? (
-          <div key={entry.key} role="separator" className="menu-separator" />
+      {runs(items).map((run) =>
+        run.kind === "separator" ? (
+          <div key={run.key} role="separator" className="menu-separator" />
+        ) : run.kind === "answers" ? (
+          <div key={run.key} role="group" className="menu-group">
+            {run.items.map(item)}
+          </div>
         ) : (
-          <button
-            key={entry.key}
-            type="button"
-            role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
-            aria-checked={entry.checked}
-            tabIndex={-1}
-            className={cx("menu-item", entry.danger && "danger")}
-            aria-disabled={entry.disabled || undefined}
-            onClick={() => activate(entry)}
-          >
-            {entry.checked !== undefined && (
-              <span className="menu-item-check" aria-hidden="true">
-                {entry.checked && <Icon name="check" size="sm" />}
-              </span>
-            )}
-            {entry.icon && <Icon name={entry.icon} size="sm" />}
-            <span className="menu-item-label">{entry.label}</span>
-            {entry.hint && <span className="menu-item-hint">{entry.hint}</span>}
-          </button>
+          item(run.item)
         ),
       )}
     </div>

@@ -3,7 +3,7 @@
  * surface a key closes.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { Dialog } from "./Dialog.tsx";
@@ -76,6 +76,11 @@ test("a choice's answers are radio items that say which one is current, and the 
   expect(vpe.getAttribute("aria-checked")).toBe("true");
   // An item that says nothing about `checked` stays an action.
   expect(item("Choose another seat")).toBeDefined();
+  // The answers stand in one group, apart from the action, so a screen reader
+  // counts them among themselves.
+  const group = screen.getByRole("group");
+  expect(within(group).getAllByRole("menuitemradio")).toEqual([none, vpe]);
+  expect(group.contains(item("Choose another seat"))).toBe(false);
 
   expect(document.activeElement).toBe(none);
   press("ArrowDown");
