@@ -304,6 +304,35 @@ var datadogReqs = []setup.Requirement{
 	},
 }
 
+// A WRITER MISSING A HALF REFUSES BY FIELD, before it writes anything.
+//
+// Every Writer the API builds carries both, so this is a wiring mistake rather
+// than a node shape, and the refusal names the field to set rather than a
+// process with no store. The config half is checked before anything is sealed,
+// and the secret half before the first credential is, so neither leaves a
+// value in the store with nothing pointing at it.
+func TestAWriterMissingAHalfRefusesByField(t *testing.T) {
+	t.Parallel()
+	submit := setup.Submission{
+		Kind:   integration.KindDatadog,
+		Values: map[string]string{"webhook_token": "s3cr3t-value", "route_to": "sre-lead"},
+	}
+
+	_, err := setup.Writer{}.Write(context.Background(), datadogReqs, submit)
+	if err == nil || !strings.Contains(err.Error(), "Writer.Config") {
+		t.Errorf("a writer with no config surface = %v, want a refusal naming Writer.Config", err)
+	}
+
+	rec := &recorder{}
+	_, err = setup.Writer{Config: rec}.Write(context.Background(), datadogReqs, submit)
+	if err == nil || !strings.Contains(err.Error(), "Writer.Secrets") {
+		t.Errorf("a writer with no secret store = %v, want a refusal naming Writer.Secrets", err)
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("the refused submission still wrote %v", rec.events)
+	}
+}
+
 // THE SECRET IS DURABLE BEFORE THE POINTER LANDS. The other order leaves the
 // config naming a secret with nothing behind it, and the route it guards
 // answering 503 to every delivery for the length of the window, which looks
