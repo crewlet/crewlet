@@ -54,6 +54,7 @@ import {
   scheduleRuns,
   schedulesOf,
   seatForm,
+  renames,
   seatParts,
   tokenBudgetError,
   unitForm,
@@ -539,7 +540,7 @@ function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void })
   ];
 
   const blocked = form.name.trim() === "" ? "A unit needs a name." : null;
-  const renamed = form.name.trim() !== initial.name;
+  const renamed = renames(initial.name, form.name);
 
   return (
     <EditorShell

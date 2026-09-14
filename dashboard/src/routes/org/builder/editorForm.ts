@@ -227,6 +227,23 @@ export function editIntent(target: NodeKey, parts: readonly EditPartIntent[]): I
   return { type: "edit", target, intents: parts };
 }
 
+/**
+ * Whether a name box holds a rename: the operator changed it, AND what the
+ * model would write (the trimmed value) differs from the name the document
+ * has.
+ *
+ * BOTH HALVES. A rename is not an ordinary field: it re-keys a unit's
+ * schedules and onboarding pages and makes every agent under it onboard
+ * again, so it may only ever come from somebody typing in the box. A stored
+ * name that carries surrounding spaces differs from its own trimmed form, so
+ * asking the trimmed question alone renamed such a node the moment anything
+ * ELSE in its form was applied. And the model compares trimmed, so a box that
+ * gained nothing but a trailing space is no rename either.
+ */
+export function renames(initial: string, typed: string): boolean {
+  return typed !== initial && typed.trim() !== initial;
+}
+
 export function companyParts(initial: CompanyForm, form: CompanyForm): EditPartIntent[] {
   const set = [
     ...changed(["name"], textValue(initial.name), textValue(form.name.trim())),
@@ -239,7 +256,7 @@ export function companyParts(initial: CompanyForm, form: CompanyForm): EditPartI
 
 export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): EditPartIntent[] {
   const parts: EditPartIntent[] = [];
-  if (form.name.trim() !== initial.name) {
+  if (renames(initial.name, form.name)) {
     parts.push({ type: "renameUnit", target: key, name: form.name });
   }
   const set = [
@@ -282,7 +299,7 @@ export function seatParts(
   { editableHandle }: { editableHandle: boolean },
 ): EditPartIntent[] {
   const parts: EditPartIntent[] = [];
-  if (form.name.trim() !== initial.name) {
+  if (renames(initial.name, form.name)) {
     parts.push({ type: "renameSeat", target: key, name: form.name });
   }
   const budget = (typed: string) => {

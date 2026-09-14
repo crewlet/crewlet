@@ -20,6 +20,7 @@ import {
   companyParts,
   editIntent,
   llmChain,
+  renames,
   seatForm,
   seatParts,
   tokenBudgetError,
@@ -38,6 +39,37 @@ describe("an untouched form", () => {
     expect(unitParts("unit:Engineering", unitForm(unit), unitForm(unit))).toEqual([]);
     const form = seatForm(dev(), "developer");
     expect(seatParts("seat:dev", dev(), form, form, { editableHandle: false })).toEqual([]);
+  });
+
+  // A RENAME COMES FROM THE BOX, NOT FROM THE MODEL'S TRIM. The model writes a
+  // trimmed name, so a stored name with spaces around it differs from what a
+  // rename would write, and asking only that question renamed such a node
+  // whenever anything else in its form was applied. Renaming a unit re-keys
+  // its schedules and makes every agent under it onboard again.
+  test("a name the document stored with spaces is not a rename until somebody types", () => {
+    const padded: ConfigRole = { name: " Dev ", goal: "Build" };
+    const initial = seatForm(padded, "");
+    expect(
+      seatParts(
+        "seat:dev",
+        padded,
+        initial,
+        { ...initial, goal: "Ship" },
+        { editableHandle: false },
+      ),
+    ).toEqual([
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+    ]);
+    expect(renames(" Dev ", "Developer")).toBe(true);
+
+    const unit = { name: " Engineering " };
+    const unitInitial = unitForm(unit);
+    expect(unitParts("unit:e", unitInitial, { ...unitInitial, purpose: "Build" })).toEqual([
+      { type: "updateUnit", target: "unit:e", set: [{ path: ["purpose"], value: "Build" }] },
+    ]);
+    // And a box that gained nothing but a space is no rename either: the model
+    // trims before it compares, so the part would only be refused.
+    expect(renames("Dev", "Dev ")).toBe(false);
   });
 });
 
