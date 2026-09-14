@@ -343,13 +343,80 @@ func TestTheClaudeCodeConfigTranslatesBothMcpTransports(t *testing.T) {
 	}
 }
 
-// Writing a config for the share setting alone would put a file on a reused
-// box that a later run with real settings has to overwrite.
-func TestNoOpenCodeConfigIsWrittenWhenThereIsNothingToSay(t *testing.T) {
+// A headless run has nobody to answer a permission prompt, so a gate left at
+// `ask` is refused and the agent carries on without the tool — which reads as
+// an agent that would not do the work. The box is the boundary instead, the
+// same stance claude-code takes with --permission-mode bypassPermissions.
+func TestTheOpenCodeConfigLeavesNoPermissionGateForNobodyToAnswer(t *testing.T) {
+	b := sandbox.NewFakeSandbox("box-1")
+	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{
+		MCPServers: map[string]sandbox.MCPServer{
+			"crewlet": {Name: "crewlet", Transport: sandbox.TransportHTTP, URL: "https://example.com/mcp"},
+		},
+	}, codingagent.PathsFor(b))
+	if err != nil || path == "" {
+		t.Fatalf("WriteConfig = %q, %v", path, err)
+	}
+	blob, _ := b.ReadFile(t.Context(), path)
+	// BOTH ARE POINTERS, so an ABSENT key is distinguishable from one written
+	// false. A plain bool decodes a missing `autoupdate` to false and passes —
+	// which is the exact regression this pins, since the CLI then takes its own
+	// default and nothing says so.
+	var cfg struct {
+		Permission *string `json:"permission"`
+		Autoupdate *bool   `json:"autoupdate"`
+	}
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, blob)
+	}
+	if cfg.Permission == nil || *cfg.Permission != "allow" {
+		t.Errorf("permission = %v, want \"allow\" — a gate nobody can answer is a lost tool call:\n%s",
+			derefOr(cfg.Permission, "(absent)"), blob)
+	}
+	// A CLI that updates itself mid-run swaps the tool under the brief while
+	// the seat's turn is suspended waiting on it.
+	if cfg.Autoupdate == nil || *cfg.Autoupdate {
+		t.Errorf("autoupdate = %v, want a written false:\n%s",
+			derefOr(cfg.Autoupdate, "(absent)"), blob)
+	}
+}
+
+// derefOr renders a pointer field for a failure message, naming an absent key
+// as absent rather than as its zero value — which is the distinction the
+// assertions above turn on.
+func derefOr[T any](p *T, absent string) any {
+	if p == nil {
+		return absent
+	}
+	return *p
+}
+
+// The config carries the run's POSTURE, not just its provider and servers, and
+// this CLI reads it from the checkout rather than from a flag — so a run that
+// wrote none would not fall back to the vendor's defaults. It would inherit
+// whatever the previous run left on a reused box, MCP block and dead per-run
+// bridge URL included.
+func TestAnOpenCodeConfigIsWrittenEvenWithNoProviderAndNoServers(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := opencode().WriteConfig(t.Context(), b, sandbox.RunRequest{}, codingagent.PathsFor(b))
-	if err != nil || path != "" {
-		t.Fatalf("WriteConfig = %q, %v; want nothing written", path, err)
+	if err != nil || path == "" {
+		t.Fatalf("WriteConfig = %q, %v; want the posture written anyway", path, err)
+	}
+	blob, _ := b.ReadFile(t.Context(), path)
+	var cfg map[string]any
+	if err := json.Unmarshal(blob, &cfg); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, blob)
+	}
+	if cfg["permission"] != "allow" || cfg["share"] != "disabled" {
+		t.Errorf("a minimal run lost its posture:\n%s", blob)
+	}
+	// And it states ONLY the posture: a provider block for a run that named
+	// no endpoint would point the agent at nothing.
+	if _, ok := cfg["provider"]; ok {
+		t.Errorf("a run with no base URL declared a provider:\n%s", blob)
+	}
+	if _, ok := cfg["mcp"]; ok {
+		t.Errorf("a run with no servers declared an mcp block:\n%s", blob)
 	}
 }
 
