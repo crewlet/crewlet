@@ -879,8 +879,13 @@ export interface AgentMemoryAnswer {
   episodes: Episode[];
   skills: SynthesizedSkill[];
   /** How many the seat HAS, which is not how many `skills` carries: the
-   *  listing is cut at the page limit, and this is what says so. */
-  skills_total?: number;
+   *  listing is cut at the page limit, and this is what says so. ALWAYS
+   *  PRESENT — `queries.Sources.agentMemory` seeds it in the answer's
+   *  default map, so it is `0` for a seat that has learned nothing rather
+   *  than absent. Optional here, a reader had to fall back to
+   *  `skills.length`, which is the page size and therefore silently
+   *  under-reports exactly the seat this count exists for. */
+  skills_total: number;
   counterparties: CounterpartyProfile[];
   onboarded_at: string;
 }
@@ -1752,8 +1757,12 @@ export interface ConfigDiff {
   /** How many differences there ARE, which is not how many `changes`
    *  carries: the answer is cut at the server's response budget, and this is
    *  what says so. `crewlet config diff` has no such budget and prints every
-   *  one. Render this as the count and say what the listing left out. */
-  changes_total?: number;
+   *  one. Render this as the count and say what the listing left out.
+   *  ALWAYS PRESENT — `configapi.Service.Diff` writes it on every answer, so
+   *  identical revisions report `0` rather than omitting it. Optional here,
+   *  a reader had to fall back to `changes.length`, which is the response
+   *  budget and therefore reads a cut diff as the whole comparison. */
+  changes_total: number;
 }
 
 // ---------------------------------------------------------------------------
