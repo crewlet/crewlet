@@ -965,6 +965,17 @@ is one of the rules on this page applied to a tracker.
   columns are the server's own grouping, and the calendar buckets rows the
   server already returned. A view that fetched differently would be a second
   idea of what the filters mean.
+- **A view SETS the scope segment.** Open / Closed / All is the single
+  authority on the status group a read asks for: the screen spreads a view's
+  saved parameters and then writes that one key from the segment. So a
+  segment defaulting to a constant made a view saved over closed work
+  unrunnable — it opened on `Open`, overwrote the view's own group, and named
+  a scope its rows did not match. The segment therefore takes its DEFAULT
+  from the chosen view, which is what makes the control and the query agree;
+  a scope somebody picks is in the URL and outlives a view switch, like every
+  other filter here. A saved group the three segments cannot name — `active`
+  alone — reads as `All`, so the segment and the read agree on the wider set
+  rather than the control claiming a narrowing that is not applied.
 - **A row is a table, and its columns belong to the LIST.** Every row was its
   own grid container once, so `auto` tracks sized against that row's content
   alone and a status badge landed at a different x on every line. The tracks

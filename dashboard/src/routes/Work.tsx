@@ -87,6 +87,7 @@ import {
   monthLabel,
   PRIORITIES,
   projectKeys,
+  scopeOf,
   shapeOf,
   shiftMonth,
   shownRows,
@@ -138,7 +139,6 @@ export function Work() {
   const [priority, setPriority] = useParam("priority", "");
   const [assignee, setAssignee] = useParam("assignee", "");
   const [sprint, setSprint] = useParam("sprint", "");
-  const [scope, setScope] = useParam("scope", "open");
   const [groupBy, setGroupBy] = useParam("group_by", "");
   const [group, setGroup] = useParam("group", "");
   const [sort, setSort] = useParam("sort", "");
@@ -178,6 +178,26 @@ export function Work() {
   const chosenView = viewKey || defaultView(views);
   const shape: Shape = shapeOf(chosenView, views);
   const detail = overview.data;
+
+  // THE VIEW SETS THE SCOPE, and it is the view's own `status_group` read back
+  // through the segment that expresses it.
+  //
+  // This control is the single authority on `status_group`: [buildItemsParams]
+  // spreads a view's params and then OVERWRITES that key from the scope, so a
+  // view saved over closed work was answered as open work on the segment's
+  // default — the saved filter could not take effect, and the segment named a
+  // scope the rows did not match. Seeding the segment from the view is what
+  // makes the two agree, and the reason it is the DEFAULT rather than a write
+  // is that a default is not a value: the control reads the view until
+  // somebody moves it, and a scope they chose is in the URL and outlives the
+  // view switch, exactly as every other filter on this screen does.
+  //
+  // A group the three segments cannot express — a saved view narrowed to
+  // `active` alone — reads as ALL, which is what [scopeOf] already answers for
+  // it. The segment and the query still agree, which is the property that
+  // matters; they simply agree on the wider set.
+  const viewScope = scopeOf(viewParams(chosenView, views).status_group) || "open";
+  const [scope, setScope] = useParam("scope", viewScope);
 
   const filters: TrackerFilters = {
     q,
@@ -257,7 +277,10 @@ export function Work() {
     setPriority("");
     setAssignee("");
     setSprint("");
-    setScope("open");
+    // TO THE VIEW'S, not to "open": clearing a narrowing returns the screen to
+    // what the view asked for, and passing the fallback drops the key from the
+    // URL so the view keeps supplying it.
+    setScope(viewScope);
     setGroupBy("");
     setGroup("");
     setSort("");
