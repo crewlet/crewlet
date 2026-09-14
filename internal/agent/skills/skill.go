@@ -290,9 +290,10 @@ type Skill struct {
 	// session. See [Guard].
 	Required bool
 
-	// SourcePageID and SourcePageVersion are provenance, for logging and
-	// for evicting a page that was deleted. They are backend-neutral: a
-	// backend with no version concept stamps zero.
+	// SourcePageID is the registry's IDENTITY for this skill: every change
+	// names a page, so a page is what the registry records a skill under and
+	// what a later change is addressed by. SourcePageVersion is provenance.
+	// Both are backend-neutral: a backend with no version concept stamps zero.
 	SourcePageID      string
 	SourcePageVersion int
 }

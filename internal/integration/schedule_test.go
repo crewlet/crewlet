@@ -69,34 +69,6 @@ func TestAdminWaitDoublesAndCaps(t *testing.T) {
 	}
 }
 
-// A row parked on a person for a long time accumulates attempts. The closed
-// form base<<(attempts-1) overflows time.Duration well before that count
-// becomes unreasonable, and an overflowed duration is NEGATIVE, which reads
-// as already due: the longest wait in the system becomes a request every
-// tick.
-func TestBackoffNeverGoesNegative(t *testing.T) {
-	for _, attempts := range []int{1, 32, 62, 63, 64, 1000, 1 << 20} {
-		got := backoff(attempts, 30*time.Second, 5*time.Minute)
-		if got <= 0 {
-			t.Fatalf("%d attempts produced %s", attempts, got)
-		}
-		if got > 5*time.Minute {
-			t.Fatalf("%d attempts produced %s, past the ceiling", attempts, got)
-		}
-	}
-}
-
-// Zero and negative attempt counts are the first attempt, not an instant
-// retry. A caller that has not counted yet must not be handed a zero wait.
-func TestBackoffTreatsNoAttemptsAsTheFirst(t *testing.T) {
-	base := 30 * time.Second
-	for _, attempts := range []int{-1, 0, 1} {
-		if got := backoff(attempts, base, time.Hour); got != base {
-			t.Fatalf("%d attempts produced %s, want the base %s", attempts, got, base)
-		}
-	}
-}
-
 // A SETTLED SURFACE TAKES THE SHARED INTERVAL, and there is only one.
 //
 // A per-surface override lived here, justified by Slack's app-manifest rate

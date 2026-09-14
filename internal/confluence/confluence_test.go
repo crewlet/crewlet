@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -561,22 +562,53 @@ func TestTheLeadIsNotWokenByTheirOwnEdit(t *testing.T) {
 // registry has to hear about every change, including that one.
 func TestTheSkillsSpaceIsIndexedAndNotRouted(t *testing.T) {
 	t.Parallel()
-	var indexed []string
+	var indexed []confluence.PageChange
 	p := parser(t, func(o *confluence.ParserOptions) {
 		// THE SKILLS SPACE HAS A LEAD in this fixture, deliberately:
 		// without one the space fallback would find nobody and the test
 		// would pass with the exclusion removed.
 		o.Leads = map[string]string{"ENG": "lead", "TS": "lead"}
-		o.OnPage = func(_ context.Context, _, pageID string) error {
-			indexed = append(indexed, pageID)
+		o.OnPage = func(_ context.Context, change confluence.PageChange) error {
+			indexed = append(indexed, change)
 			return nil
 		}
 	})
 	if got := route(t, p, pageEvent("page_updated", "TS", "<p>a skill</p>", acctWriter)); len(got) != 0 {
 		t.Fatalf("a skills-space page woke somebody: %+v", got)
 	}
-	if len(indexed) != 1 || indexed[0] != "1001" {
-		t.Fatalf("the indexer did not see the change: %v", indexed)
+	want := confluence.PageChange{PageID: "1001", Space: "TS"}
+	if len(indexed) != 1 || indexed[0] != want {
+		t.Fatalf("the indexer saw %+v, want %+v", indexed, want)
+	}
+}
+
+// THE INDEXER HEARS EVERY PAGE CHANGE IN EVERY SPACE, AND NOTHING ELSE.
+//
+// Every space, because a page moved out of the skills space is announced from
+// the space it moved to, and only the index knows it used to hold a skill.
+// Page changes only, because a comment or a blog post never changes what a
+// page says, and reading the page again for one would spend a request per
+// comment across the whole wiki. A trash or a delete is a page change like any
+// other: the index reads the page back and the wiki's answer drops it.
+func TestTheIndexerHearsPageChangesOnly(t *testing.T) {
+	t.Parallel()
+	var indexed []confluence.PageChange
+	p := parser(t, func(o *confluence.ParserOptions) {
+		o.OnPage = func(_ context.Context, change confluence.PageChange) error {
+			indexed = append(indexed, change)
+			return nil
+		}
+	})
+	for _, event := range []string{
+		"page_created", "page_updated", "page_trashed", "page_removed",
+		"blog_created", "blog_updated", "comment_created", "comment_updated",
+		"label_added",
+	} {
+		route(t, p, pageEvent(event, "ENG", "<p>x</p>", acctWriter))
+	}
+	want := slices.Repeat([]confluence.PageChange{{PageID: "1001", Space: "ENG"}}, 4)
+	if !slices.Equal(indexed, want) {
+		t.Fatalf("the indexer saw %+v, want %+v", indexed, want)
 	}
 }
 

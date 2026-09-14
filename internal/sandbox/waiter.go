@@ -3,10 +3,10 @@ package sandbox
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -195,8 +195,7 @@ func (w *Waiter) loop(ctx context.Context) {
 const jitterFraction = 0.2
 
 func (w *Waiter) jittered() time.Duration {
-	spread := float64(w.interval) * jitterFraction
-	return w.interval + time.Duration((rand.Float64()*2-1)*spread)
+	return backoff.Jitter(w.interval, jitterFraction)
 }
 
 // Tick polls every running run once and reaps expired pauses. Returns how many

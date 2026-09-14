@@ -195,6 +195,15 @@ func (w *wiki) serve(rw http.ResponseWriter, req *http.Request) {
 		w.pages[page.ID] = page
 		fmt.Fprint(rw, page.wire())
 
+	case strings.HasPrefix(path, "/content/") && req.Method == http.MethodGet:
+		page := w.pages[strings.TrimPrefix(path, "/content/")]
+		if page == nil {
+			rw.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(rw, `{"message":"no content with that id"}`)
+			return
+		}
+		fmt.Fprint(rw, page.wire())
+
 	case strings.HasPrefix(path, "/content/") && req.Method == http.MethodPut:
 		id := strings.TrimPrefix(path, "/content/")
 		var in struct {
@@ -793,5 +802,61 @@ func TestALabelThatWillNotAttachIsANote(t *testing.T) {
 	}
 	if !hasNote(res.Notes, "would not attach") {
 		t.Errorf("notes = %v", res.Notes)
+	}
+}
+
+// The skill walk hands the registry the page's own version. Confluence numbers
+// every edit, and a zero here is the value reserved for a backend that has no
+// version concept, so a walk that dropped it recorded every skill as never
+// edited.
+func TestTheSkillWalkCarriesEachPageVersion(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "TS")
+	id := w.seed("TS", "Deploying", confluence.EncodeSkillPage(
+		"key: deploy\ntitle: Deploying\ntrigger:\n  tool: deploy\nphases: [execute]\nsummary: How to deploy.",
+		"Deploy carefully."))
+	w.mu.Lock()
+	w.pages[id].Version = 7
+	w.mu.Unlock()
+
+	pages, err := confluence.SkillPages(context.Background(), wikiClient(t, w), "TS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pages) != 1 {
+		t.Fatalf("walked %d pages, want 1", len(pages))
+	}
+	if pages[0].ID != id || pages[0].Version != 7 {
+		t.Errorf("page = id %q version %d, want id %q version 7", pages[0].ID, pages[0].Version, id)
+	}
+}
+
+// ONE PAGE READ BACK is the same shape a walk gives, plus where the page lives
+// now: a skill moved out of the skills space has to be recognised as having
+// left, and a page that is gone has to be distinguishable from one that failed
+// to read.
+func TestASinglePageReadsAsTheWalkReadsIt(t *testing.T) {
+	t.Parallel()
+	w := newWiki(t, "TS", "HANDBOOK")
+	id := w.seed("HANDBOOK", "Deploying", confluence.EncodeSkillPage(
+		"key: deploy\ntitle: Deploying\ntrigger:\n  tool: deploy\nphases: [execute]\nsummary: How to deploy.",
+		"Deploy carefully."))
+	client := wikiClient(t, w)
+
+	page, space, err := confluence.SkillPage(context.Background(), client, id)
+	if err != nil {
+		t.Fatalf("SkillPage: %v", err)
+	}
+	if space != "HANDBOOK" || page.ID != id || page.Version != 1 {
+		t.Errorf("read page %q version %d in %q, want %q version 1 in HANDBOOK",
+			page.ID, page.Version, space, id)
+	}
+	if !strings.Contains(page.Text, "key: deploy") || strings.Contains(page.Text, "<") {
+		t.Errorf("the page text is not the decoded skill: %q", page.Text)
+	}
+
+	_, _, err = confluence.SkillPage(context.Background(), client, "p404")
+	if got := confluence.Status(err); got != http.StatusNotFound {
+		t.Fatalf("a page that is gone read as status %d (%v), want 404", got, err)
 	}
 }

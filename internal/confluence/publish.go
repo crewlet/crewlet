@@ -495,15 +495,39 @@ func SkillPages(ctx context.Context, client *Client, space string) ([]skills.Pag
 	}
 	out := make([]skills.Page, 0, len(pages))
 	for _, page := range pages {
-		out = append(out, skills.Page{
-			ID: page.ID, Title: page.Title,
-			// The DECODED text, so the skills package stays the one
-			// place that decides what a skill is and this one stays the
-			// only place that knows how a page is shaped.
-			Text: DecodeSkillPage(page.Body),
-		})
+		out = append(out, skillPageOf(page))
 	}
 	return out, nil
+}
+
+// SkillPage reads one page as the registry's own shape, with the space it
+// lives in now.
+//
+// A page that no longer exists (deleted, or in the trash, which the content
+// API does not serve by default) fails with the API's own 404, which
+// [Status] reports; the caller decides that absent means "drop it".
+func SkillPage(ctx context.Context, client *Client, id string) (skills.Page, string, error) {
+	page, err := client.PageByID(ctx, id)
+	if err != nil {
+		return skills.Page{}, "", err
+	}
+	return skillPageOf(page), page.Space, nil
+}
+
+// skillPageOf is one page in the registry's shape, the one conversion a walk
+// and a single-page read share.
+func skillPageOf(page Page) skills.Page {
+	return skills.Page{
+		// The VERSION travels with the id. Confluence numbers every edit,
+		// and a skill's provenance names the revision the registry holds;
+		// dropping it stamped every Confluence skill as version 0, the value
+		// reserved for a backend with no version concept.
+		ID: page.ID, Title: page.Title, Version: page.Version,
+		// The DECODED text, so the skills package stays the one place that
+		// decides what a skill is and this one stays the only place that
+		// knows how a page is shaped.
+		Text: DecodeSkillPage(page.Body),
+	}
 }
 
 func notesOf(plan *Plan) []string {

@@ -54,6 +54,8 @@ func catalogue() []events.Payload {
 		SandboxClarificationRequested{},
 		// turn.go
 		ToolSkillGuardBlocked{}, PromptSize{}, TurnGuardBreach{},
+		// toolskill.go
+		ToolSkillPageChanged{},
 		// webhook.go
 		RawWebhook{},
 	}
@@ -110,6 +112,7 @@ var wireTypes = []string{
 	"skill_used",
 	"subagent_batched",
 	"task_assigned",
+	"tool_skill_page_changed",
 	"turn.guard_breach",
 	"turn_completed",
 	"turn_trigger_skipped",

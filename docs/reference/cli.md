@@ -1245,10 +1245,9 @@ crewlet confluence resync <company.yaml> [-space KEY] [-config PATH]
 
 Runs the engine's **own** [tool-skill](../concepts/tool-skills.md) walk of the
 Confluence skills space against a throwaway registry and prints what admitted,
-so you can see what the next boot will see. The read-only diagnostic beside
-the importer, and it exists because the registry is populated by one walk at
-boot, so a page that fails to
-admit is **invisible** — the only symptom is guidance that never appears in an
+so you can see what a running node's next walk will see. The read-only
+diagnostic beside the importer, and it exists because a page that fails to
+admit is **invisible**: the only symptom is guidance that never appears in an
 executor prompt.
 
 ```
@@ -1268,5 +1267,9 @@ the company document does not name yet.
 **Skills only.** Knowledge docs are searched live at query time and never
 loaded into a registry, so for them there is nothing to resync.
 
-**It does not reach into a running engine.** Restart it, or wait for the next
-webhook, to apply what you changed.
+**It does not reach into a running engine, and a running engine does not need
+it to.** A page edit reaches every node through the page webhook, and every
+node also walks its skills space every 10 minutes (give or take a fifth, so a
+fleet does not walk in lockstep), so a change the webhook path missed is
+applied within 12 minutes without a restart. See
+[Keeping every node current](../concepts/tool-skills.md#keeping-every-node-current).

@@ -146,6 +146,12 @@ var excluded = map[string]string{
 		"agent_turn_completed rows, which internal/tokens aggregates — so " +
 		"\"what did we spend last month\" is answerable and \"what were the " +
 		"meters reading at 14:03:15\" is not a question anybody asks",
+	"tool_skill_page_changed": "a NUDGE between nodes that one tool-skill " +
+		"page moved, and the delivery that caused it is already a row, " +
+		"written by the webhook receiver. What a skill change did to a " +
+		"registry is a log line on each node, so a durable row per node " +
+		"would record the same edit once for the wiki and again for every " +
+		"member of the fleet",
 	"raw_webhook": "the delivery is ALREADY a row, written by the webhook " +
 		"receiver under its own id with the raw provider bytes as its payload. " +
 		"This event is the wake it publishes onto a seat's inbox, so " +

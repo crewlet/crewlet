@@ -101,9 +101,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// The operator's ${var} map is CONFIG, so it is refreshed per epoch —
 	// unlike the skills themselves, which come from the knowledge base and
 	// outlive one. A variable a revision removed then surfaces here rather
-	// than on that skill's next edit, which might be never.
+	// than on that skill's next edit, which might be never. The trigger
+	// audit is NOT here: it reads the epoch that is current, so it runs
+	// once this one is (see [Engine.installEpoch]).
 	e.refreshSkillVariables(c)
-	e.auditSkills(c)
 
 	// THE EMBEDDER IS BUILT AT THE APPLY, which is what makes a width
 	// change fail where somebody is watching rather than weeks later at

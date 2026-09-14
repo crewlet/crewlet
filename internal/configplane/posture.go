@@ -16,8 +16,9 @@
 package configplane
 
 import (
-	"math/rand/v2"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/backoff"
 )
 
 // Posture is what a node does about the gap between the epoch it has applied
@@ -207,8 +208,5 @@ func (p Posture) Ready() bool {
 // must not become an apply storm, but a node that has decided to converge
 // should not then dawdle.
 func ReconcileDelay() time.Duration {
-	spread := float64(ReconcileInterval) * ReconcileJitter
-	delta := (rand.Float64()*2 - 1) * spread
-	d := time.Duration(float64(ReconcileInterval) + delta)
-	return max(d, time.Second)
+	return max(backoff.Jitter(ReconcileInterval, ReconcileJitter), time.Second)
 }
