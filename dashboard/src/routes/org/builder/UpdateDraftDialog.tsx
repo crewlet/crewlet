@@ -86,8 +86,8 @@ export function UpdateDraftDialog({
       </p>
       <p className="t-caption">
         {applies.length === entries.length
-          ? `All ${plural(entries.length, "change")} still apply.`
-          : `${plural(applies.length, "change")} of ${entries.length} still apply.`}
+          ? "Every change still applies."
+          : `${applies.length} of ${plural(entries.length, "change")} still ${applies.length === 1 ? "applies" : "apply"}.`}
       </p>
 
       {gone.length > 0 && (

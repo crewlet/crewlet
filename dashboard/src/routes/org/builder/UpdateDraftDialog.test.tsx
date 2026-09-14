@@ -51,7 +51,7 @@ test("an edit that still applies is replayed onto the newer revision", async () 
   );
   fireEvent.click(screen.getByRole("button", { name: "Update my draft" }));
   const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
-  expect(within(dialog).getByText("All 1 change still apply.")).toBeDefined();
+  expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
 
   await waitFor(() => {

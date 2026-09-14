@@ -110,7 +110,7 @@ test("a kept draft of an older revision is restored through the update flow", as
   const engine = new Engine(company());
   mountBuilder({ engine });
   const dialog = await screen.findByRole("dialog", { name: "Restore the kept draft" });
-  expect(within(dialog).getByText("All 1 change still apply.")).toBeDefined();
+  expect(within(dialog).getByText("Every change still applies.")).toBeDefined();
   fireEvent.click(within(dialog).getByRole("button", { name: "Restore the draft" }));
   await waitFor(() =>
     expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),

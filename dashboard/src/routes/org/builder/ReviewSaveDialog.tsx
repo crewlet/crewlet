@@ -79,8 +79,9 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     follow.push(`${h.ref.name} changes handle from @${h.before} to @${h.after}.`);
   }
   for (const group of changes.onboarding) {
+    const onboard = group.seats.length === 1 ? "onboards" : "onboard";
     follow.push(
-      `${plural(group.seats.length, "seat")} onboard again ${ONBOARDING_CAUSE[group.cause]}: ${names(group.seats)}.`,
+      `${plural(group.seats.length, "seat")} ${onboard} again ${ONBOARDING_CAUSE[group.cause]}: ${names(group.seats)}.`,
     );
   }
   for (const u of changes.unitRenames) {

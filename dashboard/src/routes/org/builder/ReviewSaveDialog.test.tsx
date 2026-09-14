@@ -229,6 +229,24 @@ describe("the review", () => {
     expect(save.disabled).toBe(false);
   });
 
+  // COUNTED SENTENCES READ FOR ONE as well as for many: "1 seat onboard
+  // again" is the kind of copy an operator reads as a draft nobody proofread.
+  test("a consequence about a single seat agrees with its count", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
+    const dialog = await screen.findByRole("dialog", { name: "Review and save" });
+    expect(
+      within(dialog).getByText(
+        "1 seat onboards again because a unit they belong to is renamed: Dev.",
+      ),
+    ).toBeDefined();
+  });
+
   test("an empty audit summary cannot be saved", async () => {
     const engine = new Engine(company());
     const dialog = await reviewEdit(engine);
