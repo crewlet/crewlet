@@ -78,15 +78,14 @@
 // older ones were never gated — that is a faithful degradation and a
 // deliberate difference, not an oversight.
 //
-// # Every listing is ONE REQUEST, and never the client's ListKeys
+// # Every listing is ONE PASS, and never the client's ListKeys
 //
 // Reading a whole bucket goes through [eachEntry], which hands over the KEY
-// AND THE VALUE TOGETHER and, where the broker can answer it, asks for the
-// whole bucket in a single `$JS.API.DIRECT.GET` carrying `multi_last` — no
-// consumer, no metadata proposal, no second round trip. walk.go is the
-// authority on that, including why the ordered walk beside it is not a
-// fallback waiting to be deleted; what follows is why NEITHER of them is the
-// obvious shape.
+// AND THE VALUE TOGETHER in a single ordered pass, and narrows to one key
+// class at the BROKER where the caller wants one. walk.go is the authority on
+// that, including why the batched direct read that would drop even the
+// consumer is deliberately not used; what follows is why the obvious shape is
+// worse than either.
 //
 // A key listing is not a cheap read. The client implements ListKeys as a
 // watcher, so each call CREATES AND DELETES AN ORDERED EPHEMERAL CONSUMER —
@@ -317,7 +316,7 @@ func (s *Store) TTL() time.Duration { return s.ttl }
 func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, s.js.Conn(), kv, visit)
+	return eachEntry(ctx, kv, visit)
 }
 
 // checkClass refuses a class that cannot address a key.
@@ -342,7 +341,7 @@ func checkClass(class coord.Class) error {
 func (s *Store) eachUnder(ctx context.Context, kv jetstream.KeyValue, class coord.Class, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, s.js.Conn(), kv, coord.DocumentFilter(string(class)), what, visit)
+	return eachEntryUnder(ctx, kv, coord.DocumentFilter(string(class)), what, visit)
 }
 
 // --- the lease surface ----------------------------------------------------

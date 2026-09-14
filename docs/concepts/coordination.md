@@ -47,25 +47,16 @@ destroyed per call — paid continuously, since several of a node's fifteen-seco
 duty loops read a bucket on every tick and the state-log write fence reads the
 position register on every first write to a subject.
 
-**Where the broker can answer it, a listing is ONE REQUEST and no consumer at
-all** — a batched direct get, which asks for the latest record on every
-matching key in a single request/reply. The embedded broker always can. An
-external cluster older than NATS 2.11 cannot, and neither can a bucket adopted
-from an older client without direct access enabled, or a read whose match set
-exceeds 1024 keys; each of those is something the broker says explicitly, and
-the read falls back to an ordered pass over a temporary consumer rather than
-reporting an outage that is not happening. Nothing above that layer can tell
-which one answered — the difference is what it cost, not what it said.
-
-**And a listing asks for its own key class, not the bucket.** A key is a
-subject path, so a class of keys is a wildcard the broker matches. The
-positions register holds seven of them — a node's log positions, a trim hold,
-a backup point, a domain's trim floor, a capacity operation, an admission and
-a maintenance acknowledgement — and a read of the trim floors now moves the
-floors alone, rather than all seven classes so that six can be discarded. It
-also sizes the 1024 against the class rather than against every key in the
-bucket, so one class is never pushed onto the slower transport by what its
-neighbours have grown to.
+**A listing is ONE ORDERED PASS, carrying each key and its value together** —
+never a name list followed by a fetch per name, which is what it was. The
+batched direct get that would remove even the consumer is deliberately not
+used here: it is served by any replica, so a follower behind an acknowledged
+write can hide a row, and the trim floor is a *minimum* across rows — a row it
+cannot see raises the floor and deletes records a node still needs. Measured
+against a single-node broker it also returned empty answers for populated key
+classes, because a KV bucket keeps one message per subject and that churn
+leaves the server's per-subject index stale. An empty answer is the one this
+estate cannot survive, since "no rows" is legitimate everywhere it is asked.
 
 That is why a **resource name is segmented**. A lease is named
 `seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon

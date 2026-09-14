@@ -456,7 +456,7 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntry(ctx, f.js.Conn(), kv, visit)
+	return eachEntry(ctx, kv, visit)
 }
 
 // eachUnder is [each] narrowed to the keys matching one filter, with `what`
@@ -465,7 +465,7 @@ func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys, what string,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	return eachEntryUnder(ctx, f.js.Conn(), kv, keys, what, visit)
+	return eachEntryUnder(ctx, kv, keys, what, visit)
 }
 
 // ---- the rate valve ---------------------------------------------------- //
