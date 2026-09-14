@@ -127,6 +127,10 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// being rescued, and its deliveries would satisfy this round's
 		// delivery check.
 		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
+		// it would tell this job's completion that its spend is already
+		// counted, and the company would never be billed for it.
+		existing.Charged = false
 		return true
 	})
 	return err
@@ -164,6 +168,19 @@ func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string) (Pending
 	// because a reused run keeps its old question.
 	run.ClaimedFrom = before
 	return run, true, nil
+}
+
+// MarkCharged records that a claimed run's spend is on the token counter. See
+// the contract on [PendingStore].
+func (s *CoordStore) MarkCharged(ctx context.Context, turnID string) (bool, error) {
+	_, recorded, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.Charged {
+			return false
+		}
+		run.Charged = true
+		return true
+	})
+	return recorded, err
 }
 
 // MarkAwaiting parks a run until a person answers.
