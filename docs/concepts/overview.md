@@ -268,7 +268,8 @@ internal/
 ├── clientsource/         # Holds a constant the dashboard declares against the
 │                         #   engine's own
 ├── e2e/                  # The end-to-end company, and the dashboard replay
-└── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
+└── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared
+                          #   grammars
 
 dashboard/                # The dashboard's SOURCE — React + TypeScript, built
                           #   by Vite. Its output is committed to

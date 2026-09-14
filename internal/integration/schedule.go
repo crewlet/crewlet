@@ -1,6 +1,10 @@
 package integration
 
-import "time"
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/backoff"
+)
 
 // Schedule is how long each outcome waits before the next pass.
 //
@@ -123,11 +127,11 @@ func (s Schedule) Next(report Report, attempts int) time.Duration {
 	case report.Phase == PhaseReady:
 		return s.Settled
 	case report.Actor == ActorAdmin:
-		return backoff(attempts, s.AdminBase, s.AdminMax)
+		return backoff.Doubling(attempts, s.AdminBase, s.AdminMax)
 	case report.Actor == ActorOperator:
 		return s.Operator
 	default:
-		return backoff(attempts, s.WaitingBase, s.WaitingMax)
+		return backoff.Doubling(attempts, s.WaitingBase, s.WaitingMax)
 	}
 }
 
@@ -161,36 +165,4 @@ func CadenceOf(report Report) Cadence {
 	default:
 		return CadenceWaiting
 	}
-}
-
-// backoff doubles base per consecutive unsettled attempt, capped at ceiling.
-//
-// DOUBLED IN A LOOP THAT EXITS AT THE CEILING rather than computed as
-// base<<(attempts-1), and the difference is not style. A row parked on a
-// person accumulates attempts for as long as they do not act, and the closed
-// form overflows time.Duration well before that count becomes unreasonable.
-// An overflowed duration is not merely wrong: it is NEGATIVE, which every
-// caller here reads as "already due", so the longest wait in the system turns
-// into a request every tick against the third-party app least likely to answer
-// differently.
-//
-// Exiting at the ceiling also bounds the loop without a magic iteration cap:
-// delay is strictly below ceiling whenever it is doubled, so the next value
-// cannot exceed twice a duration somebody wrote in a config file, and the
-// loop runs log2(ceiling/base) times however large attempts grows.
-func backoff(attempts int, base, ceiling time.Duration) time.Duration {
-	if attempts < 1 {
-		attempts = 1
-	}
-	delay := base
-	for i := 1; i < attempts; i++ {
-		if delay >= ceiling {
-			return ceiling
-		}
-		delay *= 2
-	}
-	if delay > ceiling {
-		return ceiling
-	}
-	return delay
 }
