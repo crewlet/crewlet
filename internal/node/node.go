@@ -307,21 +307,27 @@ const drainLogInterval = 10 * time.Second
 
 // seatReleaseBudget bounds the give-back at the end of a drain.
 //
-// ONE HEARTBEAT INTERVAL — SeatLeaseTTL/3, 15 s at the shipped 45 s TTL —
-// which is the largest budget that is still strictly inside the lease it is
-// racing. Giving a lease back is a handful of coordination writes, so this is
-// a guard against a store that has stopped answering rather than a real
-// allowance; past it the seat lapses on its TTL, which is the same outcome as
-// not trying, only later.
+// ONE HEARTBEAT INTERVAL — the TTL over [seat.HeartbeatRatio], 15 s at the
+// shipped 45 s TTL — which is the largest budget that is still strictly inside
+// the lease it is racing. Giving a lease back is a handful of coordination
+// writes, so this is a guard against a store that has stopped answering rather
+// than a real allowance; past it the seat lapses on its TTL, which is the same
+// outcome as not trying, only later.
 //
 // A budget rather than the caller's context, because the caller's is very
 // often already expired by the time the wait above ends — Drain's own doc
 // invites a deadline — and a release that inherits it does nothing at all,
 // leaving every seat dark for a full TTL instead of being taken over at once.
-// Derived from the TTL rather than written as a duration, for the reason
-// HeartbeatRatio gives: a deployment that shortens its lease must not end up
-// with a release budget longer than the lease it is inside.
-const seatReleaseBudget = seat.SeatLeaseTTL / seat.HeartbeatRatio
+//
+// A FUNCTION OF THIS NODE'S OWN TTL rather than a constant, which is what the
+// reason [seat.HeartbeatRatio] gives actually requires and what this budget
+// claimed while being derived from the shipped number: a deployment that
+// shortened its lease to ten seconds spent fifteen giving the seats back — a
+// budget strictly OUTSIDE the lease it is inside, which is the arrangement
+// the whole ratio exists to prevent.
+func (n *Node) seatReleaseBudget() time.Duration {
+	return n.host.TTL() / seat.HeartbeatRatio
+}
 
 // Drain performs this node's graceful departure and returns once its seats
 // are handed back.
@@ -395,7 +401,7 @@ func (n *Node) Drain(ctx context.Context) {
 	}
 
 	releaseCtx, cancel := context.WithTimeout(
-		context.WithoutCancel(ctx), seatReleaseBudget)
+		context.WithoutCancel(ctx), n.seatReleaseBudget())
 	defer cancel()
 	n.host.ReleaseAll(releaseCtx, seat.ReasonDrain)
 	n.log.Info("drain_complete", "still_held", len(n.host.Held()))
