@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"testing"
@@ -45,7 +46,17 @@ func list(t *testing.T) []pkg {
 	t.Helper()
 
 	cmd := exec.Command("go", "list", "-json=ImportPath,Imports,TestImports,XTestImports", "./...")
-	cmd.Dir = ".."
+	// THE MODULE ROOT, two levels up from internal/solo — not one.
+	//
+	// It was "..", which is internal/, so `go list ./...` enumerated
+	// internal/... alone and this guard never saw cmd/crewlet or static.
+	// Measured at the time: the guard scanned 117 packages while the partition
+	// command, which runs from the root, listed 119. A cluster-forming test
+	// package added under cmd/ would have been partitioned solo by the
+	// Makefile and checked by nothing — a hole in exactly the guard whose job
+	// is that there are no holes. The assertion below is what stops it
+	// coming back.
+	cmd.Dir = filepath.Join("..", "..")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -66,6 +77,23 @@ func list(t *testing.T) []pkg {
 			t.Fatalf("decode go list output: %v", err)
 		}
 		pkgs = append(pkgs, p)
+	}
+}
+
+// requireModuleRoot fails unless the listing covers the whole module.
+//
+// The partition the Makefile runs lists from the module root, so a guard
+// listing from anywhere else is checking a subset while claiming to check the
+// set — which is how "..", one level short, went unnoticed. Asserted on a
+// package OUTSIDE internal/ rather than on a count, because a count drifts
+// every time somebody adds a package and would be edited rather than believed.
+func requireModuleRoot(t *testing.T, pkgs []pkg) {
+	t.Helper()
+	const outside = "github.com/crewlet/crewlet/cmd/crewlet"
+	if !slices.ContainsFunc(pkgs, func(p pkg) bool { return p.ImportPath == outside }) {
+		t.Fatalf("the listing does not contain %s, so it is not the whole module — "+
+			"this guard is scanning a subtree and would miss a cluster-forming "+
+			"package outside internal/", outside)
 	}
 }
 
@@ -94,6 +122,7 @@ func TestEveryClusterFormingPackageRunsAlone(t *testing.T) {
 	t.Parallel()
 
 	pkgs := list(t)
+	requireModuleRoot(t, pkgs)
 
 	var heavy, declared []string
 	for _, p := range pkgs {
@@ -143,7 +172,10 @@ func TestEveryClusterFormingPackageRunsAlone(t *testing.T) {
 func TestNothingOutsideATestImportsTheMarker(t *testing.T) {
 	t.Parallel()
 
-	for _, p := range list(t) {
+	pkgs := list(t)
+	requireModuleRoot(t, pkgs)
+
+	for _, p := range pkgs {
 		if slices.Contains(p.Imports, marker) {
 			t.Errorf("%s imports %s from a NON-test file; the marker pulls in `testing`, "+
 				"so it belongs in a _test.go file only", p.ImportPath, marker)
