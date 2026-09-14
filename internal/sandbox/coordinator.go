@@ -44,9 +44,11 @@ var ErrResumeUnavailable = errors.New("sandbox: this node cannot resume the run"
 // A resumer wraps its error in this when, and only when, the turn's own answer
 // says so (in the engine, turn.Abandon). The coordinator then leaves the claim
 // taken rather than reverting it, which is what stops a retry winning the flip,
-// and settles the delivery. Every other resume failure still reverts and comes
-// back, because the suspended conversation is the expensive thing here and a
-// resume that proved nothing has lost nothing by trying again.
+// settles the run as it would one that finished (the box reclaimed, the seat
+// free for its next turn), and acks the delivery. Every other resume failure
+// still reverts and comes back, because the suspended conversation is the
+// expensive thing here and a resume that proved nothing has lost nothing by
+// trying again.
 var ErrResumeAbandoned = errors.New("sandbox: the resumed turn broke and must not be resumed again")
 
 // Resumer re-enters a suspended Execute loop.
@@ -516,26 +518,34 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// take the slot first.
 	c.clearBusy(run.AgentHandle)
 
-	if err := c.resume.Resume(ctx, ResumeRequest{
+	err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
-	}); err != nil {
-		if errors.Is(err, ErrResumeAbandoned) {
-			// THE CLAIM STAYS TAKEN. Reverting it here would hand the
-			// completion back to a retry, and that retry would re-enter
-			// the same suspended conversation and either repeat the
-			// writes this turn has already made or reach the same panic,
-			// which are the two things a resume must not do twice. The
-			// turn is lost either way. The row stays in resumed for the
-			// settle path and the reaper, exactly as a successful resume
-			// leaves it.
-			log.ErrorContext(ctx, "sandbox_resume_abandoned",
-				"turn_id", run.TurnID, "error", err.Error(),
-				"detail", "the claim is left taken so the completion is not "+
-					"redelivered into a conversation a retry must not re-enter")
-			c.markBusy(run.AgentHandle)
-			return nil
-		}
+	})
+	switch {
+	case errors.Is(err, ErrResumeAbandoned):
+		// THE CLAIM STAYS TAKEN, AND THE RUN IS SETTLED BELOW. Reverting
+		// the claim would hand the completion back to a retry, and that
+		// retry would re-enter the same suspended conversation and either
+		// repeat the writes this turn has already made or reach the same
+		// panic, which are the two things a resume must not do twice.
+		//
+		// The turn is lost either way, and so is the run: what it handed
+		// back (a finished job's result, or a person's answer to its
+		// question) went to the turn that broke, and nothing will resume it
+		// again. So it is settled exactly as a resume that returned cleanly
+		// is, which reclaims the box and takes the row out of the statuses
+		// that hold the seat. This path used to re-mark the seat busy and
+		// return before the settle, leaving the row in resumed, which only a
+		// seat acquisition ever reaps: on a live node the seat requeued
+		// every delivery it was sent, and its box stayed up and billed,
+		// until the process restarted or the seat moved.
+		log.ErrorContext(ctx, "sandbox_resume_abandoned",
+			"turn_id", run.TurnID, "error", err.Error(),
+			"detail", "the claim is kept so the completion is not redelivered "+
+				"into a conversation a retry must not re-enter, and the run is "+
+				"settled")
+	case err != nil:
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended
 		// conversation is permanently lost with the row stranded in resumed.
