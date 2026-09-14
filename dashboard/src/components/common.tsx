@@ -14,7 +14,7 @@ import { Icon } from "~/ui/Icon.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { requestToken } from "~/protocol/index.ts";
+import { queryErrorCode, requestToken } from "~/protocol/index.ts";
 import { runState, seatTone, stateLabel, statusLine, toneOf, type Seat } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
@@ -233,10 +233,15 @@ export function Section({
 /**
  * What an empty or failed answer means, said precisely.
  *
- * `no_event_store` and "nothing has happened yet" are the same empty list and
+ * `unknown_query` and "nothing has happened yet" are the same empty list and
  * completely different problems; so are `unauthorized` and a company with no
  * seats. Every screen routes its failure through here so the distinction is
  * made once.
+ *
+ * The branches compare the error NARROWED to the query error codes, so a
+ * branch on a code the engine does not send fails the typecheck. Anything
+ * that is not a code (prose a screen wrote itself) takes the last banner,
+ * which shows it as it came.
  */
 export function QueryState({
   error,
@@ -249,7 +254,8 @@ export function QueryState({
   empty?: { title: ReactNode; hint?: ReactNode };
   children?: ReactNode;
 }) {
-  if (error === "unauthorized") {
+  const code = queryErrorCode(error);
+  if (code === "unauthorized") {
     return (
       <div className="banner caution">
         <Icon name="key" size="sm" />
@@ -268,19 +274,7 @@ export function QueryState({
       </div>
     );
   }
-  if (error === "no_event_store") {
-    return (
-      <div className="banner neutral">
-        <Icon name="database" size="sm" />
-        <span>
-          This node keeps no event log, so there is no history to read. Set{" "}
-          <code className="inline">store.path</code> in <code className="inline">crewlet.yaml</code>{" "}
-          to make it durable.
-        </span>
-      </div>
-    );
-  }
-  if (error === "unknown_query") {
+  if (code === "unknown_query") {
     return (
       <div className="banner neutral">
         <Icon name="info" size="sm" />
@@ -291,7 +285,7 @@ export function QueryState({
       </div>
     );
   }
-  if (error === "bad_params") {
+  if (code === "bad_params") {
     return (
       <div className="banner caution">
         <Icon name="alert" size="sm" />
@@ -303,19 +297,20 @@ export function QueryState({
       </div>
     );
   }
-  if (error === "unavailable") {
+  if (code === "unavailable") {
     return (
       <div className="banner neutral">
         <Icon name="clock" size="sm" />
         <span>
-          This node has not finished reading the company's own records yet — its projection is still
-          catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+          This node cannot answer yet: its copy of the company's records is still catching up, or it
+          could not reach the coordination store for a moment. Nothing is lost, and this screen asks
+          again on its own.
           <strong> This is not an empty company.</strong>
         </span>
       </div>
     );
   }
-  if (error === "not_found") {
+  if (code === "not_found") {
     return (
       <div className="banner neutral">
         <Icon name="info" size="sm" />
@@ -323,7 +318,7 @@ export function QueryState({
       </div>
     );
   }
-  if (error === "timeout") {
+  if (code === "timeout") {
     return (
       <div className="banner caution">
         <Icon name="clock" size="sm" />

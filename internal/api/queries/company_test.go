@@ -406,6 +406,50 @@ func TestFleetNamesTheRolesNobodyIsRunning(t *testing.T) {
 	}
 }
 
+// AN UNREACHABLE LEASE TABLE IS "ASK AGAIN", NOT "THE SERVER BROKE".
+//
+// The fleet question returned the coordination store's error as it came, so a
+// store blip reached a client as `query_failed` and a 500: the code a screen
+// gives up on, for a condition that clears in seconds. The reference promised
+// a 503 the whole time. The coordination contract already says which failures
+// are "could not reach the store", and that is the one the registry turns into
+// ErrUnavailable.
+func TestAnUnreachableLeaseTableIsUnavailableRatherThanFailed(t *testing.T) {
+	t.Parallel()
+	faulty := coordtest.NewFaulty(coordmemory.New())
+	faulty.Break(nil)
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Coord: faulty, NodeID: "node-a"})
+
+	_, err := r.Answer(t.Context(), "fleet", nil, "")
+	if !errors.Is(err, queries.ErrUnavailable) {
+		t.Fatalf("an unreachable lease table answered %v, want ErrUnavailable", err)
+	}
+	// The contract's own error survives underneath, for the log.
+	if !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("the coordination error was replaced rather than wrapped: %v", err)
+	}
+}
+
+// AND A COORDINATION FAILURE THAT IS NOT AN OUTAGE STAYS A FAILURE. A record
+// the store returned and this build could not read will not read better in
+// five seconds, and a Retry-After would send a screen round a loop.
+func TestACoordinationFailureThatIsNotAnOutageIsNotRetried(t *testing.T) {
+	t.Parallel()
+	faulty := coordtest.NewFaulty(coordmemory.New())
+	faulty.Break(errors.New("lease record: unexpected end of JSON input"))
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Coord: faulty})
+
+	_, err := r.Answer(t.Context(), "fleet", nil, "")
+	if err == nil {
+		t.Fatal("a failed read answered successfully")
+	}
+	if errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("a decode failure was reported as %v", queries.ErrUnavailable)
+	}
+}
+
 func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	t.Parallel()
 	// "This node has no lease table" and "the fleet is empty" are

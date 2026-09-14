@@ -2,10 +2,13 @@ package queries_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -198,6 +201,25 @@ func TestANodeWithNoSandboxDoesNotAnswerTheQuestion(t *testing.T) {
 	queries.Register(r, queries.Sources{})
 	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, ""); err == nil {
 		t.Fatal("a node with no sandbox answered the question")
+	}
+}
+
+// unreachableRuns is a run record whose store could not be reached.
+type unreachableRuns struct{}
+
+func (unreachableRuns) ListActive(context.Context) ([]sandbox.PendingRun, error) {
+	return nil, fmt.Errorf("sandbox: list runs: %w", coord.ErrUnavailable)
+}
+
+// The run board reads the fleet's coordination store, so a blip there is "ask
+// again in a moment" like any other, not a failure. It reached the client as
+// `query_failed` and a 500, where the reference promised a 503.
+func TestAnUnreachableRunRecordIsUnavailableRatherThanFailed(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: unreachableRuns{}})
+	if _, err := r.Answer(t.Context(), "sandbox_runs", nil, ""); !errors.Is(err, queries.ErrUnavailable) {
+		t.Fatalf("an unreachable run record answered %v, want ErrUnavailable", err)
 	}
 }
 

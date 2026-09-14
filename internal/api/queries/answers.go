@@ -39,10 +39,12 @@ const (
 
 // Sources are what the answers read from.
 //
-// Every field is optional, and an absent one makes its questions report
-// themselves unavailable rather than answer emptily. A standalone API with no
-// store and an engine mid-boot are both real, and "there is no event log here"
-// and "the event log is empty" are answers a screen must be able to tell apart.
+// Every field is optional, and an absent one leaves its questions UNREGISTERED,
+// so they come back as [ErrUnknown] (`unknown_query`, 404) rather than as an
+// empty answer. "There is no event log here" and "the event log is empty" are
+// answers a screen must be able to tell apart, and "not here" is permanent in a
+// way [ErrUnavailable]'s "not yet" is not: a Retry-After for a source this node
+// will never have sends a client round a loop.
 type Sources struct {
 	State  *livestate.LiveState
 	Events *store.EventLog
@@ -222,12 +224,19 @@ func (s Sources) clock() time.Time {
 	return s.Now()
 }
 
-// ErrUnavailable is a question this process cannot answer because the thing it
-// reads from is not wired here.
+// ErrUnavailable is a question this node understood and cannot answer YET: its
+// copy of the company's records is still catching up, or the coordination store
+// it reads could not be reached.
 //
 // Distinct from an empty answer, and the distinction is the point: a dashboard
-// that drew "no events" for "this node has no event log" would report a quiet
-// company during a misconfiguration.
+// that drew "there is no work" for "this node cannot read the work right now"
+// would report a quiet company during an outage. Distinct from [ErrUnknown]
+// too, which is the answer for a source this node does not have at all: that
+// one never clears by waiting, so it must not carry a Retry-After.
+//
+// Answers do not return it themselves. The registry classifies at one boundary
+// (see unavailableIfTransient), so an answer that reads a store which can be
+// briefly unreachable cannot forget to.
 var ErrUnavailable = errors.New("queries: not available on this node")
 
 // ErrNotFound is a question this surface understood, about a record it does

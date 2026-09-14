@@ -590,15 +590,21 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 	case errors.Is(err, queries.ErrUnavailable):
 		// 503 AND RETRY-AFTER, because this is the one failure here that
 		// is expected to pass: this node is behind the log and is
-		// draining. A 500 would tell a client to give up on a screen
-		// that will work in a few seconds, and an empty 200 would tell a
-		// person the company has no work.
+		// draining, or its coordination store was briefly unreachable. A
+		// 500 would tell a client to give up on a screen that will work in
+		// a few seconds, and an empty 200 would tell a person the company
+		// has no work.
 		//
 		// THE HINT IS THE REFUSAL'S OWN where it has one — derived from
 		// how far behind this node is over how fast it is actually
 		// draining — and five seconds otherwise. A flat hint is wrong in
-		// both directions on one fleet.
-		after := 5
+		// both directions on one fleet. The fallback is what an
+		// unreachable coordination store gets, since there is no drain to
+		// derive from, and it is the shared health tick's own cadence
+		// ([stream.HealthInterval]): a client that waits it out asks again
+		// having seen at most one newer health frame, which is the soonest
+		// it could learn the store is back.
+		after := int(stream.HealthInterval / time.Second)
 		if hint := queries.RetryAfter(err); hint > 0 {
 			after = max(1, int(hint.Round(time.Second)/time.Second))
 		}

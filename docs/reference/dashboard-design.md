@@ -434,9 +434,9 @@ of which is what makes them worth having at all:
   Model activity tab wrapped its turns in the query-state component, which
   renders nothing while a query is in flight and a banner *instead of* its
   children when one fails. So a turn happening right now was invisible until
-  the event store answered — and invisible for good on a node that keeps no
-  event log, where the answer is a permanent `no_event_store`. The query's
-  state renders beside the turns now, never in place of them.
+  the event store answered, and invisible for good on a process that serves
+  no event history, where the answer is a permanent `unknown_query`. The
+  query's state renders beside the turns now, never in place of them.
 
 The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the
@@ -929,10 +929,15 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
   company and "no events" on a node with no event log are the same empty list
   and completely different problems. `QueryState` renders the engine's own code
-  — `no_event_store`, `unauthorized`, `unknown_query`, `bad_params`,
-  `timeout` — as a sentence saying which. `bad_params` is the one that names
-  the SCREEN as the fault: the engine understood the question and refused it,
-  so retrying sends the same bad request again.
+  (`unauthorized`, `unknown_query`, `bad_params`, `unavailable`,
+  `not_found`, `timeout`) as a sentence saying which. `bad_params` is the one
+  that names the SCREEN as the fault: the engine understood the question and
+  refused it, so retrying sends the same bad request again. `unavailable` is
+  the opposite: the node will answer in a moment, so `useQuery` asks again on
+  its own rather than leaving a person to reload. The branches compare the
+  error narrowed to the protocol's `QueryErrorCode` union, so a branch on a
+  code the engine does not send is a type error, and a Go test in
+  `internal/api/stream` pins that union to the codes the engine sends.
 - **Zero** vs **unknown.** The integrations answer's counts are three-valued,
   and a node not serving ingress reports `unknown`, not `0`. The budgets answer
   says `durable: false` when the counter could not be READ.

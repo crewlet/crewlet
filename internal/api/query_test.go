@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -251,6 +253,32 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "/var/lib") {
 		t.Errorf("the failure leaked its detail to the caller: %s", raw)
+	}
+}
+
+// A COORDINATION BLIP IS "ASK AGAIN" ON BOTH TRANSPORTS: a 503 with a
+// Retry-After over REST and `unavailable` on the socket. It was a 500 and
+// `query_failed`, the pair a client gives up on.
+func TestAnUnreachableCoordinationStoreIsUnavailableOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	a.Queries().Register("blip", func(context.Context, queries.Params) (any, error) {
+		return nil, fmt.Errorf("list leases: %w", coord.ErrUnavailable)
+	})
+
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/query/blip", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("REST status = %d, want 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got == "" {
+		t.Error("a 503 with no Retry-After tells a client nothing about when to come back")
+	}
+	if !strings.Contains(rec.Body.String(), `"unavailable"`) {
+		t.Errorf("REST body = %s, want the unavailable code", rec.Body.String())
+	}
+	if socket := overSocket(t, a, "blip", nil); socket["error"] != "unavailable" {
+		t.Errorf("socket answer = %v, want unavailable", socket)
 	}
 }
 

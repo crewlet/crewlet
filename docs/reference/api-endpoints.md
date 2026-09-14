@@ -1238,10 +1238,11 @@ by id); that surface only knows it is done when a page returns zero rows.
 
 The persistent store retains 30 days. Once a cursor crosses that floor
 every page is empty — which is why a client must distinguish it from
-quiet, rather than drawing the gap as silence. A deployment with no
-event store answers **503** (and `no_event_store` on the query channel)
-rather than an empty page, for the same reason: "there is nothing older"
-and "I cannot answer" are different facts.
+quiet, rather than drawing the gap as silence. A process with no event
+store does not serve this question at all: it answers **404**
+`unknown_query`, rather than an empty page, for the same reason. "There
+is nothing older", "there is no log here" and "I cannot answer yet" are
+three different facts, and only the last of them is a `503`.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
@@ -1329,7 +1330,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `query_failed`. **`unknown_query` covers a surface this process does not have**: a question whose source is not wired here is never registered, so it is unknown rather than empty and never carries a `Retry-After`, because waiting cannot give this node an event log it was not configured with. Its REST twin is `404`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* (a projection still catching up after a restart or a fresh join, or a coordination store it could not reach), so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it (a parameter missing, malformed, or outside the set the field accepts), so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -1353,8 +1354,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |
-| `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
-| `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
+| `fleet` | — | `GET /fleet`. Leases move with no event to push, so the Fleet view polls this rather than waiting for one. `unavailable` when the lease table could not be read, which is a blip to ask again about rather than a fault (the REST twin answers `503` with a `Retry-After`) |
+| `sandbox_runs` | — | `GET /sandbox-runs`. `unknown_query` on a process with no sandbox backend, since no run can be parked there at all, and `unavailable` when the fleet's run record could not be read |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
@@ -1906,9 +1907,10 @@ simply not saying.
 Two fields report the failures that are otherwise invisible, because
 their only symptom is an absence: `unmanned_roles` lists roles no live
 node performs, and `unplaceable` lists seats whose `role.placement`
-matches no live node. Without a database configured there is no lease
-table and no fleet; the response says so in `degraded` rather than
-failing.
+matches no live node. A process with no coordination backend does not
+serve this question (`404 unknown_query`), and a lease table that could
+not be read answers `503` with a `Retry-After` rather than an empty
+fleet.
 
 ```json
 {
@@ -1982,9 +1984,10 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 deliberately not returned: it is the largest column in the row and every
 prompt in it is already reachable through the event store.
 
-Without a database the engine cannot park a run at all, so that
-deployment gets `{"runs": [], "degraded": "..."}` rather than an error;
-a store that is configured and unreadable answers `503`.
+A process with no sandbox backend cannot park a run at all, so it does
+not serve this question: it answers `404 unknown_query` rather than an
+empty board. A run record that could not be read answers `503` with a
+`Retry-After`.
 
 ### `GET /budgets`
 
