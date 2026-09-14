@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -206,5 +207,58 @@ func TestShuttingDownClearsTheRouteAddress(t *testing.T) {
 		t.Error("a shut-down member still reports its route address — the read " +
 			"at the call site no longer has to come first, and the comment " +
 			"saying it does is now wrong")
+	}
+}
+
+// CREATING A DURABLE CONSUMER THAT ALREADY EXISTS WITH A DIFFERENT START
+// SEQUENCE IS AN ERROR, NOT A NO-OP.
+//
+// This is what makes a clustered restart able to fail on the state-log
+// consumer, and therefore what [Queue.DomainConsumer]'s ErrConsumerExists
+// branch exists for. That consumer's name carries the node id, so no PEER can
+// race it — but the node itself made it on an earlier boot, and inside the
+// metadata propagation window the lookup that precedes the create answers
+// not-found. The create then meets the consumer that is really there.
+//
+// If it merely returned the existing consumer, the branch would be dead code
+// and a restart would need no tolerance at all. It does not, because the
+// configs differ: OptStartSeq moves with this node's checkpoint between every
+// boot, and the broker treats a durable's start sequence as immutable.
+//
+// Both halves are asserted, because the branch turns on the difference: an
+// IDENTICAL config comes back as the existing consumer with no error.
+func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
+	t.Parallel()
+	spec := probeDomain()
+	q := domainQueue(t, spec)
+	ctx := t.Context()
+
+	base := jetstream.ConsumerConfig{
+		Durable:       "statelog__probe__node_a",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:   1,
+	}
+	if _, err := q.js.CreateConsumer(ctx, spec.Name, base); err != nil {
+		t.Fatalf("create the consumer: %v", err)
+	}
+
+	// THE SAME CONFIG is not an error — which is why the branch cannot
+	// simply treat every re-create as a recovery.
+	if _, err := q.js.CreateConsumer(ctx, spec.Name, base); err != nil {
+		t.Errorf("re-creating an identical consumer failed with %v, so a "+
+			"restart whose checkpoint had not moved would fail too", err)
+	}
+
+	// A MOVED START SEQUENCE is, and this is the shape every real restart
+	// takes: the node has applied records since, so its checkpoint is
+	// higher than when the consumer was made.
+	moved := base
+	moved.OptStartSeq = 4
+	_, err := q.js.CreateConsumer(ctx, spec.Name, moved)
+	if !errors.Is(err, jetstream.ErrConsumerExists) {
+		t.Fatalf("re-creating with a moved start sequence gave %v, want "+
+			"ErrConsumerExists — DomainConsumer's recovery branch keys on "+
+			"that error and would be unreachable", err)
 	}
 }

@@ -142,9 +142,12 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// consumer is taken as it is). Without them the caller's context
 	// reached nats.go with no deadline and the client's five-second default
 	// decided a clustered boot, silently.
-	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	//
+	// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the read-back
+	// below must not inherit a deadline this create may have spent.
+	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancel()
-	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", name, "waited", after,
 			"detail", "this state-log consumer is still being created; on a "+
@@ -152,10 +155,39 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	})
 	defer stop()
 
-	cons, err := q.js.Consumer(ctx, stream, name)
+	cons, err := q.js.Consumer(createCtx, stream, name)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
-		cons, err = q.js.CreateConsumer(ctx, stream, config)
+		cons, err = q.js.CreateConsumer(createCtx, stream, config)
+		if errors.Is(err, jetstream.ErrConsumerExists) {
+			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
+			// this consumer is one THIS NODE made on an earlier boot
+			// and has not been told about yet — the name carries the
+			// node id, so no peer can have made it.
+			//
+			// It reaches here rather than passing silently because
+			// the config differs: nats.go returns the existing
+			// consumer when the two match and ErrConsumerExists when
+			// they do not, and OptStartSeq moves with this node's
+			// checkpoint between every boot. So on a clustered
+			// restart the reply is the error, and treating it as
+			// terminal fails a boot over a consumer that is
+			// perfectly good.
+			//
+			// Read it back and take it as it is, which is the same
+			// rule the err == nil branch below applies and the one
+			// the comment above states: an existing consumer's start
+			// sequence is immutable and the applier resumes from its
+			// own checkpoint regardless.
+			err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+				var e error
+				cons, e = q.js.Consumer(ctx, stream, name)
+				return e
+			})
+			if err == nil {
+				cons, err = q.alignDomainConsumer(createCtx, stream, cons)
+			}
+		}
 	case err == nil:
 		// THE IN-FLIGHT CEILING IS BROUGHT UP TO DATE on a consumer
 		// that already exists, because it is the count bound on every
@@ -165,7 +197,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// configuration with that one field changed — a config built
 		// from this build's defaults would reset the start policy the
 		// broker refuses to move.
-		cons, err = q.alignDomainConsumer(ctx, stream, cons)
+		cons, err = q.alignDomainConsumer(createCtx, stream, cons)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
