@@ -197,8 +197,8 @@ and in chat threads; a redirect costs one navigation, a dead link costs the
 reader the thing they were looking for.
 
 **A redirect is removed the moment a live screen takes its path.** `#/work`
-redirected to the coding runs back when "work" meant a coding run; the work
-board then took the name, and the entry would have sent every reader of a live
+redirected to the coding runs back when "work" meant a coding run; the tracker
+then took the name, and the entry would have sent every reader of a live
 route somewhere else, permanently, with the address bar agreeing with them.
 That is strictly worse than the dead link a redirect exists to avoid, because
 a dead link is visible. `router.test.ts` holds the rule against the nav.
