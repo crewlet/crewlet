@@ -291,6 +291,18 @@ describe("reorder", () => {
     );
   });
 
+  test("Alt+Down moves a row past the sibling below it and follows it", () => {
+    const { probe } = mount(checkedEdit(doc, primary("alpha")));
+    rowOf(seatKey("alpha")).focus();
+    press("ArrowDown", { altKey: true });
+    expect(probe.state.draft.units[0]!.roles.map((r) => r.data.name)).toEqual([
+      "Beta",
+      "Alpha",
+      "Cora",
+    ]);
+    expect(focusedRow()).toBe(seatKey("alpha"));
+  });
+
   test("a reorder that changes no reporting line announces nothing, and the ends and placed seats refuse", () => {
     const { probe, spies } = mount(checkedEdit(doc, primary("alpha")));
     rowOf(seatKey("cora")).focus();
@@ -319,6 +331,9 @@ describe("reorder", () => {
     rowOf(seatKey("alpha")).focus();
     press("ArrowUp", { altKey: true });
     expect(spies.announce).toHaveBeenLastCalledWith("Alpha is already the first seat in Ops.");
+    rowOf(seatKey("beta")).focus();
+    press("ArrowDown", { altKey: true });
+    expect(spies.announce).toHaveBeenLastCalledWith("Beta is already the last seat in Ops.");
 
     cleanup();
     const placed = mount();
