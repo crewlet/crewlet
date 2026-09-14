@@ -230,11 +230,20 @@ func secondsPtr(v *float64) *time.Duration {
 	return &d
 }
 
-// sandboxAccountant charges a collected coding run against the shared counter.
+// sandboxAccountant post-charges a collected coding run against the shared
+// counter.
 //
-// The charge happens AFTER the spend, which is why it cannot refuse: a
-// refusal cannot un-spend a run that already ran, and recording it anyway is
-// the only way the meter stays true when the cap is binding.
+// The charge happens AFTER the spend, which is why it cannot refuse: a refusal
+// cannot un-spend a run that already ran, and recording it anyway is the only
+// way the meter stays true when the cap is binding. So it goes through
+// [coord.Budgets.PostCharge], never the gate: charged through
+// [coord.Budgets.Charge], a run that did not fit was recorded not at all,
+// which under-stated the company's spend by the whole run at exactly the
+// moment the cap bound, and stamped a refusal on a seat that would still
+// admit its next round.
+//
+// The caps only decide whether to SAY the run went over. They are read live,
+// and a limit of 0 is unlimited, matching the config.
 type sandboxAccountant struct {
 	budgets coord.Budgets
 	caps    func(agentID string) (org, seat int)
@@ -244,12 +253,13 @@ func (a sandboxAccountant) Charge(ctx context.Context, agentID, _ string, tokens
 	if a.budgets == nil || tokens <= 0 {
 		return false, nil
 	}
-	orgLimit, seatLimit := a.caps(agentID)
-	spend, err := a.budgets.Charge(ctx, coord.AgentScope(agentID), tokens, orgLimit, seatLimit)
+	spend, err := a.budgets.PostCharge(ctx, coord.AgentScope(agentID), tokens)
 	if err != nil {
 		return false, err
 	}
-	return !spend.OK, nil
+	orgLimit, seatLimit := a.caps(agentID)
+	over := (orgLimit > 0 && spend.OrgUsed > orgLimit) || (seatLimit > 0 && spend.AgentUsed > seatLimit)
+	return over, nil
 }
 
 // resumer re-enters a suspended turn on this node.

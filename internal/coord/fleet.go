@@ -261,7 +261,8 @@ type Usage struct {
 	// Cleared by an ADMITTED charge and by nothing weaker. A charge that
 	// was refused overall leaves every other scope's stamp alone, even
 	// when that scope would have had room, so the answer does not depend
-	// on which scope a backend happens to test first.
+	// on which scope a backend happens to test first. A [Budgets.PostCharge]
+	// neither stamps nor clears it: it is not a decision about room.
 	RefusedAt time.Time
 }
 
@@ -312,6 +313,28 @@ type Budgets interface {
 	// admitted charge clears the stamp on both scopes it charged. See
 	// that field for why nothing weaker clears it.
 	Charge(ctx context.Context, agentScope string, tokens, orgLimit, agentLimit int) (Spend, error)
+
+	// PostCharge adds spend that has ALREADY HAPPENED to the seat's counter
+	// and the org's, and never refuses. The answer is OK with both counters
+	// after the write, for the caller to compare with its caps.
+	//
+	// Charge is the gate: it decides whether a round may run, before the
+	// round has spent anything. Some spend is only known after it happened
+	// (a detached coding run is collected minutes or hours after it
+	// started, possibly on another node), and no answer can un-spend it.
+	// Put through the gate, it was recorded NOT AT ALL whenever it did not
+	// fit, which is exactly when a cap binds: the counter under-stated the
+	// company's spend by the whole run, and the next round was admitted
+	// against room the run had already used.
+	//
+	// It leaves both scopes' refusal stamps alone, because it is not a
+	// decision about room: it neither says the gate turned a charge away
+	// nor that it had room for one. A counter it takes past a cap is
+	// refused by the next Charge, which stamps it then.
+	//
+	// All or nothing, as Charge is: an error leaves NEITHER scope recorded,
+	// so a caller that retries does not count the org twice.
+	PostCharge(ctx context.Context, agentScope string, tokens int) (Spend, error)
 
 	// Used reports one scope's spend. A scope never charged has spent
 	// nothing; an unreachable store is an error, never a zero.
