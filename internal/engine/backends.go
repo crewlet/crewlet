@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/coord/kv"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -400,6 +401,18 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config) 
 // What persistence the records get is the same choice as the event log's:
 // stream.store_dir.
 func attachCoordination(ctx context.Context, b *config.Bootstrap, out *Backends, conn *nats.Conn) error {
+	// ONE CEILING OVER THE WHOLE BRING-UP, because this is where the
+	// sequence actually is: fifteen replicated buckets across two calls,
+	// each of which would otherwise discover a wedged cluster on its own
+	// budget. Without it the real bound is the PRODUCT rather than the
+	// term — a number nobody declared, which is the shape of a limit that
+	// is not a decision. Each create below still takes the lesser of its
+	// own budget and what is left of this one, because WithTimeout only
+	// ever shortens.
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.SequenceBudget(jsprovision.Clustered(b.Stream.Replicas)))
+	defer cancel()
+
 	shared, err := openFleet(ctx, conn, b.Stream.Replicas)
 	if err != nil {
 		return fmt.Errorf("engine: coordination: %w", err)

@@ -14,6 +14,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -310,7 +311,20 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	return q, nil
 }
 
+// ensureStreams provisions the engine's own streams, under ONE ceiling for
+// the whole sequence.
+//
+// The per-create budget bounds one create and this bounds the run of them,
+// because without it the real worst case is the product rather than the term:
+// each stream discovers a wedged cluster independently and spends its own
+// budget doing so. [jsprovision.SequenceBudget] is that ceiling, and because
+// WithTimeout only ever shortens, each create below still takes the lesser of
+// its own budget and what is left of this one.
 func (q *Queue) ensureStreams(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.SequenceBudget(jsprovision.Clustered(q.cfg.Replicas)))
+	defer cancel()
+
 	for _, spec := range engineStreams(q.cfg.EventRetention) {
 		if err := q.ensureStream(ctx, spec); err != nil {
 			return err
@@ -355,7 +369,7 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 		// configuration at boot is how a ceiling an operator raised gets
 		// silently lowered".
 		_, err := q.js.CreateStream(ctx, config)
-		if err == nil || !unplaceable(err) {
+		if err == nil || !jsprovision.Unplaceable(err) {
 			return err
 		}
 		if attempt == 0 {
@@ -369,40 +383,16 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 			// The ORIGINAL error, not the context's: "no suitable peers"
 			// says what is wrong and "deadline exceeded" does not.
 			return err
-		case <-time.After(streamPlacementRetry):
+		case <-time.After(jsprovision.PlacementRetry):
 		}
 	}
 }
 
-// unplaceable reports the transient "the cluster is still forming" error.
-func unplaceable(err error) bool {
-	var apiErr *jetstream.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeNoPeers
+// provisionBudget is how long one stream create on this queue gets, which
+// depends on whether it has peers to agree with — see [jsprovision].
+func (q *Queue) provisionBudget() time.Duration {
+	return jsprovision.Budget(jsprovision.Clustered(q.cfg.Replicas))
 }
-
-// jsErrCodeNoPeers is JetStream's "no suitable peers for placement".
-//
-// Spelled here because nats.go names only a handful of its codes and this is
-// not one of them — and matching on the description text instead would break
-// the moment the server reworded it.
-const jsErrCodeNoPeers jetstream.ErrorCode = 10005
-
-// streamPlacementRetry is how often a forming cluster is re-asked.
-//
-// The same reasoning as clusterReadyPoll: short enough that a cluster which
-// forms quickly is not held back by the poll, and it runs at most a few
-// hundred times inside the provisioning deadline.
-const streamPlacementRetry = 250 * time.Millisecond
-
-// streamProvisionTimeout bounds one stream create.
-//
-// Sized to what the call actually does rather than to a generic request:
-// with the metadata group already current — awaitClusterReady has returned —
-// a replicated create is a RAFT round trip plus file-store setup, fast on a
-// quiet cluster and seconds under load. Thirty is well past any healthy
-// case and well inside the sixty the readiness wait already tolerates, so a
-// genuinely wedged cluster still fails rather than hanging a boot.
-const streamProvisionTimeout = 30 * time.Second
 
 // ensureStream provisions one stream, remembering that it did so. Streams
 // are idempotent to create, but the round trip is not free and this runs on
@@ -431,7 +421,7 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	//
 	// WithTimeout only ever shortens against the parent, so a caller with
 	// a tighter deadline of its own still wins.
-	ctx, cancel := context.WithTimeout(ctx, streamProvisionTimeout)
+	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancel()
 
 	config := jetstream.StreamConfig{
@@ -524,7 +514,7 @@ func (q *Queue) createOrObserveStream(
 	// a stream this node found on the first look gets. The read gets its
 	// OWN context, because the one above is the deadline that just
 	// expired.
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
 	defer cancel()
 	info, err = q.js.Stream(readCtx, spec.name)
 	if err != nil {
@@ -542,14 +532,6 @@ func (q *Queue) createOrObserveStream(
 			"is compared here exactly as one found on the first look would be")
 	return q.observeStream(spec, config, info)
 }
-
-// streamReadBack bounds the one read that asks whether a peer won the race.
-//
-// SHORT, and deliberately not the provisioning deadline: this is an ordinary
-// metadata read against a group that has just proven it is working — it either
-// answers in a round trip or the cluster has gone away, and inheriting thirty
-// seconds would double a failing boot's time to say so.
-const streamReadBack = 5 * time.Second
 
 // observeStream compares a running stream against this node's spec and decides
 // per FIELD CLASS what the difference means. It writes nothing.
@@ -871,7 +853,7 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	if createErr == nil {
 		return cons, nil
 	}
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), streamReadBack)
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
 	defer cancel()
 	cons, err := q.js.Consumer(readCtx, stream, cfg.Durable)
 	if err != nil {

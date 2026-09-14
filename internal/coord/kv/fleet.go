@@ -15,11 +15,14 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // A BUCKET IS A STREAM, and provisioning a replicated one has the two hazards
 // [internal/queue/jetstream] documents for the stream side. This is the same
-// fix, because it is the same call underneath.
+// fix, because it is the same call underneath — and both sides now take the
+// budgets, the retry cadence and the "still forming" predicate from
+// [internal/jsprovision], so neither can drift away from the other.
 //
 // # The deadline
 //
@@ -40,24 +43,9 @@ import (
 // (a bad TTL, a conflicting replica count, an auth failure) clears by nobody
 // waiting, so retrying it would turn a config mistake into a two-minute hang
 // with the same message at the end.
-const (
-	// positionsSuffix is the per-node state-log position bucket.
-	positionsSuffix = "_statelog_positions"
-	// bucketProvisionTimeout bounds one bucket create. The same size as
-	// the stream side's, and for the same reason: a replicated create is
-	// a raft round trip plus file-store setup, fast on a quiet cluster and
-	// seconds under load, so thirty is well past any healthy case and
-	// still fails a genuinely wedged one rather than hanging a boot.
-	bucketProvisionTimeout = 30 * time.Second
 
-	// bucketPlacementRetry is how often a forming cluster is re-asked.
-	bucketPlacementRetry = 250 * time.Millisecond
-
-	// jsErrCodeNoPeers is JetStream's "no suitable peers for placement".
-	// A NUMBER rather than a string match, so it survives the server
-	// rewording the message.
-	jsErrCodeNoPeers jetstream.ErrorCode = 10005
-)
+// positionsSuffix is the per-node state-log position bucket.
+const positionsSuffix = "_statelog_positions"
 
 // openBucket creates one bucket when it is absent and OBSERVES it when it is
 // present, waiting out a cluster that is still forming.
@@ -83,13 +71,16 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// WithTimeout only ever shortens against the parent, so a caller that
-	// already set a tighter deadline keeps it.
-	ctx, cancel := context.WithTimeout(ctx, bucketProvisionTimeout)
+	// already set a tighter deadline keeps it — which is also what makes
+	// the sequence ceiling [OpenFleet] applies effective: each create here
+	// takes the lesser of its own budget and what is left of that one.
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.Budget(jsprovision.Clustered(cfg.Replicas)))
 	defer cancel()
 
 	for {
 		bucket, err := createOrObserveBucket(ctx, js, cfg)
-		if err == nil || !unplaceableBucket(err) {
+		if err == nil || !jsprovision.Unplaceable(err) {
 			return bucket, err
 		}
 		select {
@@ -98,7 +89,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 			// peers" says what is wrong and "deadline exceeded"
 			// does not.
 			return nil, err
-		case <-time.After(bucketPlacementRetry):
+		case <-time.After(jsprovision.PlacementRetry):
 		}
 	}
 }
@@ -117,7 +108,7 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 	if createErr == nil {
 		return bucket, nil
 	}
-	if unplaceableBucket(createErr) {
+	if jsprovision.Unplaceable(createErr) {
 		// STILL FORMING, which is the caller's loop to wait out rather
 		// than a race to read back.
 		return nil, createErr
@@ -136,7 +127,7 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 	// So the question is re-asked rather than assumed. The read gets its
 	// OWN context, because the one above may be the deadline that just
 	// expired.
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bucketReadBack)
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
 	defer cancel()
 	bucket, err := js.KeyValue(readCtx, cfg.Bucket)
 	if err != nil {
@@ -146,17 +137,6 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
 	return bucket, nil
-}
-
-// bucketReadBack bounds the one read that asks whether a peer won the race.
-// Short for [streamReadBack]'s reason: an ordinary metadata read against a
-// group that has just proven it works.
-const bucketReadBack = 5 * time.Second
-
-// unplaceableBucket reports the transient "the cluster is still forming" error.
-func unplaceableBucket(err error) bool {
-	var apiErr *jetstream.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeNoPeers
 }
 
 // The fleet-shared state on JetStream KV.
@@ -367,9 +347,20 @@ var _ coord.Fleet = (*FleetStore)(nil)
 
 // OpenFleet creates or adopts every bucket and returns the backend.
 //
-// Idempotent and safe to call from every node at once, like [Open]: creating
-// a bucket that already exists with the same shape is a no-op, and a changed
-// retention is applied as a stream update.
+// Idempotent and safe to call from every node at once, like [Open]: a bucket
+// that already exists is ADOPTED rather than rewritten, which is what keeps N
+// booting nodes from issuing N writes against a metadata group that is still
+// electing. See [openBucket] for why that is create-else-observe rather than
+// CreateOrUpdate, and what a divergent retention therefore means.
+//
+// # One ceiling over the whole sequence
+//
+// The buckets below are opened one after another and each takes its own
+// provisioning budget, so without a ceiling the real bound on this call is the
+// PRODUCT rather than the term: a wedged cluster is rediscovered fifteen times
+// over, and a boot that nobody meant to allow ten minutes gets it. Nothing
+// declared that number, which is the shape of a limit that is not a decision.
+// [jsprovision.SequenceBudget] is the decision, applied once here.
 func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")
@@ -381,6 +372,10 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
+
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.SequenceBudget(jsprovision.Clustered(cfg.Replicas)))
+	defer cancel()
 
 	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix

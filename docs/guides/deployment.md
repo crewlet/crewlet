@@ -311,6 +311,18 @@ consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
 
+**A clustered node is given longer to create them than a solo one.** Every
+one of those creates is a local file-store setup on a solo node and a raft
+round trip on a member of a cluster, against a metadata group whose peers are
+themselves still booting — so the budget branches: **30 seconds** per create
+solo, **2 minutes** clustered, with the whole coordination bring-up bounded at
+**2 minutes** and **5 minutes** respectively. The flat 30 seconds these replaced was
+measured failing: a fleet booting together would lose one create, and because
+each object discovers a slow cluster independently the failure landed on a
+different stream or bucket every time. A node that exhausts the budget fails
+to start rather than running against a group it cannot reach, and the error
+names the object it was creating.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
