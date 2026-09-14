@@ -615,6 +615,175 @@
   border-radius: var(--r-md);
 }
 
+/* ---- Org builder: canvas ------------------------------------------------
+   The builder's charts (`routes/org/builder/CanvasView.tsx`). Every card is
+   the card-width token wide and as tall as its content, measured, and placed
+   by the tidy tree layout with a transform. Nothing here is a per-entity
+   colour: a card is neutral whatever it holds, and a human seat is drawn with
+   the dashed edge every human seat on the dashboard has. */
+
+.bchart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.bchart > .canvas {
+  flex: 1;
+}
+/* Over the canvas's top edge, in the untransformed layer, so it neither
+   resizes the viewport as it comes and goes nor takes a press meant for the
+   chart beneath it. */
+.canvas-overlay > .bchart-note {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  right: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  background: var(--surface-glass);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  pointer-events: none;
+}
+.bchart-tree,
+.bchart-box,
+.bchart-links,
+.bchart-gap-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.bchart-box {
+  width: var(--org-card-w);
+}
+/* The gaps between cards, as tokens: measured like a card, so density scales
+   the space between cards with the space inside them. */
+.bchart-gap-probe {
+  width: var(--space-6);
+  height: var(--space-8);
+  visibility: hidden;
+  pointer-events: none;
+}
+.bchart-links {
+  overflow: visible;
+  pointer-events: none;
+}
+.bchart-links path {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.bchart-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  background: var(--surface-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-1);
+}
+.bchart-card.human {
+  border-style: dashed;
+  border-color: var(--border);
+}
+.bchart-card.group {
+  background: var(--surface-2);
+}
+.bchart-head,
+.bchart-row-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-md);
+  cursor: default;
+}
+/* Inset, because the ring sits on the card's own edge. */
+.bchart-head:focus-visible,
+.bchart-row-item:focus-visible {
+  outline-offset: -2px;
+}
+/* The selection is where the reader is, so it takes the accent. */
+.bchart-head[aria-selected="true"],
+.bchart-row-item[aria-selected="true"] {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.bchart-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.bchart-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.bchart-name {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  color: var(--text);
+}
+.bchart-meta {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.bchart-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.bchart-marks:empty {
+  display: none;
+}
+.bchart-actions {
+  display: flex;
+  align-items: center;
+  padding: var(--space-1);
+}
+.bchart-lead {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-3) var(--space-2);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+}
+.bchart-rows {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-top: 1px solid var(--border-subtle);
+}
+.bchart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+}
+.bchart-row.human {
+  border-style: dashed;
+  border-color: var(--border);
+}
+/* A LIVE STATE NEVER RESIZES ITS CARD. Its slot does not shrink, wrap or push
+   the name onto a second line: the name truncates instead, so a push that
+   turns "idle" into "working" changes a word and never a measured height. */
+.bnode-state {
+  display: inline-flex;
+  flex: none;
+  white-space: nowrap;
+}
+
 /* ---- Feed --------------------------------------------------------------- */
 
 /* A feed row's columns are FIXED, so a run of rows scans as columns rather

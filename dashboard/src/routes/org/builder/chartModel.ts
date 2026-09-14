@@ -54,7 +54,9 @@ export interface ChartInputs {
  * derivation travel together, because the one is only readable through the
  * other (see the module doc).
  */
-export function chartInputs(state: BuilderState): ChartInputs {
+export function chartInputs(
+  state: Pick<BuilderState, "draft" | "baseDraft" | "check">,
+): ChartInputs {
   return {
     draft: state.draft,
     baseDraft: state.baseDraft,

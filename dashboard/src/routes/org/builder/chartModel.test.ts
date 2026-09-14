@@ -16,14 +16,9 @@ import type { CompanyDocument } from "~/protocol/index.ts";
 import { fromDocument, toDocument } from "./model/document.ts";
 import type { Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
-import {
-  builderReducer,
-  INITIAL_BUILDER,
-  type BuilderAction,
-  type BuilderState,
-} from "./model/reducer.ts";
-import type { Intent } from "./model/operations.ts";
-import { fixtureCompany, fixtureDerived, type DerivedOverrides } from "./model/testkit.ts";
+import { INITIAL_BUILDER, type BuilderState } from "./model/reducer.ts";
+import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
+import { checkedEdit, PLACED, record, run } from "./stateTestkit.ts";
 import {
   chartInputs,
   CYCLE_GROUP,
@@ -32,44 +27,6 @@ import {
   type SeatView,
   type UnitView,
 } from "./chartModel.ts";
-
-const run = (state: BuilderState, ...actions: BuilderAction[]) =>
-  actions.reduce(builderReducer, state);
-
-/** A company whose root seat Designer is placed in Platform by its reference. */
-const PLACED: DerivedOverrides = {
-  seats: { "roles[1]": { placed_by_ref: true, unit_path: "units[0].children[0]" } },
-};
-
-/** An edit-mode builder on `doc`, keyed and checked with the given derivation overrides. */
-function checkedEdit(doc: CompanyDocument, overrides: DerivedOverrides = PLACED): BuilderState {
-  const loaded = run(INITIAL_BUILDER, {
-    type: "load",
-    mode: "edit",
-    document: doc,
-    revision: "rev-1",
-  });
-  return recheck(loaded, doc, overrides);
-}
-
-/** The state after the check of its own generation answered with a derivation of `doc`. */
-function recheck(state: BuilderState, doc: CompanyDocument, overrides: DerivedOverrides) {
-  return run(state, {
-    type: "checked",
-    settled: {
-      generation: state.generation,
-      sent: toDocument(state.draft),
-      baseRevision: state.base.revision,
-      outcome: { status: "clean", warnings: [], derived: fixtureDerived(doc, overrides) },
-    },
-  });
-}
-
-const record = (state: BuilderState, intent: Intent) => {
-  const next = run(state, { type: "record", intent });
-  if (next.refusal) throw new Error(next.refusal.message);
-  return next;
-};
 
 const seatOf = (state: BuilderState, key: string) =>
   structure(chartInputs(state)).nodes.get(key) as SeatView;

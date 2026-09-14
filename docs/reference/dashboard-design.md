@@ -1093,6 +1093,51 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   reads what the builder does; Edit and Open seat change no draft and stay
   available.
 
+### The org builder draws the engine's organization
+
+The Builder lens of the Org chart screen shows the draft two ways, and both
+read one module (`routes/org/builder/chartModel.ts`), so they can never
+disagree about where a seat is drawn, who leads a unit or who a seat reports
+to.
+
+- **The document gives the shape, the engine gives the meaning.** Units,
+  their seats and their children are drawn as the draft holds them, because
+  that is what an operation edits. Every derived fact comes from the last
+  check's `derived` block, read through the document that check was sent: a
+  root seat the engine placed in a unit by its `unit:` reference is drawn in
+  that unit and marked "Placed by unit reference", a reference that names no
+  unit stays at the root marked with the engine's warning, a unit with no lead
+  of its own shows the lead it inherits, and a seat shows its primary manager.
+  A derived fact is shown only while the draft still holds the values the
+  check saw; after an edit the chart says it is waiting for the check rather
+  than showing a placement or a lead the engine has not confirmed.
+- **The canvas is a tree of cards.** The structure chart has the company card
+  at the root, root seats as cards and units as cards with their seats
+  stacked inside as rows. The reporting chart is the engine's forest: seats
+  with no manager at the top, marked "No manager", and seats that manage each
+  other in a loop under one "Reporting cycle" group, each loop drawn from its
+  first seat in the engine's order. The reporting chart is read-only, because
+  a reporting line is not written anywhere as such; "Edit reports" opens the
+  seat's editor, where `manages` is.
+- **A card holds no control a keyboard has to reach.** Each card header and
+  each seat row is a `treeitem` with its level, position and expansion, and
+  one roving tab stop moves among them: the arrows, Home, End and type-ahead
+  walk the tree, Enter edits, Delete or Backspace deletes, and the ContextMenu
+  key or Shift+F10 opens the node's menu. The buttons a pointer uses (expand,
+  Add, More and the lead chip) sit beside the treeitem, hidden from assistive
+  technology and out of the tab order, and open the same menus. Focus moves
+  with `preventScroll` and the canvas then pans to reveal the node, opening a
+  collapsed unit on the way. The Builder decides which node is focused after
+  an add, a delete, a move, an undo or a redo; the mounted view performs it.
+- **Colour stays state.** A card is neutral whatever it holds. A human seat
+  has the dashed edge every human seat on the dashboard has, a problem count
+  takes the critical tone, a reference that names nothing takes the caution
+  tone, and the Datadog fallback seat carries a neutral badge.
+- **A live push never moves a card.** A saved agent seat shows the same
+  `StateBadge` as every other screen, in a slot that neither shrinks nor wraps
+  while the seat's name truncates beside it, and live state is no input to
+  the layout, so a push changes a word and never a measured height.
+
 ---
 
 ## Rules a change has to keep
