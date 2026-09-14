@@ -443,6 +443,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const phaseEvents = usePhaseEvents();
 
   const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
+  // THE STORE STOPPED AT ITS CAP, not at the end of the turn — and a turn is
+  // read OLDEST FIRST, so what a cut loses is the ENDING: the two records
+  // every claim in the header below is made from. Everything this screen
+  // derives has to be weakened by it rather than stated over a partial read.
+  const cut = Boolean(data?.truncated);
 
   // The phases the `turn` query knew about, plus the ones that have landed on
   // the stream since it was answered, plus whichever phase is running now.
@@ -500,11 +505,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   const trigger = phases.find((p) => p.trigger)?.trigger ?? null;
   const outcome = outcomeOf(rec);
   const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
-  // Only claimable on a FINISHED turn with a record to claim it from. A
-  // running turn has not been asked about since it started, and a turn whose
-  // events fell out of the store's window has nothing to say either way —
-  // "nothing went wrong" and "nothing was read" must not render alike.
-  const clean = trouble === 0 && !running && Boolean(rec.summary || rec.learning);
+  // Only claimable on a FINISHED turn with a record to claim it from, and
+  // over the WHOLE turn. A running turn has not been asked about since it
+  // started; a turn whose events fell out of the store's window has nothing
+  // to say either way; and a turn read to the store's cap has rows this page
+  // never saw, any of which could be the failure — "nothing went wrong",
+  // "nothing was read" and "not everything was read" must not render alike.
+  const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
   const { from, to } = turnSpan(events, phases);
   // THE ENGINE'S OWN WALL CLOCK, off the record that actually carries it.
@@ -599,6 +606,20 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 nothing went wrong
               </Badge>
             )}
+            {/* WHAT THE VIEW IS MISSING, in the header, because every other
+                badge beside it is a claim made from these rows. The `trace`
+                answer has carried this flag all along and its screen renders
+                it; `turn` did not carry one at all, so a cut turn looked
+                exactly like a short one. */}
+            {cut && (
+              <Badge
+                tone="caution"
+                icon="alert"
+                title="the store stopped at its per-turn cap; a turn is read oldest first, so what is missing is the end"
+              >
+                oldest {events.length} shown
+              </Badge>
+            )}
           </>
         }
         actions={
@@ -652,6 +673,25 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
         }
       >
+        {/* ABOVE EVERYTHING, because it is a statement about the rows every
+            panel below is built from rather than about the turn. Named
+            precisely: this is not "some events are missing", it is "the ones
+            that are missing are the ending", which is the difference between
+            a reader distrusting the page and a reader distrusting the turn. */}
+        {cut && (
+          <div className="banner caution">
+            <Icon name="alert" size="sm" />
+            <span>
+              This turn published more than the store returns for one turn, so only its first{" "}
+              {events.length} events are here. A turn is read oldest first — what is missing is the{" "}
+              <strong>end</strong>, including the two records this page reads the outcome, the
+              duration and the plan summary off. The phases below are the ones that landed early;
+              anything that went wrong later is not on this page.{" "}
+              {traceId ? "The trace carries the same work from the trigger down." : ""}
+            </span>
+          </div>
+        )}
+
         <Panel padding="none">
           <StatRow cols={4}>
             <Stat
@@ -680,7 +720,14 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   ? "the engine's own measurement"
                   : running
                     ? "still running"
-                    : "spanning the turn's first and last event"
+                    : cut
+                      ? // NOT "the turn's first and last event". On a cut
+                        // view the last event this page holds is wherever
+                        // the store stopped, so the span is a floor and
+                        // captioning it as the turn's own window is the
+                        // page stating a number it does not have.
+                        "at least this — the turn's end is not in this view"
+                      : "spanning the turn's first and last event"
               }
             />
             <Stat
@@ -707,7 +754,18 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               label="Outcome"
               value={outcome.word}
               tone={outcome.tone}
-              sub={outcome.sub || (running ? "still running" : "no turn record")}
+              sub={
+                outcome.sub ||
+                (running
+                  ? "still running"
+                  : cut
+                    ? // "no turn record" is a claim about the TURN. On a cut
+                      // view it is a claim about the READ, and the two read
+                      // identically to somebody deciding whether their agent
+                      // finished the job.
+                      "cut off before the turn's own record"
+                    : "no turn record")
+              }
             />
           </StatRow>
         </Panel>

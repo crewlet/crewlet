@@ -576,10 +576,20 @@ Four rules replace it, and each one names what it fixes.
    list rather than being dropped. The event registry is additive-only; a type
    a newer node publishes has to still render.
 
-3. **A healthy turn must be able to say so.** A set defined by subtraction
-   (`type !== …`) has no meaningful empty state, so "nothing went wrong here"
-   was not a state this screen could reach — and a section that is always full
-   is a section nobody reads.
+3. **A healthy turn must be able to say so — and only when it can.** A set
+   defined by subtraction (`type !== …`) has no meaningful empty state, so
+   "nothing went wrong here" was not a state this screen could reach — and a
+   section that is always full is a section nobody reads. It is a badge in the
+   header now, beside the problem count it replaces. It is withheld on a
+   **cut** view for the same reason it is withheld on a running turn: the
+   `turn` answer carries a `truncated` flag (the `trace` answer always did;
+   this one did not), and because a turn is read oldest first, what a cut
+   loses is its **ending** — including the two records the header reads its
+   outcome, its duration and its plan summary off. Untold, that page printed
+   "no turn record" directly above the rows it did get and captioned a partial
+   event span as the turn's own measurement. It now names what is missing, and
+   the two captions say "cut off before the turn's own record" and "at least
+   this — the turn's end is not in this view".
 
 4. **The feed's row is not this screen's row.** `EventRow` has four columns —
    time, actor, summary, source and category. On a page about ONE turn the
