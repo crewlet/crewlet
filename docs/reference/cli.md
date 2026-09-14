@@ -170,6 +170,14 @@ also how this works from a machine that is not the node at all. This is the
 same routing [`crewlet secrets`](#crewlet-secrets) does for the fleet's secret
 store, and for the same reason: both estates live inside the engine's process.
 
+Through a node, the write is a [compare-and-set](api-endpoints.md#concurrent-writes)
+like every other. If another write activated first, the import says so and
+names the revision that won; when the node kept the document as an inactive
+revision it names that too, with the node's own routes that compare it with
+what is live and make it live (`GET /config/revisions/<UUID>/diff` and
+`POST /config/revisions/<UUID>/revert`), because `crewlet config diff` and
+`crewlet config activate` open the store the running engine holds.
+
 With the engine **stopped** it writes to this node's own store and marks the
 revision active there, which the node publishes to the fleet at its next start.
 The line it prints says which of the two happened.
