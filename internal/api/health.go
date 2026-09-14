@@ -82,6 +82,14 @@ type Health struct {
 	// so an operator watching a node degrade sees it here before the
 	// restart rather than only afterwards in the exit code.
 	StallLagSeconds *float64 `json:"stall_lag_seconds,omitempty"`
+
+	// UnprovenSeconds maps each seat stranded by a teardown that could not
+	// be proven to how long it has been stranded, present only when one is.
+	// It is the number an alert reads: see [RuntimeState.Unproven]. It was
+	// computed by the seat host and documented as this field while nothing
+	// served it, so the only evidence of a seat out of service for a week
+	// was a log line re-raised every twenty heartbeats.
+	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
 }
 
 // Readiness is what /ready answers.
@@ -153,6 +161,12 @@ func (a *App) health(ctx context.Context) Health {
 		// one line of this body that must be read when it appears.
 		lag := state.StallLag.Seconds()
 		body.StallLagSeconds = &lag
+	}
+	if len(state.Unproven) > 0 {
+		body.UnprovenSeconds = make(map[string]float64, len(state.Unproven))
+		for seat, stranded := range state.Unproven {
+			body.UnprovenSeconds[seat] = stranded.Seconds()
+		}
 	}
 
 	// IN THE PRECEDENCE THE STATUSES DECLARE. The posture case used to be

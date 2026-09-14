@@ -1430,7 +1430,8 @@ reconnect restores every field without a second round trip.
   "shutting_down": false,
   "posture": "serve",
   "applied_epoch": 41,
-  "seats": ["ceo", "cto"]
+  "seats": ["ceo", "cto"],
+  "unproven_seconds": {"eng": 312.5}
 }
 ```
 
@@ -1450,6 +1451,7 @@ reconnect restores every field without a second round trip.
 | `applied_epoch` | The activation epoch this node last applied. |
 | `seats` | The handles of the seats this node holds, `[]` on a node holding none. |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
+| `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it: it is absent from `seats` for exactly that reason. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts, such as how many envelopes *this* connection dropped and how
 deep its queue is, are deliberately **not** here. The tick encodes one JSON
