@@ -2482,7 +2482,83 @@ export interface WorkMyWork {
   incomplete?: WorkIncomplete;
 }
 
+/** One notice in a person's inbox, as `tracker.InboxNotice` serialises it.
+ *
+ *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
+ *  WHY this change found this person, as one of twenty, in the precedence
+ *  order that decided it. A notice also says whether it ASKS something of them
+ *  (`addressed`) or merely informs, and whether it arrived only because nobody
+ *  better was found (`fallback`). */
+export interface WorkInboxNotice {
+  /** The history row this came from, and what a mark names. */
+  record_id: string;
+  log_seq: number;
+  log_stream: string;
+  log_generation: number;
+  /** The AUTHORED instant — a card saying "yesterday" must not move because a
+   *  record was redelivered. */
+  at: string;
+  reason: string;
+  /** Which half of the person's own split this fell in. */
+  primary: boolean;
+  /** It asks something rather than informing: a turn that must answer. */
+  addressed: boolean;
+  /** Delivered only because nobody better was found — a lead hearing about a
+   *  report's task because the report has left. */
+  fallback?: boolean;
+  kind: string;
+  subject_id: string;
+  /** The human-readable key, resolved by the applier so the read is an index
+   *  range rather than a join. */
+  subject_key?: string;
+  excerpt?: string;
+  actor?: string;
+  actor_kind?: string;
+  read: boolean;
+  snoozed?: boolean;
+  snoozed_until?: string;
+}
+
+/** A page of one person's inbox. */
+export interface WorkInboxAnswer {
+  handle: string;
+  notices: WorkInboxNotice[];
+  /** The split that was APPLIED, defaulted — so a screen can say "you are
+   *  seeing these because" without repeating the defaulting rule. */
+  primary_reasons: string[];
+  /** Where this person's own record says they have read to. */
+  seen_through?: { stream?: string; generation?: number; seq?: number };
+  next_cursor?: string;
+  /** Counts over THIS PAGE, and the answer says so: a total over the table
+   *  would be a second scan of rows this answer did not return. A badge built
+   *  on them therefore saturates at the page size rather than claiming a
+   *  total. */
+  unread: number;
+  primary: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
+/** Who the presented credential belongs to — see `lib/viewer.ts`. */
+export interface Viewer {
+  /** The operator id the token resolves to, or "" for an anonymous caller. */
+  operator_id: string;
+  /** Whether this caller may ask the operator-gated questions. */
+  operator: boolean;
+  /** The seat whose `contact.crewlet_operator_id` names that id, or "".
+   *  UNBOUND IS AN ORDINARY STATE, not a misconfiguration. */
+  handle: string;
+  name: string;
+  kind: string;
+}
+
 export interface QueryMap {
+  viewer: Viewer;
+  work_inbox: WorkInboxAnswer;
   agent: AgentAnswer;
   agent_memory: AgentMemoryAnswer;
   events: EventsPage;

@@ -30,11 +30,13 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
-import { Banner, Empty, Panel, Select, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Banner, Empty, Panel, Select, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { relTime } from "~/lib/format.ts";
+import { useViewer } from "~/lib/viewer.ts";
+import { reasonPhrase } from "~/lib/reasons.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { WorkAskRow, WorkChecklistRow, WorkSummary } from "~/protocol/index.ts";
 
@@ -57,10 +59,19 @@ export function MyWork() {
   const chrome: RowChrome = {
     seatName: (handle) => index.byHandle.get(handle)?.name ?? handle,
   };
-  // THE PICKER'S FIRST ENTRY IS AN OBJECT, so the fallback takes its `value`:
-  // the option carries a label for the person reading and a handle for the
-  // engine, and the bare entry here would have sent `[object Object]`.
-  const whose = handle || handles[0]?.value || "";
+  // WHOSE DAY THIS IS, resolved rather than guessed.
+  //
+  // This fell back to `handles[0]` — the ALPHABETICALLY FIRST SEAT — so a
+  // screen titled "My work" rendered a stranger's day to everybody, and the
+  // engine had no way to tell it otherwise because `work_my_work` demanded a
+  // handle and was registered operator-only. The `viewer` question walks the
+  // binding that has always existed: a presented token resolves to an operator
+  // id, and a seat names that id in `contact.crewlet_operator_id`.
+  //
+  // An explicit choice still wins — an operator reading a report's day is a
+  // real thing to do, and the header says whose day it is either way.
+  const viewer = useViewer();
+  const whose = handle || viewer.handle;
   // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board and the sprint
   // report take. `whose` is empty until the chart has loaded, and the engine
   // refuses this question without a handle.
@@ -70,11 +81,38 @@ export function MyWork() {
   });
   const mine = state.data;
 
+  // AND WHAT REACHED THEM, which is a different question from what is on
+  // them. `work_inbox` names the ONE reason of twenty under which each change
+  // found this person — the fact no commercial tracker records — and the
+  // reader behind it has existed, tested and swept on a 365-day retention,
+  // since the tracker did.
+  const inbox = useQuery("work_inbox", whose ? { handle: whose, limit: 12 } : undefined, {
+    enabled: whose !== "",
+    pollMs: 30_000,
+  });
+  const notices = inbox.data?.notices ?? [];
+
   return (
     <>
+      {/* WHOSE DAY, said out loud. An operator reading a report's day is a
+          real thing to do, and a screen called "My work" showing somebody
+          else's without saying so is how a reader acts on work that is not
+          theirs. */}
       <ScreenHead
         title="My work"
         sub="Everything one person is expected to look at — their priorities, what they hold, the questions waiting on them, and what became workable while they were away."
+        badges={
+          whose ? (
+            <Badge
+              outline={whose !== viewer.handle}
+              tone={whose === viewer.handle ? "positive" : undefined}
+            >
+              {whose === viewer.handle
+                ? "yours"
+                : `${index.byHandle.get(whose)?.name ?? whose}’s day`}
+            </Badge>
+          ) : undefined
+        }
         actions={
           <a className="t-link" href={href(["work"])}>
             Tracker →
@@ -94,7 +132,26 @@ export function MyWork() {
         <Coverage answer={mine} />
       </div>
 
-      {!whose && <Empty title="Nobody chosen" hint="A day belongs to somebody." />}
+      {/* THREE STATES, and they are not one empty state. A reader with no
+          token, a reader whose token names no seat, and a reader who simply
+          has not chosen somebody need three different sentences — and only
+          the last of them is a choice anybody can make on this screen. */}
+      {!whose &&
+        (viewer.anonymous ? (
+          <Empty
+            icon="key"
+            title="No credential is presented"
+            hint="A day belongs to a person, and this browser has not said who it is. Set an API token, or pick somebody below to read their day."
+          />
+        ) : viewer.unbound ? (
+          <Empty
+            icon="user"
+            title="This token is not bound to a person"
+            hint={`Give a human seat contact.crewlet_operator_id: ${viewer.operatorID} in the company configuration and this becomes their day. Until then, pick somebody below.`}
+          />
+        ) : (
+          <Empty title="Nobody chosen" hint="A day belongs to somebody." />
+        ))}
 
       {whose && (
         <QueryState error={state.error} loading={state.loading}>
@@ -119,6 +176,85 @@ export function MyWork() {
                 />
                 <Stat label="Unblocked" value={mine.unblocked_recent.length} sub="newly workable" />
               </StatRow>
+
+              {/* WHAT REACHED THEM, and WHY. Every other block on this
+                  screen answers "what is on you"; this one answers "what
+                  happened that you were told about", which is the question
+                  an inbox is. The reason is the row's opening fact because
+                  it is the one nothing else in this category records. */}
+              <Panel
+                title="Reached you"
+                icon="inbox"
+                count={inbox.data?.unread ?? notices.length}
+                padding="none"
+                subtitle={
+                  inbox.data
+                    ? `${notices.length} most recent · counting as primary: ${(
+                        inbox.data.primary_reasons ?? []
+                      )
+                        .map(reasonPhrase)
+                        .join(" · ")}`
+                    : undefined
+                }
+              >
+                <QueryState
+                  error={inbox.error}
+                  loading={inbox.loading}
+                  empty={
+                    notices.length
+                      ? undefined
+                      : {
+                          title: "Nothing has reached them",
+                          hint: "A notice is written when a change names somebody — as an assignee, a mention, a question, a watcher. This person's record has none.",
+                        }
+                  }
+                >
+                  <div className="list">
+                    {notices.map((notice) => (
+                      <div
+                        key={notice.record_id}
+                        className="thread-entry"
+                        style={{ opacity: notice.read ? 0.72 : 1 }}
+                      >
+                        <div className="row gap-1">
+                          {notice.subject_key && (
+                            <a className="mono t-link" href={href(["work", notice.subject_key])}>
+                              {notice.subject_key}
+                            </a>
+                          )}
+                          <span className="truncate t-cell" style={{ flex: 1 }}>
+                            {notice.excerpt || notice.kind.replace(/_/g, " ")}
+                          </span>
+                          {notice.addressed && (
+                            <Badge tone="caution" title="this asks something of them">
+                              asks
+                            </Badge>
+                          )}
+                          <Badge
+                            outline
+                            title={notice.fallback ? "nobody better was found" : undefined}
+                          >
+                            {reasonPhrase(notice.reason)}
+                          </Badge>
+                          <span className="t-caption">{relTime(notice.at, now)}</span>
+                        </div>
+                        {notice.actor && (
+                          <span className="t-caption">
+                            by {chrome.seatName?.(notice.actor) ?? notice.actor}
+                            {notice.actor_kind && notice.actor_kind !== "seat"
+                              ? ` (${notice.actor_kind})`
+                              : ""}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </QueryState>
+                <footer className="panel-foot">
+                  Read and snoozed marks are written by this person's own assistant, through
+                  mark_inbox — the dashboard shows what it recorded.
+                </footer>
+              </Panel>
 
               <Asks rows={mine.asked_of_me} now={now} chrome={chrome} />
               <TaskBlock

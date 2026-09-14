@@ -67,6 +67,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/burndown", what: "work_burndown"},
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
+	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
 	{method: "GET", pattern: "/work/goals", what: "work_goals"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},
@@ -76,6 +77,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
+	// WHO IS ASKING. Not under /work/: the answer is the caller's own
+	// identity rather than anything the tracker holds, and a node with no
+	// native tracker still has a viewer.
+	{method: "GET", pattern: "/viewer", what: "viewer"},
 }
 
 // mountReads registers the named read routes.

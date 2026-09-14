@@ -198,6 +198,11 @@ func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracke
 	return tracker.PersonState{}, nil
 }
 
+func (emptyWork) Inbox(context.Context, tracker.InboxQuery, time.Time) (
+	tracker.InboxAnswer, error) {
+	return tracker.InboxAnswer{}, nil
+}
+
 type emptyPages struct{}
 
 func (emptyPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
@@ -292,5 +297,48 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 		t.Errorf("this build answers %q and no room asks for it — either a "+
 			"reader was lost, or the answer should go with whatever used to "+
 			"call it", kind)
+	}
+}
+
+// AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.
+//
+// The applier records, per change and per recipient, the ONE reason of twenty
+// under which that person heard about it — the fact no commercial tracker
+// keeps. It reaches a screen through `work_inbox`, and a reason the client has
+// no phrase for renders as its own snake_case value: a log line where a
+// sentence belongs, on the surface a person reads first.
+//
+// This is the `rooms` idiom one level down: the client's table is read from
+// ITS OWN SOURCE rather than restated here, so the gate cannot drift towards
+// claiming the pair agree. A phrase the client carries for a reason nothing
+// writes is checked too — that is how a renamed reason leaves a dead entry
+// behind and a live one missing.
+func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile(filepath.Join(dashboardTree, "lib", "reasons.ts"))
+	if err != nil {
+		t.Fatalf("the client's reason table could not be read, so this gate "+
+			"certifies nothing: %v", err)
+	}
+	// The table is `key: { short: …, why: … }`, one per line.
+	entry := regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*\{`)
+	phrased := map[string]bool{}
+	for _, m := range entry.FindAllStringSubmatch(string(source), -1) {
+		phrased[m[1]] = true
+	}
+	if len(phrased) == 0 {
+		t.Fatal("no phrases were found at all, so this gate certifies nothing")
+	}
+	for _, reason := range tracker.Reasons {
+		if !phrased[string(reason)] {
+			t.Errorf("the engine writes %q and the client has no phrase for it, "+
+				"so it renders as its own snake_case value on the one screen a "+
+				"person reads first", reason)
+		}
+		delete(phrased, string(reason))
+	}
+	for leftover := range phrased {
+		t.Errorf("the client phrases %q and nothing writes it — a renamed reason "+
+			"leaves exactly this behind", leftover)
 	}
 }
