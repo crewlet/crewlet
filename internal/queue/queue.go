@@ -253,8 +253,9 @@ type EventQueue interface {
 	// quiesces and must be able to come back, or it holds the seat,
 	// stays attached, and consumes nothing for the rest of its life.
 	//
-	// Does NOT touch pause holds — a seat resuming from a stale-renew
-	// window may still be legitimately paused for a running sandbox.
+	// Does NOT touch pause holds: a seat resuming from a stale-renew
+	// window may still be legitimately held by another subsystem (the
+	// engine's own is the park of a node with no turn engine).
 	Unquiesce(ctx context.Context, topic, group string) (bool, error)
 
 	// Detach closes this process's consumers, leaving the subscription.
@@ -388,10 +389,11 @@ type EventQueue interface {
 
 	// PauseTopic pauses ONE subscription's delivery under a named
 	// reason. Holds are reason-scoped and keyed by the (topic, group)
-	// PAIR: two independent subsystems gate the same inbox — the
-	// sandbox busy gate and the config-divergence shed — and with one
-	// flat set the sandbox resuming its own run would un-gate a node
-	// serving a stale company.
+	// PAIR, so a second subsystem gating the same inbox cannot release
+	// the first one's hold by lifting its own, and a hold on one group
+	// does not gate every other group on a shared subject. The engine
+	// takes one reason today: a seat whose node has no turn engine
+	// pauses before requeuing, so the copies buffer rather than loop.
 	PauseTopic(ctx context.Context, topic, group, reason string) error
 
 	// ResumeTopic releases one reason's hold, flushing when none remain.

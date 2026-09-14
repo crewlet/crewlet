@@ -160,7 +160,7 @@ func TestTheGatesThatKeepEpisodesHonest(t *testing.T) {
 			mutate: func(tn *learning.Turn) { tn.Event.ReviewOutcome = "self_iterate" },
 		},
 		{
-			// The planner recognised the trigger was for somebody else.
+			// The executor recognised the trigger was for somebody else.
 			name: "an explicit skip", want: "no_engagement",
 			mutate: func(tn *learning.Turn) { tn.Event.PlanDecision = types.PlanDecisionSkip },
 		},

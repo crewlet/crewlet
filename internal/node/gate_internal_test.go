@@ -103,8 +103,8 @@ func TestReleasingTwiceFreesOneSlot(t *testing.T) {
 
 // A DRAIN RELEASES EVERY WAITER AT ONCE. They have not called a model or
 // fired a side effect, so they are the one kind of in-flight work that costs
-// nothing to abandon — and running them would put full Plan → Execute →
-// Review turns inside a shutdown that waits indefinitely.
+// nothing to abandon, and running them would put whole turns, executor and
+// reviewer, inside a shutdown that waits indefinitely.
 func TestDrainingReleasesEveryWaiter(t *testing.T) {
 	t.Parallel()
 	g := newGate(1)

@@ -68,8 +68,8 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 		t.Fatalf("%d events for t-1, want 3 (the other turn's must not be here): %v",
 			len(events), got["events"])
 	}
-	// OLDEST FIRST: a turn is read forwards — plan, then execute, then review
-	// — which is the opposite of a feed.
+	// OLDEST FIRST: a turn is read forwards, the executor and then the
+	// reviewer round by round, which is the opposite of a feed.
 	if events[0]["id"] != "a" || events[2]["id"] != "c" {
 		t.Errorf("turn is not oldest-first: %v %v %v",
 			events[0]["id"], events[1]["id"], events[2]["id"])

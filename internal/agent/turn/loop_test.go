@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/turn"
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // fake is a scripted Phases. Each phase reads the round-th entry of its
@@ -449,7 +450,7 @@ func TestTwoIdenticalRoundsAbortAsAStall(t *testing.T) {
 	if res.Decision != phase.Failed {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
-	if res.Breach == nil || res.Breach.Kind != turn.BreachStall {
+	if res.Breach == nil || res.Breach.Kind != types.GuardStall {
 		t.Errorf("breach = %+v, want a stall", res.Breach)
 	}
 	if res.Rounds != 2 {
@@ -494,7 +495,7 @@ func TestRunningOutOfRoundsIsAFailureThatSaysSo(t *testing.T) {
 	if res.Decision != phase.Failed {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
-	if res.Breach == nil || res.Breach.Kind != turn.BreachMaxIterations {
+	if res.Breach == nil || res.Breach.Kind != types.GuardMaxIter {
 		t.Fatalf("breach = %+v, want max_iterations", res.Breach)
 	}
 	if !strings.Contains(res.Breach.Detail, "3 rounds") {
@@ -708,8 +709,8 @@ func TestTheDelegationCapEndsTheTurnBeforeAnyPhaseRuns(t *testing.T) {
 	if res.Decision != phase.Failed {
 		t.Errorf("decision = %s, want failed", res.Decision)
 	}
-	if res.Breach == nil || res.Breach.Kind != turn.BreachDepth {
-		t.Errorf("breach = %+v, want depth", res.Breach)
+	if res.Breach == nil || res.Breach.Kind != types.GuardDepthCap {
+		t.Errorf("breach = %+v, want depth_cap", res.Breach)
 	}
 	if f.workRounds != 0 {
 		t.Error("a phase ran past the depth cap")
@@ -864,7 +865,7 @@ func TestAScheduledTurnStopsAtItsWallClockCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Breach == nil || res.Breach.Kind != turn.BreachScheduledTimeout {
+	if res.Breach == nil || res.Breach.Kind != types.GuardScheduledTimeout {
 		t.Fatalf("breach = %+v, want a scheduled_timeout", res.Breach)
 	}
 	// ROUND ONE ALWAYS RUNS. A cap that refused before any work started

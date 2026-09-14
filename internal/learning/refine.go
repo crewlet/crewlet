@@ -20,7 +20,7 @@ const RefinerSource = "skill_refiner"
 //
 // # The auto path, which was documented and absent
 //
-// `refine_skill` — the manual half — has always existed: a planner that finds
+// `refine_skill`, the manual half, has always existed: an agent that finds
 // a skill wrong rewrites it mid-turn. The AUTO half is what closes the loop
 // without the model having to notice, and it was config only:
 // `auto_refine_on_success` and `auto_refine_on_failure` validated, shipped in

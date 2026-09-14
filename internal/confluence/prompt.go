@@ -151,7 +151,7 @@ func header(b *strings.Builder, n notify.Inbound, parties notify.Parties) {
 // getFullContext is the recon pointer, on the same condition
 // [Prompt.RequiresRecon] answers.
 //
-// The two must agree: the flag tells the Plan phase not to bother filtering
+// The two must agree: the flag tells the prefetch not to bother filtering
 // against a pointer, and this block is what makes the pointer followable.
 func getFullContext(b *strings.Builder, meta map[string]string) {
 	id := meta["page_id"]

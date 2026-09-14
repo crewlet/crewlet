@@ -352,7 +352,7 @@ func TestEveryConstituentSurvivesAtFullFidelity(t *testing.T) {
 
 // What the learning workers embed, so it carries the same supersede rule the
 // digest does.
-func TestTheMergedSalientTextMatchesWhatThePlannerSees(t *testing.T) {
+func TestTheMergedSalientTextMatchesWhatTheExecutorSees(t *testing.T) {
 	merged, _ := notify.Coalesce(prompts(), []types.ExternalNotification{
 		note("ana", "stale description", "issue_updated"),
 		note("bo", "the real question", "comment"),

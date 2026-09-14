@@ -52,7 +52,7 @@ export function Tools() {
     <>
       <ScreenHead
         title="Tools"
-        sub="What the models can actually call. A planner sees only the server names; the tool names below are discovered and activated during a turn."
+        sub="What the models can actually call. An executor is shown the built-in tools and each MCP server by name; a server's own tools are discovered and activated during a turn."
         badges={<Badge outline>{plural(tools.length, "tool")} registered</Badge>}
       />
 

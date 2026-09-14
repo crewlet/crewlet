@@ -60,11 +60,11 @@ func (b *Broker) drain(ctx context.Context, sub *subscription, bypassLinger bool
 // drainPass delivers until the mailbox is empty, nothing can take a delivery,
 // or a batch consumer opens a linger window.
 //
-// Deliverability is re-checked every iteration, so a handler that re-pauses its
-// own subscription — the sandbox busy gate's whole purpose — stops the drain at
-// the next event rather than being run over. Events published during a pass
-// join the tail, so the mailbox stays FIFO instead of being overtaken by new
-// arrivals.
+// Deliverability is re-checked every iteration, so a handler that pauses its
+// own subscription (which is what a seat with no turn engine does before it
+// requeues) stops the drain at the next event rather than being run over.
+// Events published during a pass join the tail, so the mailbox stays FIFO
+// instead of being overtaken by new arrivals.
 func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger bool) {
 	for {
 		b.mu.Lock()
@@ -114,8 +114,8 @@ func (b *Broker) drainPass(ctx context.Context, sub *subscription, bypassLinger 
 // subscription, whether it can take a delivery right now. Every gate belongs to
 // a process: its queue must be started and not drain-paused, and its own hold
 // and quiesce flags must be clear. A subscription-level answer would let one
-// node's sandbox pause, or one node's shutdown, stop a peer from serving the
-// seat it owns.
+// node's pause hold, or one node's shutdown, stop a peer from serving the seat
+// it owns.
 func deliverableMembersLocked(sub *subscription) []*consumer {
 	var out []*consumer
 	for _, m := range sub.members {

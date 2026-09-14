@@ -168,9 +168,8 @@ func (s *suite) runNegativePaths(t *testing.T) {
 	t.Run("a_hold_does_not_resurrect_a_deleted_subscription", func(t *testing.T) {
 		t.Parallel()
 		// DeleteSubscription exists so a decommissioned role's inbox cannot
-		// accumulate undeliverable events for ever. A gate arriving after the
-		// decommission — a sandbox hold or a config shed racing it — must not
-		// undo that.
+		// accumulate undeliverable events for ever. A hold arriving after
+		// the decommission, racing it, must not undo that.
 		//
 		// Found by building the full verb matrix at the DELETED lifecycle
 		// point rather than probing the verb that looked suspicious: six verbs
@@ -189,7 +188,7 @@ func (s *suite) runNegativePaths(t *testing.T) {
 			t.Fatalf("DeleteSubscription = (%v, %v), want (true, nil)", deleted, err)
 		}
 
-		if err := q.PauseTopic(ctx, topic, group, "sandbox"); err != nil {
+		if err := q.PauseTopic(ctx, topic, group, holdReason); err != nil {
 			// Refusing a hold on a pair it does not know is a fine answer.
 			t.Skipf("backend refuses a hold on an unknown pair: %v", err)
 		}

@@ -123,8 +123,8 @@ func (e *Engine) answerColleague(ctx context.Context, c *Company, req Request, r
 // and forwarding it verbatim sends a colleague the wrong thing while looking
 // like an answer:
 //
-//   - `skipped` puts the PLANNER'S REASONING in the artifact — a private "no
-//     one was asking this seat to do anything", which is both internal and
+//   - `skipped` puts the EXECUTOR'S OWN REASONING in the artifact: a private
+//     "no one was asking this seat to do anything", which is both internal and
 //     wrong, since somebody plainly was.
 //   - a guard breach and a failure end the turn with whatever text was in
 //     hand when it stopped, which is a fragment of working-out rather than an

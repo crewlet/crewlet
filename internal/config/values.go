@@ -35,14 +35,14 @@ type ProviderKeys = org.ProviderKeys
 
 // PhaseLLM is the `llm:` field of a seat, which accepts three shapes:
 //
-//	llm: fast                       # one provider for every phase
-//	llm: [fast, backup]             # a fallback chain for every phase
-//	llm: {default: fast, plan: big} # a chain per phase
+//	llm: fast                         # one provider for every phase
+//	llm: [fast, backup]               # a fallback chain for every phase
+//	llm: {default: fast, review: big} # a chain per phase
 //
 // The mapping form exists because the phases have genuinely different
-// shapes of work — planning wants a strong model, the extension judge wants
-// a cheap fast one — and splitting them by hand across seven flat fields is
-// how a config ends up with six of them agreeing and one stale.
+// shapes of work (reviewing wants a strong model, the extension judge wants
+// a cheap fast one), and splitting them by hand across six flat fields is
+// how a config ends up with five of them agreeing and one stale.
 //
 // It decodes to ONE type rather than an `any`, so no consumer type-switches
 // on what the operator happened to write. A phase left unset here falls

@@ -152,10 +152,9 @@ Sarah replies → webhook → notifications inbound → agent inbox → digest t
 
 Two consequences:
 
-1. **The engine never pushes to humans.** Internal task-lifecycle
-   events (`TaskCreated`, `TaskAssigned`, `TaskCompleted`,
-   `TaskDelegated`) exist to wake an *agent* into a turn — a human has
-   no turn to wake. When a recipient resolves to a human seat the event
+1. **The engine never pushes to humans.** The engine's own inbox wakes
+   (`TaskAssigned`, `A2ARequest`, `A2AMessage`) exist to wake an *agent*
+   into a turn, and a human has no turn to wake. When a recipient resolves to a human seat the event
    is skipped quietly: the human is already notified natively by the PM
    tool / Slack where the work lives (a Jira assignment emails the
    assignee; a Slack mention pings them). Inbound external-surface

@@ -32,16 +32,17 @@ import type { FeedRow } from "~/protocol/index.ts";
 /**
  * The categories the engine assigns, as a CLOSED set.
  *
- * Mirrors `internal/events/category.go`. A chip for a category with nothing in
- * it is still useful — it says the category exists and is quiet — which is the
- * opposite of a chip that vanishes because the ring evicted its last row.
+ * Mirrors `internal/events/category.go` exactly, and a Go test there fails when
+ * the two differ. A chip for a category with nothing in it yet is still useful
+ * (it says the category exists and is quiet), which is the opposite of a chip
+ * that vanishes because the ring evicted its last row. A chip for a category
+ * the engine files nothing under is not: `communication` and `knowledge`
+ * outlived the event types they held and offered a filter nothing could match.
  */
 const CATEGORIES = [
   "lifecycle",
   "task",
-  "communication",
   "decision",
-  "knowledge",
   "learning",
   "a2a",
   "notification",

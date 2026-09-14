@@ -44,13 +44,14 @@ type KnowledgeSearcher interface {
 
 // searchKnowledge searches the team knowledge base on demand.
 //
-// It replaces the engine's post-Plan re-fetch seam, which existed for one
+// It replaces the engine's mid-turn re-fetch seam, which existed for one
 // case the three-phase turn could not otherwise serve: a trigger that was a
 // bare POINTER ("PR #42 got a comment") is unsearchable at turn start, so the
 // turn-start block was skipped and the engine re-ran the search between the
-// phases, keyed on the plan summary. With one loop there is nothing between
-// the phases and nothing to key on — and there no longer needs to be: the
-// agent that just did the recon knows what to search for, and asks.
+// planning and acting phases, keyed on the plan the first had written. With
+// one phase deciding and acting there is nothing between them and nothing to
+// key on, and there no longer needs to be: the agent that just did the recon
+// knows what to search for, and asks.
 //
 // BEST EFFORT, like every other read of the seam: a backend that is slow,
 // unreachable or unconfigured yields an empty result and a sentence saying

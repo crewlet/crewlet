@@ -124,7 +124,7 @@ func (w *Episodist) Skip(t Turn) string {
 		return "non_terminal"
 	}
 	if !t.Engaged() {
-		// The planner opted out, or was coerced to direct and called
+		// The turn opted out, or was coerced to direct and called
 		// nothing. There is no work here to remember, and a row saying
 		// otherwise would weight every later recall with a turn in which
 		// the seat did nothing.

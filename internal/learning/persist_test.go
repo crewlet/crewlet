@@ -805,7 +805,7 @@ func TestTheDeciderSkipsTheTurnsItMustNotClassify(t *testing.T) {
 	}{
 		{"mid-turn", func(x *learning.Turn) { x.Event.ReviewOutcome = "self_iterate" }, "non_terminal"},
 		{"no outcome at all", func(x *learning.Turn) { x.Event.ReviewOutcome = "" }, "non_terminal"},
-		{"already self-persisted in Plan",
+		{"already self-persisted in an older build's planning phase",
 			func(x *learning.Turn) { x.Event.PlanToolSequence = []string{"reflect_and_persist"} }, "self_persisted"},
 		{"already self-persisted in Execute",
 			func(x *learning.Turn) { x.Event.ToolSequence = []string{"reflect_and_persist"} }, "self_persisted"},

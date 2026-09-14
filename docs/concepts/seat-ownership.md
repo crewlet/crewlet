@@ -220,6 +220,7 @@ record rather than from `err != nil`:
 |---|---|
 | nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
+| the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
 
 The proof is deliberately narrow, because a true answer *spends* a trigger.
 A call counts only when it is MCP-backed and not positively annotated
@@ -233,16 +234,22 @@ every turn that closed a single round.
 
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
-behind it will not come back, and why.
+behind it will not come back, and why. A panic also publishes
+`turn.guard_breach(kind="unhandled_exception")`, which is what puts the seat in
+the dashboard's `afk` state, and the log line that recovered it
+(`turn_phase_panicked`, `dispatch_panicked` or `sandbox_resume_panicked`)
+carries the stack.
 
 The same decision guards the other path a turn can arrive by. A **resumed**
 turn re-enters the executor's suspended conversation, so a redelivery repeats
 every call the resumed round made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
-acting therefore leaves its run row claimed, which is what stops a retry
-winning the flip; every other resume failure still un-claims and comes back,
-because the suspended conversation is the expensive thing there and a resume
-that proved nothing has lost nothing by trying again.
+acting, or that panicked, therefore keeps its claim, which is what stops a retry
+winning the flip, and its run is settled like one that finished: the box is
+reclaimed and the seat is free for its next turn. Every other resume failure
+still un-claims and comes back, because the suspended conversation is the
+expensive thing there and a resume that proved nothing has lost nothing by
+trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the
@@ -293,7 +300,7 @@ Single node or fleet, it is armed the same way. With one node no peer is waiting
 
 A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
 
-It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused, and a completion riding it would queue behind the very pause it exists to lift.
+It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` every inbox delivery is requeued, and a completion riding it would be requeued behind the wait it exists to end.
 
 The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 
@@ -352,9 +359,9 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 ## What ownership looks like from outside
 
-`GET /health` reports a `seats` block per node: seats held, the computed capacity, the live node count, the last claim, the last loss, and the protocol floor when an older peer is blocking claims. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
+`GET /health` reports the seat handles the answering node holds as `seats`. The fleet-wide view, every lease with its owner, epoch and remaining time, is `GET /fleet`, which reads the lease table rather than one node. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
 
-`unproven_seconds` is the number to watch — a map of seat to how long its teardown has been failing. Alert on the **duration**, not on `unproven` itself: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running.
+`unproven_seconds` on `GET /health` is the number to watch: a map of seat to how long its teardown has been failing, present only when one is. Alert on the **duration**, not on the field being present: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running. The `seat_still_unproven` log line re-raises the same alarm every twenty heartbeats.
 
 ## Single node
 

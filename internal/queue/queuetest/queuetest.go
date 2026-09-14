@@ -461,6 +461,15 @@ func startQueue(ctx context.Context, t *testing.T, q queue.EventQueue) queue.Eve
 	return q
 }
 
+// holdReason is the pause-hold reason the cases take when one reason is all a
+// case needs.
+//
+// The engine's own, so a case reads as the hold a node actually takes: a seat
+// on a node with no turn engine pauses its inbox before requeuing, and that is
+// the only reason the engine passes to PauseTopic today. The contract is about
+// reasons in general, and a case that needs two uses a second one beside it.
+const holdReason = "no_turn_engine"
+
 // --- timing budgets -------------------------------------------------------
 
 const (

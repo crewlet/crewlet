@@ -95,22 +95,20 @@ const ToolName = "delegate"
 // It cannot widen anything: it returns prompt text and touches nothing.
 const skillLoaderTool = "load_tool_skill"
 
-// The classified reasons a child stopped short. They ride the Result and
-// become the phase event's error_kind, which is what a dashboard groups on —
-// so they are wire strings, not an internal enum.
+// The reasons [stopReason] can give for a context that ended under a child,
+// which [classify] turns into the child's [Status].
+//
+// They never reach the wire themselves. What a dashboard groups on is the
+// Status, which becomes the worker's phase event error_kind; these only tell
+// classify which of two statuses a dead context means. There were three more,
+// a budget, a panic and a catch-all, and nothing produced them: a refused
+// charge is read off the loop's own error, and a contained panic is a
+// [StatusFailed] by design, with the panic's value as its message.
 const (
-	// KindTimeout — the child's own cap or the batch's expired.
+	// KindTimeout: the child's own cap or the call's expired.
 	KindTimeout = "timeout"
-	// KindBudget — the fractional slice refused a charge.
-	KindBudget = "budget_exhausted"
-	// KindPanic — something in the child's stack panicked and was
-	// contained.
-	KindPanic = "panic"
-	// KindCancelled — the parent turn was torn down under it.
+	// KindCancelled: the parent turn was torn down under it.
 	KindCancelled = "cancelled"
-	// KindFailed — anything else the loop returned: a provider that would
-	// not answer, a surface that broke.
-	KindFailed = "failed"
 )
 
 // ScopeSubagent is the budget scope a refused sub-agent charge names.
@@ -144,11 +142,11 @@ var controlDenylist = map[string]struct{}{
 	ToolName: {},
 
 	// Launching a detached coding run is engine control keyed to the
-	// PARENT: the pending row carries the parent's turn id and the
-	// completion pauses the parent seat's inbox. A sub-agent's loop cannot
-	// suspend, so the parent turn would finish normally, never persist an
-	// execute state, and the seat would stay deaf for the whole coding run
-	// with nothing to resume into.
+	// PARENT: the pending row carries the parent's turn id, and the
+	// completion re-enters the parent's own suspended executor. A
+	// sub-agent's loop cannot suspend, so the parent turn would finish
+	// normally, never persist an execute state, and the run would come back
+	// to a seat with nothing to resume into.
 	//
 	// The annotation filter below happens to catch it too — a coding run is
 	// open-world, and internal/agent/builtin says so. Named here anyway,
@@ -802,8 +800,8 @@ func stopReason(ctx context.Context) (kind, reason string) {
 		return KindTimeout, errCallDeadline.Error()
 	default:
 		// The parent turn was torn down. NOT a timeout: nothing exceeded a
-		// cap, and a planner told "timed out" would helpfully retry with a
-		// smaller task against an engine that is shutting down.
+		// cap, and an executor told "timed out" would helpfully retry with
+		// a smaller task against an engine that is shutting down.
 		return KindCancelled, ledger.Elide(cause.Error(), errorLimit)
 	}
 }

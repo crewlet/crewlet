@@ -588,7 +588,7 @@ func TestAPruneThatCannotEnumerateDeletesNothing(t *testing.T) {
 }
 
 // AN ORPHAN THAT WILL NOT DELETE IS REPORTED, because it stays in every
-// planner's tool-skill catalogue until somebody removes it by hand.
+// executor's tool-skill catalogue until somebody removes it by hand.
 func TestAnUndeletableOrphanIsReported(t *testing.T) {
 	t.Parallel()
 	w := newWiki(t, "TS")

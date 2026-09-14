@@ -14,7 +14,7 @@ import "strings"
 // answer. It is wrong here: a conversation's next turn arrives against a
 // thread that has MOVED, and replaying raw prior context invites acting on
 // state that is no longer true. So this carries the same things the iteration
-// ledger carries — plan, calls, artifact, verdict — under the same budgets,
+// ledger carries (intent, calls, artifact, verdict) under the same budgets,
 // plus the two facts a cross-turn reader needs that a within-turn one does
 // not: who said what to trigger it, and what the seat finally replied.
 type Session struct {
@@ -203,7 +203,7 @@ func RenderHistory(entries []Session, opts HistoryOptions) string {
 
 // renderSession renders one entry as prose.
 //
-// Second person throughout ("You planned", "You replied") because the reader
+// Second person throughout ("You set out to", "You replied") because the reader
 // is the same seat on a later turn: the block is its own past, not a report
 // about someone else.
 func renderSession(e Session) string {

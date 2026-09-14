@@ -36,7 +36,7 @@ const ProfilerSource = "counterparty_profiler"
 // separates LastUpdatedAt (every observation) from LastCorroboratedAt (only
 // a non-empty patch), and a counterparty seen constantly whose traits have
 // stopped moving is a different fact from one not seen at all — which is
-// exactly what the Plan-phase prefetch demotes on.
+// exactly what the turn-start prefetch demotes on.
 type Profiler struct {
 	models       Models
 	counterparts *Counterparties

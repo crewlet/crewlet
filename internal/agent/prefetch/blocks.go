@@ -81,8 +81,8 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request) string {
 	if !ok {
 		// NO FALLBACK TO RECENCY. Episode recall's whole claim is "this
 		// resembles what you are doing now"; the three most recent turns
-		// carry no such claim, and a planner told they are similar work
-		// will treat them as precedent.
+		// carry no such claim, and an executor told they are similar
+		// work will treat them as precedent.
 		return ""
 	}
 	hits, err := f.src.Episodes.Recall(ctx, learning.RecallQuery{
@@ -155,7 +155,7 @@ func renderEpisode(hit learning.Hit) string {
 // triggered the turn.
 //
 // ONE BLOCK PER DISTINCT SENDER. A coalesced trigger is several people
-// speaking, and rendering only the latest would hand the planner a profile
+// speaking, and rendering only the latest would hand the executor a profile
 // of whoever happened to speak last while it answers all of them.
 func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 	if f.src.Counterparties == nil || r.Seat == nil || len(r.Senders) == 0 {
@@ -201,7 +201,7 @@ func (f *Fetcher) counterpartyProfile(ctx context.Context, r Request) string {
 //
 // THE SUBJECT HEADER IS NOT OPTIONAL. This block arrives with no
 // conversational context around it, so a list of traits with no name on it
-// tells the planner what somebody prefers without saying who — which is
+// tells the executor what somebody prefers without saying who, which is
 // worse than nothing, because it invites applying it to whoever is asking.
 func renderProfile(p learning.Profile) string {
 	var b strings.Builder

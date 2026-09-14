@@ -152,7 +152,7 @@ type Call struct {
 //
 // active names the tools offered to the model up front. Everything else in the
 // snapshot is REACHABLE but not offered — that is what discovery is for, and
-// it is why a planner is not handed the whole of a large MCP server's
+// it is why an executor is not handed the whole of a large MCP server's
 // catalogue in its prompt.
 func NewSurface(phase string, universe Snapshot, active []string) *Surface {
 	s := &Surface{phase: phase, universe: universe}

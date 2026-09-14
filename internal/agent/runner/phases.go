@@ -1058,13 +1058,15 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	// are in its snapshot. The closure is read at call time, by which point
 	// the surface exists.
 	var surface *tools.Surface
-	for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
-		var err error
-		snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
-		if err != nil {
-			return nil, fmt.Errorf("runner: %s: %w", ph, err)
+	if discovers(ph) {
+		for _, tool := range DiscoveryTools(func() *tools.Surface { return surface }) {
+			var err error
+			snapshot, err = snapshot.With(tools.Entry{Tool: tool, Origin: tools.OriginBuiltin})
+			if err != nil {
+				return nil, fmt.Errorf("runner: %s: %w", ph, err)
+			}
+			active = append(active, tool.Name())
 		}
-		active = append(active, tool.Name())
 	}
 
 	// The sub-agent spawner, on the same closure and for the same reason:
@@ -1110,6 +1112,21 @@ func (r *Runner) surfaceWith(ctx context.Context, ph phase.Phase, round int,
 	r.guard = guard.skills()
 	r.mu.Unlock()
 	return surface.WithGuard(guard.tools()), nil
+}
+
+// discovers reports whether a phase is offered the discovery pair,
+// list_mcp_server_tools and activate_tool.
+//
+// The executor (fresh or resumed) and onboarding are, because their prompts
+// carry the slim catalogue that names each MCP server and tells the model to
+// discover its tools. The reviewer is not, and must not be: it judges the
+// round from the evidence in front of it, and its prompt promises it no domain
+// tools. activate_tool reaches every tool in the registry snapshot, MCP writes
+// included, so a reviewer offered the pair could post to a thread or edit a
+// ticket in the middle of grading whether the executor should have. Until this
+// gate, surfaceWith added the pair to every phase, the reviewer's included.
+func discovers(ph phase.Phase) bool {
+	return ph == phase.Execute || ph == phase.Onboarding
 }
 
 // armedGuard is one built gate: the concrete guard for the runner's own

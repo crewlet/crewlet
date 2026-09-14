@@ -210,8 +210,8 @@ when it moved to the shared `budgets` slot:
 what the fleet has to agree on is "may I start", and nothing more. Its
 `outcome` is `fired` or `skipped_catchup`; the downstream turn result
 (done / failed / timed-out) lives in the normal turn telemetry
-(`TaskStarted` / `TaskCompleted` / `TaskFailed`, `TurnGuardBreach`) keyed
-by the same trace.
+(`AgentTurnCompleted`, `TurnCompleted`, and `TurnGuardBreach` when a guard
+such as the wall-clock cap ends it) keyed by the same trace.
 
 > A node with no database still schedules correctly — the guarantee lives
 > in the coordination store now, not in the node's file. What such a node

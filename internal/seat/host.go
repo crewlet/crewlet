@@ -499,8 +499,8 @@ func (h *Host) Unproven() []string {
 	return slices.Sorted(maps.Keys(h.undead))
 }
 
-// UnprovenAges is how long each unproven seat has been stranded, for
-// /health.
+// UnprovenAges is how long each unproven seat has been stranded, served as
+// /health's `unproven_seconds`.
 //
 // Existence is normal for a moment — a release that fails once and succeeds
 // on the next heartbeat is a working system. Duration never is, so this is

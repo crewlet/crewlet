@@ -24,7 +24,7 @@ import (
 //
 // It is the DETERMINISTIC half of the learning stack: it runs whether or not
 // the turn's own model remembered to call reflect_and_persist, so a durable
-// fact does not fall on the floor because a planner forgot. What to keep is
+// fact does not fall on the floor because an agent forgot. What to keep is
 // still a model's judgement — compressing a turn into a fact that is useful
 // next week needs one — so the pass is a single tool-less completion on the
 // seat's auxiliary (cheap) model, and its answer is one of four tiers:
@@ -67,7 +67,7 @@ type Models interface {
 // seat already knows in front of it, the classifier re-derives the same
 // preference from every turn that counterparty appears in, and a diary fills
 // with paraphrases of one fact that then crowd the real ones out of the
-// Plan-phase digest.
+// turn-start digest.
 type DiaryStore interface {
 	Write(ctx context.Context, e DiaryEntry) error
 	Recent(ctx context.Context, agentID string, now time.Time, limit int) ([]DiaryEntry, error)

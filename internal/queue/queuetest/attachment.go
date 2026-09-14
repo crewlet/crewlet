@@ -91,7 +91,7 @@ func (s *suite) runAttachment(t *testing.T) {
 		q := s.start(ctx, t)
 		j := newJournal()
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
-		if err := q.PauseTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
+		if err := q.PauseTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		if _, err := q.Detach(ctx, "seat.inbox", "grp"); err != nil {
@@ -161,12 +161,13 @@ func (s *suite) runAttachment(t *testing.T) {
 	t.Run("unquiesce_leaves_pause_holds_alone", func(t *testing.T) {
 		t.Parallel()
 		// A seat resuming from a stale-renew window may still be
-		// legitimately paused for a running sandbox; lifting that would
-		// deliver into a suspended turn.
+		// legitimately held (on a node with no turn engine, by the park's
+		// own pause); lifting that would restart the requeue loop the hold
+		// exists to stop.
 		q := s.start(ctx, t)
 		j := newJournal()
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
-		if err := q.PauseTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
+		if err := q.PauseTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		if _, err := q.Quiesce(ctx, "seat.inbox", "grp"); err != nil {
@@ -179,8 +180,8 @@ func (s *suite) runAttachment(t *testing.T) {
 		}
 
 		if holds := s.caps.PauseHolds; holds != nil {
-			if got := holds(q, "seat.inbox", "grp"); !equalStrings(got, []string{"sandbox"}) {
-				t.Fatalf("pause holds after Unquiesce = %v, want [sandbox]", got)
+			if got := holds(q, "seat.inbox", "grp"); !equalStrings(got, []string{holdReason}) {
+				t.Fatalf("pause holds after Unquiesce = %v, want [%s]", got, holdReason)
 			}
 		}
 		j.staysAt(t, 0, "Unquiesce lifted a pause hold it does not own")
@@ -307,8 +308,8 @@ func (s *suite) runFleet(t *testing.T) {
 	t.Run("a_clients_pause_does_not_gate_its_peers", func(t *testing.T) {
 		t.Parallel()
 		// A hold describes ONE node's attachment. Gating the subscription
-		// instead would let one node's sandbox pause — or one node's
-		// shutdown — stop a peer from serving the seat it owns.
+		// instead would let one node's pause, or one node's shutdown, stop a
+		// peer from serving the seat it owns.
 		peer := s.needPeer(t)
 		a := s.start(ctx, t)
 		b := startQueue(ctx, t, peer(t, a))
@@ -319,13 +320,13 @@ func (s *suite) runFleet(t *testing.T) {
 			return queue.Ack()
 		})
 		subscribe(ctx, t, b, "seat.inbox", "grp", recordingHandler(gotB))
-		if err := a.PauseTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
+		if err := a.PauseTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 
 		if holds := s.caps.PauseHolds; holds != nil {
-			if got := holds(a, "seat.inbox", "grp"); !equalStrings(got, []string{"sandbox"}) {
-				t.Fatalf("the pausing client's holds = %v, want [sandbox]", got)
+			if got := holds(a, "seat.inbox", "grp"); !equalStrings(got, []string{holdReason}) {
+				t.Fatalf("the pausing client's holds = %v, want [%s]", got, holdReason)
 			}
 			if got := holds(b, "seat.inbox", "grp"); len(got) != 0 {
 				t.Fatalf("a peer inherited the hold: %v", got)

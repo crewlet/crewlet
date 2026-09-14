@@ -268,7 +268,7 @@ func (s Sources) a2aChannels(ctx context.Context, _ Params) (any, error) {
 
 // knowledgeSearch runs the company's own knowledge search.
 //
-// Deliberately identical to what a seat's Plan phase does: same seam, same
+// Deliberately identical to what a seat's own turn does: same seam, same
 // backend, same live read with no local copy. That is the point of the screen —
 // an operator asking "what would an agent find" gets the answer an agent would
 // get, not an answer from an index somebody would have to keep fresh.
@@ -412,7 +412,7 @@ func (r KnowledgeReason) Valid() bool {
 	return false
 }
 
-// KnowledgeHitLimit bounds one search. It matches what a Plan-phase prefetch
+// KnowledgeHitLimit bounds one search. It matches what a turn-start prefetch
 // asks for, so the screen and the agent see the same top slice.
 const KnowledgeHitLimit = 10
 

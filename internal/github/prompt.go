@@ -44,7 +44,7 @@ func (Prompt) Source() string { return Backend }
 //
 // A COMMENT IS NOT IN HERE, and that is the distinction the set encodes: a
 // comment's body IS what was said, so the trigger is the content and the
-// Plan-phase filters have something real to filter against. A
+// turn-start filters have something real to filter against. A
 // CHANGES-REQUESTED REVIEW is in here even though it usually carries a body,
 // because the body says WHAT is wrong and the diff comments say WHERE — and
 // acting on the summary alone is how a review round produces a change that

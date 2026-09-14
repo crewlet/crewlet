@@ -58,7 +58,7 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	// ONE BULLET PER TOOL, description whole. A real server publishes
 	// paragraphs, and the entry that used to be cut to its first line was
 	// cut exactly where the usable part starts: "Accepts a cursor for
-	// paging" is what a planner needs to call the tool correctly, and this
+	// paging" is what an executor needs to call the tool correctly, and this
 	// listing is the only place it is ever shown. Continuation lines are
 	// indented so the shape survives without paying for it in content.
 	if !strings.Contains(listing, "Accepts a cursor") {
@@ -77,7 +77,7 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 		t.Errorf("the listing has %d bullets for 2 tools:\n%s", bullets, listing)
 	}
 	// ONE server's tools, not every MCP tool. A listing that ignored the
-	// argument would hand a planner the wall of text discovery exists to
+	// argument would hand an executor the wall of text discovery exists to
 	// avoid.
 	if strings.Contains(listing, "jira_create") {
 		t.Errorf("the listing for slack included another server's tools:\n%s", listing)
@@ -246,5 +246,43 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 	}
 	if got := replies["activate_tool"]; !strings.Contains(got, "Name a tool") {
 		t.Errorf("an empty tool name reported %q", got)
+	}
+}
+
+// THE REVIEWER CANNOT DISCOVER A TOOL.
+//
+// It grades the round from the evidence in front of it, and its prompt promises
+// it no domain tools. activate_tool reaches every tool in the registry, MCP
+// writes included, so a reviewer offered the discovery pair could post to the
+// thread in the middle of judging whether the executor should have. Every
+// phase surface used to get the pair, the reviewer's included. A reviewer that
+// asks for activate_tool anyway is refused, and slack_post never reaches it.
+func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{
+		execute: []llm.Completion{submitWork(t)},
+		review: []llm.Completion{
+			{ToolCalls: []llm.ToolCall{{ID: "a", Name: runner.ActivateTool,
+				Arguments: map[string]any{"name": "slack_post"}}}},
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
+		},
+	})
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	reqs := prov.requestsFor("review")
+	if len(reqs) < 2 {
+		t.Fatalf("the reviewer made %d model calls, want the refused activation and its answer", len(reqs))
+	}
+	for i, req := range reqs {
+		if got := toolNames(req.Tools); !slices.Equal(got, []string{runner.SubmitReviewTool}) {
+			t.Errorf("review call %d offered %v, want only %s: the discovery pair "+
+				"puts every tool in the registry within the reviewer's reach",
+				i+1, got, runner.SubmitReviewTool)
+		}
 	}
 }

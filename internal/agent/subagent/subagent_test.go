@@ -867,7 +867,7 @@ func TestACancelledParentIsNotReportedAsATimeout(t *testing.T) {
 	defer cancel()
 	go func() { <-started; cancel() }()
 	res := oneOn(ctx, t, cfg, request("read_file"))
-	// A torn-down turn is not an exceeded cap. A planner told "timed out"
+	// A torn-down turn is not an exceeded cap. An executor told "timed out"
 	// helpfully retries with a smaller task against an engine that is
 	// shutting down.
 	if res.Status != subagent.StatusCancelled || res.TimedOut() {
@@ -1279,7 +1279,7 @@ func TestAChildBeyondMaxParallelSaysItNeverStarted(t *testing.T) {
 				continue
 			}
 			queued++
-			// "Never started" is the one failure a planner can retry
+			// "Never started" is the one failure an executor can retry
 			// unchanged, unlike a child that burned its budget.
 			// ITS OWN STATUS, not a timeout: nothing this worker did ran
 			// out of time, and a parent told "timed out" retries with a

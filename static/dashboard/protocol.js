@@ -366,6 +366,38 @@ var FALLBACK_MS = 5e3;
 * screen shows an error rather than an eternal skeleton.
 */
 var QUERY_TIMEOUT_MS = 1e4;
+/**
+* Every {@link QueryErrorCode}, as a value a rejection's message can be tested
+* against.
+*
+* A Record over the union rather than a list beside it: the compiler refuses a
+* key the union lacks and a member left out, so the two cannot drift. The
+* union itself is pinned to the engine's own codes by a Go test in
+* `internal/api/stream` that reads it.
+*/
+var QUERY_ERROR_CODES = {
+	unknown_query: true,
+	unauthorized: true,
+	query_failed: true,
+	bad_params: true,
+	not_found: true,
+	unavailable: true,
+	timeout: true,
+	closed: true
+};
+/**
+* The query error code `value` is, or null for anything else: no failure at
+* all, or prose a screen wrote itself.
+*
+* Branching on the narrowed value is what keeps a screen's handling inside the
+* vocabulary. A comparison against a code the union lacks, such as the
+* `no_event_store` the engine never sent, is then a type error rather than a
+* branch that can never run. `Object.hasOwn`, because `in` would also accept
+* `toString` and every other name an object inherits.
+*/
+function queryErrorCode(value) {
+	return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? value : null;
+}
 var LiveSocket = class {
 	store;
 	sock = null;
@@ -424,7 +456,7 @@ var LiveSocket = class {
 	* in flight when the socket dropped is simply re-sent on reconnect.
 	*
 	* Rejects with an Error carrying the server's machine-readable code
-	* (`not_found`, `unauthorized`, `no_event_store`, …), `timeout` if a sent
+	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
 	* query goes unanswered, or `closed` if the client shuts down.
 	*/
 	query(what, params) {
@@ -622,7 +654,7 @@ var LiveSocket = class {
 			case "result":
 				this.settle(msg.id, null, msg.data);
 				break;
-			case "error": this.settle(msg.id, msg.error || "error", null);
+			case "error": this.settle(msg.id, msg.error || "query_failed", null);
 		}
 	}
 	settle(id, error, data) {
@@ -830,4 +862,4 @@ var rest = {
 	del: (path, body, headers) => body === void 0 ? send("DELETE", path, void 0, void 0, headers) : json("DELETE", path, body, headers)
 };
 //#endregion
-export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, requestToken, rest, storeToken };
+export { LiveSocket, MAX_EVENTS, REQUEST_TIMEOUT_MS, RestError, Store, api, apiToken, clearToken, onTokenChanged, onTokenRequested, queryErrorCode, requestToken, rest, storeToken };
