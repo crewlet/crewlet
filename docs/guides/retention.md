@@ -290,7 +290,12 @@ make.
 maintenance window**, and the reason is not caution:
 
 - A resize is decided against the usage the log is at, and a publisher makes
-  that a moving quantity.
+  that a moving quantity. The verb decides it before the window opens: a
+  target at or below what the log already holds is refused, naming both,
+  because that ceiling would refuse every append the moment it applied.
+  Anything above the usage is fair, including a target under the current
+  ceiling, which is how a log created larger than its budget gives the
+  reservation back.
 - What retires a configuration request the broker has already queued is the
   **broker process restarting**, not a client closing its connection. So an
   apply whose outcome is unknown can only be resolved by everything restarting.

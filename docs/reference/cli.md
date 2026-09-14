@@ -751,6 +751,11 @@ There the engine does not run the broker and cannot establish who else holds a
 connection to it, so the assertion is yours in your own words rather than a
 check that quietly proves nothing.
 
+A target at or below what the log already holds is refused before the window
+opens, naming both numbers: that ceiling would refuse every append the moment
+it applied. A target under the current ceiling and above the usage is
+accepted, and is how a log gives a reservation back.
+
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
 from `maintenance` it opens, baselines and applies; run from `seal` it collects
 the barrier, seals, verifies and confirms. It prints the phase it reached and

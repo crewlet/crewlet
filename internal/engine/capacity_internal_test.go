@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -412,7 +413,7 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 
 	_, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, 1<<32)
+	}, jetstream.LogStats{MaxBytes: 1 << 32})
 	if err == nil {
 		t.Fatal("the exclusion was taken while a node held an admission")
 	}
@@ -421,6 +422,49 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 	}
 	if op, found, _ := fleet.Maintenance(ctx, "CREWLET_TRACKER_LOG"); found {
 		t.Fatalf("a window was opened anyway: %+v", op)
+	}
+}
+
+// A TARGET THE LOG ALREADY HOLDS MORE THAN IS REFUSED BEFORE THE WINDOW OPENS.
+//
+// A resize is decided against the usage the log is at, which is the whole
+// reason it runs with nothing publishing, and nothing decided against it: a
+// target under what the log held was carried through three restarts to a log
+// that refused every append the moment it applied. Lowering a ceiling is a real
+// gesture (a log created larger than its budget allows is the common case), so
+// the line is drawn at the usage and nowhere else.
+func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
+	ctx := context.Background()
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	current := jetstream.LogStats{Bytes: 5 << 30, MaxBytes: 8 << 30}
+	for _, target := range []uint64{4 << 30, 5 << 30} {
+		_, err := e.openCapacity(ctx, CapacityRequest{
+			Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: target, By: "ops-3",
+		}, current)
+		if err == nil {
+			t.Fatalf("a %d-byte target on a log holding %d bytes was accepted",
+				target, current.Bytes)
+		}
+		if !strings.Contains(err.Error(), "holds 5368709120 bytes") {
+			t.Errorf("the refusal does not say what the log holds: %v", err)
+		}
+		if op, found, _ := fleet.Maintenance(ctx, "CREWLET_PAGES_LOG"); found {
+			t.Fatalf("a window was opened anyway: %+v", op)
+		}
+	}
+
+	// LOWERING PAST THE USAGE IS NOT LOWERING PAST THE CEILING: a target
+	// under the old ceiling and above what the log holds is the gesture
+	// that reclaims a reservation.
+	op, err := e.openCapacity(ctx, CapacityRequest{
+		Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: 6 << 30, By: "ops-3",
+	}, current)
+	if err != nil {
+		t.Fatalf("a target above the usage and under the ceiling was refused: %v", err)
+	}
+	if op.OriginalMaxBytes != current.MaxBytes {
+		t.Errorf("the window recorded an original ceiling of %d, want %d",
+			op.OriginalMaxBytes, current.MaxBytes)
 	}
 }
 
@@ -444,7 +488,7 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 
 	held, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-4",
-	}, 1<<32)
+	}, jetstream.LogStats{MaxBytes: 1 << 32})
 	if err != nil {
 		t.Fatalf("the same target did not resume the open operation: %v", err)
 	}
@@ -454,7 +498,7 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 
 	_, err = e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 34, By: "ops-4",
-	}, 1<<32)
+	}, jetstream.LogStats{MaxBytes: 1 << 32})
 	if err == nil {
 		t.Fatal("an open operation was retargeted, which makes a later " +
 			"mismatch unreadable")
@@ -478,7 +522,7 @@ func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *te
 
 	op, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, 1<<32)
+	}, jetstream.LogStats{MaxBytes: 1 << 32})
 	if err != nil {
 		t.Fatalf("openCapacity: %v", err)
 	}
@@ -502,7 +546,7 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 
 	_, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, 1<<32)
+	}, jetstream.LogStats{MaxBytes: 1 << 32})
 	if err == nil {
 		t.Fatal("a create whose outcome was never established reported success")
 	}
