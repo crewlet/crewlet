@@ -78,6 +78,21 @@ TEST_TIMEOUT := 30m
 
 GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 
+# THE SKIP GATE, on the end of both test pipelines.
+#
+# `go test -json` is what makes a skipped SUBTEST visible at all — plain output
+# says nothing about one without -v, and the suite job has never passed it, so
+# every skip this repository has ever taken was absent from every CI log. The
+# gate renders the stream back to ordinary output as it reads, so a log looks
+# unchanged, and then fails on a skip nothing declared. `go doc ./internal/skipgate`
+# has the two defects that were found by measuring rather than by reading.
+#
+# It also REPORTS THE RUN'S OWN VERDICT, which is load-bearing in a pipeline:
+# make sees the last command's status, so `go test`'s exit code is gone by the
+# time the gate runs and reporting failures is the gate's job. -v is dropped
+# from test-solo because -json already carries every line.
+SKIPGATE := $(GO) run ./internal/skipgate
+
 # The two halves of the suite, COMPUTED rather than listed.
 #
 # NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
@@ -325,7 +340,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # looser than it, just in the direction nobody notices.
 test: ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition is empty" >&2; exit 1; }
-	$(GOTEST) $(PARALLEL_PKGS)
+	$(GOTEST) -json $(PARALLEL_PKGS) | $(SKIPGATE)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -335,7 +350,7 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # The old target ran one package and did not need it.
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
-	$(GOTEST) -p 1 $(SOLO_PKGS) -v
+	$(GOTEST) -json -p 1 $(SOLO_PKGS) | $(SKIPGATE)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.

@@ -144,6 +144,31 @@ start, no environment variable to set and no compose profile to remember:
 Some suites need something the machine may not have and **skip silently
 without it** — a green run has simply not exercised them.
 
+**This is enforced now, and it was not.** Both test targets pipe
+`go test -json` through `internal/skipgate`, which renders the stream back to
+ordinary output and then fails the run on a skip nothing declared. Every
+allowed skip is an entry in `internal/skipgate/allowed.go` carrying a reason
+and a `When`: `Always` for a structural one — a backend that cannot do the
+thing, a driver capability that has not landed — which is ALSO reported when it
+stops firing, because a structural skip that stopped means the world changed;
+`Environment` for one that depends on what the machine has, which is only
+checked in the undeclared direction.
+
+Adding an entry is the decision, so it lands in a diff somebody reviews. Before
+you add one, check the case is covered somewhere: the two defects this gate was
+written after were both cases that ran NOWHERE, and each looked like an
+ordinary capability skip from inside the one run that saw it.
+
+Why this had to exist: `go test` prints nothing about a skipped subtest without
+`-v`, and the suite job has never passed it, so every skip this repository has
+taken was absent from every CI log. Under that, an API gate that read a
+dashboard path the React rewrite deleted certified nothing for the whole of
+that rewrite while reporting a pass — and a queue conformance case skipped on
+*both* backends, so it ran on neither. The rule was a checkbox in the pull
+request template; it is a build failure now.
+
+What follows are the prerequisites that legitimately vary by machine.
+
 - **`node`** runs `internal/e2e`'s client replay: the Go suite drives a real
   company, captures every frame its WebSocket pushed, and replays those exact
   bytes through the dashboard's own protocol module under plain `node`. That
