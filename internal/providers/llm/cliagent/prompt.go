@@ -198,6 +198,11 @@ const systemPromptFile = "crewlet-system-prompt.txt"
 // its system prompt as the user turn.
 const promptFileName = "crewlet-prompt.txt"
 
+// usageFileName is where a [Profile.UsageFileArgs] report lands, beside the
+// other two and for the same reason: it is written by the CLI rather than by
+// this package, so it is one more thing a call must not leave behind.
+const usageFileName = "crewlet-usage.json"
+
 // promptArgs renders a file-mode profile's prompt argv, writing the text to a
 // private file in the per-call working directory.
 //
@@ -239,19 +244,23 @@ func writePromptFile(prompt, dir string) (string, error) {
 // prompt carries the company's org chart, its policies and that seat's own
 // memory, and the box it runs in is a directory on a machine other accounts
 // share.
-func systemArgs(template []string, system, dir string) ([]string, error) {
+func systemArgs(template []string, spec *SystemPromptFile, system, dir string) ([]string, error) {
 	var path string
 	out := make([]string, 0, len(template))
 	for _, arg := range template {
 		if strings.Contains(arg, "{file}") {
 			if path == "" {
 				var err error
-				if path, err = writeSystemPrompt(system, dir); err != nil {
+				if path, err = writeSystemPrompt(spec, system, dir); err != nil {
 					return nil, err
 				}
 			}
 			arg = strings.ReplaceAll(arg, "{file}", path)
 		}
+		// NEVER the spec's rendering: `{system}` here substitutes into
+		// ARGV, and a vendor envelope on argv is frontmatter the CLI
+		// reads as part of the prompt. A profile that declares both is
+		// refused at load.
 		out = append(out, strings.ReplaceAll(arg, "{system}", system))
 	}
 	return out, nil
@@ -263,8 +272,8 @@ func systemArgs(template []string, system, dir string) ([]string, error) {
 // The same private file [systemArgs] writes for `{file}`, because it is the
 // same decision: the text is on disk in the per-call directory and never on
 // argv. Only the channel that carries the PATH differs.
-func systemEnv(name, system, dir string) (string, error) {
-	path, err := writeSystemPrompt(system, dir)
+func systemEnv(name string, spec *SystemPromptFile, system, dir string) (string, error) {
+	path, err := writeSystemPrompt(spec, system, dir)
 	if err != nil {
 		return "", err
 	}
@@ -272,9 +281,14 @@ func systemEnv(name, system, dir string) (string, error) {
 }
 
 // writeSystemPrompt puts the text in the per-call working directory, 0600.
-func writeSystemPrompt(system, dir string) (string, error) {
-	path := filepath.Join(dir, systemPromptFile)
-	if err := os.WriteFile(path, []byte(system), 0o600); err != nil {
+//
+// The spec decides the NAME and the CONTENT where a vendor's channel takes a
+// structured file rather than a bare one — see [SystemPromptFile]. A nil spec
+// writes the prompt alone, under the default name, which is what every other
+// `{file}` profile takes.
+func writeSystemPrompt(spec *SystemPromptFile, system, dir string) (string, error) {
+	path := filepath.Join(dir, spec.fileName())
+	if err := os.WriteFile(path, []byte(spec.render(system)), 0o600); err != nil {
 		return "", fmt.Errorf("cli-agent: writing the system prompt: %w", err)
 	}
 	return path, nil

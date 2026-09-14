@@ -86,12 +86,14 @@ var Presets = []string{
 //
 // `view` and `preset` because an expansion that expanded again would be a
 // loop; `cursor` because a page boundary belongs to the caller that was handed
-// it and to nobody else; `read_level`, `max_lag_seconds` and `max_lag_seq`
-// because how fresh an answer must be is a property of the SURFACE asking, and
-// a saved row that carried one would let a board silently downgrade a seat's
-// own read.
+// it and to nobody else; `read_level`, `max_lag_seconds`, `max_lag_seq` and
+// `min_position` because how fresh an answer must be is a property of the
+// SURFACE asking, and a saved row that carried one would let a board silently
+// downgrade a seat's own read — or, for the floor, pin every later reader to
+// a position from the day the view was saved.
 var expansionRefused = []string{
 	"view", "preset", "cursor", "read_level", "max_lag_seconds", "max_lag_seq",
+	"min_position",
 }
 
 // Viewer is who is asking, as much as an expansion needs to know.

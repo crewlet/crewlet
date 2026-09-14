@@ -179,7 +179,7 @@ func TestAnUnblockedNoticeNamesTheKeyRatherThanTheID(t *testing.T) {
 	}
 	pending := scan.Pending[0]
 	want, err := r.reader.Task(t.Context(), "t-2", tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the dependent back: %v", err)
 	}

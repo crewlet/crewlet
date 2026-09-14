@@ -151,6 +151,21 @@ func QuiesceCopy(ctx context.Context, path string) error {
 	return remove(path + lockSuffix)
 }
 
+// RemoveCopy deletes a COPY of a database: the file, its sidecars and its lock.
+//
+// The lock goes with it for the reason [QuiesceCopy] gives: a copy has no
+// peer that could be racing for the lock, because nothing else ever opens it
+// in place. It is what a caller writing a copy under a part name clears a
+// crashed attempt with, and what it discards a failed one with — a stale -wal
+// beside a fresh copy is applied to it on the next open, so the sidecars have
+// to go with the file and the list of them is this package's.
+func RemoveCopy(path string) error {
+	if err := removeDatabaseFiles(path); err != nil {
+		return err
+	}
+	return remove(path + lockSuffix)
+}
+
 // checkpointAndClose opens path, folds its -wal into it, and closes.
 //
 // TRUNCATE rather than PASSIVE: passive leaves the -wal file in place with
@@ -188,8 +203,12 @@ func checkpointAndClose(ctx context.Context, path string) error {
 // from the state this node adopted its way out of.
 //
 // So the outer handle is stable and its PEER is what changes. A caller that
-// took [DB.Replicated] before the swap holds the old one, which is why this is
-// only ever called at boot, before an applier, a projector or a seat exists.
+// took [DB.Replicated] before the swap holds the old one — which is why
+// nothing long-lived may take it: the state log's framework resolves the peer
+// through the node handle on every call, and the engine ends every applier,
+// whose pinned connections are the only long-held claims on the file, before
+// it calls this. That is what makes an adoption possible on a RUNNING node
+// rather than only at boot.
 //
 // # Why the close is separate from the rename
 //

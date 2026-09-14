@@ -182,6 +182,13 @@ func (w *Writer) CreateTask(ctx context.Context, opID string, task Task,
 			"project files its deferral where no project-scoped probe looks",
 			task.ID)
 	}
+	// BEFORE ANY READ, because a cap is a property of the value rather
+	// than of the database: a title past its cap is refused identically
+	// whichever node is asked and whatever the project holds, so paying
+	// for a transaction to say so would buy nothing.
+	if err := checkTextCaps(task.ID, &task.Title, &task.Body, nil); err != nil {
+		return WriteResult{}, err
+	}
 	// BEFORE THE MINT, because the catalogue check runs inside it. The
 	// other two defaults below cannot: they are applied after the key is
 	// minted and nothing validates them.

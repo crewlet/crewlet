@@ -207,7 +207,7 @@ func TestASavedViewCannotCarryTheCallersOwnKeys(t *testing.T) {
 	r := newRoundTrip(t)
 
 	for _, key := range []string{"view", "preset", "cursor", "read_level",
-		"max_lag_seconds"} {
+		"max_lag_seconds", "max_lag_seq", "min_position"} {
 		_, err := r.writer.WriteView(t.Context(), "op-"+key, tracker.View{
 			ID:        "v-" + key,
 			Name:      "Bad",

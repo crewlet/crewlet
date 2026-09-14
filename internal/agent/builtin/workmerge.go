@@ -107,7 +107,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"survives. Without it the call would close the duplicate and " +
 			"say nothing about where the work went."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -144,7 +144,7 @@ func (t *mergeWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		"key": before.Task.Key, "merged_into": survivor,
 		"subtasks_moved": moveSubtasks(args),
 		"status":         string(tracker.StatusCancelled),
-		"outcome":        string(got.Outcome), "version": got.Version,
+		"outcome":        string(got.Outcome), "position": positionOf(got.Position), "version": got.Version,
 	})
 }
 

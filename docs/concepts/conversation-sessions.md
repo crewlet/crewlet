@@ -69,7 +69,18 @@ sent re-creates the duplicate-answer bug in a place nothing else can catch.
   the last constituent would make a five-message thread read back as one
 - **You set out to** — the executor's own summary of what it did
 - **You called** — the tool-call lines, writes always recorded, reads marked `(read)`
-- **You replied** — the turn's final text
+- **You replied** — the turn's final text, and **only when the turn actually
+  reached the party waiting on it**
+- **You did NOT reply** — the same text when nothing did. A turn can end with
+  real work behind it and no way to say so: the round budget ran out, the loop
+  broke, the reviewer closed it anyway. The text is kept because the conclusion
+  is real context for the next turn; what it must never do is read as a reply.
+  Filed as one, it made the failure seal itself — the seat's next turn on the
+  thread read back that it had already announced work nobody had been told
+  about, and answered the follow-up against that. The line is spelled out
+  rather than left implicit in a missing **You replied**, because "no reply
+  line" is something the reader has to notice while "nobody received this" is
+  something it has to act on
 - **Reviewer** — `completed_work`, the prose on what already landed
 - **Turn ended** — only when the decision was not `done`
 

@@ -191,13 +191,13 @@ func (r *Reader) Activity(ctx context.Context, q ActivityQuery, now time.Time) (
 
 	var answer ActivityAnswer
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:           q.Level,
-		Scope:           activityScope(q),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Level:       q.Level,
+		Scope:       activityScope(q),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		records, next, err := readActivity(ctx, tx, q, limit)
 		if err != nil {

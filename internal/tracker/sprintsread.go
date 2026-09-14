@@ -264,13 +264,13 @@ func (r *Reader) Sprints(ctx context.Context, q SprintQuery, now time.Time) (
 
 	listing := SprintListing{Project: project}
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:           q.Level,
-		Scope:           sprintReadScope(project),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Level:       q.Level,
+		Scope:       sprintReadScope(project),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		p, found, err := readProject(ctx, tx, project)
 		if err != nil {

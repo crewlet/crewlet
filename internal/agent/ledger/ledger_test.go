@@ -358,7 +358,7 @@ func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 	long := strings.Repeat("z", 6000)
 	got := BuildSession(SessionInput{
 		Trigger: long, Intent: long,
-		Reply: long, CompletedWork: long,
+		Reply: long, Delivered: true, CompletedWork: long,
 		Calls: []Call{{Name: "slack_post", Args: map[string]any{"text": long, "channel": "C1"}}},
 	})
 	for _, c := range []struct {
@@ -382,6 +382,12 @@ func TestBuildSessionKeepsStructureWholeAndElidesOnlyArguments(t *testing.T) {
 	}
 	if !strings.Contains(got.Calls, "C1") {
 		t.Errorf("the discriminating argument was lost at write time:\n%s", got.Calls)
+	}
+	// The undelivered branch is the same row with the artifact in the other
+	// field, so it inherits the same rule: whole, not cut.
+	if un := BuildSession(SessionInput{Reply: long}); un.Unsent != long {
+		t.Errorf("unsent was cut at write time: %d runes of %d",
+			utf8.RuneCountInString(un.Unsent), utf8.RuneCountInString(long))
 	}
 }
 

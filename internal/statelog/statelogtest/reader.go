@@ -91,3 +91,38 @@ func (w localWaiter) WaitCommitted(context.Context, statelog.Position) error { r
 func (w localWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
 }
+
+// LocalReaderOver is [LocalReader] over a node whose applied position MOVES:
+// the waiter is the caller's own, so a read that has to wait for a position
+// waits on it, and the health reports wherever it currently is.
+//
+// # Why a third constructor
+//
+// Because the other two cannot exercise a wait. [LocalReader]'s waiter is
+// already at its position and never blocks, which is the right shape for a
+// case about which rows a filter selects — and exactly the wrong one for a
+// case about the caller's floor: a reader handed a position past what this
+// node has applied must REFUSE `behind` rather than serve the rows from
+// before it, and a waiter that returns at once makes the two indistinguishable.
+// A harness that drains records through its own applier and advances a waiter
+// as it goes is what makes "not yet applied" a state a test can hold a read
+// in.
+func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*statelog.Reader, error) {
+	return statelog.NewReader(statelog.ReaderDeps{
+		Domain: domain,
+		DB:     db,
+		Waiter: waiter,
+		Health: func() statelog.Health {
+			at := waiter.Committed()
+			behind, first, floor := uint64(0), uint64(1), uint64(0)
+			return statelog.Health{
+				Position: at, AppliedThrough: at.Seq, CaughtUp: true,
+				Floor:     statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()},
+				Lag:       &behind,
+				FirstSeq:  &first,
+				TrimFloor: &floor,
+			}
+		},
+		Drain: func() float64 { return 2000 },
+	})
+}

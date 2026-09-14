@@ -24,7 +24,13 @@ const (
 
 	// ReadSession is "no answer from before MY last write". It costs
 	// nothing when the caller is caught up, which is the common case, and
-	// it is the honest default for a caller reading its own work.
+	// it is the honest default for a caller reading its own work — a
+	// caller that can NAME that write: the position it landed at is what
+	// the level waits for ([Query.Session] inside the engine,
+	// [Query.MinPosition] from outside it), and a session read that was
+	// handed no position waits for nothing and serves this node's own
+	// prefix under a stronger name. That is why no read grammar accepts
+	// the level without a `min_position` beside it.
 	ReadSession ReadLevel = "session"
 
 	// ReadStale is "whatever this node holds, with its lag reported". It
@@ -219,14 +225,17 @@ type Query struct {
 
 	// MinPosition is an explicit floor a caller may name — the position a
 	// wake carried, or one it was handed by its own previous write. It is
-	// the documented override rather than the mechanism.
+	// honoured at EVERY level (see [Freshness]): the later of it and the
+	// level's own target is what the read waits for, so a caller that
+	// holds a position is never served rows from before it whatever else
+	// it asked for.
 	MinPosition Position
 
 	// MaxLag is what a stale read says it will accept, and zero means it
 	// accepts anything.
 	MaxLag time.Duration
 
-	// MaxLagPositions is the same bound counted in RECORDS, and it is the
+	// MaxLagSeq is the same bound counted in RECORDS, and it is the
 	// one the broker actually answers: [Health.Lag] is a record count, and
 	// the duration above is derived from it through this node's own drain
 	// rate. A caller that knows how many records it can tolerate — a
@@ -236,7 +245,7 @@ type Query struct {
 	// Both may be set, and the read refuses on WHICHEVER IS REACHED FIRST:
 	// they are two readings of one distance rather than two distances, so
 	// an answer past either is past the caller's bound.
-	MaxLagPositions uint64
+	MaxLagSeq uint64
 
 	// Set reports a read whose answer is a SET rather than one object.
 	//
@@ -470,6 +479,23 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 				started)
 		}
 		answer.Position = r.waiter.Committed()
+
+		// THE HEALTH IS RE-READ, and the bound is enforced again
+		// against it.
+		//
+		// Everything above was decided from a snapshot taken before a
+		// wait that may have lasted the whole of [ReadBudget]. What
+		// ended that wait is this node reaching a position; the log ran
+		// on meanwhile, and on a busy company it ran on by more than
+		// the caller said it would accept. Reporting the pre-wait lag
+		// beside post-wait rows is the same defect the bound itself was
+		// fixed for once: a number that describes a different moment
+		// from the answer it is printed beside.
+		post := r.health()
+		answer.Lag = post.Lag
+		if refusal := r.pastBound(q, post); refusal != nil {
+			return r.refuse(post, q, refusal.Code, refusal.Detail, started)
+		}
 	}
 
 	// 5. ONE transaction, coverage first.
@@ -538,6 +564,34 @@ func (r *Reader) coverage(ctx context.Context, s ScopeSet) (*gap, error) {
 
 // target is the position this read must wait for, by level.
 func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error) {
+	// THE CALLER'S FLOOR NAMES A STREAM, AND IT IS CHECKED BEFORE ANY
+	// LEVEL LOOKS AT IT.
+	//
+	// [Query.MinPosition] is the one value here that came off a wire; the
+	// session mark and the barrier are this domain's own. A position is a
+	// triple, but [Position.Packed] deliberately carries only two of it —
+	// the stream is not in the number — so comparing a foreign floor
+	// against a local target is comparing coordinates from two number
+	// spaces. Selecting the maximum first therefore DISCARDS a foreign
+	// floor whenever it happens to sort low (`OTHER@0:0` against any live
+	// barrier), and the post-selection guard below then inspects a purely
+	// local position and waves it through: the read is served as though no
+	// floor was named, labelled with the level the caller asked for.
+	//
+	// Refusing here instead makes the answer honest at every level, and it
+	// is the caller's bug rather than a state that clears — see
+	// [RefuseWrongStream].
+	if !q.MinPosition.IsZero() && q.MinPosition.Stream != "" &&
+		q.MinPosition.Stream != r.domain.Stream().Name {
+
+		return Position{}, &Refused{
+			Code: RefuseWrongStream, Level: q.Level,
+			Detail: fmt.Sprintf("this read floors at a position on %s and this "+
+				"domain reads %s — a position names the log it is a position "+
+				"in, and this one is not from this log",
+				q.MinPosition.Stream, r.domain.Stream().Name),
+		}
+	}
 	switch q.Level {
 	case ReadLinearizable:
 		if r.index == nil {
@@ -551,52 +605,84 @@ func (r *Reader) target(ctx context.Context, q Query, h Health) (Position, error
 		if err != nil {
 			return Position{}, barrierRefusal(q.Level, err)
 		}
-		return at, nil
+		// THE FLOOR CANNOT BE PAST THE BARRIER on the stream the barrier
+		// was appended to — a position a write returned was acknowledged
+		// before this append was — so on the honest path this is the
+		// barrier. On the other path the floor names a sequence this
+		// stream has not reached, and waiting for it is what turns a
+		// pasted position into a `behind` refusal the caller can read
+		// rather than an answer served from before it.
+		return furthest(at, q.MinPosition), nil
 
 	case ReadSession:
 		// THE STRONGEST OF WHAT THE CALLER ALREADY KNOWS. A session
 		// read that found nothing to wait for is a stale read wearing a
-		// stronger name, so it says so rather than appending a barrier
-		// nobody asked for.
-		target := q.Session
-		if q.MinPosition.Packed() > target.Packed() {
-			target = q.MinPosition
-		}
-		return target, nil
+		// stronger name, so it waits for nothing rather than appending
+		// a barrier nobody asked for — which is why the grammars refuse
+		// the level to a caller that named no position.
+		return furthest(q.Session, q.MinPosition), nil
 
 	case ReadStale, ReadConsistentPrefix:
-		if q.MaxLag > 0 || q.MaxLagPositions > 0 {
-			if h.Lag == nil {
-				return Position{}, &Refused{
-					Code: RefuseBrokerUnreachable, Level: q.Level,
-					Detail: "this read bounds its staleness and the broker could " +
-						"not say how far behind this node is",
-				}
-			}
-			// THE RECORD COUNT FIRST, because it is the reading the
-			// broker gave: the duration below is derived from it
-			// through this node's own drain rate, so a bound stated in
-			// records is checked against the number itself rather than
-			// against an estimate made from it.
-			if q.MaxLagPositions > 0 && *h.Lag > q.MaxLagPositions {
-				return Position{}, &Refused{
-					Code: RefuseTooStale, Level: q.Level,
-					Detail: fmt.Sprintf("this node is %d records behind and this "+
-						"read accepts %d", *h.Lag, q.MaxLagPositions),
-				}
-			}
-			behind := time.Duration(*h.Lag) * time.Second / time.Duration(max(int64(r.drain()), 1))
-			if q.MaxLag > 0 && behind > q.MaxLag {
-				return Position{}, &Refused{
-					Code: RefuseTooStale, Level: q.Level,
-					Detail: fmt.Sprintf("this node is about %s behind and this read "+
-						"accepts %s", behind.Round(time.Second), q.MaxLag),
-				}
-			}
+		if refusal := r.pastBound(q, h); refusal != nil {
+			return Position{}, refusal
 		}
-		return Position{}, nil
+		// AND THE FLOOR STILL HOLDS. A stale read with a position is
+		// "whatever this node holds, from here on": the lag is checked
+		// above and reported on the answer, and the wait below is for
+		// the caller's own write rather than for the log's end.
+		return q.MinPosition, nil
 	}
 	return Position{}, fmt.Errorf("statelog: unreachable read level %q", q.Level)
+}
+
+// pastBound is the staleness bound's whole rule, against ONE health snapshot.
+//
+// # Why it is a function and not the lines it replaced
+//
+// Because the bound has to be applied to TWO snapshots and there must be one
+// rule for both. It was enforced only against the snapshot taken before the
+// read waited — and a read can now wait for the caller's own floor
+// ([Query.MinPosition]) for up to [ReadBudget], a wait whose ending says this
+// node reached a position and says nothing whatever about how far the log has
+// run on in the meantime. A caller declaring `max_lag_seq=250` could therefore
+// be served an answer assembled when the node was thousands behind, with
+// `Lag` reporting the figure from before the wait: the bound checked, the
+// answer past it, and the number beside the rows agreeing with neither.
+//
+// A nil return is "within the bound", which includes a read that declared no
+// bound at all — zero accepts anything, and that is what makes declaring one
+// the caller's own decision.
+func (r *Reader) pastBound(q Query, h Health) *Refused {
+	if q.MaxLag <= 0 && q.MaxLagSeq == 0 {
+		return nil
+	}
+	if h.Lag == nil {
+		return &Refused{
+			Code: RefuseBrokerUnreachable, Level: q.Level,
+			Detail: "this read bounds its staleness and the broker could " +
+				"not say how far behind this node is",
+		}
+	}
+	// THE RECORD COUNT FIRST, because it is the reading the broker gave:
+	// the duration below is derived from it through this node's own drain
+	// rate, so a bound stated in records is checked against the number
+	// itself rather than against an estimate made from it.
+	if q.MaxLagSeq > 0 && *h.Lag > q.MaxLagSeq {
+		return &Refused{
+			Code: RefuseTooStale, Level: q.Level,
+			Detail: fmt.Sprintf("this node is %d records behind and this "+
+				"read accepts %d", *h.Lag, q.MaxLagSeq),
+		}
+	}
+	behind := time.Duration(*h.Lag) * time.Second / time.Duration(max(int64(r.drain()), 1))
+	if q.MaxLag > 0 && behind > q.MaxLag {
+		return &Refused{
+			Code: RefuseTooStale, Level: q.Level,
+			Detail: fmt.Sprintf("this node is about %s behind and this read "+
+				"accepts %s", behind.Round(time.Second), q.MaxLag),
+		}
+	}
+	return nil
 }
 
 // barrierRefusal maps the read index's own failures onto refusal codes.

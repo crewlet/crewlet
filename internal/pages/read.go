@@ -161,8 +161,8 @@ type Listing struct {
 // listing cannot enumerate what would have ENTERED it — a deferred create is
 // an absence with no local row — so it is served and says so. See
 // [Listing.Complete].
-func (r *Reader) List(ctx context.Context, f Filter, level statelog.ReadLevel) (Listing, error) {
-	if level == "" {
+func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (Listing, error) {
+	if fresh.Level == "" {
 		return Listing{}, errors.New("pages: this read names no level — a " +
 			"surface resolves an absent read_level to its own default (a seat " +
 			"tool linearizable, a dashboard poll stale) before it reads")
@@ -223,9 +223,7 @@ func (r *Reader) List(ctx context.Context, f Filter, level statelog.ReadLevel) (
 		limit = MaxLimit
 	}
 	var out []Summary
-	served, err := r.log.Read(ctx, statelog.Query{
-		Level: level, Scope: ReadScope(f.Container, ""), Set: true,
-	}, func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container, ""), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.list(ctx, tx, where, args, limit, max(f.Offset, 0))
 		return err
@@ -361,17 +359,15 @@ type RevisionSummary struct {
 // children and the ancestors. They used to be five separate statements on the
 // bare connection, so a page could answer with a comment thread from after the
 // revision it reported.
-func (r *Reader) Get(ctx context.Context, ref string, level statelog.ReadLevel) (Detail, error) {
-	if level == "" {
+func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) (Detail, error) {
+	if fresh.Level == "" {
 		return Detail{}, errors.New("pages: this read names no level — a " +
 			"surface resolves an absent read_level to its own default before " +
 			"it reads")
 	}
 	var detail Detail
 	container, _, _ := strings.Cut(ref, "/")
-	served, err := r.log.Read(ctx, statelog.Query{
-		Level: level, Scope: ReadScope(container, ref),
-	}, func(tx *sql.Tx) error {
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope(container, ref), false), func(tx *sql.Tx) error {
 		document, revision, id, err := r.locate(ctx, tx, ref)
 		if err != nil {
 			return err
@@ -536,14 +532,12 @@ func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]
 //
 // THE DOMAIN IS ITS SCOPE, because a container list is about all of them —
 // which is exactly what [ReadScope] returns for a read that names none.
-func (r *Reader) Containers(ctx context.Context, level statelog.ReadLevel) ([]Container, error) {
-	if level == "" {
+func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) ([]Container, error) {
+	if fresh.Level == "" {
 		return nil, errors.New("pages: this read names no level")
 	}
 	var out []Container
-	_, err := r.log.Read(ctx, statelog.Query{
-		Level: level, Scope: ReadScope("", ""), Set: true,
-	}, func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope("", ""), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.containers(ctx, tx)
 		return err
@@ -595,9 +589,9 @@ func placeholders(n int) string {
 // registry, and a walk that returned it would put it straight back — the
 // replace is wholesale, so what this returns IS the registry.
 func (r *Reader) SkillPages(ctx context.Context, container string,
-	level statelog.ReadLevel) ([]Page, error) {
+	fresh statelog.Freshness) ([]Page, error) {
 
-	if level == "" {
+	if fresh.Level == "" {
 		return nil, errors.New("pages: this read names no level")
 	}
 	container = strings.ToUpper(strings.TrimSpace(container))
@@ -605,9 +599,7 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 		return nil, nil
 	}
 	var out []Page
-	_, err := r.log.Read(ctx, statelog.Query{
-		Level: level, Scope: ReadScope(container, ""), Set: true,
-	}, func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(ReadScope(container, ""), true), func(tx *sql.Tx) error {
 		var err error
 		out, err = r.skillPages(ctx, tx, container)
 		return err

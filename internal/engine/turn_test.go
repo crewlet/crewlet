@@ -489,7 +489,7 @@ func TestTheConversationLedgerIsReadInAndWrittenBack(t *testing.T) {
 	}
 
 	r := &recorder{result: turn.Result{
-		Decision: phase.Done, Artifact: "and now this",
+		Decision: phase.Done, Delivered: true, Artifact: "and now this",
 		LastReview: &turn.Review{CompletedWork: "the post landed"},
 	}}
 	d := dispatcher(t, r)
@@ -525,6 +525,59 @@ func TestTheConversationLedgerIsReadInAndWrittenBack(t *testing.T) {
 	}
 }
 
+// A TURN THAT TOLD NOBODY MUST NOT WRITE THAT IT DID.
+//
+// The artifact filed here is the reviewer's prose about the turn, not anything
+// a tool sent, and it was recorded unconditionally as the seat's own "You
+// replied". So a turn that did real work and never reached the person waiting
+// — the round budget ran out, the loop broke, the reviewer closed it anyway —
+// wrote into its own history that it had answered. That record is the one the
+// NEXT turn on the thread reads back, which is what made the failure seal
+// itself: a follow-up asking "did you do it?" is answered against a reply that
+// was never sent.
+func TestAnUndeliveredTurnIsNotRecordedAsAReply(t *testing.T) {
+	t.Parallel()
+	conversations := ledgerstore.NewMemoryConversations()
+	ctx := context.Background()
+
+	// Done, with real work behind it, and nothing delivered.
+	r := &recorder{result: turn.Result{
+		Decision: phase.Done, Delivered: false,
+		Artifact: "Task LEAD-1 was opened and is ready to refine",
+	}}
+	d := dispatcher(t, r)
+	d.Conversations = conversations
+	if got := d.Dispatch(ctx, "ceo",
+		[]*events.Event{inThread("notification", "slack:C1")}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v", got.Outcome)
+	}
+
+	after, err := conversations.History(ctx, "ceo", "slack:C1", 0)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("history = %d entries, want the turn's own", len(after))
+	}
+	if after[0].Reply != "" {
+		t.Errorf("reply = %q — the seat recorded an answer it never gave, and "+
+			"its next turn on this thread will read it back as fact", after[0].Reply)
+	}
+	// KEPT, not dropped. The conclusion is real context for the next turn;
+	// what it must not be is a reply.
+	if after[0].Unsent != "Task LEAD-1 was opened and is ready to refine" {
+		t.Errorf("unsent = %q, want the artifact — dropping it trades a wrong "+
+			"answer for a blank one", after[0].Unsent)
+	}
+	// And the rendered block a model actually reads has to SAY so, because
+	// "no reply line" is something the reader must notice while "nobody
+	// received this" is something it must answer.
+	block := ledger.RenderHistory(after, ledger.HistoryOptions{MaxChars: 10_000})
+	if !strings.Contains(block, "did NOT reply") {
+		t.Errorf("the history block does not say the turn reached nobody:\n%s", block)
+	}
+}
+
 // The `enabled` toggle is documented as a live kill switch that "restores the
 // previous prompt exactly". It was read NOWHERE — the dispatcher wired its
 // conversation store whenever a store existed — so the switch did nothing, and
@@ -538,7 +591,7 @@ func TestTheConversationLedgerKillSwitchActuallyStops(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "and now this"}}
+	r := &recorder{result: turn.Result{Decision: phase.Done, Delivered: true, Artifact: "and now this"}}
 	d := dispatcher(t, r)
 	d.Conversations = conversations
 	d.Conversation = func() config.ConversationSession {
@@ -578,7 +631,7 @@ func TestTheConversationLedgerTrimsToTheConfiguredKeep(t *testing.T) {
 		}
 	}
 
-	r := &recorder{result: turn.Result{Decision: phase.Done, Artifact: "newest"}}
+	r := &recorder{result: turn.Result{Decision: phase.Done, Delivered: true, Artifact: "newest"}}
 	d := dispatcher(t, r)
 	d.Conversations = conversations
 	d.Conversation = func() config.ConversationSession {
@@ -1097,9 +1150,10 @@ func TestAMergeCarriesWhatBoundsTheTurn(t *testing.T) {
 		t.Errorf("the merged ask carries conversation %q", got)
 	}
 	// And the obligation the turn engine enforces is derived from the
-	// constituents either way.
-	if got := engine.ReplyFor(r.reqs[0].Events); got != turn.ReplyTool {
-		t.Errorf("the turn owes %s, want a tool delivery", got)
+	// constituents either way — including WHERE it is owed, which a merge
+	// must not launder any more than it may launder the ask itself.
+	if got := engine.ReplyFor(r.reqs[0].Events); got != turn.ToolReply("slack") {
+		t.Errorf("the turn owes %+v, want a tool delivery on slack", got)
 	}
 }
 

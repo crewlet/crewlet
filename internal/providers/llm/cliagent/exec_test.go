@@ -155,6 +155,27 @@ func runFakeCLI() {
 		}
 		fmt.Printf("%s|%o|%s", strings.Join(os.Args, " "), info.Mode().Perm(),
 			base64.StdEncoding.EncodeToString(body))
+	case os.Getenv("FAKE_USAGE_FILE") != "":
+		// Writes the vendor's own usage report where the profile asked
+		// for it, FROM INSIDE THE CHILD — which is the only place it can
+		// be written honestly: the per-call working directory is created
+		// for one call and removed on release, so a report the parent
+		// planted would prove nothing about the path the CLI was handed.
+		// The variable carries the report's BYTES; an empty one is a run
+		// that wrote no report at all.
+		path := ""
+		for i, arg := range os.Args {
+			if arg == "--usage-file" && i+1 < len(os.Args) {
+				path = os.Args[i+1]
+			}
+		}
+		if path != "" && os.Getenv("FAKE_USAGE_FILE") != "-" {
+			if err := os.WriteFile(path, []byte(os.Getenv("FAKE_USAGE_FILE")), 0o600); err != nil {
+				fmt.Print("UNWRITABLE: ", err)
+				return
+			}
+		}
+		fmt.Print(os.Getenv("FAKE_STDOUT"))
 	case os.Getenv("FAKE_ECHO_STDIN") == "1":
 		// Base64 rather than verbatim: the prompt CONTAINS the response
 		// contract's own fenced example, so echoing it raw would be

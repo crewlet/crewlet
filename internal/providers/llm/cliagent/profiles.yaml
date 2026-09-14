@@ -717,6 +717,629 @@ muse-code:
     - sentinel: "run `muse login`"
     - sentinel: "META_API_KEY was rejected"
 
+kimi-code:
+  binary: kimi
+  # Moonshot's own family. The managed service the OAuth login reaches is
+  # api.kimi.com/coding/v1 and its model aliases are `kimi-code/k3`,
+  # `kimi-code/kimi-for-coding` and `kimi-code/kimi-for-coding-highspeed` —
+  # none of which any other vendor's catalogue would resolve.
+  vendor: moonshot
+  # MOONSHOT'S OWN CLI, `@moonshot-ai/kimi-code` — NOT the unscoped `kimi-code`
+  # package on npm, which is a community wrapper that starts an
+  # anthropic-proxy and runs Claude Code behind it. Both install a `kimi` on
+  # PATH and they are different programs: this profile's `--agent-file`,
+  # `--output-format stream-json` and `~/.kimi-code` layout are the official
+  # one's. The same trap the grok profile records, with the same tell — if
+  # `kimi --version` prints a 1.0.x, that is the other one.
+  #
+  # It is also the successor to `kimi-cli`, whose docs are still the first
+  # search hit and whose print mode took `--input-format`/`--final-message-only`
+  # flags this build does not have. `kimi migrate` is the seam between them.
+  #
+  # MEASURED AGAINST 0.42.0: the flags off `kimi --help`, the tool surface and
+  # the system prompt off the request body the CLI actually sent (a stub HTTP
+  # endpoint standing in for the model), and the failure classifications off
+  # real 401 and 429 responses. What is NOT measured is a spent Kimi
+  # subscription, which no profile here can produce on demand.
+  written_for: "Kimi Code CLI 0.42.x (`kimi --version`) — MoonshotAI's OWN, from @moonshot-ai/kimi-code"
+  version_args: ["--version"]
+  # `--output-format stream-json` IS NOT OPTIONAL, and the reason is the
+  # ANSWER rather than the failure classification (the opposite of muse-code's
+  # `--json`). The default `text` output is a TRANSCRIPT, not a reply: the
+  # vendor's own reference says assistant text is "prefixed with `• `" and
+  # "wrapped lines are indented by two spaces". Crewlet's tool calls ride a
+  # JSON envelope inside that text, so a bullet on every line and a hard wrap
+  # through the middle of it destroys the envelope and the prose together.
+  # stream-json prints one JSON object per line and leaves the reply intact.
+  #
+  # Nothing else belongs here. `--yolo`, `--auto` and `--plan` are REFUSED
+  # alongside `--prompt` at startup, and print mode already runs under the
+  # `auto` permission policy with static deny rules still in force, so there
+  # is no approval for a headless run to wait on. `--add-dir` and
+  # `--skills-dir` would widen the per-call directory this backend keeps
+  # empty on purpose.
+  complete_args: ["--output-format", "stream-json"]
+  # DENIED IN THE AGENT FILE, which is the only per-call channel this CLI has
+  # for it. `[tools]` and `[[permission.rules]]` live in config.toml — and
+  # config.toml is where `kimi login` writes the OAuth reference and the model
+  # catalogue, so it is a CREDENTIAL here (see credential_paths) and seeding a
+  # policy into it would destroy the login it carries.
+  #
+  # An allowlist rather than a denylist, and unlike grok that is the safe
+  # direction on this CLI: a name it does not recognise "is reported with a
+  # warning" and matches nothing, so a stale entry costs one tool rather than
+  # lifting the whole restriction.
+  #
+  # MEASURED, by reading the tool array the CLI actually put on the wire:
+  # TWENTY-FIVE tools by default, ONE with this agent file. What goes is
+  # `Bash`, `Read`, `Write`, `Edit`, `Grep`, `Glob`, the plan-mode pair,
+  # `TodoList`, `Skill`, `AskUserQuestion`, the `Task*` background family, the
+  # `Cron*` family, an undocumented GOAL family (`CreateGoal`, `GetGoal`,
+  # `UpdateGoal`, `SetGoalBudget`) — and `Agent`/`AgentSwarm`, which is what
+  # bounds the construct: with no `Agent` tool there is no sub-agent to
+  # delegate to, so `subagents` needs no entry of its own.
+  #
+  # The goal family is the reason an allowlist is right here beyond the
+  # failure-direction argument: it is in the binary and not in the vendor's
+  # published tool table, so a denylist written from the docs would have
+  # admitted four tools nobody knew to name.
+  #
+  # `FetchURL` is the one that survives, and it is web — the one local tool
+  # this backend never denies. `WebSearch` is named beside it and was NOT in
+  # the measured baseline: it is registered only when the Moonshot search
+  # service is configured, which the OAuth login provisions
+  # (`[services.moonshot_search].oauth` is "injected automatically by the
+  # login flow") and a credential-less test does not. So the name is
+  # load-bearing on a real subscription seat and inert here, which is the
+  # opposite of muse-code's gated `web_fetch` — there, naming it admitted
+  # nothing ever.
+  local_tools: denied
+  model_args: ["--model", "{model}"]
+  # `--agent-file`, and it is the tool denial AND the system prompt at once.
+  #
+  # This CLI's per-call prompt channel is an AGENT FILE: YAML frontmatter
+  # declaring the agent's name, its description (REQUIRED) and its tool
+  # allowlist, with the BODY as the system prompt. Handed a bare prompt it
+  # does not degrade — the vendor's reference says a file passed explicitly
+  # "must be valid, otherwise the CLI reports the error and exits" — so the
+  # envelope below is what makes the channel usable at all. It is also why
+  # this profile's channel is passed on EVERY call, including one carrying no
+  # system prompt: see [SystemPromptFile]. Such a call — `crewlet llm doctor`'s
+  # two isolation probes are the only ones the engine makes — gets a valid
+  # agent file with an EMPTY body, which is an empty system prompt rather than
+  # the vendor's default one. That is the right answer for a probe, and it is
+  # loud rather than silent if this CLI ever refuses it.
+  #
+  # `$KIMI_CODE_HOME/SYSTEM.md` is the other prompt override and is NOT usable
+  # here: it is one static file per home, and a seat's prompt differs per
+  # phase and per turn. `--agent-file` outranks it either way.
+  #
+  # The body is rendered as a TEMPLATE each time the prompt is built, and
+  # `${skills}`, `${agents_md}`, `${cwd}`, `${cwd_listing}`, `${os}`,
+  # `${shell}`, `${now}`, `${additional_dirs_info}`, `${base_prompt}` and
+  # `${plugin_sections}` substitute inside it. A bare `$` is never special and
+  # an unknown `${…}` stays verbatim, so ordinary prose is safe; a seat whose
+  # prompt legitimately contains one of those ten names is not, and that is
+  # the cost of the only channel this CLI has.
+  #
+  # NO `${base_prompt}`, deliberately: a body without it "owns the entire
+  # prompt", which is the replace-rather-than-append decision every other
+  # profile here makes for the same reason — a coding-agent identity over the
+  # top of whatever seat is actually being served.
+  system_prompt_args: ["--agent-file", "{file}"]
+  system_prompt_file:
+    # `.md`: agent files are Markdown, and the discovery pass scans for that
+    # extension. The default `.txt` name is not worth betting the channel on.
+    name: crewlet-seat.md
+    # `name` is stated rather than left to the file name, so the channel does
+    # not depend on what this package happens to call the file, and
+    # `description` is stated because the CLI requires it.
+    template: |
+      ---
+      name: crewlet-seat
+      description: The Crewlet seat this run serves. Crewlet drives the model and executes its tools; this CLI is a text model behind that loop.
+      tools:
+        - WebSearch
+        - FetchURL
+      ---
+      {system}
+  # `--prompt` TAKES THE PROMPT AS ITS VALUE, so it goes in prompt_args rather
+  # than complete_args — the same shape as grok's `-p`, and the same failure
+  # if it sits earlier: the next flag becomes the prompt.
+  prompt_mode: argv
+  prompt_args: ["--prompt"]
+  # An OpenAI-shaped chat stream: one message object per line, discriminated
+  # by `role`. Assistant text is `content`; a tool call emits an assistant
+  # message carrying `tool_calls` first, then a `role: tool` message, then
+  # further assistant messages — so the answer has to be filtered to the
+  # assistant's own lines rather than read off every line. Thinking content is
+  # not written to the stream at all, and the "resuming session" notices and
+  # tool progress go to stderr.
+  #
+  # With the agent file's allowlist in force there is no tool call and
+  # therefore exactly one assistant message, which matters because this
+  # package joins a stream's text hits with a newline.
+  #
+  # The second path is the array form, for the same reason cursor-agent
+  # declares two: `content` is a string on this build, and a chat message's
+  # content is the field a vendor most often widens to a block list.
+  output: jsonl
+  event_type_path: ["role"]
+  text_events: ["assistant"]
+  text_paths: [["content"], ["content", "0", "text"]]
+  # NO USAGE PATHS: the stream carries messages, not a usage report, so the
+  # counts are estimated and `crewlet llm doctor` says so. The CLI does keep
+  # real figures — `[token_counting]` selects the strategy behind its own
+  # context display — but they reach the TUI and the session store rather than
+  # this stream.
+  env:
+    # The update preflight, off. Left on, the CLI checks for a release, may
+    # install it in the background, and swaps the binary under a running fleet
+    # with nothing to say so — which is precisely what `written_for` exists to
+    # make visible. Upgrades are the operator's, on their schedule. Same
+    # decision as muse-code's MUSE_NO_AUTO_UPDATE.
+    KIMI_CODE_NO_AUTO_UPDATE: "1"
+    # What `kimi -p` does when background tasks are still pending after the
+    # main turn. The default is `steer`, whose own wait ceiling defaults to
+    # 2147483 seconds — twenty-four days — and a headless run that reaches it
+    # holds the seat's concurrency slot until cli.timeout_seconds fires.
+    # `exit` is the only posture that cannot wait. Nothing should ever create
+    # a background task here (they come from `Bash`, which the agent file
+    # denies), which is exactly why this costs nothing and covers the case
+    # where the denial did not apply.
+    KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE: "exit"
+    # THE RETRY CAP, and this one is MEASURED rather than reasoned. The
+    # default is ten attempts with exponential backoff, and against a stub
+    # returning 429 the CLI slept through nine retries before giving up:
+    #
+    #   default (10 attempts) ......... 2 min 24 s
+    #   this setting (3 attempts) ..... 5.4 s
+    #
+    # A spent plan is exactly when the seat's fallback chain must carry it
+    # onto a metered key, and at the default the CLI sits on the seat's
+    # concurrency slot for two and a half minutes first — on every call, until
+    # the plan resets — doing nothing but sleeping. Three keeps one real retry
+    # for a transient 500 or an overloaded engine (~1.8 s of backoff) and
+    # hands everything past that to the chain and the credential pool, which
+    # move to another model or another key rather than hammering a dependency
+    # that is already refusing. An auth failure is not retried at all, which
+    # this measured at 3.1 s either way.
+    KIMI_LOOP_MAX_ATTEMPTS_PER_STEP: "3"
+  config_env:
+    KIMI_CODE_HOME: ".kimi-code"
+  # TWO FILES, because this CLI splits its login across them: `kimi login`
+  # writes the OAuth token to credentials/oauth/kimi-code.json AND injects the
+  # provider's `[providers.<name>.oauth]` reference into config.toml, which
+  # also carries `default_model` and the `[models]` catalogue every `--model`
+  # alias resolves against. A seat home with only the token has no provider
+  # and no model and fails at startup.
+  #
+  # Their base names differ (`kimi-code.json`, `config.toml`), which is what
+  # the shared credential directory keys on.
+  credential_paths:
+    - ".kimi-code/credentials/oauth/kimi-code.json"
+    - ".kimi-code/config.toml"
+  # Sessions, their index, and the logs. Everything else under the home is
+  # either the credential above or re-created on the next start.
+  #
+  # Each session directory holds `agents/*/wire.jsonl`, which the vendor
+  # documents as carrying "user prompts, command output, repository paths,
+  # tool return values, or traces of credentials" — one seat's turn is not
+  # allowed to reach the next one through it.
+  volatile_paths:
+    - ".kimi-code/sessions"
+    - ".kimi-code/session_index.jsonl"
+    - ".kimi-code/logs"
+  host_credential_paths:
+    - ".kimi-code/credentials/oauth/kimi-code.json"
+    - ".kimi-code/config.toml"
+  # A real one-shot subcommand, not a slash command: `kimi login` runs the
+  # RFC 8628 device-code flow, prints the verification URL and user code to
+  # stderr, polls, and exits 0 on success. No flags.
+  #
+  # There is no logout and no status subcommand — `/login` and `/status` are
+  # the TUI's, which a headless run cannot reach — so neither is declared.
+  login_args: ["login"]
+  # NO capture_token_args: this CLI mints no headless token. KIMI_API_KEY is
+  # the METERED Moonshot platform key and it is not read from the shell at
+  # all — the vendor is explicit that `export KIMI_API_KEY=…` gives no
+  # provider its key, because credentials are read only from config.toml. So
+  # there is no api_key_env either: the variable exists and setting it would
+  # do nothing, and naming a variable the CLI ignores is worse than naming
+  # none. A metered account is configured by writing the key into the
+  # credential home's config.toml, which then travels to every seat.
+  #
+  # THE SENTINELS ARE THIS CLI'S OWN CLASSIFICATION, not the vendor's prose,
+  # and that is what a measurement bought. A real 429 exits 1 with
+  #
+  #   error: failed to run prompt: provider.rate_limit: 429 You have reached
+  #   your 5-hour usage limit. …
+  #
+  # and a real 401 with `provider.auth_error: 401 Invalid Authentication`.
+  # Everything after the colon is the UPSTREAM provider's message and changes
+  # with the plan, the endpoint and the vendor's wording; the
+  # `provider.<kind>:` prefix is the CLI's own and does not. Matching the
+  # prefix is therefore the sentinel that cannot go stale on a reworded error
+  # — which is exactly the drift limit_markers are shaped to survive.
+  #
+  # The plan-window phrases are kept BESIDE it, from the vendor's published
+  # error reference, for a failure that reaches the operator by some path
+  # that does not go through the provider classifier. Each is quoted without
+  # its leading "You've reached your", because a sentinel is matched verbatim
+  # and a vendor rendering a curly apostrophe would silently never match.
+  # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: on every
+  # failure the answer stream carried only `role: meta` lines and the
+  # classification landed on stderr. So the markers below are matched against
+  # stderr ALONE, and nothing the model writes can bench this seat's
+  # credential — see [MarkerScope]. It is also what keeps the plan-window
+  # phrases safe to keep beside the structural sentinel.
+  marker_scope: stderr
+  limit_markers:
+    - sentinel: "provider.rate_limit"
+    - sentinel: "5-hour usage limit"
+    - sentinel: "weekly (7-day) usage limit"
+    - sentinel: "monthly usage limit for this billing cycle"
+    - sentinel: "concurrent request limit"
+  auth_markers:
+    - sentinel: "provider.auth_error"
+    - sentinel: "Invalid Authentication"
+    - sentinel: "appears to be invalid or may have expired"
+
+hermes:
+  binary: hermes
+  # NO VENDOR, and that is a statement rather than an omission: this CLI is a
+  # front end over 300+ models across Nous Portal, OpenRouter, Anthropic,
+  # OpenAI and a dozen more, and its `model` carries its own `provider/id`
+  # prefix. Naming one family here would make the field say something false
+  # about every entry that chose another; empty falls back to the coding-agent
+  # catalogue's own default, which is the honest answer.
+  vendor: ""
+  # MEASURED AGAINST 0.21.2: the argv driven through the CLI's own argparse
+  # (hermes_cli/_parser.py), the toolset resolved through its own registry,
+  # the usage-report keys read off hermes_cli/oneshot.py, and the version
+  # line off its `--version` fast path. What is NOT measured is a live
+  # completion — this CLI's 183-package dependency tree would not install
+  # here — so the failure sentinels below are the weakest claim in this entry.
+  written_for: "Hermes Agent 0.21.x (`hermes --version`)"
+  version_args: ["--version"]
+  # THE DENIAL IS ON ARGV, and `--toolsets` is the whole of it.
+  #
+  # It was nearly a seeded config.yaml, on the strength of the vendor's docs
+  # listing `--toolsets` under `hermes chat`. Read against the parser
+  # (hermes_cli/_parser.py) it is a TOP-LEVEL flag whose own help says
+  # "Applies to -z/--oneshot", and hermes_cli/oneshot.py states the rule:
+  # "Toolsets = explicit --toolsets, else the user's `cli` toolsets from
+  # `hermes tools`". So passing it REPLACES the set for the invocation and
+  # the config file is not consulted at all — a per-call denial rather than a
+  # file that can quietly stop applying.
+  #
+  # `web` resolves to exactly `web_search` and `web_extract` (toolsets.py),
+  # which is the surface this backend keeps and nothing else. Everything the
+  # default `hermes-cli` platform toolset carries goes with it: file,
+  # terminal, browser, code_execution, delegation, cronjob, memory, skills,
+  # vision, image_gen, todo, tts, session_search, computer_use and kanban.
+  #
+  # AND IT FAILS THE SAFE WAY, which is the opposite of grok's allowlist. An
+  # entry this build does not know is warned about and dropped; if NOTHING
+  # valid survives, the run stops on "--toolsets did not contain any valid
+  # toolsets" rather than falling back to every tool. A name that goes stale
+  # therefore costs the call, loudly, instead of the restriction.
+  #
+  # `--ignore-rules` is the other half: it skips the auto-injection of
+  # AGENTS.md, SOUL.md, .cursorrules, persistent memory and preloaded skills.
+  # Two things follow, and this backend wants both — no context is admitted
+  # from a host the engine does not control, and the CLI keeps no second,
+  # invisible memory beside the seat's own.
+  #
+  # NOT --ignore-user-config and NOT --safe-mode. Neither is needed now that
+  # the tools are on argv, and each would discard an operator's own
+  # cli.overrides.seed_files if they ever add one.
+  #
+  # AND NOT --yolo, which the vendor's own flag help makes unnecessary rather
+  # than merely unwise: `-z` already says "approvals are auto-bypassed". There
+  # is no prompt for a headless run to wedge on, so --yolo would grant
+  # something for nothing.
+  complete_args: ["--ignore-rules", "--toolsets", "web"]
+  local_tools: denied
+  model_args: ["--model", "{model}"]
+  # NO SYSTEM-PROMPT CHANNEL. This CLI's identity slot is SOUL.md, a file in
+  # its home rather than a per-call argument — and --ignore-rules deliberately
+  # switches its injection off. So the seat's identity rides the transcript,
+  # as it does for codex, opencode, copilot, cursor-agent and muse-code.
+  #
+  # `-z` IS THE ONE-SHOT ENTRY POINT and it takes the prompt as its value, so
+  # it goes in prompt_args: the vendor's contract for it is "single prompt in,
+  # final response text out, nothing else on stdout or stderr", which is what
+  # makes `output: text` correct here. `hermes chat --oneshot -q` is the
+  # alternative and is NOT used: the vendor's own note says it is the one to
+  # reach for when "you need tool output in the transcript too", and a tool
+  # transcript spliced into the reply is what this backend must not have.
+  #
+  # `-p` IS NOT THE PROMPT FLAG on this CLI — it selects a PROFILE. Nothing
+  # here uses it; it is recorded because every other profile in this file
+  # spells `-p` as print or prompt, and borrowing that reflex would silently
+  # run every seat against a profile named after its own transcript.
+  prompt_mode: argv
+  prompt_args: ["-z"]
+  output: text
+  # THE COUNTS COME FROM A FILE, because the entry point that gives a clean
+  # answer gives nothing else at all — see [Profile.UsageFileArgs]. The report
+  # is written after the run, "even when the run fails", and carries
+  # `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`,
+  # `reasoning_tokens`, `total_tokens`, `estimated_cost_usd`, `model`,
+  # `provider` and the completed/failed flags.
+  #
+  # `reasoning_tokens` is deliberately not read: it is a SUBSET of the output
+  # count on every vendor that reports both, and adding it would double-charge
+  # a thinking model's budget.
+  usage_file_args: ["--usage-file", "{usage_file}"]
+  usage:
+    input: [["input_tokens"]]
+    output: [["output_tokens"]]
+    cache_read: [["cache_read_tokens"]]
+    cache_write: [["cache_write_tokens"]]
+  config_env:
+    # The vendor's own relocation variable, and the one its official container
+    # image uses (HERMES_HOME=/opt/data). It moves the config, the credentials,
+    # the session store and the logs — not the installation, which stays
+    # wherever the installer put it.
+    HERMES_HOME: ".hermes"
+  # TWO FILES AGAIN, and for a different reason than kimi-code's: .env holds
+  # API keys and bot tokens, auth.json holds the OAuth credential pool that
+  # `hermes auth add --type oauth` writes. An entry may use either or both.
+  credential_paths:
+    - ".hermes/.env"
+    - ".hermes/auth.json"
+  # state.db is the session store — every message of every session — and
+  # SQLite's two sidecars hold the tail of it, so pruning the database and
+  # leaving them behind is half a prune. memories/ is the CLI's own persistent
+  # memory (MEMORY.md, USER.md) and skills/ is what its skill_manage tool
+  # writes: both are exactly the second invisible memory this backend refuses,
+  # and --ignore-rules already stops them being injected.
+  volatile_paths:
+    - ".hermes/state.db"
+    - ".hermes/state.db-wal"
+    - ".hermes/state.db-shm"
+    - ".hermes/sessions"
+    - ".hermes/memories"
+    - ".hermes/skills"
+    - ".hermes/checkpoints"
+    - ".hermes/cache"
+    - ".hermes/cron"
+    - ".hermes/logs"
+  host_credential_paths:
+    - ".hermes/.env"
+    - ".hermes/auth.json"
+  # `hermes auth` with no subcommand is the interactive credential wizard, and
+  # it is what brokers an OAuth sign-in. `hermes login` still exists and is
+  # DEPRECATED in favour of it.
+  #
+  # No logout_args: `hermes auth logout` requires a provider name, and which
+  # provider a seat is logged into is the operator's to know rather than this
+  # profile's to guess. `hermes status` needs no argument and reports agent,
+  # auth and platform state, so it is the status probe.
+  login_args: ["auth"]
+  status_args: ["status"]
+  # NO api_key_env and NO token_env. This CLI fronts thirty-odd providers and
+  # each has its own variable — OPENROUTER_API_KEY, ANTHROPIC_API_KEY,
+  # NOUS_API_KEY — so there is no one key variable a profile could name, and
+  # naming one would silently be wrong for every other entry. A metered key
+  # goes in the credential home's .env (which travels to every seat) or
+  # through `cli.env`, where it is ${VAR}-resolved like any other secret.
+  #
+  # THESE SENTINELS ARE GENERIC, and unusually so for this file, because this
+  # CLI publishes no verbatim exhausted-plan wording: it rotates its OWN
+  # credential pool and falls through to its OWN fallback providers first, so
+  # what reaches this backend is whatever the last provider in that chain
+  # said, in its own words. `hermes -z: agent failed:` is the CLI's own
+  # prefix on all of it (hermes_cli/oneshot.py) but says nothing about WHICH
+  # failure it was, so it cannot separate a spent plan from a dead login.
+  #
+  # WHAT MAKES THEM SAFE IS THE SCOPE, not the wording. `-z` writes the final
+  # response text to stdout and nothing else BY CONTRACT, and every failure
+  # goes to stderr — so these are matched against stderr alone and a seat that
+  # was ASKED about rate limits cannot answer its way into a credential
+  # cooldown. See [MarkerScope]. Without that, "quota" in a model's prose
+  # would bench this seat's login, which is the bug this file already fixed
+  # once by dropping a bare "429".
+  #
+  # `hermes auth` is the auth marker because it is the CLI's own remedy
+  # sentence — a command name rather than a phrase a model writes by accident.
+  marker_scope: stderr
+  limit_markers:
+    - sentinel: "rate limit"
+    - sentinel: "usage limit"
+    - sentinel: "quota"
+  auth_markers:
+    - sentinel: "hermes auth"
+    - sentinel: "No credentials"
+
+pi:
+  binary: pi
+  # NO VENDOR, for the same reason as hermes: this is a harness over 20+
+  # providers and its `--model` takes a `provider/id` pattern, so the family
+  # belongs to the entry's model rather than to the CLI.
+  vendor: ""
+  # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
+  # `@mariozechner` scope to Earendil Works, so the older package name is a
+  # different, frozen thing.
+  #
+  # MEASURED AGAINST 0.85.1: the flags off `pi --help`, the tool surface and
+  # the system prompt off the request body the CLI actually sent (a stub HTTP
+  # endpoint standing in for the model), and the error format off real 401
+  # and 429 responses.
+  written_for: "Pi Coding Agent 0.85.x (`pi --version`)"
+  version_args: ["--version"]
+  # `-p` is print mode: answer and exit, no TUI. The rest is the isolation,
+  # and this CLI is unusually generous with it — every discovery path it has
+  # can be switched off by name:
+  #
+  #   --no-tools          every built-in, extension and custom tool off
+  #   --no-context-files  no AGENTS.md / CLAUDE.md discovery
+  #   --no-extensions     no extension discovery (extensions EXECUTE)
+  #   --no-skills         no skill discovery
+  #   --no-prompt-templates / --no-themes  the remaining two discovery passes
+  #   --no-approve        project-local files ignored for this run
+  #   --no-session        ephemeral: nothing written to the session store
+  #
+  # --no-tools AND NOT an allowlist, which is the opposite of every other
+  # profile here, because there is no web tool to keep. MEASURED off the
+  # request body: the baseline this build advertises is FOUR tools — `bash`,
+  # `edit`, `read`, `write` — and `--no-tools` sends the tool array empty.
+  # (The vendor's README also lists `grep`, `find`, `ls` and a Windows
+  # `powershell`; none was registered here, so the four are what a Linux
+  # engine host actually faces.) Web is the one local tool this backend never
+  # denies, and on this CLI there is simply none to deny.
+  #
+  # --no-approve rather than trusting the per-call directory: non-interactive
+  # modes never show a trust prompt and fall back to `defaultProjectTrust`
+  # from the operator's own global settings, which may be `always`. This
+  # pins the answer for the run instead of inheriting it.
+  complete_args:
+    - "-p"
+    - "--no-tools"
+    - "--no-context-files"
+    - "--no-extensions"
+    - "--no-skills"
+    - "--no-prompt-templates"
+    - "--no-themes"
+    - "--no-approve"
+    - "--no-session"
+  local_tools: denied
+  model_args: ["--model", "{model}"]
+  # Replace, not append: `--append-system-prompt` is the other half of this
+  # pair and would leave the harness's own prompt in front of the seat's. The
+  # vendor notes that context files and skills are still appended to a
+  # replaced prompt — which is why --no-context-files and --no-skills are in
+  # complete_args rather than being merely tidy.
+  #
+  # MEASURED, and the replacement is not quite total: what reached the model
+  # was the seat's own prompt followed by one line, `Current working
+  # directory: <path>`. That is this backend's per-call scratch directory,
+  # it is true, and it is 60-odd characters rather than a coding-agent
+  # identity — so it is recorded here rather than fought.
+  #
+  # Inline, because this CLI takes a string and has no file variant. The one
+  # file channel it does have is `~/.pi/agent/SYSTEM.md`, which is static per
+  # home and cannot carry a prompt that differs per phase. So the seat's
+  # identity is on argv here, as it is for grok — and the prompt already is
+  # too, so on a shared host both are readable through /proc/<pid>/cmdline and
+  # both count against ARG_MAX. `cli.overrides.system_prompt_args: []` puts
+  # the identity back in the transcript for an operator who would rather.
+  system_prompt_args: ["--system-prompt", "{system}"]
+  prompt_mode: argv
+  # `--` stops option parsing, so a transcript that happens to begin with a
+  # dash is a prompt rather than an unknown flag. This CLI is the only one
+  # here that offers the separator, and the vendor documents exactly this use
+  # (`pi -p -- "- Summarize these points"`).
+  prompt_args: ["--"]
+  # PLAIN TEXT, deliberately, although this CLI has a richer channel.
+  # `--mode json` streams every session event and would carry real token
+  # counts — but its answer lives at `message.content[N].text`, an array of
+  # text, thinking and tool-call blocks whose index moves with whether the
+  # model reasoned, and a model that interleaves thinking with prose spreads
+  # one reply across several of them. Reading it by index would guess, and a
+  # guess about WHICH part of the output is the model's reply is the one thing
+  # this backend must never get wrong. Print mode prints the reply and exits.
+  #
+  # The cost is the token counts, which are estimated here — the same state
+  # copilot, grok and muse-code are in, and `crewlet llm doctor` says so. An
+  # operator who wants the stream has it in one override:
+  #
+  #   overrides:
+  #     complete_args: ["--mode", "json", …]
+  #     output: jsonl
+  #     event_type_path: ["type"]
+  #     text_events: ["turn_end"]
+  #     text_paths: [["message", "content", "0", "text"]]
+  #     usage: {input: [["usage", "input"]], output: [["usage", "output"]]}
+  output: text
+  env:
+    # No startup network calls: no version check against pi.dev, no package
+    # update check, no install telemetry. The same decision as muse-code's and
+    # kimi-code's auto-update switches, plus the reason those two do not have:
+    # a check on every call is a per-call round trip on the seat's latency.
+    PI_OFFLINE: "1"
+  config_env:
+    # The vendor's own relocation variable. Note the `agent` segment: the
+    # config root is ~/.pi/agent rather than ~/.pi, so the seat home's copy is
+    # .pi/agent and every path below is relative to that.
+    PI_CODING_AGENT_DIR: ".pi/agent"
+  # OAuth tokens and API keys both land here, 0600, and the file auto-refreshes
+  # an expired token in place.
+  credential_paths: [".pi/agent/auth.json"]
+  # --no-session already keeps the store empty, and these are what the CLI
+  # writes anyway: sessions/ if an override ever drops the flag, trust.json
+  # which accumulates one record per per-call directory that will never exist
+  # again, and the model catalogue cache, which PI_OFFLINE keeps stale rather
+  # than fresh. Extensions and packages are pruned because an extension is
+  # EXECUTABLE: --no-extensions stops discovery, and this stops one turn from
+  # leaving something behind for the next to find.
+  volatile_paths:
+    - ".pi/agent/sessions"
+    - ".pi/agent/trust.json"
+    - ".pi/agent/models-store.json"
+    - ".pi/agent/extensions"
+    - ".pi/agent/npm"
+    - ".pi/agent/git"
+  host_credential_paths: [".pi/agent/auth.json"]
+  # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a
+  # subcommand — this CLI has no headless login of any kind. So the broker
+  # starts the interactive session in the credential home and the operator
+  # types `/login`, completes the browser flow, then `/exit`.
+  #
+  # That is the shape the claude-code profile's note warns about, and the
+  # difference is that there it was avoidable: `claude auth login` exists and
+  # `claude /login` merely LOOKED like a login. Here the REPL is the only
+  # route the vendor offers, so the alternative is declaring no login at all
+  # and telling the operator, wrongly, that the CLI "authenticates on first
+  # use". `--no-session` keeps the sign-in from leaving a session behind.
+  #
+  # No logout_args and no status_args: `/logout` is a slash command too, and
+  # there is no status subcommand.
+  login_args: ["--no-session"]
+  # `--api-key` exists as a flag but the environment variable is per provider
+  # — ANTHROPIC_API_KEY, OPENAI_API_KEY, one for each of the twenty-odd — so
+  # there is no single key variable to name, exactly as for hermes. A metered
+  # key goes in auth.json (which travels to every seat) or through `cli.env`.
+  #
+  # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this CLI's, and a
+  # measurement is what settles that rather than a guess: a failing call
+  # writes `<status>: <the provider's error JSON, verbatim>` to stderr, e.g.
+  #
+  #   429: {"message":"…","type":"rate_limit_error","code":"rate_limit_exceeded"}
+  #
+  # So the only stable tokens are the provider's own `type` and `code`, which
+  # is what these are. The status prefix is deliberately NOT one: this file
+  # dropped a bare "429" sentinel once already, because three digits match
+  # ordinary prose. Pi's subscription providers are Claude Pro/Max, ChatGPT
+  # and GitHub Copilot, so both vendors' vocabularies are listed; if yours
+  # differs, override cli.overrides.limit_markers.
+  #
+  # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: a failed
+  # call left stdout EMPTY and wrote `<status>: <the provider's error JSON>`
+  # to stderr. Matching stderr alone is what stops a model that mentions an
+  # error code in prose from benching the seat's credential — and here the
+  # exposure would be total, since on a `text` profile the whole of stdout IS
+  # the answer. See [MarkerScope].
+  marker_scope: stderr
+  limit_markers:
+    - sentinel: "Usage limit reached"
+    - sentinel: '"type":"rate_limit_error"'
+    - sentinel: "rate_limit_exceeded"
+    - sentinel: "insufficient_quota"
+  #
+  # The auth sentinels are structural for the same reason, and deliberately
+  # NOT this CLI's own `/login` remedy: an auth marker fires KindAuth, which
+  # exhausts the credential exactly as a spent plan does, and `/login` is
+  # four characters a model writes in its own prose whenever somebody asks it
+  # about signing in. The two spellings of the same failure are both listed
+  # because a sentinel is matched case-sensitively.
+  auth_markers:
+    - sentinel: "authentication_error"
+    - sentinel: "Invalid API key"
+    - sentinel: "invalid_api_key"
+
 # `custom` ships NOTHING on purpose. An operator pointing at their own wrapper
 # or a self-hosted gateway declares every field under cli.overrides, and the
 # profile validation then names whichever one they left out — which is a far

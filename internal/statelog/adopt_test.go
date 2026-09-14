@@ -112,7 +112,10 @@ func newJoinHarness(t *testing.T) *joinHarness {
 		t.Fatalf("Take: %v", err)
 	}
 	h.manifest = m
-	h.snapPath = filepath.Join(snapDir, "snapshot-4200.db")
+	// THE NAME THE MANIFEST CARRIES, which is how the engine's donor
+	// finds it too: the name is unique per take, so nothing outside can
+	// derive it.
+	h.snapPath = filepath.Join(snapDir, m.Artifact)
 	h.donorDB = donorDB
 
 	donor, err := statelog.NewDonor(statelog.DonorDeps{
@@ -149,8 +152,11 @@ func (h *joinHarness) adopter(t *testing.T) *statelog.Adopter {
 		LivePath: h.joinPath,
 		NodeID:   "joiner",
 		Conn:     h.nc,
-		Need: func(context.Context) (map[string]uint64, map[string]uint32, error) {
-			return map[string]uint64{"probe": 4_000}, map[string]uint32{"probe": 1}, nil
+		Need: func(context.Context) (statelog.OfferRequest, error) {
+			return statelog.OfferRequest{
+				Need:        map[string]uint64{"probe": 4_000},
+				Generations: map[string]uint32{"probe": 1},
+			}, nil
 		},
 		Hold: func(context.Context, map[string]uint64) (func(), error) {
 			h.held.Add(1)

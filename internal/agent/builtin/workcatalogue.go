@@ -222,7 +222,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 		t.deps.settle(ctx, result.Position)
 		out["types"] = map[string]any{
-			"count": len(types), "outcome": string(result.Outcome),
+			"count": len(types), "outcome": string(result.Outcome), "position": positionOf(result.Position),
 			"version": result.Version,
 		}
 	}
@@ -237,7 +237,7 @@ func (t *writeWorkCatalogue) CallForTurn(ctx context.Context, turn *turnctx.Turn
 		}
 		t.deps.settle(ctx, result.Position)
 		out["fields"] = map[string]any{
-			"count": len(fields), "outcome": string(result.Outcome),
+			"count": len(fields), "outcome": string(result.Outcome), "position": positionOf(result.Position),
 			"version": result.Version,
 		}
 	}

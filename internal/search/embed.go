@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // The embedding duty: ONE fleet singleton, one provider bill, N copies.
@@ -210,9 +211,13 @@ type Document struct {
 }
 
 // text is what is actually sent, cut to the per-source ceiling.
+//
+// Through [textcut.Bytes], like every other cut in this package: unmarked,
+// because what the provider receives is embedding INPUT and an appended
+// character would be a token in the vector rather than a note about one.
 func (d Document) text() string {
 	joined := strings.TrimSpace(d.Title) + "\n\n" + strings.TrimSpace(d.Body)
-	return cut(strings.TrimSpace(joined), EmbedInputBytes)
+	return textcut.Bytes(strings.TrimSpace(joined), EmbedInputBytes)
 }
 
 // sha is the digest of the exact text that was embedded.
@@ -226,23 +231,6 @@ func (d Document) sha() string {
 	sum := sha256.Sum256([]byte(d.text()))
 	return hex.EncodeToString(sum[:])
 }
-
-// cut shortens a string at a rune boundary.
-//
-// BYTES, and the boundary matters: a plain slice is invalid UTF-8 whenever a
-// multi-byte rune straddles the cut, which a JSON encoder substitutes and a
-// vendor rejects.
-func cut(s string, limit int) string {
-	if len(s) <= limit {
-		return s
-	}
-	for limit > 0 && !isRuneStart(s[limit]) {
-		limit--
-	}
-	return s[:limit]
-}
-
-func isRuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
 // EmbedDeps is what the duty needs.
 type EmbedDeps struct {

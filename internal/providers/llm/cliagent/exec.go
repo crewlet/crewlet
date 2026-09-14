@@ -384,6 +384,39 @@ func extractStream(p Profile, stdout string) extracted {
 	return out
 }
 
+// applyUsageFile overlays a vendor's SEPARATE usage report on what stdout
+// said, for a profile whose CLI writes one — see [Profile.UsageFileArgs].
+//
+// BOTH PROMPT COUNTS COME FROM THE FILE OR NEITHER DOES. A partial overlay
+// would pair one source's input count with another's output count, and the
+// sum is what a budget is charged. The two cache figures are not part of that
+// test: a provider that caches nothing reports neither, and zero is the true
+// answer there.
+func (e *extracted) applyUsageFile(p Profile, raw string) {
+	if len(p.UsageFileArgs) == 0 || strings.TrimSpace(raw) == "" {
+		return
+	}
+	doc, ok := decodeObject(strings.TrimSpace(raw))
+	if !ok {
+		return
+	}
+	input, gotInput := firstInt(doc, p.Usage.Input)
+	output, gotOutput := firstInt(doc, p.Usage.Output)
+	if !gotInput || !gotOutput {
+		// The report exists but this profile cannot read both counts
+		// out of it, which is drift rather than a zero-token call. Left
+		// to the estimate, the same answer a CLI that reports nothing
+		// gets — and better than charging a real output count against a
+		// prompt this build read as zero. The two cache figures are not
+		// in the test: a provider that caches nothing reports neither,
+		// and zero is the true answer there.
+		return
+	}
+	e.input, e.output, e.reported = input, output, true
+	e.cacheRead, _ = firstInt(doc, p.Usage.CacheRead)
+	e.cacheWrite, _ = firstInt(doc, p.Usage.CacheWrite)
+}
+
 // textOf reads the assistant's text out of ONE line of a jsonl stream,
 // honouring the profile's event filter.
 //

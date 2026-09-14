@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -447,4 +448,70 @@ func TestAPeopleFieldWithoutARosterPassesThrough(t *testing.T) {
 	if _, err := coerceField(field, json.RawMessage(`"whoever"`), world()); err == nil {
 		t.Error("a build WITH a roster accepted a handle nobody has")
 	}
+}
+
+// A REFUSAL QUOTES THE WHOLE VALUE, AND THE URL RULE PRESCRIBES A REAL ONE.
+//
+// The quote is the caller's OWN value handed back so it can see what failed to
+// match, and internal/agent/builtin already states the rule for the same
+// gesture: "a shortened echo names a query the model never sent — which is
+// worse than a long line, because the model then retries against the wrong
+// string." At sixty-four bytes that fired on an ordinary URL.
+//
+// coerceURL is where it stopped being merely unhelpful. Its refusal composes
+// the CORRECTION out of the same quote — "write https://<value>" — so a URL
+// past the cap was answered with an instruction to store a truncated address
+// with an ellipsis inside it. That value parses, and lands on the board as a
+// dead link nobody typed. This asserts the whole round trip: take what the
+// refusal told the caller to write, put it back through the same rule, and it
+// has to be accepted as exactly itself.
+func TestAURLRefusalPrescribesAValueThatIsAccepted(t *testing.T) {
+	t.Parallel()
+	field := FieldDef{Slug: "runbook", Type: FieldURL}
+	// Comfortably past the old sixty-four-byte quote and well inside what
+	// the field itself accepts, which is the size that makes a cut here a
+	// bug rather than a guard.
+	bare := "example.com/runbooks/incident-response/" +
+		strings.Repeat("section-", 12) + "final?revision=7&highlight=rollback"
+
+	_, err := coerceField(field, mustJSON(t, bare), world())
+	if err == nil {
+		t.Fatal("a url with no scheme was accepted")
+	}
+	// THE ECHO, matched as the QUOTED form so this cannot be satisfied by
+	// the prescription below happening to carry the same characters.
+	if !strings.Contains(err.Error(), strconv.Quote(bare)) {
+		t.Fatalf("the refusal does not quote back the whole value it rejected, "+
+			"so a caller cannot match it to what it sent:\n%v", err)
+	}
+
+	// THE PRESCRIPTION, taken literally. Everything after the last
+	// "https://" in the refusal is what a caller is being told to write.
+	i := strings.LastIndex(err.Error(), "https://")
+	if i < 0 {
+		t.Fatalf("the refusal names no replacement: %v", err)
+	}
+	prescribed := err.Error()[i:]
+	if strings.Contains(prescribed, "…") {
+		t.Fatalf("the refusal prescribes a CUT address, which parses and "+
+			"stores as a dead link: %q", prescribed)
+	}
+	got, err := coerceField(field, mustJSON(t, prescribed), world())
+	if err != nil {
+		t.Fatalf("the value the refusal told the caller to write was itself "+
+			"refused: %v", err)
+	}
+	if string(got.Value) != string(mustJSON(t, prescribed)) {
+		t.Errorf("the prescribed value stored as %s, want %s",
+			got.Value, mustJSON(t, prescribed))
+	}
+}
+
+func mustJSON(t *testing.T, s string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal %q: %v", s, err)
+	}
+	return raw
 }

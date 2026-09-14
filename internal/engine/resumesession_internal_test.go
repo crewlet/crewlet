@@ -47,6 +47,7 @@ func TestAResumedTurnRecordsWhatItSaidToTheConversation(t *testing.T) {
 
 	e.recordResume(ctx, resumed("slack:C1"), turn.Result{
 		Decision:   phase.Done,
+		Delivered:  true,
 		Artifact:   "shipped the branch and opened the MR",
 		LastReview: &turn.Review{CompletedWork: "MR !42 is up"},
 	})
@@ -181,7 +182,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 		Name:  "Acme",
 		Roles: []*org.Role{{Name: "Engineer", DeclaredHandle: "swe"}},
 	}}
-	got := tel.runnerTurn(company, "wk-1", 0, nil, "fix the failing test", turn.ReplyTool)
+	got := tel.runnerTurn(company, "wk-1", 0, nil, "fix the failing test", turn.ToolReply(""))
 	if got.Context == nil {
 		t.Fatal("the runner turn carries no turn context")
 	}
@@ -191,7 +192,7 @@ func TestTheTurnCarriesWhatWorkItDetachesWillNeed(t *testing.T) {
 	if got.Context.Task != "fix the failing test" {
 		t.Errorf("turn context task = %q", got.Context.Task)
 	}
-	if got.Context.Reply != string(turn.ReplyTool) {
+	if got.Context.Reply != turn.ToolReply("").String() {
 		t.Errorf("turn context reply = %q, want the delivery obligation", got.Context.Reply)
 	}
 }

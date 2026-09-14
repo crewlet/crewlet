@@ -603,12 +603,21 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation, wo
 	// produced them — no trigger, no intent, no calls — and the renderer's
 	// other three sections never appeared at all.
 	in := ledger.SessionInput{
-		TurnID:   workKey,
-		At:       now.Format(time.RFC3339),
-		Trigger:  trigger,
-		Reply:    res.Artifact,
-		Decision: res.Decision.String(),
-		Skip:     MetaToolNames(),
+		TurnID:  workKey,
+		At:      now.Format(time.RFC3339),
+		Trigger: trigger,
+		Reply:   res.Artifact,
+		// WHICH FIELD THAT ARTIFACT LANDS IN. It is the reviewer's
+		// `final_artifact`, which is prose about the turn rather than
+		// anything a tool sent, and this was filed unconditionally as the
+		// seat's own "You replied" — so a turn that did real work and told
+		// nobody wrote into its own history that it had. That record is
+		// what the next turn on this thread reads, which is what made the
+		// failure self-sealing: the founder's follow-up would be answered
+		// against a reply that was never sent.
+		Delivered: res.Delivered,
+		Decision:  res.Decision.String(),
+		Skip:      MetaToolNames(),
 	}
 	if w := res.LastWork; w != nil {
 		// The LAST round's, which is the one the reply came out of. The
@@ -955,7 +964,7 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 // which is what makes triage cheap; a seat wrongly told somebody is must post
 // on every broadcast it observes.
 func ReplyFor(evs []*events.Event) turn.Reply {
-	out := turn.ReplyNone
+	out := turn.NoReply()
 	for _, ev := range evs {
 		if ev == nil {
 			continue
@@ -968,12 +977,19 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// Nothing here calls a tool to deliver, so demanding one
 			// for the ask alone would loop every colleague exchange to
 			// exhaustion.
-			owed = turn.ReplyEngine
+			owed = turn.EngineReply()
 
 		case types.TaskAssigned{}.EventType():
 			// Work was assigned to this seat. The answer lives wherever
 			// the tracker is, and only a tool puts it there.
-			owed = turn.ReplyTool
+			//
+			// NO SURFACE, deliberately. Unlike a notification, an
+			// assignment does not say where its answer belongs: moving
+			// the item, commenting on the ticket and replying in the
+			// thread the work came from are all honest answers, and the
+			// engine has no basis to pick one. Naming a surface here
+			// would refuse the other two. See [turn.Reply.Surface].
+			owed = turn.ToolReply("")
 
 		case types.ExternalNotification{}.EventType():
 			// The third-party app's own reading of its routing. See
@@ -990,8 +1006,17 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// inbound message: a seat could end a turn woken by a direct
 			// ask having posted nothing, and the guard that exists to
 			// catch exactly that saw ReplyNone.
+			//
+			// AND WHERE THEY ARE WAITING. The source is the vendor's own
+			// name — `mattermost`, `slack`, `jira` — which is the same
+			// vocabulary a delivering tool reports, because an MCP tool's
+			// surface is its server and a company names that server after
+			// the vendor it serves. Carried because the obligation is
+			// useless without it: "somebody is waiting on a tool" is
+			// satisfied by any tool at all, so a founder's Mattermost DM
+			// was closed out by a row in the tracker.
 			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n.Addressed {
-				owed = turn.ReplyTool
+				owed = turn.ToolReply(n.NotificationSource)
 			}
 
 			// types.A2AMessageType is deliberately absent: that hop wakes
@@ -999,7 +1024,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
-		if replyRank[owed] > replyRank[out] {
+		if replyRank[owed.Kind] > replyRank[out.Kind] {
 			out = owed
 		}
 	}
@@ -1009,7 +1034,7 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 // replyRank orders the obligations for [ReplyFor]: the one the engine
 // enforces outranks the one it answers itself, and both outrank none. A
 // value not in the map ranks zero, below every real obligation.
-var replyRank = map[turn.Reply]int{
+var replyRank = map[turn.ReplyKind]int{
 	turn.ReplyNone:   1,
 	turn.ReplyEngine: 2,
 	turn.ReplyTool:   3,

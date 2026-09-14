@@ -53,23 +53,23 @@ func newFakeKB() *fakeKB {
 }
 
 func (f *fakeKB) List(_ context.Context, _ pages.Filter,
-	level statelog.ReadLevel) (pages.Listing, error) {
+	fresh statelog.Freshness) (pages.Listing, error) {
 
-	f.levels = append(f.levels, level)
+	f.levels = append(f.levels, fresh.Level)
 	if f.readErr != nil {
 		return pages.Listing{}, f.readErr
 	}
 	return pages.Listing{
 		Pages:    []pages.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
-		Level:    level,
+		Level:    fresh.Level,
 		Complete: true,
 	}, nil
 }
 
 func (f *fakeKB) Get(_ context.Context, ref string,
-	level statelog.ReadLevel) (pages.Detail, error) {
+	fresh statelog.Freshness) (pages.Detail, error) {
 
-	f.levels = append(f.levels, level)
+	f.levels = append(f.levels, fresh.Level)
 	if f.readErr != nil {
 		return pages.Detail{}, f.readErr
 	}
@@ -187,14 +187,18 @@ func TestThePageWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
-	deliverables := reg.Deliverables()
+	deliveries := reg.Deliveries()
 	for _, name := range builtin.PageWrites() {
-		if !slices.Contains(deliverables, name) {
-			t.Errorf("%s does not count as a delivery", name)
+		// AND ON THE KNOWLEDGE BASE, not just "somewhere". A page write
+		// answers a turn asked to document something; it does not answer
+		// somebody waiting in a chat thread, and the surface is what keeps
+		// those two apart.
+		if deliveries[name] != pages.Source {
+			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], pages.Source)
 		}
 	}
 	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {
-		if slices.Contains(deliverables, name) {
+		if _, ok := deliveries[name]; ok {
 			t.Errorf("%s counts as a delivery, so a turn that only read would pass", name)
 		}
 	}
@@ -314,13 +318,13 @@ func TestListingReturnsOnlyPublishedPages(t *testing.T) {
 type listRecorder struct{ filters []pages.Filter }
 
 func (l *listRecorder) List(_ context.Context, f pages.Filter,
-	_ statelog.ReadLevel) (pages.Listing, error) {
+	_ statelog.Freshness) (pages.Listing, error) {
 	l.filters = append(l.filters, f)
 	return pages.Listing{}, nil
 }
 
 func (l *listRecorder) Get(context.Context, string,
-	statelog.ReadLevel,
+	statelog.Freshness,
 ) (pages.Detail, error) {
 	return pages.Detail{}, pages.ErrNotFound
 }
@@ -523,11 +527,11 @@ func TestAnIncompleteListingTellsTheModel(t *testing.T) {
 type partialKB struct{ fakeKB }
 
 func (p *partialKB) List(_ context.Context, _ pages.Filter,
-	level statelog.ReadLevel,
+	fresh statelog.Freshness,
 ) (pages.Listing, error) {
 	return pages.Listing{
 		Pages:    []pages.Summary{{ID: "p1", Title: "Deploy Runbook"}},
-		Level:    level,
+		Level:    fresh.Level,
 		Complete: false,
 	}, nil
 }

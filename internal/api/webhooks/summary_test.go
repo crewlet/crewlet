@@ -153,7 +153,7 @@ func TestALongTitleIsTrimmedWithoutBreakingItsCharacters(t *testing.T) {
 	summary := e.stream.seen[0].Summary
 	e.stream.mu.Unlock()
 
-	if !strings.Contains(summary, "...") {
+	if !strings.Contains(summary, "…") {
 		t.Errorf("a 100-character title was not trimmed: %q", summary)
 	}
 	if !utf8.ValidString(summary) {

@@ -363,6 +363,85 @@ func TestTheEmptyAnswerCorrectiveIsBoundedToOne(t *testing.T) {
 	}
 }
 
+// The allowance bounds a RUN of empty rounds, not the phase's lifetime. An
+// executor stalled at round 2, worked at round 3, and stalled again at round
+// 5; counted for the phase, the second stall found the allowance already spent
+// and broke the loop with most of its budget unused — one round before the
+// message it had just said it was about to send. Counted per run, the working
+// round clears it and the second stall gets its own nudge.
+func TestAnEmptyRoundAfterRealWorkGetsItsOwnCorrective(t *testing.T) {
+	t.Parallel()
+	empty := llm.Completion{Content: ""}
+	p := &scriptedProvider{turns: []llm.Completion{
+		{Content: "filing it", ToolCalls: []llm.ToolCall{toolCall("1", "write")}},
+		empty, // stall one — corrective, allowance spent
+		{Content: "trying again", ToolCalls: []llm.ToolCall{toolCall("2", "write")}},
+		empty, // stall two — a NEW run, so a new corrective
+		{Content: "posted"},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("write")}}
+
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 10,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.RoundsUsed != 5 {
+		t.Fatalf("rounds = %d, want 5 — the second stall broke the loop instead "+
+			"of being corrected, so the phase ended with its budget unspent",
+			res.RoundsUsed)
+	}
+	if !strings.Contains(res.Text, "posted") {
+		t.Errorf("text = %q, want the answer the second corrective produced", res.Text)
+	}
+	var correctives int
+	for _, m := range res.Messages {
+		if m.Role == llm.RoleUser && strings.Contains(m.Content, "empty") {
+			correctives++
+		}
+	}
+	if correctives != 2 {
+		t.Errorf("correctives = %d, want 2 — one per run of empty rounds", correctives)
+	}
+	if res.EmptyAnswers != 2 {
+		t.Errorf("EmptyAnswers = %d, want 2 — the metric stays a phase TOTAL; "+
+			"only the allowance is per run", res.EmptyAnswers)
+	}
+}
+
+// The same rule for the forced corrective, whose own rationale — a model that
+// cannot emit the call in three attempts will not emit it in ten — is a claim
+// about consecutive attempts. A round that emitted a call in between is proof
+// the model can, so the run starts over.
+func TestADeclinedRoundAfterACallGetsItsOwnForcedCorrective(t *testing.T) {
+	t.Parallel()
+	prose := llm.Completion{Content: "I think we should stop here"}
+	p := &scriptedProvider{turns: []llm.Completion{
+		prose, prose, // two declines — the run's whole allowance
+		{Content: "fine", ToolCalls: []llm.ToolCall{toolCall("1", "submit_work")}},
+		prose, prose, // a NEW run, so two more correctives
+		{Content: "ok", ToolCalls: []llm.ToolCall{toolCall("2", "submit_work")}},
+	}}
+	s := &fakeSurface{tools: []llm.ToolDef{def("submit_work")}}
+
+	// Six, so the run ends on the second call rather than on a break — what
+	// this asserts is that the loop REACHED it, not where it stopped.
+	res, err := toolloop.Run(t.Context(), toolloop.Config{
+		Provider: p, Surface: s, MaxRounds: 6, ToolChoice: llm.ToolChoiceRequired,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(s.ran) != 2 {
+		t.Fatalf("tool ran %d times, want 2 — the second run of declines was not "+
+			"corrected, so the phase gave up before the second submission", len(s.ran))
+	}
+	if res.RoundsUsed != 6 {
+		t.Errorf("rounds = %d, want 6", res.RoundsUsed)
+	}
+}
+
 // The forced corrective WINS on a caller that required a tool call, so a
 // reviewer's four-round budget is not taxed twice for one round that said
 // nothing. "Call one of these tools" is strictly the better instruction for a

@@ -213,6 +213,23 @@ export function ConfigScreen() {
                         </span>
                       </div>
                     ))}
+                    {/* Both `?? 0` guard the ANSWER, not the fields: `changes`
+                        and `changes_total` are always sent together, but
+                        `diff.data` is null until the query lands, and an
+                        unanswered comparison must render nothing rather than
+                        compare two undefineds. */}
+                    {(diff.data?.changes_total ?? 0) > (diff.data?.changes.length ?? 0) && (
+                      // THE CUT, SAID. The answer is bounded by its response
+                      // budget, so this list is a page of the comparison —
+                      // without a line here a short diff reads as "that is
+                      // all that changed". The server used to report it as a
+                      // pathless CHANGE, which this screen drew as a blank
+                      // path turning undefined into a sentence.
+                      <div className="t-caption faint" style={{ paddingTop: 6 }}>
+                        {diff.data?.changes.length} of {diff.data?.changes_total} shown —{" "}
+                        <code className="inline">crewlet config diff</code> prints them all
+                      </div>
+                    )}
                   </div>
                 </QueryState>
               )}

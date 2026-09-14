@@ -157,6 +157,14 @@ disk question, and it is the one you ask when a join has failed.
 node across at least two nodes — and a recipient that fails a verification asks
 the next donor.
 
+**The manifest names the position the file keeps.** The checkpoint commits with
+the rows, so the position inside the copy is the only one that describes it,
+and the donor reads it back out of the copy after the scrub rather than from
+its own live applier — which has moved on by however many records landed while
+the copy was taken. A recipient verifies the two agree and refuses an artefact
+where they do not. A domain nobody has written to yet is at position zero in
+both, and adoptable.
+
 **On a single node the loop does not run at all.** It skips with the published
 reason `sole_node`, because a full copy every day buys an artefact no peer can
 fetch. A solo deployment's recovery artefact is `crewlet backup`.
@@ -171,6 +179,7 @@ answer rather than a silence:
 | `unhydrated` | this node has not established a complete copy of some domain |
 | `deferred` | this node holds a record it cannot decode |
 | `insufficient_space` | not enough disk in `store.snapshot_dir` |
+| `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
 | `recent` | the newest artefact is younger than `snapshot_interval` — but see below |
 | `failed` | the copy was attempted and errored; the engine log carries the error |
 
@@ -200,9 +209,14 @@ because a fleet whose snapshot loop is skipping has no next rotation to name.
 When a node reports `below_floor`:
 
 1. **`crewlet retention snapshots`** — does any peer hold one, and how old?
-2. If one does, the node fetches it on its own at boot. It takes a **hold** on
-   every domain's log first, which pins the trim for the duration of the
-   transfer — so a join cannot race the trim that made it necessary.
+2. If one does, the node fetches it on its own — at boot, or the moment its
+   own heartbeat finds it below the floor while running: it pauses its
+   appliers, adopts, moves its consumers to the artefact's position and
+   resumes, with no restart. It takes a **hold** on every domain's log first,
+   which pins the trim for the duration of the transfer — so a join cannot
+   race the trim that made it necessary. A running node that finds no donor
+   stays as it is, refusing, and asks again on an interval that doubles up to
+   five minutes.
 3. If none does, the skip reason says why. Fix that first: a fleet where every
    node is `lagging` has an applier problem, not a snapshot problem.
 4. If the fleet genuinely holds none — a single node, or every peer skipping —
@@ -374,7 +388,23 @@ position the fleet holds then names a number space that no longer exists: a
 stored version, a consumer cursor, an arbitration anchor. Nodes refuse to
 serve, which is correct.
 
-The engine detects this from the stream's own **creation instant**, and
+The engine detects this from the stream's own **creation instant**, which the
+broker reports and every applier compares at boot against the instant its
+checkpoint was committed under. On a difference the applier **stops** rather
+than resuming — the log line names both instants and this verb — the node's
+reads refuse `stalled` with that reason, its seats move to a peer, and
+`crewlet retention status` shows the domain as stopped. A checkpoint past the
+log's end is caught the same way, as `wrong_stream`, because a position the
+log has never reached is a position on another stream.
+
+**A rebuild under a node that never restarts is caught too**, on the position
+heartbeat: it reads the stream's state every ten seconds anyway, and the
+creation instant arrives in that same answer. Nothing else can see it — a
+rebuilt stream comes back at generation 0 counting from 1, so once it has
+published past the node's checkpoint every sequence term reads healthy while
+the node applies a different history into rows keyed by the old one. The node
+refuses `wrong_stream`, gives up its seats, and logs both instants.
+
 `reanchor` is the response:
 
 ```
@@ -495,7 +525,7 @@ on.
 
 Each domain's **operation ledger** — the table that answers "did the operation
 I published land here?" — is swept at **30 days**. The horizon comes from the
-client that actually re-asks: a machine retry lives inside a two-second wait,
+client that actually re-asks: a machine retry lives inside a five-second wait,
 but a seat carries an operation id forward and re-asks on its next wake, hours
 or a weekend later. An operation id older than that resolves `unknown` rather
 than `applied`, which is the honest answer once the row is gone.

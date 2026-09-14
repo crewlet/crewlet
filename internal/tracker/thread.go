@@ -87,7 +87,7 @@ func (e *ErrAmbiguousAnswer) Error() string {
 // resolved to the wrong comment closes somebody else's question. So a read
 // failure empties the first and refuses the second.
 func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
-	level statelog.ReadLevel) (ResolvedThread, error) {
+	fresh statelog.Freshness) (ResolvedThread, error) {
 
 	if q.Task == "" {
 		return ResolvedThread{}, fmt.Errorf("tracker: a thread read names no task")
@@ -100,12 +100,9 @@ func (r *Reader) Thread(ctx context.Context, q ThreadQuery,
 	// this node cannot decode covering this task means the comment rows
 	// it is about to read may already be wrong, and routing a wake from
 	// them would wake the wrong people.
-	_, err := r.log.Read(ctx, statelog.Query{
-		Level: level,
-		Scope: statelog.ScopeSet{Paths: []string{ScopeTerm{
-			Kind: TermObject, ID: q.Task,
-		}.Path()}}.Normalised(),
-	}, func(tx *sql.Tx) error {
+	_, err := r.log.Read(ctx, fresh.Query(statelog.ScopeSet{Paths: []string{ScopeTerm{
+		Kind: TermObject, ID: q.Task,
+	}.Path()}}.Normalised(), false), func(tx *sql.Tx) error {
 		if q.ReplyTo != "" {
 			participants, err := threadParticipants(ctx, tx, q.Task, q.ReplyTo)
 			if err != nil {

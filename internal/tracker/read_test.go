@@ -660,7 +660,7 @@ func TestABranchMayNotCarryTheAnswersOwnShape(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{
 		"removed", "archived", "show_closed", "subtasks",
-		"read_level", "max_lag_seconds", "max_lag_seq",
+		"read_level", "max_lag_seconds", "max_lag_seq", "min_position",
 	} {
 		branch := `[{"assignee":"bo","` + key + `":"true"}]`
 		if _, err := tracker.ParseQuery(tracker.MapParams(map[string]any{

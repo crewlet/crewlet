@@ -230,8 +230,18 @@ func Catalogue() []Instrument {
 			Name: StatelogApplyRecords, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain", "result"},
 			Shows: "Records consumed, by what happened to them: applied, " +
-				"retained, gated or skipped. A node applying nothing while " +
-				"its position advances is healthy on lag alone.",
+				"retained, gated, skipped, or reprocessed by a build that could " +
+				"read what an earlier one retained. A node applying nothing " +
+				"while its position advances is healthy on lag alone.",
+		},
+		{
+			Name: StatelogApplyRetries, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"domain"},
+			Shows: "Attempts the apply loop retried in place after a failure " +
+				"that was not a stop — a fetch the broker did not answer, a " +
+				"transaction the disk refused, an applier that errored. A rate " +
+				"that stays up past the retry budget is a node whose rows have " +
+				"stopped moving, and its health says so.",
 		},
 		{
 			Name: StatelogApplyTxAborts, Kind: KindCounter, Unit: UnitCount,

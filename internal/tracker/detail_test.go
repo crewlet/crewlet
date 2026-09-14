@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -32,7 +33,7 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 
 	detail, err := r.reader.Task(t.Context(), created.Key, tracker.DetailWants{
 		History: true,
-	}, statelog.ReadSession)
+	}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read by key: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestATaskReadsBackWholeAndByEveryNameItHasHad(t *testing.T) {
 
 	// THE PARTS NOT ASKED FOR ARE ABSENT.
 	bare, err := r.reader.Task(t.Context(), created.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read by id: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestAMissingTaskIsItsOwnAnswer(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	_, err := r.reader.Task(t.Context(), "ENG-9999", tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err == nil {
 		t.Fatal("a task nobody has read back")
 	}
@@ -106,7 +107,7 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	r.deferRecordOn(other.ID, other.Project)
 
 	detail, err := r.reader.Task(t.Context(), mine.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestAnUnrelatedDeferredRecordDoesNotFlagThisTask(t *testing.T) {
 	}
 
 	flagged, err := r.reader.Task(t.Context(), other.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the affected task: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestALinkComesBackFromBothEnds(t *testing.T) {
 	r.relate(blocked.ID, blocker.ID, tracker.RelationWaitingOn)
 
 	from, err := r.reader.Task(t.Context(), blocked.ID,
-		tracker.DetailWants{Links: true}, statelog.ReadSession)
+		tracker.DetailWants{Links: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the authoring end: %v", err)
 	}
@@ -153,7 +154,7 @@ func TestALinkComesBackFromBothEnds(t *testing.T) {
 	}
 
 	to, err := r.reader.Task(t.Context(), blocker.ID,
-		tracker.DetailWants{Links: true}, statelog.ReadSession)
+		tracker.DetailWants{Links: true}, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		t.Fatalf("read the other end: %v", err)
 	}
@@ -185,7 +186,7 @@ func (r *roundTrip) createTask(title string) tracker.Task {
 	}
 	r.drain()
 	detail, err := r.reader.Task(r.t.Context(), task.ID, tracker.DetailWants{},
-		statelog.ReadSession)
+		statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		r.t.Fatalf("read back %q: %v", title, err)
 	}
@@ -257,7 +258,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	r.drain()
 
 	detail, err := r.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read the thread: %v", err)
 	}
@@ -311,7 +312,7 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 	}
 	r.drain()
 	edited, err := r.reader.Task(t.Context(), created.ID,
-		tracker.DetailWants{Comments: true}, statelog.ReadStale)
+		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read the thread: %v", err)
 	}
@@ -370,5 +371,115 @@ func TestAChecklistItemIsARow(t *testing.T) {
 	})); len(got) != 0 {
 		t.Fatalf("checklist_assignee=bob still answers %v after his item was "+
 			"deleted", got)
+	}
+}
+
+// A LONG COMMENT BODY IS AN EXCERPT IN THE PAGE AND WHOLE WHEN OPENED.
+//
+// The page is excerpted because twenty bodies at [tracker.MaxCommentBody] is
+// ten times the ceiling on one tool answer. That is only legitimate if the
+// rest is reachable, and for a long time it was not: the excerpt was
+// documented as a pointer to a read the engine did not have, so anything a
+// person wrote past 2 KiB could not be recovered by any seat through any
+// tool. This is that read, and the assertion that the two halves disagree —
+// one cut and marked, one exactly what was written — is the whole point.
+func TestALongCommentBodyIsAnExcerptWithAWayBackToTheWhole(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	created := r.createTask("the incident write-up")
+
+	// Past the excerpt and well inside what a write accepts, with a
+	// non-ASCII character ON the boundary: a byte slice there yields
+	// invalid UTF-8, which is the other half of what the cut has to get
+	// right.
+	body := strings.Repeat("a", tracker.CommentBodyShown-1) + "é" +
+		strings.Repeat("b", 500)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", created.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-long", Task: created.ID, Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: body, CreatedAt: wednesday,
+		}}, tracker.ChangeComment, nil); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	page, err := r.reader.Task(t.Context(), created.ID,
+		tracker.DetailWants{Comments: true}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read the thread: %v", err)
+	}
+	if len(page.Comments) != 1 {
+		t.Fatalf("the thread holds %d comment(s), want 1", len(page.Comments))
+	}
+	excerpt := page.Comments[0].Body
+	switch {
+	case excerpt == body:
+		t.Fatal("a body past the excerpt came back whole in the PAGE — " +
+			"twenty of these is ten times what one tool answer may weigh")
+	case !strings.HasSuffix(excerpt, "…"):
+		t.Errorf("the excerpt is unmarked: %q — a body cut at exactly the cap "+
+			"and handed over unmarked reads as a comment that ENDED there",
+			excerpt[max(0, len(excerpt)-8):])
+	case !utf8.ValidString(excerpt):
+		t.Error("the excerpt is not valid UTF-8, so the cut went through a rune")
+	}
+
+	// AND THE WHOLE THING IS ONE READ AWAY. Without this the excerpt is
+	// not a pointer, it is a loss.
+	opened, err := r.reader.Task(t.Context(), created.ID,
+		tracker.DetailWants{Comment: "cm-long"}, statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("open one comment: %v", err)
+	}
+	if len(opened.Comments) != 1 {
+		t.Fatalf("opening one comment answered %d of them", len(opened.Comments))
+	}
+	if opened.Comments[0].Body != body {
+		t.Fatalf("the opened comment is %d bytes and %d were written — opening "+
+			"one is the read that has to be exact",
+			len(opened.Comments[0].Body), len(body))
+	}
+	// IT REPLACES THE PAGE, so there is no cursor inviting a caller to walk
+	// a thread it did not ask for.
+	if opened.CommentsCursor != "" {
+		t.Errorf("opening one comment carried a thread cursor %q",
+			opened.CommentsCursor)
+	}
+	// AND IT IS READ WITHOUT `comments`: naming one IS asking for it, and a
+	// caller that had to pass both would meet a silently empty thread.
+	if len(opened.Comments) == 0 {
+		t.Error("a read naming a comment but not `comments` came back empty")
+	}
+}
+
+// A COMMENT ID THAT IS NOT ON THIS TASK IS ITS OWN ANSWER.
+//
+// Its own sentinel beside ErrNoTask, because the caller's answer differs: a
+// mistyped id is not an empty thread, and a reader told "no comments" would go
+// looking for the wrong thing. Scoped to the task for the same reason — an id
+// from another item must not quietly open a thread the caller was not reading.
+func TestAnUnknownCommentIsItsOwnAnswer(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	mine := r.createTask("mine")
+	theirs := r.createTask("theirs")
+	if _, err := r.writer.UpdateTask(t.Context(), "op-comment", theirs.ID, "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+			ID: "cm-elsewhere", Task: theirs.ID, Author: "ana",
+			AuthorKind: tracker.AuthorHuman, Body: "on the other item",
+			CreatedAt: wednesday,
+		}}, tracker.ChangeComment, nil); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	r.drain()
+
+	for _, id := range []string{"cm-nothing", "cm-elsewhere"} {
+		_, err := r.reader.Task(t.Context(), mine.ID,
+			tracker.DetailWants{Comment: id}, statelog.Freshness{Level: statelog.ReadStale})
+		if !errors.Is(err, tracker.ErrNoComment) {
+			t.Errorf("opening %q on a task that does not have it answered %v, "+
+				"which a caller cannot tell from a store it could not reach",
+				id, err)
+		}
 	}
 }

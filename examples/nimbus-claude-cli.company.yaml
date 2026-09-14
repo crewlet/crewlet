@@ -143,7 +143,8 @@ providers:
                                     #   `crewlet llm doctor` measures.
       cli:
         agent: claude-code          # or codex | gemini-cli | opencode
-                                    #    | muse-code | …
+                                    #    | muse-code | kimi-code | hermes
+                                    #    | pi | …
         mode: text                  # the default: a model behind the
                                     #   engine's own tool loop.  `agent`
                                     #   hands the executor to the CLI's own

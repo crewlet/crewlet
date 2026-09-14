@@ -228,54 +228,67 @@ func TestAStalenessBoundBelongsToTheStaleLevelAlone(t *testing.T) {
 	if q.Level != statelog.ReadStale {
 		t.Fatalf("read_level parsed as %q", q.Level)
 	}
-	// `session` IS NOT IN THIS LIST, deliberately: the grammar refuses it
-	// outright (see [TestSessionIsNotALevelThisGrammarCanHonour]), so a
-	// case for it here would pass for a reason that has nothing to do
-	// with the staleness bound this test is about.
 	for _, level := range []string{"linearizable", "consistent_prefix"} {
 		_, err := parse(t, map[string]any{"read_level": level, "max_lag_seq": "10"})
 		if err == nil {
 			t.Errorf("a staleness bound was accepted at read_level=%s", level)
 		}
 	}
+	// `session` TOO, and it needs the position that makes it a level
+	// this grammar can honour (see
+	// [TestSessionNeedsThePositionItWaitsFor]) — without one the case
+	// would fail for a reason that has nothing to do with the bound.
+	if _, err := parse(t, map[string]any{
+		"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:7",
+		"max_lag_seq": "10",
+	}); err == nil {
+		t.Error("a staleness bound was accepted at read_level=session")
+	}
 	if _, err := parse(t, map[string]any{"read_level": "eventually"}); err == nil {
 		t.Error("a fifth read level was accepted")
 	}
 }
 
-// `session` IS A LEVEL THIS GRAMMAR CANNOT HONOUR, so it is refused rather
-// than served.
+// `session` NEEDS THE POSITION IT WAITS FOR, and `min_position` is how a
+// caller names one.
 //
-// A session read waits for the CALLER'S OWN high-water mark, which the caller
-// supplies — [statelog.Query.Session]. This grammar has no key that carries
-// one, and neither does any surface built on it: an HTTP request holds no
-// position and a seat's tools carry none either. Accepted, the level would
-// wait for the zero position, serve this node's committed prefix and come back
-// labelled `session` — a WRONG LABEL on a stale answer rather than a weaker
-// answer than the one asked for, which is precisely how twenty-one seat call
-// sites asked for the engine's strongest guarantee and were handed its
-// weakest without anything saying so.
-//
-// The refusal names both honest alternatives, because a caller who typed
-// `session` wants freshness and has to be told which kind they can have.
-func TestSessionIsNotALevelThisGrammarCanHonour(t *testing.T) {
+// A session read waits for the CALLER'S OWN high-water mark. Accepted bare,
+// the level would wait for the zero position, serve this node's committed
+// prefix and come back labelled `session` — a WRONG LABEL on a stale answer
+// rather than a weaker answer than the one asked for, which is precisely how
+// twenty-one seat call sites asked for the engine's strongest guarantee and
+// were handed its weakest without anything saying so. So the level is refused
+// without a floor, and the refusal names the key that would make it honest
+// beside the two other asks a caller who typed `session` might have meant.
+func TestSessionNeedsThePositionItWaitsFor(t *testing.T) {
 	t.Parallel()
 	_, err := parse(t, map[string]any{"read_level": "session"})
 	if err == nil {
-		t.Fatal("read_level=session was accepted — it waits for a position " +
-			"no caller on this surface can supply, so what comes back is this " +
-			"node's own prefix wearing a stronger name")
+		t.Fatal("a bare read_level=session was accepted — it waits for a " +
+			"position nobody named, so what comes back is this node's own " +
+			"prefix wearing a stronger name")
 	}
 	// THE REFUSAL IS ACTIONABLE. A caller told only "no" asks again.
-	for _, want := range []string{"linearizable", "max_lag_seq"} {
+	for _, want := range []string{"min_position", "linearizable", "max_lag_seq"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not name %q — a caller who typed "+
 				"`session` wants freshness and has to be told which kind "+
 				"they can have: %v", want, err)
 		}
 	}
-	// AND THE OTHER THREE STILL PARSE, so this is a refusal of one level
-	// rather than of the key.
+	// AND WITH A POSITION IT IS A LEVEL, carried whole.
+	q := mustParse(t, map[string]any{
+		"read_level": "session", "min_position": "CREWLET_TRACKER_LOG@1:4711",
+	})
+	if q.Level != statelog.ReadSession {
+		t.Errorf("read_level=session with a floor parsed as %q", q.Level)
+	}
+	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1, Seq: 4711}
+	if q.MinPosition != want {
+		t.Errorf("min_position parsed as %v, want %v", q.MinPosition, want)
+	}
+	// AND THE OTHER THREE STILL PARSE WITHOUT ONE, so this is a rule
+	// about one level rather than about the key.
 	for _, level := range []statelog.ReadLevel{
 		statelog.ReadLinearizable, statelog.ReadStale, statelog.ReadConsistentPrefix,
 	} {
@@ -283,6 +296,42 @@ func TestSessionIsNotALevelThisGrammarCanHonour(t *testing.T) {
 		if q.Level != level {
 			t.Errorf("read_level=%s parsed as %q", level, q.Level)
 		}
+	}
+}
+
+// `min_position` IS A FLOOR AT EVERY LEVEL, and it is carried where it is
+// accepted: a `stale` poll redrawing after the write it just made names the
+// write's position and is served nothing from before it, still labelled with
+// its lag.
+func TestMinPositionIsCarriedAtEveryLevelAndRefusedMalformed(t *testing.T) {
+	t.Parallel()
+	want := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 2, Seq: 9}
+	for _, level := range []string{"", "linearizable", "stale", "consistent_prefix"} {
+		args := map[string]any{"min_position": "CREWLET_TRACKER_LOG@2:9"}
+		if level != "" {
+			args["read_level"] = level
+		}
+		q := mustParse(t, args)
+		if q.MinPosition != want {
+			t.Errorf("read_level=%q dropped min_position: got %v, want %v — a "+
+				"floor the reader never sees is one nothing waits for",
+				level, q.MinPosition, want)
+		}
+	}
+	for _, bad := range []string{"4711", "TRACKER@x:1", "@1:1", "TRACKER@1", "TRACKER@1:-1"} {
+		if _, err := parse(t, map[string]any{"min_position": bad}); err == nil {
+			t.Errorf("min_position=%q was accepted — it is not a log position", bad)
+		} else if !strings.Contains(err.Error(), "min_position") {
+			t.Errorf("the refusal of min_position=%q does not name the key: %v",
+				bad, err)
+		}
+	}
+	// AND A BRANCH MAY NOT CARRY IT: how fresh the answer must be is the
+	// caller's one decision, not a predicate.
+	if _, err := parse(t, map[string]any{
+		"any": `[{"min_position":"CREWLET_TRACKER_LOG@2:9"}]`,
+	}); err == nil {
+		t.Error("an any branch carrying min_position was accepted")
 	}
 }
 

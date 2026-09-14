@@ -155,12 +155,12 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time) (
 		// and a narrower closure would certify the answer complete while
 		// a deferred record in some project held the task that belongs
 		// in it.
-		Scope:           statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Scope:       statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		return readMyWork(ctx, tx, q.Handle, now, &out)
 	})

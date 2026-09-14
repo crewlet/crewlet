@@ -113,7 +113,7 @@ func TestARenameMovesTheAddressAndFreesTheOldOne(t *testing.T) {
 	if got := r.get("ENG/New Name"); got.Page.ID != page.Page.ID {
 		t.Fatalf("the new address resolves to %s", got.Page.ID)
 	}
-	if _, err := r.reader.Get(t.Context(), "ENG/Old Name", statelog.ReadSession); !errors.Is(err, pages.ErrNotFound) {
+	if _, err := r.reader.Get(t.Context(), "ENG/Old Name", statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, pages.ErrNotFound) {
 		t.Fatalf("the old address still resolves: %v", err)
 	}
 	// AND THE PAGE RENDERS THE NAME IT MOVED TO. The address is a COLUMN
@@ -407,7 +407,7 @@ func TestAPurgeIsPermanentAndFreesTheAddress(t *testing.T) {
 		t.Fatalf("purge: %v", err)
 	}
 	r.drain()
-	if _, err := r.reader.Get(t.Context(), page.Page.ID, statelog.ReadSession); !errors.Is(err, pages.ErrNotFound) {
+	if _, err := r.reader.Get(t.Context(), page.Page.ID, statelog.Freshness{Level: statelog.ReadSession}); !errors.Is(err, pages.ErrNotFound) {
 		t.Fatalf("a purged page is still readable: %v", err)
 	}
 	// THE ADDRESS IS FREE, because the claim went with the page.

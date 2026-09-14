@@ -87,16 +87,19 @@ func (f Floor) Age(now time.Time) time.Duration {
 }
 
 // ApplyRetryBudget is how long a transient apply error is retried in place
-// before the applier reports itself stalled.
+// before the applier reports itself faulted — which its readers treat as
+// stalled: reads refuse naming the error, and the seats move.
 //
 // HALF THE STALL GRACE, deliberately: a retry that outlasted the grace would
 // let a node report itself healthy while it made no progress, and one much
-// shorter would turn an ordinary transaction conflict into a fleet event.
+// shorter would turn an ordinary transaction conflict into a fleet event. The
+// retry itself never gives up — see [Runner.Fault]; this is the point at which
+// it stops being quiet about it.
 const ApplyRetryBudget = StallGrace / 2
 
 // Health is one registered domain's readiness.
 //
-// # THIRTEEN FIELDS, DECLARED ONCE
+// # FOURTEEN FIELDS, DECLARED ONCE
 //
 // This struct is cited from the framework's contracts, from the readiness
 // gate, from the operator surface and from the register's own heartbeat, and
@@ -182,6 +185,38 @@ type Health struct {
 	// advisory.
 	TrimFloor *uint64
 
+	// LastSeq is the stream's own last sequence as last read, and NIL when
+	// it could not be.
+	//
+	// ITS OWN FIELD BESIDE Lag, because Lag is clamped at zero: a
+	// checkpoint PAST the log's end reads as caught up through it, and
+	// that is the one state the number exists to refuse. A checkpoint
+	// above the end is a position on a stream that is not this one — a
+	// recreated stream, or a broker restored from an older copy — and a
+	// consumer created there waits for a sequence that never arrives while
+	// reporting nothing pending.
+	LastSeq *uint64
+
+	// StreamRecreated is a live stream that is not the one this node's applier
+	// started against — a delete and a rebuild under the same name.
+	//
+	// # Why it is observed rather than derived
+	//
+	// Because nothing this node holds can show it. The generation does not move
+	// (a rebuilt stream comes back at 0), the sequences count from 1 again, and
+	// once the new stream has published past this node's checkpoint even
+	// [Health.AheadOfLog] goes quiet — the checkpoint is no longer past an end
+	// that has caught up with it. What is left is a node applying a DIFFERENT
+	// history into rows keyed by the old one, reporting itself caught up.
+	//
+	// The only thing that separates the two streams is the broker's own creation
+	// instant, and the only place that sees the live one while a node runs is the
+	// position heartbeat, which reads the stream's state every ten seconds anyway.
+	// So the heartbeat compares and sets this, and the refusal it produces is the
+	// same one the boot's own identity check produces — with the same remedy, an
+	// operator's re-anchor.
+	StreamRecreated bool
+
 	// Coverage is COMPACTED domains only: the fraction of rows present
 	// against rows expected. A gap here is the compaction policy working
 	// rather than a fault, which is why it is a number and not a bool.
@@ -216,10 +251,23 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 		return RefuseFloorUnknown
 	case h.Floor.Effective(now) == FloorBelow:
 		return RefuseBelowFloor
+	case h.AheadOfLog() || h.StreamRecreated:
+		return RefuseWrongStream
 	case h.Err != "" || h.Stalled:
 		return RefuseStalled
 	}
 	return ""
+}
+
+// AheadOfLog reports a checkpoint past the stream's own last sequence.
+//
+// A position the log has never reached is a position on another stream: the
+// stream was recreated, or the broker was restored from a copy older than
+// this node's rows. Nothing this node holds above the end can be reconciled
+// with what the log will now produce, so it is a refusal on every path rather
+// than a lag of zero — which is exactly what a clamped lag would report.
+func (h Health) AheadOfLog() bool {
+	return h.LastSeq != nil && h.Position.Seq > *h.LastSeq
 }
 
 // Healthy reports whether this domain's state permits admitting seats.
@@ -244,7 +292,8 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 // A compacted domain's coverage does not make it false either: a derived row's
 // gaps are the compaction policy working.
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
-	if h.Err != "" || h.Evicted || !h.Floor.Serves(now) {
+	if h.Err != "" || h.Evicted || !h.Floor.Serves(now) ||
+		h.AheadOfLog() || h.StreamRecreated {
 		return false
 	}
 	if !h.CaughtUp || h.Stalled {
@@ -272,7 +321,9 @@ func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
 // ABOVE THE STREAM'S LAST SEQUENCE IS A REFUSAL, not a clamp. With a non-zero
 // start sequence the server does not clamp downward, so a consumer created
 // there waits for a sequence that never arrives, reports nothing pending, and
-// looks perfectly caught up while applying nothing, for ever.
+// looks perfectly caught up while applying nothing, for ever. It is decided
+// from [Health.LastSeq] rather than from Lag, because Lag is clamped at zero
+// and reads that state as caught up.
 func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	// THE AUTHORITATIVE TERM IS THE PUBLISHED FLOOR. The stream's own
 	// first sequence may only raise it.
@@ -286,11 +337,14 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 	if h.Position.Seq+1 < floor {
 		return false, RefuseBelowFloor
 	}
-	if h.Lag == nil {
+	if h.Lag == nil || h.LastSeq == nil {
 		// The stream's own end could not be read, so the upper half of
 		// the inequality cannot be evaluated — and it is the half whose
 		// failure is silent.
 		return false, RefuseBrokerUnreachable
+	}
+	if h.AheadOfLog() || h.StreamRecreated {
+		return false, RefuseWrongStream
 	}
 	if strict && !h.CaughtUp {
 		return false, RefuseBehind

@@ -194,7 +194,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
-		"handle": handle, "outcome": string(result.Outcome),
+		"handle": handle, "outcome": string(result.Outcome), "position": positionOf(result.Position),
 		"version": result.Version,
 	})
 }
@@ -258,7 +258,7 @@ func (t *setPins) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
-		"outcome": string(result.Outcome), "version": result.Version,
+		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 	})
 }
 
@@ -369,7 +369,7 @@ func (t *markInbox) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
-		"outcome": string(result.Outcome), "version": result.Version,
+		"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 	})
 }
 

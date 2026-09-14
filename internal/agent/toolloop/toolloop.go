@@ -49,6 +49,10 @@ import (
 // and judge loops run with a budget of two themselves. A model that cannot
 // emit the call in three attempts will not emit it in ten, and each attempt is
 // a full priced round.
+//
+// PER RUN OF DECLINED ROUNDS, not per phase — the count clears the moment a
+// round emits a call. The claim it rests on is about a model that keeps
+// declining, and a phase that called a tool in between is not that model.
 const maxForcedToolRetries = 2
 
 // maxEmptyAnswerRetries bounds the corrective re-prompts issued when a round
@@ -64,6 +68,16 @@ const maxForcedToolRetries = 2
 // inside the smallest budget any caller declares — a worker's `max_turns` is
 // validated at >= 1 and routinely set to 2 — so the corrective can never eat
 // a whole delegated task's allowance.
+//
+// PER RUN OF EMPTY ROUNDS, and that is precisely what the argument above is
+// about: the SAME prompt against the SAME model, asked twice in a row. Counted
+// for the phase's lifetime instead, this bounds a different quantity — how
+// many times a model may ever stall — and one stall early then disarms the
+// corrective for every round after it. That is measured, not hypothetical: an
+// executor on a 24-round budget stalled at round 2, filed a work item at round
+// 3, had a submission bounced at round 4, and broke on the stall at round 5
+// with nineteen rounds unspent — one round before the message it had just said
+// it was about to send.
 const maxEmptyAnswerRetries = 1
 
 // Surface is the set of tools a phase runs against.
@@ -689,6 +703,20 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 			}
 			break
 		}
+
+		// A ROUND THAT EMITTED A CALL CLEARS BOTH STALL ALLOWANCES. Each
+		// corrective above bounds a RUN of rounds that produced nothing,
+		// never the phase's lifetime: a model that just asked for a tool
+		// has demonstrated it can, so its next stall is a new stall and
+		// earns its own nudge.
+		//
+		// Cleared on the CALL, not on the call's success. A tool that
+		// returned an error — a submission the engine refused, a write the
+		// vendor rejected — is a round the model has to read and answer,
+		// which is the opposite of a model that has stopped responding.
+		// Gating this on a successful result would withdraw the nudge
+		// exactly where the next round matters most.
+		forcedRetries, emptyRetries = 0, 0
 
 		suspended, pendingID, pendingName, payload, err := runCalls(
 			ctx, cfg, completion.ToolCalls, roundsUsed, &msgs, &execs)

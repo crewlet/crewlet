@@ -1250,7 +1250,7 @@ func describe(s *tools.Surface) turn.Surface {
 	u := s.Universe()
 	return turn.Surface{
 		Catalogue:      u.Names(),
-		Deliverables:   u.Deliverables(),
+		Deliveries:     u.Deliveries(),
 		KnownReads:     u.KnownReads(),
 		KnownOpenWorld: u.KnownOpenWorld(),
 	}

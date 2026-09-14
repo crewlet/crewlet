@@ -440,9 +440,10 @@ does not parse, naming the key.
 are called. Four are spelled differently: `project` is `container` and takes
 `project:ENG` or `workspace`, `text` is `q`, `label` is `tag`, and `open_only`
 is `status_group=not_started,active`. Everything else is the same word, and a
-custom field is `f.<ref>`. A view may not carry `view`, `cursor` or
-`read_level` at all: those are about the caller's own read — where it resumes
-and how fresh it must be — rather than about the rows.
+custom field is `f.<ref>`. A view may not carry `view`, `cursor`,
+`read_level`, `max_lag_seconds`, `max_lag_seq` or `min_position` at all: those
+are about the caller's own read — where it resumes and how fresh it must be —
+rather than about the rows.
 
 **A saved view is run by its id**, passed as `view` to `list_work_items` or as
 `?view=` on the REST route. Anything else the caller passes overrides the
@@ -475,7 +476,7 @@ CHANGE rather than about state:
 | Tool | What it does |
 |---|---|
 | `list_work_items` | the query surface above, filtered any way a view can be — including `preset=my_queue`, which is the seat's own open work. Beside the obvious filters it takes `type`, `priority`, `parent` (an item's subtasks), `reporter`, `watcher`, `unit`, `goal`, the three date keys (`due`, `updated`, `created`), `sort`, `cursor` for the next page, and **`field_filters`** keyed by field slug — which is how a seat reaches the custom fields its company declares |
-| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
+| `get_work_item` | one task with its recent comments, history, links and **custom fields**. `include` narrows to the parts you need; `comments_cursor` pages back through a long thread; **`comment`** opens one comment by id with its body exactly as it was written; **`body: true`** returns the task's own description in full. Comment bodies in the thread are excerpts ending in `…`, because twenty at their full length is ten times what one tool answer may weigh — `comment` is how the rest is read, and on its own it answers the item and that comment and nothing else. The description is excerpted the same way and for the same reason, and `body` is its counterpart — each answers on its own, and naming both gets the comment, because it is the narrower ask. Each field value comes back with the slug, name and type that explain it, and says when it is **hidden** (its declaration was archived), **foreign** (mirrored in from another tracker) or **undeclared** (a value this company explains nowhere) |
 | `create_work_item` | file a task or a subtask. `fields` sets custom fields by **slug**, and the create is refused naming any the project requires and this call leaves out |
 | `update_work_item` | change any field, with an optional `if_match`. `watch: true`/`false` is a gesture about the CALLER and nobody else — the engine resolves it against the item's current watchers inside its own transaction, so following a task never removes whoever was already following it. Its `waiting_on`, `blocking`, `linked` and `linked_pages` arguments are **set-valued** — see below — and `fields` sets custom fields by slug, checked against each field's own declaration |
 | `create_work_item` and `update_work_item` | both take `fields`, keyed by field **slug** — see "What a field value may be" above |
@@ -549,9 +550,12 @@ the follow-up — and the delivery gate knows that, so such a turn is not
 corrected and looped for "having done nothing". Reading is not delivering,
 which is exactly the turn the gate exists to catch.
 
-Seat tools read at the **`session`** level: a seat that files a task and then
-lists its project sees the task it just filed. See
-[Read consistency](consistency.md).
+Seat tools read at the **`linearizable`** level: a seat that files a task and
+then lists its project sees the task it just filed, because every read
+establishes the log's end before answering. Every write's answer also carries
+the `position` its record landed at, which a client outside the engine — the
+dashboard, an operator's assistant — hands back as `min_position` to read the
+write back at a cheaper level. See [Read consistency](consistency.md).
 
 ### Optimistic concurrency
 
@@ -699,6 +703,12 @@ What keeps answers under it is that every collection which grows is paged:
   2 KiB with a marker. `comments_cursor` reads the page before. Twenty comments
   at their full length would be 640 KiB — ten times the ceiling — for a thread
   nobody asked to read in full.
+- **The description** comes back cut to 4 KiB with a marker, and `body: true`
+  returns it whole. It is the one value on a detail read that used to carry no
+  bound: a description at its 32 KiB cap would have spent half the ceiling on a
+  part nobody named, and `include` governs the collections *beside* the task,
+  never the task itself — so an item with a long description met a refusal
+  whose own advice could not help.
 - **History** is the fifty most recent changes. `work_activity` is what pages
   properly, with a cursor that survives a reanchor.
 - **Options** page by whole fields: a field whose list does not fit comes back

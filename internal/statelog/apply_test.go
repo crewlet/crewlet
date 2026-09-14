@@ -96,6 +96,33 @@ type probeFetch struct {
 	queue   []statelog.Message
 	acked   map[uint64]int
 	fetches int
+
+	// withhold is how many queued records the broker keeps back from
+	// every fetch while still counting them as pending — which is what a
+	// consumer at its in-flight ceiling looks like from the loop: Pending
+	// says records remain and Fetch hands over none of them.
+	withhold int
+
+	// failures is how many fetches the broker answers with an error
+	// before it answers normally again — a blip, as the loop sees one.
+	failures int
+
+	// after runs once, after the fetch with that NUMBER has handed its
+	// records over. It is how a case stages a REDELIVERY, which no single
+	// batch can: a batch is sorted and deduped on arrival, so a record
+	// that comes back has to arrive in a LATER fetch, while the loop still
+	// holds a higher one in the same run.
+	after map[int]func()
+}
+
+// afterFetch schedules a hook to run once the nth fetch has answered.
+func (f *probeFetch) afterFetch(n int, hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.after == nil {
+		f.after = map[int]func(){}
+	}
+	f.after[n] = hook
 }
 
 func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
@@ -129,11 +156,22 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 	for {
 		f.mu.Lock()
 		f.fetches++
-		if len(f.queue) > 0 {
-			n := min(len(f.queue), maxMessages)
+		if f.failures > 0 {
+			f.failures--
+			f.mu.Unlock()
+			return nil, errors.New("the probe broker did not answer")
+		}
+		if deliverable := len(f.queue) - f.withhold; deliverable > 0 {
+			n := min(deliverable, maxMessages)
 			out := f.queue[:n]
 			f.queue = f.queue[n:]
+			hook := f.after[f.fetches]
 			f.mu.Unlock()
+			if hook != nil {
+				// OUTSIDE THE LOCK, because a hook stages more
+				// records and offering one takes it.
+				hook()
+			}
 			return out, nil
 		}
 		f.mu.Unlock()
@@ -152,6 +190,13 @@ func (f *probeFetch) Pending(context.Context) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return uint64(len(f.queue)), nil
+}
+
+// fetchCount is how many times the loop asked.
+func (f *probeFetch) fetchCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.fetches
 }
 
 func (f *probeFetch) ackCount(seq uint64) int {
@@ -226,6 +271,86 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 	}
 	return &applyHarness{t: t, db: db, runner: runner, applier: applier,
 		fetch: fetch, metrics: recorder}
+}
+
+// upgrade rebuilds the runner over the SAME database under another domain —
+// the shape of a node restarting on a newer build. The applier, the fetch and
+// the recorder are fresh, because a new process has new ones; the rows, the
+// checkpoint and the retained records are what survive.
+func (h *applyHarness) upgrade(domain statelog.Domain) {
+	h.t.Helper()
+	h.rebuild(domain, time.Time{})
+}
+
+// rebuild is [applyHarness.upgrade] under a stream identity: the instant the
+// broker reports for the stream, which the loop compares against the instant
+// its checkpoint was committed under.
+func (h *applyHarness) rebuild(domain statelog.Domain, created time.Time) {
+	h.t.Helper()
+	h.applier = newProbeApplier()
+	h.fetch = newProbeFetch()
+	recorder, err := metrics.New()
+	if err != nil {
+		h.t.Fatalf("recorder: %v", err)
+	}
+	h.metrics = recorder
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain:          domain,
+		Applier:         h.applier,
+		Fetch:           h.fetch,
+		DB:              h.db.Replicated(),
+		Generation:      1,
+		StreamCreatedAt: created,
+		Metrics:         recorder,
+	})
+	if err != nil {
+		h.t.Fatalf("NewRunner: %v", err)
+	}
+	h.runner = runner
+}
+
+// retainedCount is how many records this node still holds that it could not
+// decode.
+func (h *applyHarness) retainedCount() int64 {
+	h.t.Helper()
+	var count int64
+	if err := h.db.Replicated().Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT COUNT(*) FROM probe_log_deferred`).Scan(&count)
+	}); err != nil {
+		h.t.Fatalf("count the retained records: %v", err)
+	}
+	return count
+}
+
+// boot runs the loop with nothing queued until the retained table holds want
+// records, or fails. It is how a reprocess is observed: the checkpoint does
+// not move, so [applyHarness.run] has nothing to wait on.
+func (h *applyHarness) boot(want int64) error {
+	h.t.Helper()
+	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if h.retainedCount() == want {
+			// Settle: the release and the applier's Committed hook
+			// run in that order, and the count moves first.
+			time.Sleep(20 * time.Millisecond)
+			cancel()
+			<-errs
+			return nil
+		}
+		select {
+		case err := <-errs:
+			return err
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+	return fmt.Errorf("%d record(s) are still retained, want %d", h.retainedCount(), want)
 }
 
 // counter is one instrument's total across every attribute set.
@@ -885,12 +1010,18 @@ func TestAStrictLoopWaitsForAHoleRatherThanApplyingPastIt(t *testing.T) {
 	}
 }
 
-// AN APPLIER'S FAILURE ON ONE RECORD DOES NOT MOVE THE CHECKPOINT.
+// AN APPLIER'S FAILURE ON ONE RECORD DOES NOT MOVE THE CHECKPOINT, AND DOES
+// NOT END THE LOOP.
 //
 // The transaction rolls back, so the rows, the anchor, the operation id and
 // the checkpoint all go back together — which is the whole point of committing
 // them together, and the property a node "can only be behind, never
-// inconsistent" rests on.
+// inconsistent" rests on. And the loop retries the same run in place: a
+// failure that is not a stop is a disk that refused, a broker that did not
+// answer, an applier that errored — none of which says this node cannot run
+// the company's records, and a loop that returned on one of them left the
+// domain dead for the life of the process. Once the failure clears, both
+// records apply.
 func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -898,11 +1029,35 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
 	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
 	defer cancel()
-	err := h.runner.Run(ctx)
-	if err == nil || !strings.Contains(err.Error(), "refuses sequence 2") {
-		t.Fatalf("Run = %v, want the applier's own refusal", err)
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+
+	// The failure is retried, quietly: inside the budget the fault is not
+	// reported, past it the same fault is.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+			break
+		}
+		select {
+		case err := <-errs:
+			t.Fatalf("Run returned %v on a failure that is not a stop — the domain "+
+				"is dead for the life of the process", err)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	msg, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget))
+	if !faulted || !strings.Contains(msg, "refuses sequence 2") {
+		t.Fatalf("Fault past the budget = (%q, %v), want the applier's own refusal", msg, faulted)
+	}
+	if _, faulted := h.runner.Fault(time.Now()); faulted {
+		t.Fatal("the fault is reported inside the retry budget, so a single " +
+			"refused transaction would move a company's seats")
+	}
+	if err := h.runner.Stopped(); err != nil {
+		t.Fatalf("a retried failure reads as a stop: %v", err)
 	}
 	if got := h.runner.Committed().Seq; got != 0 {
 		t.Fatalf("the checkpoint is at %d after a rolled-back transaction, want "+
@@ -927,6 +1082,83 @@ func TestAFailedApplyLeavesNothingBehind(t *testing.T) {
 	if len(h.fetch.ackedAll()) != 0 {
 		t.Fatalf("%d delivery(ies) acknowledged for a transaction that rolled "+
 			"back", len(h.fetch.ackedAll()))
+	}
+
+	// THE FAILURE CLEARS, and the same run — never re-fetched, never left
+	// to a redelivery — applies whole.
+	h.applier.mu.Lock()
+	h.applier.failAt = 0
+	h.applier.mu.Unlock()
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && h.runner.Committed().Seq < 2 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := h.runner.Committed().Seq
+	cancel()
+	<-errs
+	if got != 2 {
+		t.Fatalf("the checkpoint is at %d after the failure cleared, want 2", got)
+	}
+	if _, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+		t.Fatal("the fault is still reported after a retry succeeded")
+	}
+	if h.fetch.ackCount(1) != 1 || h.fetch.ackCount(2) != 1 {
+		t.Fatalf("the records were acknowledged %d and %d time(s), want once each",
+			h.fetch.ackCount(1), h.fetch.ackCount(2))
+	}
+	if got := h.counter(metrics.StatelogApplyRetries); got == 0 {
+		t.Fatal("the retries were not counted, so an operator watching the " +
+			"instrument would see a healthy loop")
+	}
+}
+
+// A BROKER THAT DOES NOT ANSWER IS RETRIED, NOT RETURNED FROM.
+//
+// A fetch error was the loop's exit: one timeout at the wrong moment and the
+// domain's applier was gone until the process restarted, with the first
+// symptom a node that had lost its seats. A blip is waited out on a widening
+// pause and the loop carries on from where it was.
+func TestABrokerBlipDoesNotEndTheApplier(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.mu.Lock()
+	h.fetch.failures = 3
+	h.fetch.mu.Unlock()
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if err := h.runner.Stopped(); err != nil {
+		t.Fatalf("three failed fetches stopped the applier: %v", err)
+	}
+	if got := h.fetch.fetchCount(); got < 4 {
+		t.Fatalf("the loop asked %d time(s), so the failures were not what it "+
+			"waited out", got)
+	}
+	if _, faulted := h.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
+		t.Fatal("a blip the loop recovered from is still reported as a fault")
+	}
+}
+
+// THE PAUSE DOUBLES TO THE CEILING and never past it, and the ceiling leaves a
+// fault several attempts before it is reported — so one failed call never
+// sheds a seat.
+func TestTheRetryPauseIsBoundedAndTheBudgetOutlastsSeveralOfIt(t *testing.T) {
+	t.Parallel()
+	if statelog.ApplyRetryBeat != statelog.ApplyLinger {
+		t.Errorf("the retry beat is %v against a linger of %v — a retry inside the "+
+			"linger is indistinguishable from an ordinary partial batch",
+			statelog.ApplyRetryBeat, statelog.ApplyLinger)
+	}
+	if statelog.ApplyRetryCeiling*6 > statelog.ApplyRetryBudget {
+		t.Errorf("the ceiling %v leaves fewer than six attempts inside the %v budget",
+			statelog.ApplyRetryCeiling, statelog.ApplyRetryBudget)
+	}
+	if statelog.ApplyRetryBudget >= statelog.StallGrace {
+		t.Errorf("the retry budget %v is not inside the stall grace %v, so a node "+
+			"could report itself healthy for longer than it made no progress",
+			statelog.ApplyRetryBudget, statelog.StallGrace)
 	}
 }
 
@@ -1177,5 +1409,483 @@ func TestTheApplierMeasuresItsOwnDrain(t *testing.T) {
 		t.Errorf("the commit rate (%v/s) is above the record rate (%v/s), "+
 			"which cannot happen: a run is one transaction over at least one "+
 			"record", commits, drain)
+	}
+}
+
+// A PARTIAL RUN COMMITS WHEN THE BROKER HANDS OVER NOTHING.
+//
+// The loop fills a run toward its budget while records are pending, and the
+// broker reports records pending for as long as it has not DELIVERED them —
+// which includes records it is deliberately withholding because the consumer
+// is at its in-flight ceiling. That ceiling is reached by exactly the records
+// the run holds, and it clears only when they are acknowledged, which happens
+// only after the run commits. A loop that kept pulling while anything was
+// pending was therefore waiting on its own commit, for ever: measured on the
+// embedded broker, a 257-record backlog stopped a node applying anything at
+// all. The linger is the bound: a pull that returns nothing inside it closes
+// the run.
+func TestAPartialRunCommitsWhenTheBrokerHandsOverNothing(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	for seq := uint64(1); seq <= 3; seq++ {
+		h.fetch.offer(seq, env(seq, "edit", string(rune('a'+seq-1)), fmt.Sprintf("op-%d", seq), 1))
+	}
+	// The broker withholds the third: it stays pending and is never
+	// delivered until the first two are acknowledged.
+	h.fetch.mu.Lock()
+	h.fetch.withhold = 1
+	h.fetch.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+
+	// Two records, one linger: the run commits inside a couple of lingers
+	// rather than never.
+	deadline := time.Now().Add(4 * statelog.ApplyLinger)
+	for time.Now().Before(deadline) && h.runner.Committed().Seq < 2 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := h.runner.Committed().Seq; got != 2 {
+		cancel()
+		<-errs
+		t.Fatalf("the checkpoint is at %d after %s with two records in hand and "+
+			"one withheld, want 2 — a run that waits for a pending record the "+
+			"broker will not deliver until the run commits waits for ever",
+			got, 4*statelog.ApplyLinger)
+	}
+	if h.fetch.ackCount(1) != 1 || h.fetch.ackCount(2) != 1 {
+		cancel()
+		<-errs
+		t.Fatalf("the committed records were acknowledged %d and %d time(s), "+
+			"want once each", h.fetch.ackCount(1), h.fetch.ackCount(2))
+	}
+
+	// Acknowledged, the broker releases the third and the loop takes it.
+	h.fetch.mu.Lock()
+	h.fetch.withhold = 0
+	h.fetch.mu.Unlock()
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && h.runner.Committed().Seq < 3 {
+		time.Sleep(2 * time.Millisecond)
+	}
+	got := h.runner.Committed().Seq
+	cancel()
+	<-errs
+	if got != 3 {
+		t.Fatalf("the checkpoint is at %d after the broker released the third "+
+			"record, want 3", got)
+	}
+}
+
+// upgradedDomain is the probe domain as a newer build reads it.
+type upgradedDomain struct {
+	probeDomain
+	reads int
+}
+
+func (d upgradedDomain) RecordVersion() int { return d.reads }
+
+// A RETAINED RECORD IS APPLIED BY THE BUILD THAT CAN READ IT, at its next
+// boot, in log order, and released in the transaction that applied it.
+//
+// This is the second half of the retain rule and the half that had no code:
+// a record this build cannot decode is kept byte for byte so that a build
+// which can decode it applies it later. Without the later, a node that sat
+// through a rolling upgrade kept its deferrals after it was upgraded — refusing
+// every read and write about the objects they covered, for ever, and naming a
+// record version it was already running.
+//
+// The record retained BECAUSE its scope met the undecodable one is applied
+// too, and after it: it was decodable all along, and what kept it back was
+// order.
+func TestARetainedRecordIsAppliedByTheBuildThatCanReadIt(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	// THE ARBITRATED KIND, so the records carry an anchor to check.
+	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "object", "b", "op-2", 9)) // above this build
+	h.fetch.offer(3, env(3, "object", "b", "op-3", 1)) // on the rows 2 left stale
+	h.fetch.offer(4, env(4, "object", "c", "op-4", 1))
+	if err := h.run(4); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 2 {
+		t.Fatalf("the old build retained %d record(s), want 2", got)
+	}
+
+	// THE UPGRADE. Same database, a build that reads version 9.
+	h.upgrade(upgradedDomain{reads: 9})
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the upgraded build's boot: %v", err)
+	}
+
+	seen := h.applier.seen()
+	if len(seen) != 2 || seen[0].Seq != 2 || seen[1].Seq != 3 {
+		t.Fatalf("the upgraded build applied %v, want the retained records at 2 "+
+			"then 3 — in log order, and the one held back by scope after the one "+
+			"that held it", seen)
+	}
+	if _, held := h.runner.Deferred(); held {
+		t.Fatal("the runner still reports a deferred record after applying them all")
+	}
+	if got := h.runner.Committed().Seq; got != 4 {
+		t.Fatalf("the checkpoint moved to %d — a reprocess applies at the "+
+			"original positions and the log consumed them long ago", got)
+	}
+	var ops, orphans int64
+	var anchor int64
+	if err := h.db.Replicated().Read(t.Context(), func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM probe_ops WHERE op_id IN ('op-2', 'op-3')`).
+			Scan(&ops); err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(t.Context(),
+			`SELECT COUNT(*) FROM probe_deferred_scope`).Scan(&orphans); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(t.Context(),
+			`SELECT anchor FROM statelog_anchor WHERE subject = ?`,
+			probePrefix+".object.b").Scan(&anchor)
+	}); err != nil {
+		t.Fatalf("read the tables: %v", err)
+	}
+	if ops != 2 {
+		t.Fatalf("%d operation row(s) for the reprocessed records, want 2 — a "+
+			"caller resolving op-2 would read its absence as somebody else winning", ops)
+	}
+	if orphans != 0 {
+		t.Fatalf("%d scope row(s) outlived their records", orphans)
+	}
+	if want := (statelog.Position{Stream: probeStream, Generation: 1, Seq: 3}).Packed(); anchor != want {
+		t.Fatalf("the anchor on object.b is %d, want %d — a replay at the original "+
+			"position must not move it backwards", anchor, want)
+	}
+	if got := h.counter(metrics.StatelogApplyRecords); got != 2 {
+		t.Fatalf("the apply counter recorded %d, want the 2 reprocessed", got)
+	}
+}
+
+// A REPROCESS STOPS AT WHAT IT STILL CANNOT READ, and keeps everything that
+// record covers — however many builds it waits through.
+func TestAReprocessKeepsWhatAnUnreadableRecordStillCovers(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 9))  // readable at 9
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 12)) // not yet
+	h.fetch.offer(3, env(3, "edit", "b", "op-3", 1))  // covered by 2
+	h.fetch.offer(4, env(4, "edit", "a", "op-4", 1))  // covered by 1
+	if err := h.run(4); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if got := h.retainedCount(); got != 4 {
+		t.Fatalf("the old build retained %d record(s), want 4", got)
+	}
+
+	h.upgrade(upgradedDomain{reads: 9})
+	if err := h.boot(2); err != nil {
+		t.Fatalf("the build reading 9: %v", err)
+	}
+	seen := h.applier.seen()
+	if len(seen) != 2 || seen[0].Seq != 1 || seen[1].Seq != 4 {
+		t.Fatalf("the build reading 9 applied %v, want 1 then 4: 2 is still above "+
+			"it and 3 is covered by 2", seen)
+	}
+	d, held := h.runner.Deferred()
+	if !held || d.Position.Seq != 2 || d.Version != 12 {
+		t.Fatalf("the runner reports %+v held=%v, want the record at 2 needing "+
+			"version 12", d, held)
+	}
+
+	// AND THE NEXT UPGRADE FINISHES IT.
+	h.upgrade(upgradedDomain{reads: 12})
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the build reading 12: %v", err)
+	}
+	seen = h.applier.seen()
+	if len(seen) != 2 || seen[0].Seq != 2 || seen[1].Seq != 3 {
+		t.Fatalf("the build reading 12 applied %v, want 2 then 3", seen)
+	}
+}
+
+// A RECREATED STREAM STOPS THE APPLIER, and it is the broker's own creation
+// instant that says so.
+//
+// A stream deleted and remade restarts its sequences at one. Every position
+// this node holds then names a number space that no longer exists, and a
+// consumer resumed from the checkpoint waits for a sequence the new stream
+// reaches only by coincidence — reporting nothing pending, looking perfectly
+// caught up, applying none of the new stream's records. The instant is the
+// only thing that can notice: the sequences are plausible and an empty stream
+// and an emptied one have the same count.
+//
+// Until the engine passed the LIVE instant, the loop compared the checkpoint
+// row's own recorded value against itself and this could never fire.
+func TestARecreatedStreamStopsTheApplier(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
+	h.rebuild(probeDomain{}, born)
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// THE SAME STREAM, reported at nanosecond precision against a row that
+	// keeps microseconds: the same stream, and it must read as such.
+	h.rebuild(probeDomain{}, born.Add(100*time.Nanosecond))
+	if err := h.boot(0); err != nil {
+		t.Fatalf("the same stream, reported at a finer resolution, was refused: %v", err)
+	}
+	if err := h.runner.Stopped(); err != nil {
+		t.Fatalf("the same stream stopped the applier: %v", err)
+	}
+
+	// A DIFFERENT STREAM WEARING THE SAME NAME.
+	h.rebuild(probeDomain{}, born.Add(time.Hour))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	err := h.runner.Run(ctx)
+	if !errors.Is(err, statelog.ErrStopped) || !errors.Is(err, statelog.ErrStreamRecreated) {
+		t.Fatalf("Run on a recreated stream returned %v, want a stop naming the "+
+			"recreation", err)
+	}
+	if stopped := h.runner.Stopped(); stopped == nil {
+		t.Fatal("the applier does not report itself stopped, so its health would " +
+			"not refuse and its seats would not move")
+	}
+	if !strings.Contains(err.Error(), "reanchor") {
+		t.Fatalf("the stop does not name the verb that repairs it: %v", err)
+	}
+	if got := h.runner.Committed().Seq; got != 2 {
+		t.Fatalf("the checkpoint moved to %d on a stopped applier", got)
+	}
+}
+
+// A RUNNER RUNS AGAIN FROM THE CHECKPOINT IT NOW HOLDS.
+//
+// An adoption on a running node ends every apply loop, replaces the file, and
+// starts the loops again — the same runners, because every subsystem holds
+// them. So Run has to be re-enterable: it resumes from whatever checkpoint the
+// file keeps, and a stop from the previous run is a verdict about rows this
+// node no longer has rather than something to remember.
+func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "edit", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "edit", "b", "op-2", 1))
+	if err := h.run(2); err != nil {
+		t.Fatalf("the first run: %v", err)
+	}
+
+	// A caller left waiting across the gap is told, not released.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	waited := make(chan error, 1)
+	go func() {
+		waited <- h.runner.WaitCommitted(ctx, statelog.Position{Stream: probeStream, Generation: 1, Seq: 3})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && h.runner.Waiting() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	runCtx, stopRun := context.WithCancel(t.Context())
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(runCtx) }()
+	time.Sleep(50 * time.Millisecond)
+	stopRun()
+	<-errs
+	select {
+	case err := <-waited:
+		if !errors.Is(err, statelog.ErrWaitAbandoned) {
+			t.Fatalf("the waiter across the gap got %v, want %v", err, statelog.ErrWaitAbandoned)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the waiter was not told the loop ended")
+	}
+
+	// THE SECOND RUN continues from 2.
+	h.fetch.offer(3, env(3, "edit", "c", "op-3", 1))
+	if err := h.run(3); err != nil {
+		t.Fatalf("the second run: %v", err)
+	}
+	seen := h.applier.seen()
+	if len(seen) != 3 || seen[2].Seq != 3 {
+		t.Fatalf("the applier saw %v across two runs, want 1, 2, 3 once each", seen)
+	}
+}
+
+// A LATE REDELIVERY MUST NOT MOVE THE CHECKPOINT BACKWARDS.
+//
+// [reorderBuffer.admit] deliberately hands a record already below the run's
+// high-water mark straight to the caller, because a redelivery nothing
+// acknowledges is redelivered for ever. A run therefore closes legitimately as
+// [1, 2, 1] — and the checkpoint is the HIGHEST position it applied, never the
+// tail.
+//
+// Checkpointing the tail wrote 1 in the same transaction that committed 2's
+// rows: a cursor understating its own database, which is the one thing the
+// checkpoint exists to rule out. It is not a self-correcting slip either. The
+// waiters release through the same value, so a linearizable read waiting for 2
+// is refused `behind` over rows this node already holds; and the next boot
+// resumes at 2 and re-applies a record whose anchor it already advanced past.
+func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "object", "b", "op-2", 1))
+	// THE ACKNOWLEDGEMENT OF 1 WAS LOST, so the broker hands it back
+	// while the loop still holds 2 — in a later fetch, because a single
+	// batch is deduped on arrival and could never produce this run.
+	h.fetch.afterFetch(1, func() {
+		h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+	})
+
+	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+
+	// THE ACK IS THE SIGNAL THE RUN COMMITTED, and it happens whatever
+	// the checkpoint ended up saying — so a broken checkpoint fails these
+	// assertions promptly rather than waiting out a timeout.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && h.fetch.ackCount(2) == 0 {
+		select {
+		case err := <-errs:
+			t.Fatalf("the applier stopped before the run committed: %v", err)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+
+	if got := h.runner.Committed().Seq; got != 2 {
+		t.Errorf("the loop reports itself committed through %d, want 2 — the "+
+			"run applied 2 and closed with a redelivery of 1", got)
+	}
+	at, _, found, err := statelog.CursorFor(h.t.Context(), h.db.Replicated(),
+		probeDomain{}.Stream().Name)
+	if err != nil {
+		t.Fatalf("read the checkpoint: %v", err)
+	}
+	if !found || at.Seq != 2 {
+		t.Errorf("the checkpoint row is at %s (found=%v), want sequence 2 — a "+
+			"cursor below rows its own transaction committed is the one state "+
+			"the checkpoint exists to rule out", at, found)
+	}
+	// AND THE REDELIVERY IS STILL ACKNOWLEDGED, which is why admit passes
+	// it through at all: dropping it to protect the checkpoint would
+	// leave the broker redelivering it for ever.
+	if got := h.fetch.ackCount(1); got != 2 {
+		t.Errorf("sequence 1 was acknowledged %d time(s), want 2 — the "+
+			"original delivery and the redelivery", got)
+	}
+}
+
+// flakyEstate is a replicated estate whose connection cannot be pinned for the
+// first `refusals` attempts — a store that is momentarily unavailable, which is
+// what an adoption's close-and-reopen bracket and a refused transaction both
+// look like from the applier.
+type flakyEstate struct {
+	inner interface {
+		Read(context.Context, func(*sql.Tx) error) error
+		Tx(context.Context, func(*sql.Tx) error) error
+		Writer(context.Context) (*store.Writer, error)
+	}
+	mu       sync.Mutex
+	refusals int
+	attempts int
+}
+
+func (f *flakyEstate) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	return f.inner.Read(ctx, fn)
+}
+
+func (f *flakyEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	return f.inner.Tx(ctx, fn)
+}
+
+func (f *flakyEstate) Writer(ctx context.Context) (*store.Writer, error) {
+	f.mu.Lock()
+	f.attempts++
+	refuse := f.refusals > 0
+	if refuse {
+		f.refusals--
+	}
+	f.mu.Unlock()
+	if refuse {
+		return nil, errors.New("the probe store is not available")
+	}
+	return f.inner.Writer(ctx)
+}
+
+func (f *flakyEstate) pinAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+// A STORE THAT IS MOMENTARILY UNAVAILABLE AT STARTUP IS RETRIED, NOT FATAL.
+//
+// Pinning the connection, reading the checkpoint and reprocessing what an
+// earlier build retained are all database work, and all three used to sit
+// ABOVE the retry loop: a store that refused for a moment — the adoption
+// bracket between a close and a reopen, a refused transaction, a slow disk —
+// returned straight out of Run and left the domain with no applier for the
+// life of the process.
+//
+// Nothing restarted it and nothing reported it either. Stopped stayed nil and
+// no fault was recorded, so this node went on publishing a caught-up position
+// for a domain that would never apply another record — which is precisely the
+// failure the loop's retry design exists to rule out, reached through the door
+// above it.
+func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	flaky := &flakyEstate{inner: h.db.Replicated(), refusals: 3}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain:     probeDomain{},
+		Applier:    h.applier,
+		Fetch:      h.fetch,
+		DB:         flaky,
+		Generation: 1,
+		Metrics:    h.metrics,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+
+	ctx, cancel := context.WithTimeout(h.t.Context(), 30*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- runner.Run(ctx) }()
+
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) && runner.Committed().Seq < 1 {
+		select {
+		case err := <-errs:
+			t.Fatalf("Run returned %v — a store that refused three times took "+
+				"the domain's applier down for the life of the process, with "+
+				"Stopped unset and no fault recorded", err)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+
+	if got := runner.Committed().Seq; got != 1 {
+		t.Fatalf("the applier reached %d after the store came back, want 1", got)
+	}
+	if got := flaky.pinAttempts(); got < 4 {
+		t.Errorf("the connection was pinned %d time(s), want at least 4 — three "+
+			"refusals and the attempt that succeeded", got)
+	}
+	if err := runner.Stopped(); err != nil {
+		t.Errorf("the applier reports itself stopped after recovering: %v", err)
 	}
 }

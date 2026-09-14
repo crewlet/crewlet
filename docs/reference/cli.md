@@ -259,8 +259,12 @@ shape [Design Decisions](design-decisions.md#the-config-diff-is-paths-and-values
 records. A string value is quoted and other values are not, because `"true"`
 and `true` are different settings and a renderer that printed both bare would
 show a type change as no change at all.
-A diff longer than the cap reports its own truncation rather than stopping
-silently.
+**Every change, however many there are.** `GET /config/revisions/{id}/diff`
+cuts its listing at 500 entries because a response body and a dashboard socket
+frame have a size budget — it reports `changes_total` beside the listing, so a
+reader knows what was left out. A terminal has no such budget and does have a
+pager, so this command prints the whole comparison: the reader best equipped
+to read a long diff was the one a shared cap kept it from.
 
 **Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act.
 
@@ -651,8 +655,8 @@ capturing stdout for a dashboard still gets the reason in its own mail.
 Its own verb rather than a block of `status`, because the repository is per
 node: *which of my machines can donate, and how old is what they hold* is a
 disk question. A node with no artefact still gets a row, carrying the reason —
-`sole_node`, `lagging`, `unhydrated`, `deferred`, `insufficient_space` or
-`failed` — because the absence is the answer to "why did the join fail". A
+`sole_node`, `lagging`, `unhydrated`, `deferred`, `insufficient_space`,
+`ahead_of_log` or `failed` — because the absence is the answer to "why did the join fail". A
 node that holds a current artefact carries no reason at all: `recent` is the
 skip a healthy node takes, so it is never published as one.
 

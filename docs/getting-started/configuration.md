@@ -278,7 +278,7 @@ providers:
       cli:
         agent: claude-code              # claude-code | codex | gemini-cli | qwen-code
                                         #   | opencode | cursor-agent | copilot | grok
-                                        #   | muse-code
+                                        #   | muse-code | kimi-code | hermes | pi
                                         #   | custom
         state_dir: ""                   # optional — credential dir + per-seat CLI homes.
                                         #   Empty: $CREWLET_LLM_CLI_HOME/<key>, else

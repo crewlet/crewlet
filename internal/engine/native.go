@@ -1472,7 +1472,8 @@ func (e *Engine) syncNativeSkills(ctx context.Context) {
 		// target was the zero position and the read served this same
 		// prefix under a stronger name. The behaviour is unchanged and
 		// the claim is now true.
-		found, err := reader.SkillPages(ctx, container, statelog.ReadStale)
+		found, err := reader.SkillPages(ctx, container,
+			statelog.Freshness{Level: statelog.ReadStale})
 		if err != nil {
 			return nil, err
 		}

@@ -58,6 +58,24 @@ type OfferRequest struct {
 	// is on. An artefact from another generation names a different
 	// history, however large its sequences look.
 	Generations map[string]uint32 `json:"generations"`
+
+	// StreamCreatedAt is, per domain, the creation instant of the stream
+	// the JOINER is live on.
+	//
+	// A SECOND IDENTITY TERM BESIDE THE GENERATION, because the two
+	// answer different questions and only one of them is answered by a
+	// number the fleet controls. A generation moves when an OPERATOR
+	// re-anchors; a stream that is deleted and rebuilt comes back at
+	// generation 0 with sequences counting from 1 again, and an artefact
+	// from before it matches on generation, matches on record version,
+	// matches on replay protocol, and names a history that no longer
+	// exists. The broker's own creation instant is the only value that
+	// separates them, which is why it is stamped into every checkpoint
+	// and carried in every manifest.
+	//
+	// Zero is NO CLAIM — a joiner that could not read its own stream's
+	// instant asks without one rather than refusing every donor.
+	StreamCreatedAt map[string]time.Time `json:"stream_created_at,omitempty"`
 }
 
 // Offer is what a node answers with.
@@ -108,6 +126,21 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered) error {
 			return fmt.Errorf("%s was taken at generation %d and this node's "+
 				"stream is on %d — the sequences name a different history",
 				name, pos.Generation, gen)
+		}
+		// THROUGH [IdentityOf], never a bare Equal: the instant is stored
+		// at microsecond precision and the broker reports nanoseconds, so
+		// comparing them exactly makes every honest artefact look
+		// recreated. That rule has one implementation and this is a
+		// caller of it.
+		if created, named := req.StreamCreatedAt[name]; named &&
+			IdentityOf(pos.StreamCreatedAt, created, true) == StreamRecreated {
+
+			return fmt.Errorf("%s was taken while its donor was applying the "+
+				"stream created at %s and this node's stream was created at "+
+				"%s — a stream that was rebuilt counts from 1 again, so the "+
+				"artefact's sequences name a history this one does not have",
+				name, pos.StreamCreatedAt.UTC().Format(time.RFC3339Nano),
+				created.UTC().Format(time.RFC3339Nano))
 		}
 		if need, named := req.Need[name]; named && pos.Seq < need {
 			return fmt.Errorf("%s names position %d and this node needs at least "+

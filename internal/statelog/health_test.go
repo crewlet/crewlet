@@ -111,18 +111,19 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		"at the floor and caught up": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50),
-				Lag: ptr(0), CaughtUp: true,
+				Lag: ptr(0), LastSeq: ptr(100), CaughtUp: true,
 			},
 			strict: true, ok: true,
 		},
 		"below the floor": {
 			health: statelog.Health{
 				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(500), Lag: ptr(0),
+				LastSeq: ptr(900),
 			},
 			want: statelog.RefuseBelowFloor,
 		},
 		"a floor nobody could read": {
-			health: statelog.Health{Position: at(100), Lag: ptr(0), CaughtUp: true},
+			health: statelog.Health{Position: at(100), Lag: ptr(0), LastSeq: ptr(100), CaughtUp: true},
 			want:   statelog.RefuseFloorUnknown,
 		},
 		"a stream whose end could not be read": {
@@ -131,9 +132,28 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 			},
 			want: statelog.RefuseBrokerUnreachable,
 		},
+		// A LAG WITHOUT AN END IS THE SAME REFUSAL: the lag is derived
+		// from the end and clamped, so it cannot stand in for it.
+		"a lag reported with no end behind it": {
+			health: statelog.Health{
+				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(0),
+				CaughtUp: true,
+			},
+			want: statelog.RefuseBrokerUnreachable,
+		},
+		// ABOVE THE END IS A REFUSAL, NOT A CLAMP. The lag reads zero
+		// here — which is exactly why the end is its own field.
+		"a checkpoint past the log's end": {
+			health: statelog.Health{
+				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(0),
+				LastSeq: ptr(60), CaughtUp: true,
+			},
+			strict: true, want: statelog.RefuseWrongStream,
+		},
 		"a strict domain that has never drained": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(50), Lag: ptr(3),
+				LastSeq: ptr(103),
 			},
 			strict: true, want: statelog.RefuseBehind,
 		},
@@ -144,14 +164,14 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 		"a stale first sequence cannot lower the published floor": {
 			health: statelog.Health{
 				Position: at(10), TrimFloor: ptr(500), FirstSeq: ptr(1), Lag: ptr(0),
-				CaughtUp: true,
+				LastSeq: ptr(900), CaughtUp: true,
 			},
 			strict: true, want: statelog.RefuseBelowFloor,
 		},
 		"and a first sequence above it does raise it": {
 			health: statelog.Health{
 				Position: at(100), TrimFloor: ptr(50), FirstSeq: ptr(900), Lag: ptr(0),
-				CaughtUp: true,
+				LastSeq: ptr(900), CaughtUp: true,
 			},
 			strict: true, want: statelog.RefuseBelowFloor,
 		},
@@ -168,7 +188,7 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 	}
 }
 
-// HEALTH IS THIRTEEN FIELDS, DECLARED ONCE.
+// HEALTH IS FIFTEEN FIELDS, DECLARED ONCE.
 //
 // The count is asserted because the failure is a copy: written out per reader
 // it becomes three lists that disagree, and the fields most likely to be
@@ -178,14 +198,14 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeFor[statelog.Health]()
-	if got := typ.NumField(); got != 13 {
-		t.Fatalf("Health has %d fields, want 13 — this struct is cited from the "+
+	if got := typ.NumField(); got != 15 {
+		t.Fatalf("Health has %d fields, want 15 — this struct is cited from the "+
 			"framework's contracts, the readiness gate, the operator surface and "+
 			"the register's heartbeat, and a field added here without a reason "+
 			"is a field one of them will not know about", got)
 	}
-	// AND THE THREE NILABLE ONES STAY NILABLE.
-	for _, name := range []string{"Lag", "FirstSeq", "TrimFloor"} {
+	// AND THE FOUR NILABLE ONES STAY NILABLE.
+	for _, name := range []string{"Lag", "FirstSeq", "TrimFloor", "LastSeq"} {
 		f, ok := typ.FieldByName(name)
 		if !ok {
 			t.Fatalf("Health has no %s", name)
@@ -200,7 +220,7 @@ func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 // EVERY FIELD Refusal AND Healthy READ MUST HAVE A PRODUCER, and nothing said
 // so until this test.
 //
-// Four of [statelog.Health]'s thirteen fields — Err, Stalled, Evicted and
+// Four of [statelog.Health]'s fourteen fields — Err, Stalled, Evicted and
 // Floor — were read by both decision functions and assigned by nothing. The
 // consequences were silent in exactly the way a zero value is: every arm of
 // [Health.Refusal] was unreachable, so an evicted node, a node below the trim
@@ -244,6 +264,18 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			statelog.RefuseBelowFloor},
 		{"Floor(unread)", func(h *statelog.Health) { h.Floor = statelog.Floor{} },
 			statelog.RefuseFloorUnknown},
+		// THE END, which the lag cannot stand in for: it is clamped at
+		// zero, so a checkpoint past the end reads as caught up.
+		{"LastSeq(behind the checkpoint)", func(h *statelog.Health) {
+			end := uint64(40)
+			h.Position.Seq, h.LastSeq = 41, &end
+		}, statelog.RefuseWrongStream},
+		// AND THE REBUILT STREAM THE SEQUENCES CANNOT SHOW. It comes
+		// back at generation 0 counting from 1, so once it has
+		// published past this node's checkpoint the term above goes
+		// quiet while the node applies a different history.
+		{"StreamRecreated", func(h *statelog.Health) { h.StreamRecreated = true },
+			statelog.RefuseWrongStream},
 	} {
 		h := serving()
 		tc.mutil(&h)
