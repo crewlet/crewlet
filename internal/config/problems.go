@@ -393,6 +393,38 @@ const (
 	WarningAdmission         = "admission"
 )
 
+// Warnings is everything a person should know about a company the engine
+// will run: every reference it resolves to nothing ([Company.ReferenceWarnings]),
+// then every admission rule it breaks ([Company.AdmissionWarnings]).
+//
+// A document that passed [Company.Validate] carries no admission warning, so
+// on a write that was admitted this is its references alone. The admission
+// half is what a revision re-activated under the runnable rules still says: a
+// reload or a revert of a company stored before a rule existed.
+func (c *Company) Warnings() []Warning {
+	return append(c.ReferenceWarnings(), c.AdmissionWarnings()...)
+}
+
+// AdmissionWarnings is every admission rule c breaks, as warnings located
+// exactly like the problems a write keeping them is refused with.
+//
+// Built from those problems rather than beside them, so the two cannot place
+// one violation differently: one warning per entity it is about (a duplicated
+// name is a warning beside each seat or unit holding it), each carrying that
+// problem's path, segments, seat, unit and message. Ref, From and To are
+// empty, because an admission rule names no reference.
+func (c *Company) AdmissionWarnings() []Warning {
+	problems := Problems(c.ValidateAdmission())
+	out := make([]Warning, 0, len(problems))
+	for _, p := range problems {
+		out = append(out, Warning{
+			Kind: WarningAdmission, Path: p.Path, Segments: p.Segments,
+			Seat: p.Seat, Unit: p.Unit, Message: p.Message,
+		})
+	}
+	return out
+}
+
 // ReferenceWarnings is every reference this revision resolves to nothing
 // ([Company.DanglingRefs]), located in the document: a unit's lead at its
 // `lead`, a root seat's unit at its `unit`, a manages entry at the index it

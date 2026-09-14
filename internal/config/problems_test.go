@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -362,5 +363,79 @@ units:
 	}
 	if !reflect.DeepEqual(got, expected) {
 		t.Errorf("warnings =\n%+v\nwant\n%+v", got, expected)
+	}
+}
+
+// A STORED REVISION'S ADMISSION VIOLATIONS ARE WARNINGS PLACED LIKE PROBLEMS.
+//
+// A reload or a revert re-activates a company under the runnable rules, and
+// the answer still has to say which admission rules it breaks and where: the
+// same places a write keeping them is refused at, one beside each entity a
+// duplicate names, so a client draws a warning and a problem on the same node.
+func TestAdmissionViolationsAreWarningsPlacedLikeTheirProblems(t *testing.T) {
+	t.Parallel()
+	cfg := parsed(t, `
+name: Acme
+units:
+  - name: Platform
+    roles:
+      - name: Engineer
+        handle: platform-engineer
+  - name: Product
+    children:
+      - name: Platform
+        roles:
+          - name: Engineer
+            handle: product-engineer
+`)
+	problems := config.Problems(cfg.ValidateAdmission())
+	warnings := cfg.AdmissionWarnings()
+	if len(problems) == 0 {
+		t.Fatal("the fixture breaks no admission rule, so this proves nothing")
+	}
+	if len(warnings) != len(problems) {
+		t.Fatalf("%d warnings for %d problems, want one per problem:\n%+v", len(warnings), len(problems), warnings)
+	}
+	for i, w := range warnings {
+		p := problems[i]
+		if w.Kind != config.WarningAdmission || w.Ref != "" || w.From != "" || w.To != "" {
+			t.Errorf("warning %d = %+v, want an admission warning naming no reference", i, w)
+		}
+		if w.Path != p.Path || !reflect.DeepEqual(w.Segments, p.Segments) ||
+			w.Seat != p.Seat || w.Unit != p.Unit || w.Message != p.Message {
+			t.Errorf("warning %d = %+v, placed differently from its problem %+v", i, w, p)
+		}
+	}
+	var paths []string
+	for _, w := range warnings {
+		paths = append(paths, w.Path)
+	}
+	for _, want := range []string{"units[0].name", "units[1].children[0].name",
+		"units[0].roles[0].name", "units[1].children[0].roles[0].name"} {
+		if !slices.Contains(paths, want) {
+			t.Errorf("no admission warning at %s: %v", want, paths)
+		}
+	}
+
+	// And Warnings is the references first, then these.
+	all := cfg.Warnings()
+	if !reflect.DeepEqual(all, append(cfg.ReferenceWarnings(), warnings...)) {
+		t.Errorf("Warnings = %+v, want the reference warnings then the admission ones", all)
+	}
+}
+
+// AN ADMITTED COMPANY CARRIES NO ADMISSION WARNING, so a write's answer holds
+// its references alone.
+func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
+	t.Parallel()
+	cfg := parsed(t, "name: Acme\nroles:\n  - name: CEO\n    manages: [Ghost]\n")
+	if err := cfg.ValidateAdmission(); err != nil {
+		t.Fatalf("the fixture breaks an admission rule: %v", err)
+	}
+	if got := cfg.AdmissionWarnings(); len(got) != 0 {
+		t.Errorf("admission warnings = %+v, want none", got)
+	}
+	if got := cfg.Warnings(); len(got) != 1 || got[0].Kind != config.WarningDanglingReference {
+		t.Errorf("warnings = %+v, want the one dangling manages entry", got)
 	}
 }
