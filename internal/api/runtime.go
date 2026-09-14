@@ -58,6 +58,16 @@ type RuntimeState struct {
 	// processes' logs at debug level.
 	Seats []string
 
+	// Unproven is how long each seat whose teardown could not be proven
+	// has been stranded: still leased by this node, so no peer can claim
+	// it, while this node will not run it either.
+	//
+	// The DURATION is the alarm, not the membership. A release that fails
+	// once and succeeds on the next heartbeat is a working system, and a
+	// seat still here minutes later is a seat nothing in the fleet runs.
+	// Empty is "none stranded".
+	Unproven map[string]time.Duration
+
 	// RoutedSources names the integrations whose deliveries can actually
 	// wake a seat — the ones with a parser, not the ones with a config
 	// block.

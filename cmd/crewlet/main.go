@@ -1674,7 +1674,12 @@ func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 		InFlight:     r.engine.Backends().Queue.InFlightCount(),
 		ShuttingDown: host.Draining(),
 		Seats:        host.Held(),
-		StartedAt:    r.engine.StartedAt().Format(time.RFC3339),
+		// The seats this node could not prove it let go of, and for how
+		// long. The one fleet fault that is silent everywhere else: the
+		// lease is still ours, so no peer claims the seat, and the host
+		// will not run it.
+		Unproven:  host.UnprovenAges(),
+		StartedAt: r.engine.StartedAt().Format(time.RFC3339),
 		// Which integrations have a PARSER, which is the only thing that
 		// makes a verified delivery reach an agent. Read from the notify
 		// service rather than from a list kept here: a hand-maintained

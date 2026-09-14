@@ -1162,41 +1162,49 @@ without the tag every historical failure would read back as a success.
 
 ### The health envelope
 
-One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
-the snapshot's `health` section, and the 5-second push, so those three
-surfaces cannot disagree about whether the engine is healthy — and a
-reconnect restores every field without a second round trip.
+One builder answers `GET /health`, the snapshot's `health` section, and the
+5-second push, so those three surfaces cannot disagree about whether the
+engine is healthy, and a reconnect restores every field without a second
+round trip.
 
 ```json
 {
   "status": "ok",
+  "node": "node-0",
   "configured": true,
   "engine": true,
   "version": "0.4.0",
-  "started_at": "2026-04-01T12:00:00+00:00",
+  "started_at": "2026-04-01T12:00:00Z",
   "queue": "jetstream-embedded",
-  "event_store": "durable",
-  "feed_hydrated": true,
   "clients": 3,
   "in_flight": 2,
-  "engine_started_at": "2026-04-01T11:58:03+00:00",
-  "shutting_down": false
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 41,
+  "engine_started_at": "2026-04-01T11:58:03Z",
+  "seats": ["ceo", "cto"],
+  "unproven_seconds": {"eng": 312.5}
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
+| `status` | `ok`, `unconfigured`, `shutting_down`, or the node's config posture when that posture takes it out of step with its fleet (`shed`, `stuck`, `isolated`). A draining engine reports `shutting_down` whatever else is true of it. |
+| `node` | The node that answered, which is what turns "the apply failed" into "the apply failed on node-2" behind a load balancer. |
 | `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where every field below `clients` is absent. The flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
 | `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
-| `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
-| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
+| `queue` | The event queue's backend: `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this API process. |
-| `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `in_flight` | Handler invocations mid-flight. |
+| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens. |
+| `posture` | What this node concluded about its own config lag: `serve`, `wait`, `shed`, `isolated` or `stuck`. See [Control plane](../concepts/control-plane.md). |
+| `applied_epoch` | The config revision this node is running. |
+| `engine_started_at` | When the engine started. |
+| `seats` | The seat handles this node currently holds. |
+| `stall_lag_seconds` | How far behind this node's watched duty is, present only when it is behind at all. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
+| `unproven_seconds` | Each seat whose teardown this node could not prove, mapped to how long it has been stranded, present only when one is. Such a seat is still leased by this node, so no peer can claim it, and this node will not run it. Alert on the duration rather than on the field's presence: a release that fails once and succeeds on the next heartbeat is a working system. See [Seat ownership](../concepts/seat-ownership.md#what-ownership-looks-like-from-outside). |
 
 Per-socket facts — how many envelopes *this* connection dropped, how deep
 its queue is — are deliberately **not** here. The tick encodes one JSON

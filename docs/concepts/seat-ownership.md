@@ -357,9 +357,9 @@ The current protocol is **3**, and it has moved twice — each time because hold
 
 ## What ownership looks like from outside
 
-`GET /health` reports a `seats` block per node: seats held, the computed capacity, the live node count, the last claim, the last loss, and the protocol floor when an older peer is blocking claims. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
+`GET /health` reports the seat handles the answering node holds as `seats`. The fleet-wide view, every lease with its owner, epoch and remaining time, is `GET /fleet`, which reads the lease table rather than one node. The `inbox_attached` / `inbox_detached` log lines carry the seat, the epoch and the elapsed milliseconds.
 
-`unproven_seconds` is the number to watch — a map of seat to how long its teardown has been failing. Alert on the **duration**, not on `unproven` itself: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running.
+`unproven_seconds` on `GET /health` is the number to watch: a map of seat to how long its teardown has been failing, present only when one is. Alert on the **duration**, not on the field being present: a teardown that fails once and succeeds on the next heartbeat retry is a working system, while a seat still stranded minutes later is a seat nothing in the fleet is running. The `seat_still_unproven` log line re-raises the same alarm every twenty heartbeats.
 
 ## Single node
 

@@ -129,6 +129,44 @@ func TestAMergedNodeReportsWhatOnlyItCanKnow(t *testing.T) {
 	}
 }
 
+// A STRANDED SEAT IS ON THE HEALTH BODY, with how long it has been stranded.
+//
+// The seat host computed the age and nothing served it, while the seat
+// ownership page told operators to alert on `unproven_seconds`. A seat whose
+// teardown failed is held by this node's lease and run by nobody, and until
+// this field existed the only trace of that was a periodic log line.
+func TestAStrandedSeatIsReportedWithHowLongItHasBeenStranded(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{Runtime: &fakeRuntime{state: api.RuntimeState{
+		Posture: "serve", Seats: []string{"ceo"},
+		Unproven: map[string]time.Duration{"ceo": 90 * time.Second},
+	}}})
+	a.SetConfigured(true)
+	_, body := get(t, a, "/health")
+
+	stranded, ok := body["unproven_seconds"].(map[string]any)
+	if !ok {
+		t.Fatalf("unproven_seconds = %v, want a map of seat to seconds", body["unproven_seconds"])
+	}
+	if stranded["ceo"] != float64(90) {
+		t.Errorf("unproven_seconds[ceo] = %v, want 90", stranded["ceo"])
+	}
+}
+
+// And absent when nothing is stranded, so an alert on its presence does not
+// fire on every healthy node.
+func TestAHealthyNodeReportsNoStrandedSeats(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{Runtime: &fakeRuntime{state: api.RuntimeState{
+		Posture: "serve", Seats: []string{"ceo"},
+	}}})
+	a.SetConfigured(true)
+	_, body := get(t, a, "/health")
+	if _, present := body["unproven_seconds"]; present {
+		t.Errorf("unproven_seconds = %v on a node with nothing stranded", body["unproven_seconds"])
+	}
+}
+
 func TestHealthStaysOKThroughADrain(t *testing.T) {
 	t.Parallel()
 	// An orchestrator watching liveness must not SIGKILL a node that is
