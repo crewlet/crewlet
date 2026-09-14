@@ -1236,6 +1236,55 @@ func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
 	}
 }
 
+// onlyTheClaim is a coordination store that answers the claim and its release
+// and refuses every other write a tail makes, the shape of a store under a
+// blip that lets some compare-and-swaps through and not others.
+type onlyTheClaim struct{ PendingStore }
+
+var errUnanswered = errors.New("the coordination store did not answer")
+
+func (onlyTheClaim) MarkBoxPaused(context.Context, string, time.Time) error { return errUnanswered }
+func (onlyTheClaim) MarkAwaiting(context.Context, string, Clarification) error {
+	return errUnanswered
+}
+func (onlyTheClaim) SetStatus(context.Context, string, string, Fence) error { return errUnanswered }
+func (onlyTheClaim) ReleaseBox(context.Context, string) error               { return errUnanswered }
+
+// THE RECORD NEEDS NO WRITE OF ITS OWN. Kept in one, a store that refused it
+// and then accepted the release reopened the run with no record, and the
+// retry charged the same job again. Riding on the release, the run is handed
+// back with its record or not at all.
+func TestAChargeIsRecordedByTheWriteThatHandsTheClaimBack(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	resumer := &resumeSpy{err: fmt.Errorf("%w: the seat moved", ErrResumeUnavailable)}
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: onlyTheClaim{rig.pending}, Manager: rig.manager,
+		Resume: resumer, Account: rig.accountant,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	payload, ev := rig.completion("t1")
+	for attempt := range 2 {
+		if err := coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+			t.Fatalf("attempt %d: a failed resume was acked", attempt+1)
+		}
+	}
+	resumer.failWith(nil)
+	if err := coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+	if got := len(resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times, want the last retry to resume once", got)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens over three deliveries of one run, want its 1000 once", got)
+	}
+}
+
 // A duplicate completion of a run that parked on a question is the other way
 // one job reaches the charge twice.
 func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
@@ -1258,7 +1307,9 @@ func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
 }
 
 // A SECOND RUN IN ONE TURN IS A SECOND SPEND. The record is the launch's, so a
-// resumed executor that calls run_sandbox again is charged for that job too.
+// resumed executor that calls run_sandbox again is charged for that job too,
+// even when the first job's completion was retried and its row carries the
+// first job's record into the relaunch.
 func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
@@ -1270,7 +1321,12 @@ func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
 		}
 	}
 	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 400, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
 	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+	rig.resumer.failWith(nil)
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("the first run's completion: %v", err)
 	}
