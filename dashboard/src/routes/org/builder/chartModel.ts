@@ -252,9 +252,13 @@ export function structure(inputs: ChartInputs): Structure {
 
   const unitName = new Map<NodeKey, string>();
   for (const { unit } of allUnits(draft)) unitName.set(unit.key, unit.data.name);
+  const unitNames = new Set(unitName.values());
 
   // WHERE A ROOT SEAT IS DRAWN. The engine says whether its reference placed
-  // it, and in which unit; the draft says whether that is still true.
+  // it, and in which unit; the draft says whether that is still true. A
+  // reference the check found no unit for is dangling only while the draft
+  // still holds none of that name: a unit added or renamed to it since is
+  // one the engine will place the seat in, which the next check says.
   const placedIn = new Map<NodeKey, NodeKey[]>();
   const rootSeats: NodeKey[] = [];
   const placement = new Map<NodeKey, { unit: NodeKey | null; dangling: string | null }>();
@@ -268,7 +272,12 @@ export function structure(inputs: ChartInputs): Structure {
       if (derived.placed_by_ref && derived.unit_path) {
         const target = engine.sent?.index.byPath.get(derived.unit_path);
         if (target !== undefined && unitName.get(target) === ref) unit = target;
-      } else if (!derived.placed_by_ref && checked && text(checked.unit) === ref) {
+      } else if (
+        !derived.placed_by_ref &&
+        checked &&
+        text(checked.unit) === ref &&
+        !unitNames.has(ref)
+      ) {
         dangling = ref;
       }
     }

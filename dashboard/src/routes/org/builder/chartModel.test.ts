@@ -98,6 +98,28 @@ describe("structure", () => {
     expect(designer).toMatchObject({ parent: COMPANY_KEY, danglingUnitRef: null });
   });
 
+  test("a reference is not called dangling once the draft holds a unit of that name", () => {
+    const doc = fixtureCompany();
+    doc.roles![1]!.unit = "Ghost";
+    const state = checkedEdit(doc, {});
+    // Added since the check, the unit is one the reference will resolve to:
+    // where the seat is placed is the next check's to say.
+    const added = record(state, {
+      type: "addUnit",
+      key: "new:ghost",
+      placement: { parent: COMPANY_KEY, after: unitKey("Sales") },
+      data: { name: "Ghost" },
+    });
+    expect(seatOf(added, seatKey("designer"))).toMatchObject({
+      parent: COMPANY_KEY,
+      placedByRef: false,
+      danglingUnitRef: null,
+    });
+    // So is a unit renamed to it.
+    const renamed = record(state, { type: "renameUnit", target: unitKey("Sales"), name: "Ghost" });
+    expect(seatOf(renamed, seatKey("designer")).danglingUnitRef).toBeNull();
+  });
+
   test("an inherited lead is the engine's, and goes when the unit declares its own", () => {
     const doc = fixtureCompany();
     const state = checkedEdit(doc, {
