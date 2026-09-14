@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -109,7 +110,7 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 		return coord.MaintenanceOperation{}, fmt.Errorf(
 			"engine: read %s's current ceiling: %w", req.Stream, err)
 	}
-	op, err := e.openCapacity(ctx, req, stats.MaxBytes)
+	op, err := e.openCapacity(ctx, req, stats)
 	if err != nil {
 		return coord.MaintenanceOperation{}, err
 	}
@@ -124,7 +125,7 @@ func (e *Engine) SetCapacity(ctx context.Context, req CapacityRequest) (
 // still be outstanding, so a retry with a fresh id would open a SECOND window
 // on a stream that may already have one.
 func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
-	originalMaxBytes uint64) (coord.MaintenanceOperation, error) {
+	current jetstream.LogStats) (coord.MaintenanceOperation, error) {
 
 	held, found, err := e.backends.Fleet.Maintenance(ctx, req.Stream)
 	if err != nil {
@@ -143,6 +144,21 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		// THE SAME TARGET is a resume, which is the ordinary path after
 		// a restart into the next mode.
 		return held, nil
+	}
+
+	// A TARGET AT OR BELOW WHAT THE LOG HOLDS IS A FULL LOG the moment it
+	// applies: every append and every linearizable read refused, fleet-wide,
+	// after three restarts spent reaching it. The usage is what a resize is
+	// decided against, and in this mode nothing moves it, so it is decided
+	// here, once, before the exclusion is taken. A resume is not asked
+	// again: its target was accepted when the window opened, and refusing
+	// it now would strand a window whose request may already be in flight.
+	if req.TargetMaxBytes <= current.Bytes {
+		return coord.MaintenanceOperation{}, fmt.Errorf(
+			"engine: %s holds %d bytes, so a %d-byte ceiling would refuse every "+
+				"append the moment it applied. Choose a target above what the log "+
+				"holds, or let the trim release some of it first",
+			req.Stream, current.Bytes, req.TargetMaxBytes)
 	}
 
 	// EVERY ADMISSION BLOCKS. A node that read the operation absent and
@@ -170,7 +186,7 @@ func (e *Engine) openCapacity(ctx context.Context, req CapacityRequest,
 		Stream:           req.Stream,
 		OperationID:      config.NewIncarnation("capacity"),
 		TargetMaxBytes:   req.TargetMaxBytes,
-		OriginalMaxBytes: originalMaxBytes,
+		OriginalMaxBytes: current.MaxBytes,
 		Phase:            coord.PhaseOpened,
 		Attempt:          1,
 		Participants:     participants,
