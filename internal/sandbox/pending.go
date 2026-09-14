@@ -380,10 +380,13 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 
 // PendingStore is the persistence surface for detached runs.
 //
-// An interface because there are two implementations under one contract suite
-// — the SQL store and a memory twin — and because the coordinator's hardest
-// properties (at-most-once claim, epoch fencing) are properties of the
-// STATEMENTS, which is what makes running both against one suite worth doing.
+// ONE IMPLEMENTATION, [CoordStore], on the fleet's coordination store, whose
+// record operations are certified on both coordination backends. It stays an
+// interface because the coordinator's hardest properties (the at-most-once
+// claim, the scoped release, epoch fencing) are properties of the store's
+// conditional writes, which the sandboxtest suite certifies apart from any
+// caller, and because a coordinator case can stage a store that refuses one
+// write only by wrapping it.
 type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —

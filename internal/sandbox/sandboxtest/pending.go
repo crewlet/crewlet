@@ -1,11 +1,13 @@
 // Package sandboxtest is the pending-run store's contract suite.
 //
-// ONE SUITE, BOTH IMPLEMENTATIONS. The properties that matter here — the
-// at-most-once tail claim, the epoch fence, the box record's two halves moving
-// together — are properties of the STATEMENTS, not of the code around them, so
-// a suite that ran only against a fake would assert the author's intent and
-// nothing about the store. And a memory twin nobody holds to the contract is a
-// twin that models the store wrongly and certifies the bug.
+// THE PROPERTIES THAT MATTER HERE ARE THE STORE'S. The at-most-once tail claim,
+// the scoped release and the charge record it carries, the epoch fence, the
+// box record's two halves moving together: each is a conditional write, not
+// code around one, so a suite that ran only against a fake would assert the
+// author's intent and nothing about the store. The one implementation is
+// [sandbox.CoordStore]. The record operations it is built on are certified on
+// both coordination backends by coordtest, and this suite certifies every
+// conditional flip built on top of them.
 package sandboxtest
 
 import (
