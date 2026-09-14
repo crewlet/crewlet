@@ -30,6 +30,7 @@ import { allSeats, allUnits } from "./model/draft.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
+import { builderSurfaces } from "./surfaces.ts";
 
 export class InertWebSocket {
   static CONNECTING = 0;
@@ -326,14 +327,14 @@ export function FakeCanvas({ chart }: { chart: ChartKind }) {
   );
 }
 
+/**
+ * The lens's own surfaces with the two views stood in: the suites exercise
+ * the Builder rather than a view, and the dialogs they open are the real ones.
+ */
 export const fakeSurfaces: BuilderSurfaces = {
+  ...builderSurfaces,
   canvas: FakeCanvas,
   outline: FakeView,
-  editor: null,
-  add: null,
-  move: null,
-  remove: null,
-  changeKind: null,
 };
 
 /** Mounts the Builder lens against the scripted engine. */

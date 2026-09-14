@@ -1001,6 +1001,9 @@ dry-run check, the live region, the shortcuts, the selection and the dialog
 that is open. Its views and dialogs are handed in (`BuilderSurfaces`, bound
 in `routes/org/builder/surfaces.ts`) and reach all of it through
 `BuilderContext`, so no view or dialog starts a request or touches storage.
+Every surface is required: a Builder suite stands a view in with a fake,
+while the screen binds the real canvas, outline, editor and dialogs, and
+`surfaces.test.tsx` mounts the lens with exactly those.
 
 - **The posture is what the engine answers.** `GET /config` is read on mount
   and on every token change, and its answer decides edit mode, create mode,

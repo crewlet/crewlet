@@ -4,19 +4,26 @@
  * ONE PLACE WHERE THE LENS IS ASSEMBLED. The Builder hosts its canvas, its
  * outline, its node editor and its structural dialogs without importing any
  * of them (see `BuilderSurfaces` in `Builder.tsx`), so each is built and
- * tested against `BuilderContext` alone. This is where the screen binds them.
- * A member left `null` is a surface this build does not carry, and the lens
- * says so where it would have drawn it.
+ * tested against `BuilderContext` alone, and a Builder suite can stand a view
+ * in with a fake. This is where the screen binds the real ones, and
+ * `surfaces.test.tsx` holds the lens to drawing them.
  */
 
 import type { BuilderSurfaces } from "./Builder.tsx";
+import { AddNodeDialog } from "./AddNodeDialog.tsx";
+import { CanvasView } from "./CanvasView.tsx";
+import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
+import { DeleteDialog } from "./DeleteDialog.tsx";
+import { MoveDialog } from "./MoveDialog.tsx";
+import { NodeEditor } from "./NodeEditor.tsx";
+import { OutlineView } from "./OutlineView.tsx";
 
 export const builderSurfaces: BuilderSurfaces = {
-  canvas: null,
-  outline: null,
-  editor: null,
-  add: null,
-  move: null,
-  remove: null,
-  changeKind: null,
+  canvas: CanvasView,
+  outline: OutlineView,
+  editor: NodeEditor,
+  add: AddNodeDialog,
+  move: MoveDialog,
+  remove: DeleteDialog,
+  changeKind: ChangeKindDialog,
 };

@@ -139,19 +139,19 @@ export interface AddDialogProps {
 
 /**
  * The views and dialogs the Builder hosts. They read and act through
- * `BuilderContext`; the Builder decides which is mounted.
- *
- * A surface this build does not carry is `null`, and the Builder says so where
- * it would have drawn it rather than drawing nothing.
+ * `BuilderContext`; the Builder decides which is mounted. Every one is
+ * required: a lens missing its canvas or its editor is not a smaller lens
+ * but a broken one, so an unbound surface is a type error rather than a
+ * screen that apologises at run time.
  */
 export interface BuilderSurfaces {
-  canvas: ComponentType<{ chart: ChartKind }> | null;
-  outline: ComponentType | null;
-  editor: ComponentType<NodeDialogProps> | null;
-  add: ComponentType<AddDialogProps> | null;
-  move: ComponentType<NodeDialogProps> | null;
-  remove: ComponentType<NodeDialogProps> | null;
-  changeKind: ComponentType<NodeDialogProps> | null;
+  canvas: ComponentType<{ chart: ChartKind }>;
+  outline: ComponentType;
+  editor: ComponentType<NodeDialogProps>;
+  add: ComponentType<AddDialogProps>;
+  move: ComponentType<NodeDialogProps>;
+  remove: ComponentType<NodeDialogProps>;
+  changeKind: ComponentType<NodeDialogProps>;
 }
 
 type OpenDialog =
@@ -1443,12 +1443,10 @@ function Lens({
           <TabPanel id={viewPanel} value={view}>
             {view === "canvas" ? (
               <TabPanel id={chartPanel} value={chart}>
-                {Canvas ? <Canvas chart={chart} /> : <MissingSurface name="The canvas" />}
+                <Canvas chart={chart} />
               </TabPanel>
-            ) : Outline ? (
-              <Outline />
             ) : (
-              <MissingSurface name="The outline" />
+              <Outline />
             )}
           </TabPanel>
         )}
@@ -1603,17 +1601,6 @@ function isTextEntry(el: HTMLElement): boolean {
   );
 }
 
-/** Where a view this build does not carry would have been drawn. */
-function MissingSurface({ name }: { name: string }) {
-  return (
-    <Empty
-      icon="sitemap"
-      title={`${name} is not part of this build`}
-      hint="Open the Chart or Directory lens to read the organization."
-    />
-  );
-}
-
 function DialogHost({
   dialog,
   surfaces,
@@ -1646,38 +1633,13 @@ function DialogHost({
       );
     case "add": {
       const Add = surfaces.add;
-      return Add ? (
-        <Add parent={dialog.parent} kind={dialog.kind} onClose={onClose} />
-      ) : (
-        <MissingDialog onClose={onClose} />
-      );
+      return <Add parent={dialog.parent} kind={dialog.kind} onClose={onClose} />;
     }
     default: {
-      const Node = {
-        editor: surfaces.editor,
-        move: surfaces.move,
-        remove: surfaces.remove,
-        changeKind: surfaces.changeKind,
-      }[dialog.type];
-      return Node ? (
-        <Node nodeKey={dialog.key} onClose={onClose} />
-      ) : (
-        <MissingDialog onClose={onClose} />
-      );
+      const Node = surfaces[dialog.type];
+      return <Node nodeKey={dialog.key} onClose={onClose} />;
     }
   }
-}
-
-function MissingDialog({ onClose }: { onClose: () => void }) {
-  return (
-    <Dialog
-      title="Not available"
-      onClose={onClose}
-      footer={<Button onClick={onClose}>Close</Button>}
-    >
-      <p>This action is not part of this build of the dashboard.</p>
-    </Dialog>
-  );
 }
 
 function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) {
