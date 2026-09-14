@@ -171,7 +171,11 @@ reasons:
 | **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
 
 Then placement retries for as long as the cluster answers "no suitable
-peers", inside a 30-second provisioning deadline per stream.
+peers", inside a 30-second provisioning deadline per stream. Inside the same
+deadline, a stream a peer is creating at the same moment is waited for rather
+than reported: members booting together all create every state log, each at
+a ceiling sized from its own member, and the cluster answers the second
+create "name already in use" seconds before the first one commits.
 
 The clustered accept budget is four times the solo one because a member
 starting alongside its peers is competing with them for the same disk and the
