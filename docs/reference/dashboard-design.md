@@ -180,7 +180,7 @@ meets their company first and the engine last.
 | **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
 | | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
 | | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
-| | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)*. It reads and writes nothing: every surface that reports no active configuration (the shell's banner, the attention row, this screen's empty state) links to `#/org?lens=builder` to create the company, and names `crewlet config import` beside it |
+| | Configuration | `#/config?lens=&revision=&against=` | `config` / `config_audit` / `config_diff` *(operator-gated)*. The diff lens compares `revision` with the active revision, or with `against` when a link names one (what one save changed is its revision against its parent). It reads and writes nothing: every surface that reports no active configuration (the shell's banner, the attention row, this screen's empty state) links to `#/org?lens=builder` to create the company, and names `crewlet config import` beside it |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
 | — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |
@@ -1063,8 +1063,12 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   (`savedRevision.ts`), watches the `stream` query's `applied_epoch` and the
   `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
   N of M nodes, or the node that refused it with a link to the Fleet screen.
-  Until this node applies it, the Org screen's read lenses carry a note that
-  they draw the previous revision.
+  Its View changes opens the saved revision against its parent
+  (`against=`), since against the active revision a save that is active now
+  differs from nothing; the conflict banner's Show what changed is the newer
+  revision against the draft's base for the same reason. Until this node
+  applies it, the Org screen's read lenses carry a note that they draw the
+  previous revision.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
   machine decides the status only while a check is out or before any answer.

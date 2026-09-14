@@ -170,11 +170,13 @@ The strip under the toolbar follows the revision:
 | Applied. | every node reported this epoch |
 | Node `<id>` refused this revision: `<reason>`. | that node kept the previous epoch. **Open the fleet** for the rest |
 
-Beside it: **View changes**, which opens the revision's diff on the
-Configuration screen, and **Copy as YAML**, which reads the active company as
-YAML (credentials redacted, as every configuration read is) so a
-`company.yaml` kept in a repository can be brought back in step. `crewlet
-config import company.yaml` writes it back.
+Beside it: **View changes**, which opens what the save changed on the
+Configuration screen (the saved revision against the one the draft was
+started from; after creating the company it is **View the configuration**,
+since a first revision has nothing to differ from), and **Copy as YAML**,
+which reads the active company as YAML (credentials redacted, as every
+configuration read is) so a `company.yaml` kept in a repository can be
+brought back in step. `crewlet config import company.yaml` writes it back.
 
 ## A draft survives a reload
 
@@ -205,8 +207,8 @@ Every check is conditional on the revision the draft was started from, so a
 revision saved by somebody else (another operator, `crewlet config import`, a
 setup flow on the Integrations screen) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
-banner offers **Show what changed** (the revision history's diff) and **Update
-my draft**.
+banner offers **Show what changed** (the newer revision against the one the
+draft was started from) and **Update my draft**.
 
 Updating replays each change of the draft onto the revision the engine holds
 now, and sorts every change into one of three outcomes:

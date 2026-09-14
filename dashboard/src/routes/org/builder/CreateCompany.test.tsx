@@ -116,6 +116,12 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
     "#/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
+  // The first revision has no parent to differ from, so the strip opens the
+  // configuration itself rather than an empty diff.
+  expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
+  expect(screen.getByRole("link", { name: "View the configuration" }).getAttribute("href")).toBe(
+    "#/config",
+  );
 });
 
 test("a company created while the draft is open is found by the check, before any save", async () => {

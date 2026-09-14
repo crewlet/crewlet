@@ -51,6 +51,8 @@ export type SavePhase =
 
 export interface Landed {
   readonly revisionId: string;
+  /** The revision the save was built on: the landed revision's parent. `null` in create mode. */
+  readonly parentRevisionId: string | null;
   /** From the write's answer; `null` for a write found by settling. */
   readonly epoch: number | null;
   readonly derived: Derived | null;
@@ -149,6 +151,8 @@ export function useSave({
         case "landed":
           landed({
             revisionId: result.revisionId,
+            // Settling finds the write by this very parent, so it is known.
+            parentRevisionId: attempt.baseRevision,
             epoch: null,
             derived: null,
             mode: attempt.mode,
@@ -206,6 +210,9 @@ export function useSave({
         case "saved":
           landed({
             revisionId: outcome.revisionId,
+            // The write was conditional on this base, so the engine stored it
+            // as the new revision's parent.
+            parentRevisionId: attempt.baseRevision,
             epoch: outcome.epoch,
             derived: outcome.derived,
             mode: attempt.mode,

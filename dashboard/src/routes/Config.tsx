@@ -3,7 +3,10 @@
  *
  * THIS SCREEN READS. It shows the active revision, the history of revisions
  * and the difference between any one of them and the active document, and it
- * writes nothing. The previous editor on this screen was a bare JSON textarea
+ * writes nothing. The diff lens compares against the active revision unless
+ * the link names another (`against=`): what one save changed is its revision
+ * against its parent, because once that save is active its diff against the
+ * active revision is empty. The previous editor on this screen was a bare JSON textarea
  * with no schema hints, no validation until Save, no diff before saving and a
  * dirty flag that was set and never read, so navigating away lost the edit
  * silently.
@@ -19,7 +22,7 @@
 
 import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import {
   Badge,
@@ -45,14 +48,20 @@ type Lens = "active" | "audit" | "diff";
 export function ConfigScreen() {
   const now = useNow();
   const [lens, setLens] = useParam("lens", "active", "section");
-  const [revision, setRevision] = useParam("revision", "");
+  const [revision] = useParam("revision", "");
+  // THE SIDE A DIFF IS READ AGAINST. Empty is the active revision, which is
+  // what a row picked from the history compares with. A link can name the
+  // revision's parent instead, which is the only way to show what one save
+  // changed: once that save is active, it is byte-identical to itself.
+  const [against] = useParam("against", "");
+  const nav = useNavigator();
   const panel = useId();
 
   const active = useQuery("config", undefined, { enabled: lens === "active" });
   const audit = useQuery("config_audit", { limit: 100 }, { enabled: lens !== "active" });
   const diff = useQuery(
     "config_diff",
-    { revision_id: revision, against: "active" },
+    { revision_id: revision, against: against || "active" },
     { enabled: lens === "diff" && !!revision },
   );
 
@@ -146,7 +155,9 @@ export function ConfigScreen() {
                   rowKey={(r) => r.revision_id}
                   defaultSort={{ key: "at", dir: "desc" }}
                   onRowClick={(r) => {
-                    setRevision(r.revision_id);
+                    // A picked row is compared with the active revision, so
+                    // the revision a link compared against is dropped with it.
+                    nav.filter({ revision: r.revision_id, against: null });
                     setLens("diff");
                   }}
                   isSelected={(r) => r.revision_id === revision}
@@ -198,7 +209,11 @@ export function ConfigScreen() {
               <Panel
                 title={revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
                 icon="gitBranch"
-                subtitle="against the active revision"
+                subtitle={
+                  against
+                    ? `against revision ${against.slice(0, 10)}`
+                    : "against the active revision"
+                }
               >
                 {!revision ? (
                   <Empty
@@ -218,7 +233,9 @@ export function ConfigScreen() {
                         ? undefined
                         : {
                             title: "No differences",
-                            hint: "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
+                            hint: against
+                              ? "The two revisions are byte-identical. Re-activating an unchanged revision is the credential-rotation gesture."
+                              : "This revision is byte-identical to the active one. Re-activating an unchanged revision is the credential-rotation gesture.",
                           }
                     }
                   >

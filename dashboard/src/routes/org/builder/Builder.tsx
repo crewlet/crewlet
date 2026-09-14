@@ -785,7 +785,11 @@ function Lens({
       // Recorded and cleared first: this runs even when the Builder has gone
       // away while the save was in flight, and a kept log of a saved draft
       // would be offered for replay onto its own revision.
-      recordSavedRevision({ revisionId: landed.revisionId, epoch: landed.epoch });
+      recordSavedRevision({
+        revisionId: landed.revisionId,
+        parentRevisionId: landed.parentRevisionId,
+        epoch: landed.epoch,
+      });
       clearDraft(storage);
       dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
       setReviewing(false);
@@ -1197,11 +1201,19 @@ function Lens({
             icon="alert"
             action={
               <span className="row gap-1 wrap">
-                {state.base.revision && (
+                {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
+                    against that base. The Configuration screen compares with
+                    the active revision unless told otherwise, and the base
+                    against the active one reads every change backwards. */}
+                {state.base.revision && conflict.currentRevisionId && (
                   <ButtonLink
                     size="sm"
                     variant="ghost"
-                    href={href(["config"], { lens: "diff", revision: state.base.revision })}
+                    href={href(["config"], {
+                      lens: "diff",
+                      revision: conflict.currentRevisionId,
+                      against: state.base.revision,
+                    })}
                   >
                     Show what changed
                   </ButtonLink>

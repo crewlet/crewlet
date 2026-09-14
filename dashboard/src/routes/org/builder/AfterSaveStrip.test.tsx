@@ -44,7 +44,7 @@ const fleet = (nodes: FleetAnswer["nodes"], target: number): FleetAnswer => ({
 });
 
 describe("what the strip says", () => {
-  const saved = { revisionId: "r-saved", epoch: 4 };
+  const saved = { revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 };
 
   test("a node that has applied the epoch, with no fleet answer, is applied", () => {
     expect(applyState(saved, { status: "ok", applied_epoch: 4 }, null)).toMatchObject({
@@ -136,7 +136,9 @@ describe("what the strip says", () => {
 
   test("a save whose answer was lost takes the fleet's target as its epoch", () => {
     const answer = fleet([node({ id: "a", config_epoch: 7, config_status: "ok" })], 7);
-    expect(applyState({ revisionId: "r-saved", epoch: null }, null, answer)).toMatchObject({
+    expect(
+      applyState({ revisionId: "r-saved", parentRevisionId: "r1", epoch: null }, null, answer),
+    ).toMatchObject({
       message: "Applied.",
       resolved: true,
     });
@@ -163,8 +165,11 @@ describe("in the builder", () => {
     );
     expect(await screen.findByText("The engine is applying it.")).toBeDefined();
     expect(screen.getByText("r-saved")).toBeDefined();
+    // What the save changed is the saved revision against the one it was
+    // built on. Against the active revision, which the save now is, the diff
+    // would be empty.
     expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
-      "#/config?lens=diff&revision=r-saved",
+      "#/config?lens=diff&revision=r-saved&against=r1",
     );
     applied = 2;
     expect(await screen.findByText("Applied.", {}, { timeout: 8000 })).toBeDefined();
@@ -222,13 +227,13 @@ describe("the read lenses", () => {
   }
 
   test("say they still draw the previous revision until this node applies the saved one", async () => {
-    recordSavedRevision({ revisionId: "r-saved", epoch: 4 });
+    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
     mountOrg(3);
     expect(await screen.findByText(/still applying revision/)).toBeDefined();
   });
 
   test("say nothing once the node has applied it", async () => {
-    recordSavedRevision({ revisionId: "r-saved", epoch: 4 });
+    recordSavedRevision({ revisionId: "r-saved", parentRevisionId: "r1", epoch: 4 });
     mountOrg(4);
     await waitFor(() => expect(screen.queryByText(/still applying revision/)).toBeNull());
   });

@@ -19,6 +19,13 @@ import { useSyncExternalStore } from "react";
 export interface SavedRevision {
   readonly revisionId: string;
   /**
+   * The revision the save was built on, which is the saved revision's parent;
+   * `null` for the company's first revision. What the save changed is the
+   * saved revision against this one: against the active revision, a save
+   * that is active now differs from nothing.
+   */
+  readonly parentRevisionId: string | null;
+  /**
    * The epoch the write activated, from its answer. `null` when the save's
    * answer was lost and the write was found afterwards by reading the
    * revision history, which carries no epoch.

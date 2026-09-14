@@ -123,6 +123,10 @@ describe("a save whose answer never arrives", () => {
     expect(await screen.findByText("Saved. The engine is applying it.")).toBeDefined();
     expect(engine.sent("GET", "/config/revisions/r-saved")).toHaveLength(1);
     expect(engine.requests.filter(isWrite)).toHaveLength(1);
+    // Found by its parent, so what it changed is still that parent's diff.
+    expect(screen.getByRole("link", { name: "View changes" }).getAttribute("href")).toBe(
+      "#/config?lens=diff&revision=r-saved&against=r1",
+    );
   });
 
   test("that did not land is offered again, and nothing was stored twice", async () => {

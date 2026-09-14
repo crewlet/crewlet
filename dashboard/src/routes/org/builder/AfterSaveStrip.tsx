@@ -16,8 +16,10 @@
  * and stops polling once it has.
  *
  * It also offers the two things an operator wants right after a save: the
- * diff of what they changed, and the company as YAML, which is what keeps a
- * `company.yaml` in a repository in step with what the dashboard wrote.
+ * diff of what they changed (the saved revision against its parent, never
+ * against the active revision, which the save now is), and the company as
+ * YAML, which is what keeps a `company.yaml` in a repository in step with what
+ * the dashboard wrote.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -171,13 +173,25 @@ export function AfterSaveStrip({
         icon={state.tone === "positive" ? "check" : state.tone === "critical" ? "alert" : "refresh"}
         action={
           <span className="row gap-1 wrap">
-            <ButtonLink
-              size="sm"
-              variant="ghost"
-              href={href(["config"], { lens: "diff", revision: saved.revisionId })}
-            >
-              View changes
-            </ButtonLink>
+            {saved.parentRevisionId ? (
+              <ButtonLink
+                size="sm"
+                variant="ghost"
+                href={href(["config"], {
+                  lens: "diff",
+                  revision: saved.revisionId,
+                  against: saved.parentRevisionId,
+                })}
+              >
+                View changes
+              </ButtonLink>
+            ) : (
+              // The company's first revision has no parent to differ from:
+              // all of it is what the save wrote.
+              <ButtonLink size="sm" variant="ghost" href={href(["config"])}>
+                View the configuration
+              </ButtonLink>
+            )}
             <Button size="sm" variant="ghost" onClick={() => setYaml(true)}>
               Copy as YAML
             </Button>
