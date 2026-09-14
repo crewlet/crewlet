@@ -70,7 +70,7 @@ func (e *Engine) RecheckGitHub() {
 // because state set in one and forgotten in the other fails silently and only
 // on the path nobody exercised.
 //
-// Today that is two things.
+// Today that is three things.
 //
 // THE PARTY REGISTRY, indexed BEFORE the epoch is stored, so no reader can
 // find a company through [Engine.Company] whose parties are not in
@@ -87,6 +87,10 @@ func (e *Engine) RecheckGitHub() {
 // belongs to the rows in the file rather than to the current config, and
 // [Engine.buildEmbedder] has already refused any revision that would change
 // it.
+//
+// And the TOOL-SKILL TRIGGER AUDIT, which reads the epoch that is current
+// and so runs once this one is; see [Engine.auditSkills] for why it takes
+// no epoch.
 //
 // It also tells the OPERATOR one thing: that an epoch with no model is now
 // current. See nomodels.go.
@@ -110,6 +114,7 @@ func (e *Engine) installEpoch(c *Company) {
 	if e.backends != nil && e.backends.Store != nil {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
+	e.auditSkills()
 }
 
 // indexes reports whether the live party registry was built from exactly this

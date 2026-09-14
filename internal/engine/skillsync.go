@@ -28,7 +28,7 @@ import (
 // does.
 func (e *Engine) newSkillSync(nodeID string) error {
 	opts := skillsync.Options{
-		Registry: e.skills, Node: nodeID, OnChange: e.auditCurrentSkills,
+		Registry: e.skills, Node: nodeID, OnChange: e.auditSkills,
 	}
 	// A NIL INTERFACE, never a typed nil wrapping one: the loop reads
 	// `Stream == nil` as "no broker, nobody to tell".

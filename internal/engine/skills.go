@@ -94,15 +94,27 @@ func (e *Engine) refreshSkillVariables(c *Company) {
 	e.skills.SetVariables(skillVariables(e.resolver(), c, e.publicBase(c)))
 }
 
-// auditSkills reports every skill whose trigger names a tool this company
-// does not have.
+// auditSkills reports every skill whose trigger names a tool the current
+// epoch does not have.
 //
 // PER EPOCH, because the tool surface is what an apply changes: a revision
 // that removed an MCP server silently un-triggers every skill about it, and
 // nothing else in the system would say so. See [skills.Trigger.Classify] for
 // why drift and a foreign stack are reported differently.
-func (e *Engine) auditSkills(c *Company) {
-	if e.skills.Len() == 0 || c.Tools == nil {
+//
+// AGAINST THE EPOCH THAT IS CURRENT, never one still being built, which is why
+// it takes no epoch. It has two inputs and runs wherever either one changes:
+// after an epoch is installed ([Engine.installEpoch]), and after the skill
+// sync changed the registry (its OnChange hook), each reading the other as it
+// stands at that moment, so the last change to either is always audited
+// against the last value of the other. It ran inside [Engine.equip] before,
+// against the epoch an apply was building, while the sync audited against
+// whatever was current: a registry change that landed between the build and
+// the publish (most often the very walk the apply's own source change asked
+// for) was audited against the outgoing epoch and never against the new one.
+func (e *Engine) auditSkills() {
+	c := e.Company()
+	if c == nil || c.Tools == nil || e.skills.Len() == 0 {
 		return
 	}
 	snapshot := c.Tools.Snapshot()
@@ -152,14 +164,3 @@ func (e *Engine) skillsContainer() string {
 // check on every phase build, and the one that forgot it would panic on a
 // company mid-setup.
 func (e *Engine) Skills() *skills.Registry { return e.skills }
-
-// auditCurrentSkills audits the registry against the epoch serving now.
-//
-// For a registry change that no apply made (a walk, a page update): the
-// trigger audit is per epoch, and the epoch to audit against is the current
-// one, whichever apply published it.
-func (e *Engine) auditCurrentSkills() {
-	if c := e.Company(); c != nil {
-		e.auditSkills(c)
-	}
-}
