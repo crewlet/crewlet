@@ -182,3 +182,79 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 		"it stopped somewhere new and the profile needs re-reading against "+
 		"it:\nargs: %v\n%s", args, got)
 }
+
+// EVERY BUILT-IN PROFILE'S ENVIRONMENT REACHES THE CHILD, over the whole
+// table rather than over the profiles that happen to have a real-CLI case.
+//
+// This is the guard the hand-written helper did not have, and its absence is
+// why the drift lasted. The real-CLI cases SKIP wherever the vendor binary is
+// not installed, which is every CI runner and nearly every workstation — so
+// the code path that composes their environment was compiled and never run,
+// and a profile gaining a variable nobody copied across produced no failure
+// anywhere. This case runs unconditionally, needs no binary, and fails the
+// moment vendorCLIEnv stops deriving what buildEnv derives.
+//
+// Driven off BuiltinNames rather than a list, so a profile added tomorrow is
+// covered by existing code — the alternative is a list that has to be edited
+// by whoever adds the profile, which is the same shape of omission one level
+// up.
+func TestVendorCLIEnvCarriesEveryProfilesOwnEnvironment(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range BuiltinNames() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p, ok := Builtin(name)
+			if !ok {
+				t.Fatalf("Builtin(%q) missing from a table BuiltinNames just listed", name)
+			}
+
+			home := t.TempDir()
+			got := map[string]string{}
+			for _, kv := range vendorCLIEnv(p, home, nil) {
+				k, v, found := strings.Cut(kv, "=")
+				if !found {
+					t.Fatalf("environment entry %q is not KEY=VALUE", kv)
+				}
+				got[k] = v
+			}
+
+			// The fixed environment: an auto-update switch, an offline flag,
+			// a retry cap. Each one stops the CLI doing something a test must
+			// not provoke, so a missing one is a test that makes a call the
+			// engine never makes.
+			for k, want := range p.Env {
+				if got[k] != want {
+					t.Errorf("%s = %q, want %q — the profile declares it and buildEnv sets it, "+
+						"so the test environment must carry it too", k, got[k], want)
+				}
+			}
+
+			// The relocation variables, joined onto the home exactly as
+			// buildEnv joins them. These were re-stated per case with the
+			// path spelled out by hand, so profiles.yaml and the test each
+			// held a copy of where a vendor keeps its state.
+			for k, rel := range p.ConfigEnv {
+				if want := filepath.Join(home, rel); got[k] != want {
+					t.Errorf("%s = %q, want %q — the relocation must point inside the "+
+						"case's own home, or the CLI writes to the real one", k, got[k], want)
+				}
+			}
+
+			// A zero Auth signs nothing in. The api-key variable is deleted
+			// outright by buildEnv's default branch, which is what lets these
+			// cases run on a machine already logged in to the vendor.
+			if p.APIKeyEnv != "" {
+				if _, present := got[p.APIKeyEnv]; present {
+					t.Errorf("%s reached the child; a real-CLI case must reach authentication "+
+						"and stop, never spend a plan", p.APIKeyEnv)
+				}
+			}
+
+			// HOME is the isolation everything else hangs off.
+			if got["HOME"] != home {
+				t.Errorf("HOME = %q, want %q", got["HOME"], home)
+			}
+		})
+	}
+}
