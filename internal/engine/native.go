@@ -1308,10 +1308,9 @@ func (m seatMentions) Mentions(text string) []string {
 // # Why a warning and not a refusal
 //
 // `stream.store_dir` unset selects an in-memory embedded broker, which is
-// exactly what a test wants and what a stateless ingress-only node can use.
-// The engine cannot tell one of those from an operator who left the field out
-// of a deployment, so refusing here would break the two legitimate cases to
-// catch the mistake.
+// exactly what a test wants. The engine cannot tell a test from an operator who
+// left the field out of a deployment, so refusing here would break the
+// legitimate case to catch the mistake.
 //
 // # Why it is worth a line at all
 //

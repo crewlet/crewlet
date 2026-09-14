@@ -185,11 +185,12 @@ a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 
 **Set `store_dir`, or the fleet forgets.** Empty selects an in-memory member,
-which is right for a test and for a stateless ingress-only node and wrong for
-anything else: a restart loses that member's replicas, and the same server
-holds the KV buckets carrying the fleet's shared records — the token counter,
-the completion ledger, open agent-to-agent asks, claimed scheduled fires,
-detached (and billed) sandbox runs.
+which is right for a test and wrong for every node serving a company, an
+ingress-only one included: every node runs the engine, an in-memory member
+creates every stream it provisions in memory, and a restart loses that member's
+replicas, while the same server holds the KV buckets carrying the fleet's
+shared records (the token counter, the completion ledger, open agent-to-agent
+asks, claimed scheduled fires, detached and billed sandbox runs).
 
 **On the native backends it is the company's own record.** With
 `tracker.backend: native` or `knowledge.backend: native` — the defaults — every
@@ -198,9 +199,8 @@ then means the whole tracker and the whole wiki are gone on the next restart,
 and nothing reports a loss: the company simply appears to have no work. The
 engine logs `native_backend_on_an_ephemeral_stream` at error level on every
 boot that is in that state, and it is the one startup line worth grepping for.
-It is not refused, because a test and an ingress-only node legitimately run
-this way and nothing here can tell them from a deployment somebody forgot to
-finish.
+It is not refused, because a test legitimately runs this way and nothing here
+can tell one from a deployment somebody forgot to finish.
 
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**

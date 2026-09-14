@@ -98,15 +98,17 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	// AN EMBEDDED STREAM WITH NOWHERE TO PERSIST loses everything on a
-	// restart. It is the right configuration for a test and for an
-	// ingress-only node, and the wrong one for anything holding a company.
+	// restart. It is the right configuration for a test and the wrong one
+	// for any node serving a company. An ingress-only node is no exception:
+	// it runs the engine like every other node, and an embedded server with
+	// no store directory creates every stream it provisions in memory.
 	if b.Stream.Type != StreamNATS && strings.TrimSpace(b.Stream.StoreDir) == "" {
 		out = append(out, Warning{
 			Path: "stream.store_dir",
 			Message: "an embedded stream with no store directory keeps everything in " +
 				"memory: a restart loses every mailbox, every coordination record and " +
 				"the company's own history. Correct for a test; not for a node that " +
-				"holds seats",
+				"serves a company, whatever its node.roles",
 		})
 	}
 	// A BROKER TOLD TO BE VERBOSE INTO A SINK THAT TAKES NO DEBUG says

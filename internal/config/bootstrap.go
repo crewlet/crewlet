@@ -767,9 +767,10 @@ type Stream struct {
 	URL string `yaml:"url,omitempty" json:"url,omitempty" desc:"External NATS URL. Required for nats, refused for embedded."`
 
 	// StoreDir is where an EMBEDDED server persists its streams. Empty
-	// selects an in-memory server, which is what a test wants and what a
-	// stateless ingress-only node can use — and what a company that
-	// expects to survive a restart must NOT leave unset.
+	// selects an in-memory server, which is what a test wants and what no
+	// node serving a company should run, whatever its roles: every node
+	// runs the engine, and an in-memory server creates every stream it
+	// provisions in memory, so a restart takes those streams with it.
 	StoreDir string `yaml:"store_dir,omitempty" json:"store_dir,omitempty" desc:"Embedded stream persistence directory. Empty = in-memory (nothing survives a restart)."`
 
 	// Cluster makes the embedded server join peers, which is the fleet
