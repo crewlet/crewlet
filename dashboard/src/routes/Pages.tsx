@@ -129,13 +129,25 @@ export function Pages() {
       <QueryState
         error={error}
         loading={loading}
+        // ONE EMPTY STATE. There used to be two, and on a company with no
+        // pages at all they rendered TOGETHER: `QueryState` fired on
+        // `rows.length === 0` under one heading and a trailing `Empty` fired
+        // on no containers under another, so the screen said "No pages here"
+        // and "Nothing has been written down yet" one above the other, in two
+        // different chromes. They are two facts, so this is one component
+        // telling them apart rather than two components each telling one.
         empty={
           rows.length
             ? undefined
-            : {
-                title: "No pages here",
-                hint: "Nothing in this node's copy of the knowledge base matches. Seats write pages with write_page, and a page's container comes from the unit's `space` field.",
-              }
+            : containerKeys.length === 0
+              ? {
+                  title: "Nothing has been written down yet",
+                  hint: "A container is created the first time somebody writes into it. Give a unit a `space` and its seats will have somewhere to file what they learn.",
+                }
+              : {
+                  title: "No pages here",
+                  hint: "Nothing in this node's copy of the knowledge base matches. Seats write pages with write_page, and a page's container comes from the unit's `space` field.",
+                }
         }
       >
         <Panel>
@@ -231,14 +243,6 @@ export function Pages() {
           />
         </Panel>
       </QueryState>
-
-      {!loading && !error && containerKeys.length === 0 && rows.length === 0 && (
-        <Empty
-          icon="book"
-          title="Nothing has been written down yet"
-          hint="A container is created the first time somebody writes into it. Give a unit a `space` and its seats will have somewhere to file what they learn."
-        />
-      )}
     </>
   );
 }

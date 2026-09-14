@@ -207,7 +207,17 @@ export function Sprints() {
  * legend, because a legend for one series is a box saying what the title says.
  */
 export function Velocity({ sprints, measure }: { sprints: WorkSprintRow[]; measure: string }) {
-  if (sprints.length < 2) return null;
+  // A SPRINT THAT HAS NOT STARTED HAS NO DELIVERY, and a bar reading "0 of 0"
+  // in a delivery chart is not a slow sprint — it is a sprint that has not
+  // happened. Every row used to be drawn, so a project with three planned
+  // sprints ahead of it drew three empty bars beside its real ones and the
+  // trend a reader came for was three-fifths fiction.
+  //
+  // `future` is the state the cadence duty mints ahead; `closed` and `active`
+  // are the two that have a measurement.
+  const run = sprints.filter((s) => s.state === "closed" || s.state === "active");
+  if (run.length < 2) return null;
+  sprints = run;
   // THE SCALE IS THE LARGEST SPRINT'S WHOLE COMMITMENT, so a bar reads as a
   // fraction of what that sprint took on rather than of what the best sprint
   // delivered — the second makes an ordinary sprint beside an exceptional one

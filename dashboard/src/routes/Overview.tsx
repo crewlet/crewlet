@@ -40,7 +40,7 @@ import {
 } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
-import { indexOrg, runState } from "~/lib/seats.ts";
+import { awaitingPerson, indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
@@ -228,8 +228,8 @@ export function Overview() {
             label="Coding runs"
             value={sandboxes.length}
             sub={
-              sandboxes.filter((s) => s.status === "awaiting_input").length
-                ? `${plural(sandboxes.filter((s) => s.status === "awaiting_input").length, "run")} paused on a question`
+              sandboxes.filter((s) => awaitingPerson(s.status)).length
+                ? `${plural(sandboxes.filter((s) => awaitingPerson(s.status)).length, "run")} paused on a question`
                 : "detached sandbox runs in flight"
             }
           />

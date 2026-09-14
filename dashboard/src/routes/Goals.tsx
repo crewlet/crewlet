@@ -275,3 +275,102 @@ function targetRight(target: WorkGoalTarget): string {
   const unit = target.unit ? ` ${target.unit}` : "";
   return `${target.current ?? 0}${unit} of ${target.goal ?? 0}${unit}`;
 }
+
+/**
+ * One goal.
+ *
+ * `work_goals` has taken an `id` since it existed and `#/goals/{id}` fell
+ * through to the list, because the route dispatch discarded `route.path[1]` —
+ * so every link to a goal, from a target, from a check-in or from a colleague,
+ * landed on every goal.
+ *
+ * The CHECK-IN FEED is the part a list cannot show: `updates[]` is the only
+ * part of a goal a person writes in prose, each one carrying the health they
+ * declared at the time, and it was served by the engine and declared by
+ * nothing on this side.
+ */
+export function Goal({ id }: { id: string }) {
+  const now = useNow();
+  const org = useOrg();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
+  const { data, loading, error } = useQuery("work_goals", { id }, { pollMs: 60_000 });
+  const goal = data?.goals?.[0];
+
+  return (
+    <>
+      <ScreenHead
+        title={goal?.name || "Goal"}
+        sub={
+          goal?.description ||
+          "A goal is the tier above projects: what the company is trying to move, and what says whether it moved."
+        }
+        badges={
+          goal?.health && HEALTH[goal.health] ? (
+            <Badge tone={HEALTH[goal.health]!.tone}>{HEALTH[goal.health]!.label}</Badge>
+          ) : undefined
+        }
+      />
+      {loading && !goal && <Skeleton rows={4} />}
+      <QueryState
+        error={error}
+        loading={loading}
+
+        empty={
+          goal
+            ? undefined
+            : {
+                title: "No goal with that id",
+                hint: "A goal is addressed by its uuid. It may have been removed, or this node's copy of the log may not have reached it yet.",
+              }
+        }
+      >
+        {goal && (
+          <>
+            <GoalPanel goal={goal} now={now} onOwner={() => {}} seatName={seatName} />
+
+            {/* THE CHECK-IN HISTORY. Health is set by a PERSON and never
+                inferred, so each entry is somebody's judgement at a moment,
+                with the reasoning they gave for it — newest first here,
+                because a reader wants the current view and then how it got
+                there. The engine appends, so the list itself is oldest-first. */}
+            <Panel
+              title="Check-ins"
+              icon="activity"
+              count={goal.updates?.length ?? 0}
+              padding="none"
+              subtitle="the only part of a goal a person writes"
+            >
+              {goal.updates?.length ? (
+                <div className="list">
+                  {[...goal.updates].reverse().map((update, i) => (
+                    <div key={`${update.at}-${i}`} className="thread-entry">
+                      <div className="row gap-1">
+                        <strong className="t-cell">{seatName(update.author)}</strong>
+                        {update.health && HEALTH[update.health] && (
+                          <Badge tone={HEALTH[update.health]!.tone}>
+                            {HEALTH[update.health]!.label}
+                          </Badge>
+                        )}
+                        <span className="spacer" />
+                        <span className="t-caption" title={update.at}>
+                          {relTime(update.at, now)}
+                        </span>
+                      </div>
+                      {update.text && <p className="t-caption">{update.text}</p>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="thread-entry t-caption faint">
+                  Nobody has checked in on this goal. A check-in is a person declaring its health
+                  and saying why — the engine never infers one from progress.
+                </div>
+              )}
+            </Panel>
+          </>
+        )}
+      </QueryState>
+    </>
+  );
+}

@@ -151,9 +151,20 @@ describe("what a seat is doing", () => {
 
   test("waiting on a person and having fallen over are DIFFERENT tones", () => {
     // Both stopped, and only one is a failure. Red is reserved for failure.
-    expect(seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "awaiting_input" }])).toBe(
-      "needs",
-    );
+    //
+    // THE ENGINE'S OWN WORD. This asserted `awaiting_input`, which
+    // `sandbox.PendingRun` cannot write, so the case passed against a fixture
+    // no engine produces while the real state reached no tone at all.
+    expect(
+      seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "awaiting_clarification" }]),
+    ).toBe("needs");
+    // A box reaped past its pause TTL is the same fact one step worse.
+    expect(seatTone({ id: "a", role: "Dev A" }, [{ ...box, status: "reseed" }])).toBe("needs");
+    // And a running one is not waiting on anybody — without this the rule
+    // could be "any sandbox at all" and still pass.
+    expect(
+      seatTone({ id: "a", role: "Dev A", state: "idle" }, [{ ...box, status: "running" }]),
+    ).toBe("working");
     expect(
       seatTone(
         {

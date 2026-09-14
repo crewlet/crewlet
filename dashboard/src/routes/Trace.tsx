@@ -74,7 +74,13 @@ export function TraceScreen({ traceId }: { traceId: string }) {
 
   const from = events.length ? Math.min(...events.map((e) => tsKey(e.timestamp))) : 0;
   const to = events.length ? Math.max(...events.map((e) => tsKey(e.timestamp))) : 0;
-  const failed = events.filter((e) => (e.payload?.failed as boolean) === true).length;
+  // THE ROW'S OWN FIELD, not its payload. `EventLog.Trace` scans through
+  // `scanRows`, whose SELECT does not include `payload` — so `e.payload` is
+  // undefined on every span and this tile read 0 on every trace ever drawn,
+  // under a caption asserting that nothing had failed. `failed` is derived
+  // server-side from the type and the stored tag and has always been on the
+  // wire; it is what the feed's own red rows are drawn from.
+  const failed = events.filter((e) => e.failed === true).length;
 
   return (
     <>

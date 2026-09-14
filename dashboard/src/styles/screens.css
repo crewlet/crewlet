@@ -576,10 +576,15 @@
 .feed-row.failed {
   box-shadow: inset 2px 0 0 var(--critical);
 }
+/* A TIMESTAMP IS THE FEED'S PRIMARY SORT KEY, so it is a fact and not
+   decoration. `--text-faint` is annotated in tokens.css as decoration only —
+   it is measured between 2.8:1 and 4.5:1 deliberately, to keep it out of
+   exactly this kind of cell — and the one column every reader scans was
+   painted in it. */
 .feed-time {
   font-family: var(--font-mono);
   font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 .feed-actor {
