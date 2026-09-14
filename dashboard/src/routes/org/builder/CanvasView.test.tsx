@@ -206,11 +206,32 @@ describe("the tree", () => {
   test("a root seat placed by reference is a row of its unit, and a dangling reference is marked at the root", () => {
     const doc = fixtureCompany();
     doc.roles!.push({ name: "Scout", unit: "Ghost" });
-    mount(checkedEdit(doc));
+    const state = answered(checkedEdit(doc), {
+      status: "clean",
+      warnings: [
+        {
+          kind: "dangling_reference",
+          ref: "unit",
+          path: "roles[2].unit",
+          segments: ["roles", 2, "unit"],
+          seat: "scout",
+          unit: "",
+          from: "Scout",
+          to: "Ghost",
+          message: "Seat Scout names unit Ghost, which is no unit.",
+        },
+      ],
+      derived: fixtureDerived(doc, PLACED),
+    });
+    mount(state);
     expect(within(item("Designer")).getByText("Placed by unit reference")).toBeDefined();
     expect(item("Designer").getAttribute("aria-level")).toBe("4");
     expect(item("Scout").getAttribute("aria-level")).toBe("2");
-    expect(within(item("Scout")).getByText("No unit named Ghost")).toBeDefined();
+    const mark = within(item("Scout")).getByText("No unit named Ghost");
+    // The engine's own sentence, carried on the mark it explains.
+    expect(mark.closest(".badge")!.getAttribute("title")).toBe(
+      "Seat Scout names unit Ghost, which is no unit.",
+    );
     expect(within(item("SRE")).getByText("Datadog fallback")).toBeDefined();
   });
 
