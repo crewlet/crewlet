@@ -1241,6 +1241,63 @@ func TestAFailedResumeDoesNotReviveARunTheSeatsNextOwnerReaped(t *testing.T) {
 	}
 }
 
+// honoursCancel refuses a release on a cancelled context, the way the fleet's
+// store does over the wire and the in-memory twin does not.
+type honoursCancel struct{ PendingStore }
+
+func (s honoursCancel) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return s.PendingStore.ReleaseClaim(ctx, turnID, release)
+}
+
+// drained is a resume a drain breaks: the delivery's context is cancelled
+// under it, and it fails with that cancellation.
+type drained struct{ cancel context.CancelFunc }
+
+func (d drained) Resume(ctx context.Context, _ ResumeRequest) error {
+	d.cancel()
+	return ctx.Err()
+}
+
+// A DRAIN THAT BREAKS A RESUME STILL HANDS THE CLAIM BACK. The release is a
+// rollback of the claim, and the failure it undoes is the drain's own
+// cancellation: inheriting it, the release wrote nothing, the run stayed
+// resumed, and the node the drain handed the seat to reaped it as abandoned
+// rather than resuming it.
+func TestADrainThatBreaksAResumeStillHandsTheClaimBack(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	delivery, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	coordinator, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: honoursCancel{rig.pending}, Manager: rig.manager,
+		Resume: drained{cancel: cancel},
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+
+	payload, ev := rig.completion("t1")
+	if err := coordinator.OnCompleted(delivery, payload, ev); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OnCompleted = %v, want the drain's cancellation sent back", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim handed back for the seat's next owner", got.Status)
+	}
+	if err := rig.coordinator.RecoverSeat(t.Context(), "swe", "node-b:1", 2); err != nil {
+		t.Fatalf("the next owner's recovery: %v", err)
+	}
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the redelivery to the next owner: %v", err)
+	}
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("the next owner resumed %d times, want the turn continued once", got)
+	}
+}
+
 // deliverControl hands the coordinator every completion published to the
 // seat's control topic, as the broker would.
 func (r *coordRig) deliverControl(t *testing.T) {
