@@ -1061,10 +1061,10 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 - **A newer revision is an update, never an overwrite.** A check answering
   `409` (or a dry run validated against another base) halts checking and
   offers Update my draft; a draft holding no work reads the newer revision
-  instead, since there is nothing to update. The update is read only from a node serving the
-  conflict's revision or a descendant of it, and `UpdateDraftDialog.tsx` shows
-  what still applies, what is dropped and every conflict with its three values;
-  confirming waits for a choice on each. A value is shown as a person reads
+  instead, since there is nothing to update. The update is read only from a
+  node serving the conflict's revision or a descendant of it, and
+  `UpdateDraftDialog.tsx` shows what still applies, what is dropped and every
+  conflict with its three values; confirming waits for a choice on each. A value is shown as a person reads
   it: the model tags a conflict over its own structures with their shape, so
   a node key reads as the node's name, a removed node as the fields that
   changed, a kind change's stripped fields by name only, and a credential's
@@ -1090,9 +1090,10 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   write id before the save is sent and unmarked once the save is known not to
   have landed, so an answer lost after the lens was left, or across a reload,
   is settled on the next visit (`useSave.resume`) before the kept log is
-  offered: replayed onto its own revision it would apply every change twice. `ReviewSaveDialog.tsx` states every
-  change and consequence and gates the irreversible ones on an
-  acknowledgement.
+  offered: replayed onto its own revision it would apply every change twice.
+  `ReviewSaveDialog.tsx` states every change and consequence and gates the
+  irreversible ones on an acknowledgement, whose sentences (`dialogParts`'s
+  `ACKNOWLEDGEMENT_TEXT`) the editor's company rename shares.
 - **Create mode is a form, one template operation, and a create-only write.**
   `CreateCompany.tsx` collects the charter, the starting shape and an optional
   seat for the operator, and records the model's `applyTemplate` (refused
@@ -1145,7 +1146,14 @@ to.
   value the engine has not given yet reads "Lead after the check", "Manager
   after the check" or "Handle after the check", never that a check is
   running: whether one is on its way, or the engine cannot be reached at all,
-  is the toolbar's check status to say, and a card cannot know. The reporting
+  is the toolbar's check status to say, and a card cannot know. A seat's
+  handle is one rule for every surface and for the reducer that records by it
+  (`model/document.knownHandles`): declared, else the one its key carries,
+  else the one a check derived while the seat keeps the name that check saw,
+  since the engine derives an undeclared handle from the name alone. The
+  editor and the dialogs read it, the seat a reported handle names and the
+  Datadog fallback from `chartModel.ts` too, so a card and the dialog it opens
+  never name a seat two ways. The reporting
   chart, drawn from the last check while the draft has moved past it, says so
   in a note over the canvas.
 - **The canvas is a tree of cards.** The structure chart has the company card
