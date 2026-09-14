@@ -50,7 +50,30 @@ that Tier B applies deliberately. When both are present the **header wins**:
 it is the more explicit channel, and a `_summary` can survive in a document
 somebody keeps in version control long after it stopped describing the write.
 
-Response is `201 Created` with `{"revision_id": "..."}`.
+Response is `201 Created` with the new `revision_id` and `epoch`, the
+`warnings` the engine has about the document (a lead or a `manages` entry that
+names nobody, for example) and the `derived` hierarchy it will run. See
+[What a write answers](../reference/api-endpoints.md#what-a-write-answers).
+
+To check a document without writing it, send the same request with
+`?dry_run=true`. Nothing is stored or activated, no summary is needed, and the
+answer is `200 {"valid": true, "base_revision_id", "warnings", "derived"}`, or
+the refusal the write would get:
+
+```bash
+curl -X PUT "$CREWLET_URL/config?dry_run=true" \
+  -H "$AUTH" \
+  --data-binary @examples/nimbus.company.yaml
+```
+
+A refusal names each failure in `detail` and again in `problems`, one located,
+classified entry per failure with its `path`, `segments` and `kind` (and the
+`line` when the parser found it), so a script can point at the field rather
+than parse the message. See
+[Refusals carry located problems](../reference/api-endpoints.md#refusals-carry-located-problems).
+
+The body is read as YAML, which JSON is a subset of, whatever `Content-Type`
+says.
 
 JSON body works too:
 
@@ -132,8 +155,9 @@ The `config_entities` query still lists a collection and still answers a
 `{kind, id, entity}` envelope — it is what the dashboard reads. For one entity
 prefer `GET /config/{kind}/{id}`, whose body is exactly what `PUT` takes.
 
-The response is `201 Created` with the new `revision_id` and `epoch`, exactly
-as a full PUT would be: the write changed one entity and created one revision.
+The response is `201 Created` with the new `revision_id`, `epoch`, `warnings`
+and `derived` hierarchy, exactly as a full PUT would be: the write changed one
+entity and created one revision.
 
 ### What a write actually does
 
@@ -223,11 +247,16 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 
 ## Common error responses
 
+Every `400` about the document carries `problems`, the failures located and
+classified, beside the `detail` that renders them.
+
 | Status | Error | Meaning |
 |--------|-------|---------|
-| `400` | `invalid_body` | Body isn't JSON / YAML, or wrong `Content-Type` |
-| `400` | `validation_error` | The merged config failed validation — `detail` carries the message |
+| `400` | `invalid_body` | The body is not YAML or JSON, or its shape is not a company's (an unknown key, a list where a mapping belongs). `Content-Type` is not what decides it |
+| `400` | `invalid_patch` | A `PATCH` body that could not be merged, or that names a key the document does not have |
+| `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
 | `400` | `summary_required` | Any write with neither an `X-Summary` header nor a top-level `_summary` key in the body |
+| `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
 | `401` | `invalid_token` | Bearer missing / wrong / wrong scheme |
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
@@ -235,5 +264,7 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 | `409` | `revision_advanced` | Stale `If-Match` or concurrent writer won the race |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
 | `412` | `already_configured` | `If-None-Match: *` sent while a revision is active |
+| `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
+| `503` | `no_control_plane` | The process has no coordination store, so it cannot activate a revision; a dry run is refused the same way |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).

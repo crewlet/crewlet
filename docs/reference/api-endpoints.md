@@ -188,9 +188,9 @@ does.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/config` | Replace the active revision. Body JSON or `Content-Type: application/yaml`. Requires a revision summary — an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match` — see [below](#conditional-requests) |
+| `PUT` | `/config` | Replace the active revision. The body is JSON or YAML, read the same way whatever `Content-Type` says. Requires a revision summary: an `X-Summary` header, **or** a top-level `_summary` key in the body. Conditional via `If-Match` / `If-None-Match`, see [below](#conditional-requests). `?dry_run=true` checks it and stores nothing, see [Dry runs](#dry-runs) |
 | `OPTIONS` | `/config` | `204` with `Allow` and `Accept-Patch: application/merge-patch+json` |
-| `PATCH` | `/config` | Merge one or more sections into the active revision — see [below](#patch-config--the-narrower-write) |
+| `PATCH` | `/config` | Merge one or more sections into the active revision, see [below](#patch-config--the-narrower-write). `?dry_run=true` checks it and stores nothing |
 | `POST` | `/config/reload` | Re-publish the active document unchanged, so every node re-applies and re-reads the secret store. See [below](#post-configreload-after-a-secret-changes) |
 | `POST` | `/config/revisions/{id}/revert` | Create a new active revision whose payload equals revision `{id}` |
 
@@ -214,6 +214,89 @@ curl -X PATCH https://engine.example.com/config \
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
 
 **`If-Match` matters more here than on the full write.** A `PUT` carries the caller's whole intended document; a `PATCH` is merged against whatever is active at that instant. See [Concurrent writes](#concurrent-writes) for what the engine does and does not guarantee.
+
+#### What a write answers
+
+Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload and a revert) answers `201` with the revision, its epoch, and what the engine makes of the document it stored:
+
+```json
+{
+  "revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
+  "epoch": 42,
+  "warnings": [
+    {
+      "kind": "dangling_reference", "ref": "manages",
+      "path": "roles[0].manages[1]", "segments": ["roles", 0, "manages", 1],
+      "seat": "ceo", "unit": "", "from": "CEO", "to": "Ghost",
+      "message": "seat \"CEO\" manages \"Ghost\", which is neither a seat nor a unit, so the entry manages nobody. Correct the entry or add a seat or unit with that name"
+    }
+  ],
+  "derived": {"seats": [...], "units": [...]}
+}
+```
+
+- **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` name it is about, empty when neither), plus `from` and `to` as display text. Two kinds:
+  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead), `unit` (a root seat's `unit:`), `manages` (one `manages` entry, at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
+  - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company stored before the rule answers with one, one beside each entity the violation names.
+- **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
+
+#### Dry runs
+
+`PUT /config?dry_run=true` and `PATCH /config?dry_run=true` are the same request, checked in the same order, that store, activate and publish nothing. The dashboard's organization builder sends one on every edit, so a check is always exactly the write a save would send.
+
+```bash
+curl -X PATCH "https://engine.example.com/config?dry_run=true" \
+  -H "Authorization: Bearer $TOKEN" -H "If-Match: \"$REV\"" \
+  -d '{"mission": "Ship the thing"}'
+```
+
+A valid check answers `200`:
+
+```json
+{"valid": true, "base_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41", "warnings": [], "derived": {"seats": [...], "units": [...]}}
+```
+
+- **`dry_run` is read before anything else**, and takes exactly `true` or `false`, or nothing. Any other value (`1`, `yes`, an empty value, the parameter twice) is `400 invalid_query`: the two readings of a guess differ by whether the fleet's configuration changes.
+- **No summary is needed**, because nothing is stored to record one on. A `_summary` key in the body is still lifted out, so the document checked is the one the write reads.
+- **`base_revision_id`** is the revision the check was built on, and `""` when nothing is active. A client whose draft was built on a different revision learns that the configuration moved without a second request.
+- **Every other refusal is the write's, in the write's order**: `409 no_active_revision` for a patch with nothing to patch, `409 revision_advanced` for a stale `If-Match`, `412 already_configured` for `If-None-Match: *` on a configured company, and `400` with [problems](#refusals-carry-located-problems) for a document the write would refuse.
+- **A process that cannot activate refuses the check with `503 no_control_plane`**, before validating, exactly as it refuses the write. A clean check there would promise a save that cannot land.
+- A dry run needs the same token a write does.
+
+#### Refusals carry located problems
+
+A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_body`) keeps `error`, `detail` (one line per failure) and `hint`, and adds **`problems`**: the same failures, located and classified, so a client puts each beside the field it is about without parsing the detail.
+
+```json
+{
+  "error": "validation_error",
+  "detail": "roles[1].llm: value not in the allowed set: \"nowhere\" is not a configured provider: providers.llm has zulu. ...",
+  "hint": "the WHOLE document a write produces is validated, ...",
+  "problems": [
+    {
+      "path": "roles[1].llm", "segments": ["roles", 1, "llm"], "kind": "unknown_value",
+      "message": "roles[1].llm: value not in the allowed set: ...", "seat": "cto"
+    }
+  ],
+  "derived": {"seats": [...], "units": [...]}
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into. `""` only for a failure that belongs to no place in it, such as a body that is not YAML at all |
+| `segments` | The same path taken apart: strings for keys, numbers for list indexes. A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is `""` |
+| `kind` | `missing`, `unknown_value`, `out_of_range`, `conflict`, `unknown_field`, `shape`, or `invalid` for anything this build does not classify |
+| `message` | The failure's whole line, exactly as it appears in `detail`. A duplicate name is one line naming every entity and one problem beside each, so there can be more problems than lines |
+| `seat` | The engine-derived handle of the seat the problem is about, when it is about one |
+| `unit` | The name of the unit the problem is about, when it is about one |
+| `line` | The 1-based line in the text that was sent, for a failure the parser found. A patch's failure found in the merged document names no line, because that text is the engine's merge rather than anything sent |
+
+`derived` is present whenever the document parsed: a document with problems still has a hierarchy, and a person fixing a misspelled lead finds it in the chart it breaks. A body or patch that never became a document carries none.
+
+No message repeats a credential. A document read from `GET /config` carries masks, which a write restores from the stored revision before validating, so the values a refusal judges are ones the caller was never shown: a message says what rule a value breaks and never the value, a fragment of it, or its length.
+
+The [`/setup`](#setting-an-integration-up) submissions that change the document answer their `validation_error` with the same `problems` and `derived`.
 
 #### Conditional requests
 
@@ -355,13 +438,15 @@ On a `409`, re-read `/config` and send the edit again.
 
 ### Status codes
 
-- `200 OK` — successful read
-- `201 Created` — a write produced a new revision; body has `{"revision_id": ..., "epoch": ...}`. A per-entity write returns this too: it changed one entity and created one revision.
-- `400 Bad Request` — invalid body / validation error (`error` names which, and `detail` carries the field path and what to change); `summary_required` when neither an `X-Summary` header nor a `_summary` body key is present on a write
-- `401 Unauthorized` — missing or invalid bearer token (`{"error": "invalid_token"}`)
-- `404 Not Found` — a revision that is not there, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
-- `409 Conflict` — `revision_advanced` (stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (per-entity write on an unconfigured node)
-- `412 Precondition Failed` — `If-Match` supplied when no revision exists yet
+- `200 OK`: a successful read, or a [dry run](#dry-runs) that found the write valid (`{"valid", "base_revision_id", "warnings", "derived"}`)
+- `201 Created`: a write produced a new revision; the body is `{"revision_id", "epoch", "warnings", "derived"}` (see [What a write answers](#what-a-write-answers)). A per-entity write, a reload and a revert return this too: each created one revision.
+- `400 Bad Request`: `invalid_body`, `invalid_patch` or `validation_error`, each with `detail` (the field path and what to change) and [`problems`](#refusals-carry-located-problems); `summary_required` when a write has neither an `X-Summary` header nor a `_summary` body key; `invalid_query` when `dry_run` is anything but `true` or `false`; `identity_mismatch` when a per-entity body renames what the path addresses
+- `401 Unauthorized`: missing or invalid bearer token (`{"error": "invalid_token"}`)
+- `404 Not Found`: a revision that is not there, `no_active_revision` on a read before the first write, or `no_such_entity` on a per-entity write naming an id the active revision does not carry
+- `409 Conflict`: `revision_advanced` (a stale `If-Match`, or a race with a concurrent writer) or `no_active_revision` (a `PATCH` or a per-entity write on an unconfigured node, or a reload)
+- `412 Precondition Failed`: `already_configured` when `If-None-Match: *` meets an active revision, or `no_active_revision` when `If-Match` names a revision and none is active
+- `415 Unsupported Media Type`: `unsupported_patch_media_type` when a `PATCH` body is a patch format other than a JSON Merge Patch, with `Accept-Patch`
+- `503 Service Unavailable`: `no_control_plane` when the process has no coordination store to activate a revision with, on a write and on a dry run alike
 
 ### The `config_audit` query
 
@@ -419,14 +504,16 @@ writes one: the history stays append-only, so "the credentials were reloaded
 at 04:12" is a fact somebody can find later. `X-Summary` names it; unset, it
 records `reload configuration`.
 
-Answers `201 {"revision_id", "epoch"}`, `409 no_active_revision` when nothing
-is configured, `400 validation_error` when the active document breaks a
+Answers `201` with the revision, its epoch, its warnings and its derived
+hierarchy (see [What a write answers](#what-a-write-answers)),
+`409 no_active_revision` when nothing is configured, `400 validation_error` when the active document breaks a
 runnable rule of this build (a reload is an apply, so it re-publishes only a
 company every node can run; correct it with `PUT` or `PATCH`), and
 `503 no_control_plane` on a process that cannot activate. A document that
 breaks only an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to),
 such as a duplicate seat or unit name stored before the rule existed, reloads:
-that is how a credential rotation still reaches a company carrying one.
+that is how a credential rotation still reaches a company carrying one. Its
+answer lists each violation as an `admission` warning.
 
 The command-line equivalent is [`crewlet config activate <UUID>`](cli.md#crewlet-config-activate)
 naming the revision that is already current.

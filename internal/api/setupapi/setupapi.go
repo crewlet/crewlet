@@ -2120,16 +2120,23 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		}
 		httpjson.FailWith(w, http.StatusConflict, codeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
-		httpjson.FailWith(w, http.StatusBadRequest, codeValidationError, map[string]string{
-			"detail": invalid.Err.Error(),
-			"hint": "the values are checked as the whole company document they " +
-				"produce, so a field that is fine on its own is still refused " +
-				"when it leaves the company invalid",
-		})
+		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
+		// derived hierarchy, so a screen placing a refusal on the field it
+		// is about reads one shape whichever surface refused. The words
+		// around it are this surface's.
+		fields := configapi.RefusalFields(err)
+		fields["detail"] = invalid.Err.Error()
+		fields["hint"] = "the values are checked as the whole company document they " +
+			"produce, so a field that is fine on its own is still refused " +
+			"when it leaves the company invalid"
+		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
 	case errors.As(err, &patchErr):
-		httpjson.FailWith(w, http.StatusBadRequest, codeValidationError, map[string]string{
-			"detail": patchErr.Err.Error(),
-		})
+		// validation_error rather than the config surface's invalid_patch:
+		// the caller here submitted values, not a patch, and this surface
+		// built the patch they became.
+		fields := configapi.RefusalFields(err)
+		fields["detail"] = patchErr.Err.Error()
+		httpjson.FailWithFields(w, http.StatusBadRequest, codeValidationError, fields)
 	case errors.Is(err, configapi.ErrNoControlPlane):
 		httpjson.FailWith(w, http.StatusServiceUnavailable, codeNoControlPlane, map[string]string{
 			"hint": "this process has no coordination store, so it cannot activate a revision",

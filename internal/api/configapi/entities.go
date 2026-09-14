@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -353,8 +354,11 @@ func (s *Service) getEntity(kind string) http.HandlerFunc {
 }
 
 // putEntity replaces one entity and stores the resulting document.
+//
+// The same write [Service.ApplyEntity] performs, through the same draft, with
+// the refusals an HTTP caller needs spelled out: which entity was missing, and
+// why a rename is not an edit.
 func (s *Service) putEntity(kind string) http.HandlerFunc {
-	access := entityKinds[kind]
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		body, err := readBody(w, r)
@@ -365,7 +369,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		// The same rule the whole-document write has, and for the same
 		// reason: a list of revisions with no summaries is a list of
 		// uuids. A per-entity write can say more, so the hint does.
-		summary, body, ok := requireSummary(w, r, body,
+		summary, body, ok := takeSummary(w, r, body, true,
 			"this write needs an audit summary: the X-Summary header, "+
 				"or a top-level _summary key in the body. Name what changed "+
 				"about "+kind+"/"+id)
@@ -389,69 +393,63 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 			})
 			return
 		}
-		if !s.checkPrecondition(w, r, active, found) {
+		if _, ok := s.checkPrecondition(w, r, active, found); !ok {
 			return
 		}
-		prior, err := s.open(active)
+		d, err := entityDraft(kind, id, body, active.ID)
 		if err != nil {
-			s.fail(w, "open the active revision", err)
+			s.fail(w, "address the entity", err)
 			return
 		}
-
-		// SPLICED INTO A COPY OF THE ACTIVE DOCUMENT, so everything the
-		// caller did not send is exactly what is already stored — which is
-		// the entire difference between this and PUT /config.
-		spliced, err := s.open(active)
+		prepared, err := s.prepare(r.Context(), d)
 		if err != nil {
-			s.fail(w, "open the active revision", err)
+			s.refuseEntity(w, kind, id, err)
 			return
 		}
-		switch err := access.replace(spliced, id, body); {
-		case errors.Is(err, ErrNoSuchEntity):
-			// NEVER CREATED. A PUT naming an id nothing carries is far more
-			// often a typo than an intent to add one, and adding through
-			// this route would let a caller grow the company without ever
-			// seeing the document they changed.
-			writeJSON(w, http.StatusNotFound, map[string]string{
-				"error": "no_such_entity",
-				"hint": "no " + kind + " called " + id + " in the active revision; " +
-					"add one through PUT /config, which shows the whole document",
-			})
-			return
-		case errors.Is(err, ErrIdentityMismatch):
-			// A RENAME, REFUSED. Not coerced back to the path's id either:
-			// silently keeping the old identity would land every other edit
-			// in the body and leave the caller believing the rename took,
-			// which is the same surprise one revision later.
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "identity_mismatch", "detail": err.Error(),
-				"hint": "the path is the address: send " + kind + "/" + id +
-					" back under the id it already has. Renaming is a " +
-					"full-document edit: a seat's durable id derives from its " +
-					"handle, so a rename also has to move what references it, " +
-					"and PUT /config is where that is visible",
-			})
-			return
-		case err != nil:
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "invalid_body", "detail": err.Error(),
-			})
+		applied, err := s.commit(r.Context(), prepared, summary, operatorOf(r))
+		if err != nil {
+			s.refuseApply(w, err)
 			return
 		}
+		writeApplied(w, applied)
+	}
+}
 
-		// The masks the caller was shown come back as the values they hide,
-		// against the revision they were shown FROM.
-		spliced.RestoreRedacted(prior)
-		// VALIDATED WHOLE, not just the entity. A seat naming a provider
-		// that no longer exists is valid on its own and breaks the company,
-		// and a per-entity surface is exactly where that gets introduced.
-		if err := spliced.Validate(); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{
-				"error": "validation_error", "detail": err.Error(),
-			})
-			return
-		}
-		s.store(w, r, spliced, active.ID, summary)
+// refuseEntity answers an entity write's own refusals, and every other one as
+// [Service.refuseApply] does.
+func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error) {
+	var entityErr *EntityError
+	switch {
+	case !errors.As(err, &entityErr):
+		s.refuseApply(w, err)
+	case errors.Is(err, ErrNoSuchEntity):
+		// NEVER CREATED. A PUT naming an id nothing carries is far more
+		// often a typo than an intent to add one, and adding through this
+		// route would let a caller grow the company without ever seeing the
+		// document they changed.
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "no_such_entity",
+			"hint": "no " + kind + " called " + id + " in the active revision; " +
+				"add one through PUT /config, which shows the whole document",
+		})
+	case errors.Is(err, ErrIdentityMismatch):
+		// A RENAME, REFUSED. Not coerced back to the path's id either:
+		// silently keeping the old identity would land every other edit in
+		// the body and leave the caller believing the rename took, which is
+		// the same surprise one revision later.
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "identity_mismatch", "detail": entityErr.Err.Error(),
+			"hint": "the path is the address: send " + kind + "/" + id +
+				" back under the id it already has. Renaming is a " +
+				"full-document edit: a seat's durable id derives from its " +
+				"handle, so a rename also has to move what references it, " +
+				"and PUT /config is where that is visible",
+		})
+	default:
+		// A BODY THIS KIND CANNOT READ, which is the same refusal the
+		// whole-document write gives a document it cannot read.
+		refuseDocument(w, httpjson.CodeInvalidBody, entityErr.Err.Error(), "",
+			&DocumentError{Err: entityErr.Err})
 	}
 }
 

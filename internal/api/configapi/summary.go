@@ -8,6 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // Where a revision summary comes from.
@@ -71,8 +72,12 @@ func splitSummary(body []byte) (string, []byte, error) {
 		}
 		value := mapping.Content[i+1]
 		if value.Kind != yaml.ScalarNode {
-			return "", nil, fmt.Errorf(
-				"%s must be a string naming what this write changes", summaryKey)
+			// A FAULT, placed at the key, so the refusal's problem points
+			// at the one line that is wrong rather than at the document.
+			return "", nil, &config.Fault{
+				Path: config.Path{summaryKey}, Kind: config.ErrShape, Line: value.Line,
+				Detail: "must be a string naming what this write changes",
+			}
 		}
 		summary := strings.TrimSpace(value.Value)
 		mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
@@ -100,24 +105,27 @@ func rootMapping(doc *yaml.Node) *yaml.Node {
 	return node
 }
 
-// requireSummary takes the summary for a write and answers the request itself
-// when there is not one.
+// takeSummary takes the summary for a write, lifting `_summary` out of the
+// body, and answers the request itself when a required summary is missing.
 //
-// ONE FUNCTION FOR THREE ROUTES, and the reason is the precedence rather than
-// the boilerplate: three copies of "split the body, then let the header win,
-// then refuse if empty" is three chances for one of them to read the header
-// FIRST and never lift `_summary` out — which parses green and then fails at
-// the document parser, by name, as an unknown field. Only the hint differs
-// per route, so only the hint is a parameter.
+// ONE FUNCTION FOR EVERY ROUTE THAT READS A BODY, and the reason is the
+// precedence rather than the boilerplate: several copies of "split the body,
+// then let the header win, then refuse if empty" are several chances for one
+// of them to read the header FIRST and never lift `_summary` out, which
+// parses green and then fails at the document parser, by name, as an unknown
+// field. Only the hint differs per route, so only the hint is a parameter.
+//
+// required is false for a dry run, which stores nothing and so records no
+// summary. The key is still lifted out, because the document a check reads
+// has to be the one the write will read.
 //
 // It returns the remaining body, because splitting is what removes the key:
 // a caller that ignored the second result would hand the parser a document
 // with a `_summary` in it. ok is false when the request has been answered.
-func requireSummary(w http.ResponseWriter, r *http.Request, body []byte, hint string) (summary string, rest []byte, ok bool) {
+func takeSummary(w http.ResponseWriter, r *http.Request, body []byte, required bool, hint string) (summary string, rest []byte, ok bool) {
 	summary, rest, err := splitSummary(body)
 	if err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+		refuseDocument(w, httpjson.CodeInvalidBody, err.Error(), "", &DocumentError{Err: err})
 		return "", nil, false
 	}
 	if header := r.Header.Get("X-Summary"); header != "" {
@@ -126,7 +134,7 @@ func requireSummary(w http.ResponseWriter, r *http.Request, body []byte, hint st
 		// in version control long after it stopped describing the write.
 		summary = header
 	}
-	if summary == "" {
+	if summary == "" && required {
 		// Required, because the history is what an operator reads at 3am
 		// to find the change that broke something. A list of revisions
 		// with no summaries is a list of uuids.
