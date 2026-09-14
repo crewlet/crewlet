@@ -241,6 +241,23 @@ export function Refusal({ message }: { message: string | null }) {
   return <Banner tone="critical">{message}</Banner>;
 }
 
+/**
+ * What a dialog says in a posture that records nothing.
+ *
+ * A DISABLED BUTTON IS NOT A REASON. Every dialog refuses to record while the
+ * builder is guarded, read only, in a conflict or holding a kept draft, so
+ * without this the operator fills the dialog in, finds its one button
+ * unavailable, and has nothing on screen telling them the builder rather than
+ * their answers is what is in the way.
+ */
+export function ReadOnlyNote() {
+  return (
+    <Banner tone="neutral">
+      The organization cannot be changed right now, so this change cannot be applied.
+    </Banner>
+  );
+}
+
 /** A read-only list of names or sentences, and nothing at all when there are none. */
 export function NameList({ names }: { names: readonly string[] }) {
   if (names.length === 0) return null;

@@ -31,6 +31,7 @@ import { useBuilder } from "./BuilderContext.tsx";
 import {
   ContactField,
   EditorSection,
+  ReadOnlyNote,
   Refusal,
   ScreenLink,
   StrandedNotes,
@@ -133,6 +134,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
         </>
       }
     >
+      {api.readOnly && <ReadOnlyNote />}
       <Refusal message={refusal ?? (preview.ok ? null : preview.message)} />
       <p className="t-body">
         {becoming === "human"

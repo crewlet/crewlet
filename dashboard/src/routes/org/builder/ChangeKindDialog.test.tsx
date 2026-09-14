@@ -162,9 +162,14 @@ test("a human seat becomes an agent seat again, losing the fields an agent may n
   expect(seat?.kind === "seat" && seat.node.data).toEqual({ name: "Dev" });
 });
 
-test("a read-only builder changes nothing", () => {
+test("a read-only builder changes nothing, and says why the button is unavailable", () => {
   const doc = fixtureCompany();
   doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
   open(keyedState(doc), "seat:dev", { readOnly: true });
   expect(confirm("Change to an agent seat").disabled).toBe(true);
+  expect(
+    screen.getByText(
+      "The organization cannot be changed right now, so this change cannot be applied.",
+    ),
+  ).toBeDefined();
 });

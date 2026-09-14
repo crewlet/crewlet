@@ -22,7 +22,7 @@ import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { Button, Segmented } from "~/ui/primitives.tsx";
 import { useBuilder, type AddKind } from "./BuilderContext.tsx";
-import { ContactField, Refusal, UnitTypeField } from "./dialogParts.tsx";
+import { ContactField, ReadOnlyNote, Refusal, UnitTypeField } from "./dialogParts.tsx";
 import { suggestUniqueName } from "./model/document.ts";
 import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
 import { COMPANY_KEY, mintKey, type KeySource, type NodeKey } from "./model/keys.ts";
@@ -153,6 +153,7 @@ export function AddNodeDialog({
         </>
       }
     >
+      {api.readOnly && <ReadOnlyNote />}
       <Refusal
         message={
           missingParent

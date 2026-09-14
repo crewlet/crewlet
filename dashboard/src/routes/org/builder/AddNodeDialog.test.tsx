@@ -15,16 +15,22 @@ import { builderReducer, INITIAL_BUILDER } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import type { AddKind } from "./BuilderContext.tsx";
 import type { BuilderState } from "./model/reducer.ts";
-import { renderInBuilder } from "./testBuilder.tsx";
+import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
 import { keyedState } from "./testState.ts";
 
 afterEach(cleanup);
 
-function open(state: BuilderState, parent: string | null, kind?: AddKind) {
+function open(
+  state: BuilderState,
+  parent: string | null,
+  kind?: AddKind,
+  options: HarnessOptions = {},
+) {
   const onClose = vi.fn();
   const view = renderInBuilder(
     state,
     <AddNodeDialog parent={parent} kind={kind} onClose={onClose} />,
+    options,
   );
   return { ...view, onClose };
 }
@@ -119,4 +125,18 @@ test("a refusal keeps the dialog open and adds nothing", () => {
   expect(screen.getByText(/has not described this company yet/)).toBeDefined();
   expect(view.state().log.ops).toHaveLength(0);
   expect(view.onClose).not.toHaveBeenCalled();
+});
+
+// A disabled button is not a reason: without the note the operator fills the
+// dialog in and nothing on screen says the builder is what is in the way.
+test("a read-only builder adds nothing, and says why the button is unavailable", () => {
+  open(keyedState(fixtureCompany()), null, "agent", { readOnly: true });
+  expect(
+    (screen.getByRole("button", { name: "Add agent seat" }) as HTMLButtonElement).disabled,
+  ).toBe(true);
+  expect(
+    screen.getByText(
+      "The organization cannot be changed right now, so this change cannot be applied.",
+    ),
+  ).toBeDefined();
 });

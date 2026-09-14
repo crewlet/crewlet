@@ -39,6 +39,7 @@ import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
   NameList,
+  ReadOnlyNote,
   Refusal,
   ScreenLink,
   StrandedNotes,
@@ -150,6 +151,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         </>
       }
     >
+      {api.readOnly && <ReadOnlyNote />}
       <Refusal message={refusal ?? (preview.ok ? null : preview.message)} />
       <p className="t-body">
         {found.kind === "unit"

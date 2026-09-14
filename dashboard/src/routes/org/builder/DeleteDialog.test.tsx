@@ -209,8 +209,15 @@ describe("before the seats go", () => {
     expect(view.state().log.ops).toHaveLength(1);
   });
 
-  test("a read-only builder deletes nothing", () => {
+  // A disabled button is not a reason: without the note the operator fills
+  // the dialog in and nothing on screen says the builder is what is in the way.
+  test("a read-only builder deletes nothing, and says why the button is unavailable", () => {
     open(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
     expect(deleteButton().disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "The organization cannot be changed right now, so this change cannot be applied.",
+      ),
+    ).toBeDefined();
   });
 });

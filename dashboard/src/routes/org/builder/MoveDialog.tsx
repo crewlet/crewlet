@@ -28,7 +28,13 @@ import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
-import { EditorSection, Refusal, StrandedNotes, WorkingNotes } from "./dialogParts.tsx";
+import {
+  EditorSection,
+  ReadOnlyNote,
+  Refusal,
+  StrandedNotes,
+  WorkingNotes,
+} from "./dialogParts.tsx";
 import { allSeats, allUnits, locate, siblingsAt, subtreeKeys } from "./model/draft.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
@@ -138,6 +144,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
         </>
       }
     >
+      {api.readOnly && <ReadOnlyNote />}
       <Refusal message={refusal} />
       <Field
         label="Move to"
