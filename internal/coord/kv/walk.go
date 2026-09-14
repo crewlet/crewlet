@@ -157,11 +157,44 @@ const (
 func eachEntry(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue,
 	visit func(jetstream.KeyValueEntry) error) error {
 
-	declined, err := directWalk(ctx, nc, kv, directWalkMaxBytes, visit)
+	return eachEntryUnder(ctx, nc, kv, jetstream.AllKeys, kv.Bucket(), visit)
+}
+
+// eachEntryUnder is [eachEntry] over the keys matching one filter.
+//
+// THE BROKER DOES THE FILTERING, which is the whole point. A key is a subject
+// token path under its bucket (coord/keys.go), so a class of keys written by
+// [coord.DocumentKey] is a subject wildcard the broker can match — and the
+// shared positions register holds SEVEN classes, so a walk that read the whole
+// bucket moved all seven to use one. That read is not an edge case: the
+// state-log write fence takes it on every first write to a subject.
+//
+// It also moves the direct walk's own ceiling. What makes the fast transport
+// decline is the server's cap on how many SUBJECTS one request may match, and
+// a narrowed walk is measured against its own class rather than against every
+// key in the bucket — so a class is no longer pushed onto the slower transport
+// by what its neighbours have grown to.
+//
+// The filter is in the KEY's vocabulary rather than the subject's — "floor.>"
+// and not "$KV.crewlet_x.floor.>" — because a key is what the caller holds and
+// what the ordered transport takes. Each walk composes its own, and there is
+// deliberately no default: an empty filter read as "everything" would turn a
+// caller that lost its class value into one that walks the whole register and
+// decodes seven classes as one.
+//
+// `what` names the listing a failure could not complete — the bare name, which
+// every message composes into "read <what>" — and a filtered walk names its
+// LISTING rather than its bucket. Seven classes share the positions register,
+// so "read crewlet_positions" is the same sentence for all of them: it names
+// the file an operator would inspect and never the duty that stalled.
+func eachEntryUnder(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue,
+	keys, what string, visit func(jetstream.KeyValueEntry) error) error {
+
+	declined, err := directWalk(ctx, nc, kv, keys, what, directWalkMaxBytes, visit)
 	if !declined {
 		return err
 	}
-	return watchWalk(ctx, kv, visit)
+	return watchWalk(ctx, kv, keys, what, visit)
 }
 
 // directWalk reads a whole bucket with one `multi_last` direct get.
@@ -175,11 +208,10 @@ func eachEntry(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue,
 //
 // maxBytes is a parameter rather than the constant so a test can force the
 // paging path with a byte or two instead of eight megabytes of records.
-func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, maxBytes int,
-	visit func(jetstream.KeyValueEntry) error) (bool, error) {
+func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, keys, what string,
+	maxBytes int, visit func(jetstream.KeyValueEntry) error) (bool, error) {
 
 	bucket := kv.Bucket()
-	what := "read " + bucket
 	subject := fmt.Sprintf(server.JSDirectMsgGetT, kvStreamPrefix+bucket)
 	prefix := kvSubjectPrefix + bucket + "."
 
@@ -191,7 +223,7 @@ func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, maxBy
 	inbox := nats.NewInbox()
 	replies, err := nc.SubscribeSync(inbox)
 	if err != nil {
-		return false, unavailable(what, err)
+		return false, unavailable("read "+what, err)
 	}
 	defer func() { _ = replies.Unsubscribe() }()
 
@@ -206,7 +238,7 @@ func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, maxBy
 	// swap.
 	for {
 		request, err := json.Marshal(server.JSApiMsgGetRequest{
-			MultiLastFor: []string{prefix + ">"},
+			MultiLastFor: []string{prefix + keys},
 			Seq:          from,
 			UpToSeq:      upTo,
 			MaxBytes:     maxBytes,
@@ -215,10 +247,10 @@ func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, maxBy
 			return false, fmt.Errorf("coord/kv: encode a batched read of %s: %w", bucket, err)
 		}
 		if err := nc.PublishRequest(subject, inbox, request); err != nil {
-			return false, unavailable(what, err)
+			return false, unavailable("read "+what, err)
 		}
 
-		batch, err := readBatch(ctx, replies, prefix, bucket, visited, visit)
+		batch, err := readBatch(ctx, replies, prefix, bucket, what, visited, visit)
 		switch {
 		case err != nil:
 			// AN OUTAGE IS NOT A CAPABILITY ANSWER. Only the broker
@@ -245,7 +277,7 @@ func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, maxBy
 			// starts. Looping on that is an unbounded read of the same
 			// batch; reporting a short answer is the lie this package
 			// exists to refuse.
-			return false, fmt.Errorf("%w: %s: the broker reported %d more record(s) "+
+			return false, fmt.Errorf("%w: read %s: the broker reported %d more record(s) "+
 				"and no sequence to continue from", coord.ErrUnavailable, what, batch.pending)
 		}
 		from, upTo = next, batch.upTo
@@ -269,10 +301,9 @@ type batchResult struct {
 // ends only on the nil entry: a read that stops because the replies stopped
 // has not read the bucket, and saying so is the difference between a degraded
 // answer and a wrong one.
-func readBatch(ctx context.Context, replies *nats.Subscription, prefix, bucket string,
+func readBatch(ctx context.Context, replies *nats.Subscription, prefix, bucket, what string,
 	visitedBefore bool, visit func(jetstream.KeyValueEntry) error) (batchResult, error) {
 
-	what := "read " + bucket
 	var out batchResult
 	for {
 		// Per message rather than per batch: a batch is as long as the
@@ -289,17 +320,17 @@ func readBatch(ctx context.Context, replies *nats.Subscription, prefix, bucket s
 			// 503 into this sentinel.
 			if errors.Is(err, nats.ErrNoResponders) && !visitedBefore && !out.visited {
 				log.DebugContext(ctx, "coord_kv_batched_read_declined",
-					"bucket", bucket, "reason", "no direct endpoint")
+					"bucket", bucket, "listing", what, "reason", "no direct endpoint")
 				return batchResult{declined: true}, nil
 			}
-			return out, unavailable(what, err)
+			return out, unavailable("read "+what, err)
 		}
 
 		switch status := msg.Header.Get(statusHeader); status {
 		case "":
 			// A record. Only a status reply carries that header, so an
 			// empty one here is the bucket's own data.
-			entry, ok, err := decodeDirect(msg, prefix, bucket)
+			entry, ok, err := decodeDirect(msg, prefix, bucket, what)
 			if err != nil {
 				return out, err
 			}
@@ -319,17 +350,17 @@ func readBatch(ctx context.Context, replies *nats.Subscription, prefix, bucket s
 
 		case statusEndOfBatch:
 			if out.pending, err = headerNum(msg, server.JSNumPending); err != nil {
-				return out, fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
+				return out, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, what, err)
 			}
 			if out.upTo, err = headerNum(msg, server.JSUpToSequence); err != nil {
-				return out, fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
+				return out, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, what, err)
 			}
 			// The marker's own last-sequence is authoritative over
 			// what this batch happened to send: a batch whose every
 			// record was below the starting sequence sends none.
 			last, err := headerNum(msg, server.JSLastSequence)
 			if err != nil {
-				return out, fmt.Errorf("%w: %s: %w", coord.ErrUnavailable, what, err)
+				return out, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, what, err)
 			}
 			out.lastSeq = max(out.lastSeq, last)
 			return out, nil
@@ -349,42 +380,42 @@ func readBatch(ctx context.Context, replies *nats.Subscription, prefix, bucket s
 			// entries again.
 			if visitedBefore || out.visited {
 				return batchResult{visited: out.visited},
-					fmt.Errorf("%w: %s: the broker abandoned a batched read it had "+
+					fmt.Errorf("%w: read %s: the broker abandoned a batched read it had "+
 						"already begun answering (%s %s)", coord.ErrUnavailable, what,
 						status, msg.Header.Get(descriptionHeader))
 			}
 			log.DebugContext(ctx, "coord_kv_batched_read_declined",
-				"bucket", bucket, "status", status,
+				"bucket", bucket, "listing", what, "status", status,
 				"description", msg.Header.Get(descriptionHeader))
 			return batchResult{declined: true}, nil
 
 		default:
-			return out, fmt.Errorf("%w: %s: the broker answered %s %s",
+			return out, fmt.Errorf("%w: read %s: the broker answered %s %s",
 				coord.ErrUnavailable, what, status, msg.Header.Get(descriptionHeader))
 		}
 	}
 }
 
 // decodeDirect turns one reply into an entry, reporting false for a tombstone.
-func decodeDirect(msg *nats.Msg, prefix, bucket string) (directEntry, bool, error) {
+func decodeDirect(msg *nats.Msg, prefix, bucket, what string) (directEntry, bool, error) {
 	subject := msg.Header.Get(server.JSSubject)
 	if !strings.HasPrefix(subject, prefix) || len(subject) == len(prefix) {
 		return directEntry{}, false, fmt.Errorf("%w: read %s: the broker answered with a "+
-			"record on %q, which is not a key of this bucket", coord.ErrUnavailable, bucket, subject)
+			"record on %q, which is not a key of this bucket", coord.ErrUnavailable, what, subject)
 	}
 	revision, err := headerNum(msg, server.JSSequence)
 	if err != nil {
-		return directEntry{}, false, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, bucket, err)
+		return directEntry{}, false, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, what, err)
 	}
 	stamp := msg.Header.Get(server.JSTimeStamp)
 	created, err := time.Parse(time.RFC3339Nano, stamp)
 	if err != nil {
 		return directEntry{}, false, fmt.Errorf("%w: read %s: the record at %s carries an "+
-			"unreadable timestamp %q: %w", coord.ErrUnavailable, bucket, subject, stamp, err)
+			"unreadable timestamp %q: %w", coord.ErrUnavailable, what, subject, stamp, err)
 	}
 	delta, err := headerNum(msg, server.JSNumPending)
 	if err != nil {
-		return directEntry{}, false, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, bucket, err)
+		return directEntry{}, false, fmt.Errorf("%w: read %s: %w", coord.ErrUnavailable, what, err)
 	}
 
 	entry := directEntry{
@@ -486,20 +517,26 @@ func (e directEntry) Operation() jetstream.KeyValueOp { return e.op }
 // It also owns the watcher, so there is no early-return path that leaks one —
 // the abandoned-listing case the client's blocking 256-entry handoff could
 // park a goroutine and a server-side consumer on for ever.
-func watchWalk(ctx context.Context, kv jetstream.KeyValue, visit func(jetstream.KeyValueEntry) error) error {
-	w, err := kv.WatchAll(ctx, jetstream.IgnoreDeletes())
+func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	// Watch rather than WatchAll, so this transport narrows server-side too.
+	// A filter both walks honour is what keeps them interchangeable: one that
+	// narrowed and one that did not would hand a caller a different bucket
+	// depending on which answered.
+	w, err := kv.Watch(ctx, keys, jetstream.IgnoreDeletes())
 	if err != nil {
-		return unavailable("list "+kv.Bucket(), err)
+		return unavailable("read "+what, err)
 	}
 	defer func() { _ = w.Stop() }()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return unavailable("list "+kv.Bucket(), ctx.Err())
+			return unavailable("read "+what, ctx.Err())
 		case kve, ok := <-w.Updates():
 			if !ok {
-				return unavailable("list "+kv.Bucket(), errors.New("listing ended early"))
+				return unavailable("read "+what, errors.New("listing ended early"))
 			}
 			// nil marks the end of the initial values.
 			if kve == nil {

@@ -489,13 +489,31 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	fn func(key string, value []byte) error) error {
 
-	return f.each(ctx, f.positions, func(kve jetstream.KeyValueEntry) error {
-		segments, ok := coord.DocumentSegments(kve.Key())
-		if !ok || len(segments) < 2 || segments[0] != class {
-			return nil
-		}
-		return fn(kve.Key(), kve.Value())
-	})
+	// THE CLASS IS A SUBJECT TOKEN, so the broker filters. A key here is
+	// coord.DocumentKey(class, id) — two segments joined by the separator,
+	// which is a dot because a key IS a subject token path — and the class
+	// segment escapes to itself, so `<class>.>` is a filter the broker can
+	// match. SEVEN classes share this register; reading all of them and
+	// discarding six was the shape this replaced, and the state-log write
+	// fence takes this read on every first write to a subject.
+	//
+	// `what` reaches the walk now rather than going nowhere: a store failure
+	// here used to say "read crewlet_positions" for all seven listings, which
+	// names the bucket an operator would inspect but never the duty that
+	// stalled.
+	//
+	// The decode below stays, and its class test with it. It is no longer
+	// what SELECTS the class — it is what catches a filter and a grammar
+	// that have drifted apart, along with a key this grammar did not write,
+	// which is the rule the rest of the package already follows.
+	return f.eachUnder(ctx, f.positions, coord.DocumentFilter(class), what,
+		func(kve jetstream.KeyValueEntry) error {
+			segments, ok := coord.DocumentSegments(kve.Key())
+			if !ok || len(segments) < 2 || segments[0] != class {
+				return nil
+			}
+			return fn(kve.Key(), kve.Value())
+		})
 }
 
 // The two CAS-race classifiers, and why they live beside the positions rather

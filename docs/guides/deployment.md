@@ -302,9 +302,9 @@ subject — and from 2.11 it does that with a single *batched direct get*: one
 request, one reply, no consumer. Below that the broker says so, and the read
 falls back to a temporary consumer per call, which on a replicated bucket is
 two metadata-raft proposals each time. The company is correct either way; the
-older cluster simply does more work per read. The same fallback covers a
-bucket the cluster will not serve that way — one adopted from an older client
-without `allow_direct`, or one holding more than 1024 keys — and an account
+older cluster simply does more work per read. The same fallback covers a read
+the cluster will not serve that way — against a bucket adopted from an older
+client without `allow_direct`, or matching more than 1024 keys — and an account
 whose permissions do not include `$JS.API.DIRECT.GET.>`, which is worth
 granting alongside the rest of `$JS.API` for the same reason.
 

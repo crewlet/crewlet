@@ -459,6 +459,15 @@ func (f *FleetStore) each(ctx context.Context, kv jetstream.KeyValue,
 	return eachEntry(ctx, f.js.Conn(), kv, visit)
 }
 
+// eachUnder is [each] narrowed to the keys matching one filter, with `what`
+// naming the listing a failure could not complete — see [eachEntryUnder],
+// which is where both are explained.
+func (f *FleetStore) eachUnder(ctx context.Context, kv jetstream.KeyValue, keys, what string,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	return eachEntryUnder(ctx, f.js.Conn(), kv, keys, what, visit)
+}
+
 // ---- the rate valve ---------------------------------------------------- //
 
 // rateRecord is one window's count.

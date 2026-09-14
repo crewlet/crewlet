@@ -22,9 +22,9 @@ import (
 
 // truncatingKV is a bucket whose listing STOPS WITHOUT SAYING SO.
 //
-// Embedding the interface rather than implementing it: only WatchAll and
-// Bucket are reached, and a method this test does not mean to exercise should
-// panic rather than quietly answer a zero value.
+// Embedding the interface rather than implementing it: only Watch and Bucket
+// are reached, and a method this test does not mean to exercise should panic
+// rather than quietly answer a zero value.
 type truncatingKV struct {
 	jetstream.KeyValue
 	deliver int // entries handed over before the channel closes
@@ -32,7 +32,7 @@ type truncatingKV struct {
 
 func (k truncatingKV) Bucket() string { return "truncating" }
 
-func (k truncatingKV) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+func (k truncatingKV) Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	ch := make(chan jetstream.KeyValueEntry, k.deliver+1)
 	for i := range k.deliver {
 		ch <- stubEntry{key: fmt.Sprintf("k%d", i)}
@@ -73,7 +73,7 @@ func TestAListingThatEndsEarlyIsUnavailableRatherThanShort(t *testing.T) {
 		t.Run(fmt.Sprintf("after_%d_entries", delivered), func(t *testing.T) {
 			t.Parallel()
 			var seen int
-			err := watchWalk(context.Background(), truncatingKV{deliver: delivered},
+			err := watchWalk(context.Background(), truncatingKV{deliver: delivered}, jetstream.AllKeys, "the bucket",
 				func(jetstream.KeyValueEntry) error { seen++; return nil })
 			if err == nil {
 				t.Fatalf("a listing that ended after %d of an unknown number of "+
@@ -162,7 +162,7 @@ func TestAnAbandonedWalkLeavesNoConsumer(t *testing.T) {
 	// broker that answers a batched read would assert nothing, since that
 	// transport never creates one to leak.
 	abandon := errors.New("the caller gave up on the first record")
-	if err := watchWalk(ctx, store.budgets, func(jetstream.KeyValueEntry) error {
+	if err := watchWalk(ctx, store.budgets, jetstream.AllKeys, "the bucket", func(jetstream.KeyValueEntry) error {
 		return abandon
 	}); !errors.Is(err, abandon) {
 		t.Fatalf("watchWalk = %v, want the visit's own error back unwrapped", err)
@@ -294,10 +294,10 @@ func TestTheTwoTransportsAgreeAboutABucket(t *testing.T) {
 	}
 
 	ordered := collect(func(visit func(jetstream.KeyValueEntry) error) error {
-		return watchWalk(ctx, store.budgets, visit)
+		return watchWalk(ctx, store.budgets, jetstream.AllKeys, "the bucket", visit)
 	})
 	batched := collect(func(visit func(jetstream.KeyValueEntry) error) error {
-		declined, err := directWalk(ctx, nc, store.budgets, directWalkMaxBytes, visit)
+		declined, err := directWalk(ctx, nc, store.budgets, jetstream.AllKeys, "the bucket", directWalkMaxBytes, visit)
 		if declined {
 			t.Fatal("this broker declined a batched read; the embedded one is what " +
 				"this package is measured against and it is well past 2.11")
@@ -339,7 +339,7 @@ func TestABatchedReadPagesRatherThanTruncating(t *testing.T) {
 	// resume path exercised forty times, for a fraction of the data eight
 	// megabytes would take to write.
 	seen := map[string]int{}
-	declined, err := directWalk(ctx, nc, store.budgets, 1, func(kve jetstream.KeyValueEntry) error {
+	declined, err := directWalk(ctx, nc, store.budgets, jetstream.AllKeys, "the bucket", 1, func(kve jetstream.KeyValueEntry) error {
 		seen[kve.Key()]++
 		return nil
 	})
@@ -445,7 +445,7 @@ func TestABrokerThatCannotAnswerABatchedReadDeclines(t *testing.T) {
 				sendStatus(t, nc, to, tc.status, tc.description)
 			})
 
-			declined, err := directWalk(context.Background(), nc, bucket, directWalkMaxBytes,
+			declined, err := directWalk(context.Background(), nc, bucket, jetstream.AllKeys, "the bucket", directWalkMaxBytes,
 				func(jetstream.KeyValueEntry) error {
 					t.Error("a declined read visited an entry")
 					return nil
@@ -475,7 +475,8 @@ func TestADirectEndpointNobodyServesDeclines(t *testing.T) {
 	nc := embeddedNATS(t)
 
 	declined, err := directWalk(context.Background(), nc,
-		ghostBucket{bucket: fmt.Sprintf("unserved%d", bucketSeq.Add(1))}, directWalkMaxBytes,
+		ghostBucket{bucket: fmt.Sprintf("unserved%d", bucketSeq.Add(1))},
+		jetstream.AllKeys, "the bucket", directWalkMaxBytes,
 		func(jetstream.KeyValueEntry) error {
 			t.Error("a read nobody answered visited an entry")
 			return nil
@@ -512,7 +513,7 @@ func TestABatchedReadWithoutItsMarkerIsUnavailable(t *testing.T) {
 	defer cancel()
 
 	var seen int
-	declined, err := directWalk(ctx, nc, bucket, directWalkMaxBytes,
+	declined, err := directWalk(ctx, nc, bucket, jetstream.AllKeys, "the bucket", directWalkMaxBytes,
 		func(jetstream.KeyValueEntry) error { seen++; return nil })
 	if err == nil {
 		t.Fatalf("a read that stopped after %d of an unknown number of records returned "+
@@ -564,7 +565,7 @@ func TestADeclineAfterARecordIsAnErrorRatherThanARestart(t *testing.T) {
 	defer cancel()
 
 	var seen int
-	declined, err := directWalk(ctx, nc, bucket, directWalkMaxBytes,
+	declined, err := directWalk(ctx, nc, bucket, jetstream.AllKeys, "the bucket", directWalkMaxBytes,
 		func(jetstream.KeyValueEntry) error { seen++; return nil })
 	if err == nil {
 		t.Fatal("a read abandoned half way came back clean; the caller reads that as " +
@@ -624,7 +625,7 @@ func TestAContinuationWithNothingToContinueFromIsUnavailable(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			declined, err := directWalk(ctx, nc, bucket, directWalkMaxBytes,
+			declined, err := directWalk(ctx, nc, bucket, jetstream.AllKeys, "the bucket", directWalkMaxBytes,
 				func(jetstream.KeyValueEntry) error { return nil })
 			if err == nil {
 				t.Fatal("a read the broker would not let us finish came back clean")
@@ -692,10 +693,10 @@ func TestTheTwoTransportsAgreeAboutABrokerWrittenTombstone(t *testing.T) {
 	}
 
 	ordered := collect("ordered", func(visit func(jetstream.KeyValueEntry) error) error {
-		return watchWalk(ctx, bucket, visit)
+		return watchWalk(ctx, bucket, jetstream.AllKeys, "the bucket", visit)
 	})
 	batched := collect("batched", func(visit func(jetstream.KeyValueEntry) error) error {
-		declined, err := directWalk(ctx, nc, bucket, directWalkMaxBytes, visit)
+		declined, err := directWalk(ctx, nc, bucket, jetstream.AllKeys, "the bucket", directWalkMaxBytes, visit)
 		if declined {
 			t.Fatal("the embedded broker declined a batched read")
 		}
@@ -708,5 +709,38 @@ func TestTheTwoTransportsAgreeAboutABrokerWrittenTombstone(t *testing.T) {
 	if !slices.Equal(ordered, batched) {
 		t.Errorf("the two transports disagree about a broker-written tombstone:\n"+
 			" ordered = %v\n batched = %v", ordered, batched)
+	}
+}
+
+// A FAILED LISTING NAMES THE LISTING, not the bucket it lives in.
+//
+// Seven key classes share the positions register, so every one of them used to
+// fail with "read crewlet_positions" — a sentence that names the file an
+// operator would inspect and never the duty that stalled. The trim floors, the
+// trim holds and the maintenance acknowledgements are three very different
+// outages behind that one message.
+func TestAFailedListingNamesTheListingRatherThanTheBucket(t *testing.T) {
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
+	store := openFleetForTest(t, nc, prefix)
+
+	// A cancelled walk is the cheapest failure both transports share, and
+	// the message is composed in the same place every other failure's is.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	const listing = "the trim floors"
+	err := store.eachUnder(ctx, store.positions, coord.DocumentFilter("floor"), listing,
+		func(jetstream.KeyValueEntry) error { return nil })
+	if err == nil {
+		t.Fatal("a cancelled walk came back clean")
+	}
+	if !errors.Is(err, coord.ErrUnavailable) {
+		t.Errorf("err = %v, want it to wrap ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), listing) {
+		t.Errorf("err = %q, which does not name %q. Seven classes share this "+
+			"bucket, so a message naming only the bucket is the same sentence "+
+			"for all of them", err, listing)
 	}
 }

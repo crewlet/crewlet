@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
 )
@@ -135,4 +136,115 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 		t.Fatalf("OpenFleet: %v", err)
 	}
 	return store
+}
+
+// THE BROKER FILTERS THE CLASS, AND THE WALK ONLY SEES ITS OWN.
+//
+// Seven classes share the positions register, and a walk that read all of them
+// to use one was what this replaced — on a read the state-log write fence
+// takes on every first write to a subject. A key here is
+// coord.DocumentKey(class, id), whose separator is a dot because a key IS a
+// subject token path, so the class is a token the broker can match.
+//
+// What this asserts is the OUTCOME rather than the wire: with keys of every
+// class in the bucket, each class read must see its own and nothing else. A
+// filter that narrowed to the wrong token would return nothing; one that
+// narrowed to nothing at all would return everything — and the client-side
+// class test that remains would hide the second, so the count is checked from
+// the inside of the walk rather than from the rows it produced.
+func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
+	store := openFleetForTest(t, nc, prefix)
+	ctx := context.Background()
+
+	// One key per class, all in the one register. All SEVEN of them, and
+	// `maintenance` beside `maintenance-ack` is the adversarial pair: one
+	// class name is a STRING PREFIX of the other, so a filter built by
+	// concatenation rather than by the grammar would hand every
+	// acknowledgement to the capacity walk. A subject wildcard matches per
+	// TOKEN, so it does not — and that is the property this pair pins.
+	classes := []string{
+		"node", "floor", "hold", "backup",
+		"maintenance", "admitted", "maintenance-ack",
+	}
+	for _, class := range classes {
+		key := coord.DocumentKey(class, "n-1")
+		if _, err := store.positions.Put(ctx, key, []byte(`{}`)); err != nil {
+			t.Fatalf("seed %s: %v", class, err)
+		}
+	}
+
+	for _, class := range classes {
+		var reached, kept int
+		err := store.eachUnder(ctx, store.positions, coord.DocumentFilter(class), class,
+			func(kve jetstream.KeyValueEntry) error {
+				reached++
+				if segs, ok := coord.DocumentSegments(kve.Key()); ok && segs[0] == class {
+					kept++
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatalf("walk %s: %v", class, err)
+		}
+		if kept != 1 {
+			t.Errorf("class %s saw %d of its own keys, want 1", class, kept)
+		}
+		// THE NARROWING ITSELF. Every record that reaches the walk was moved
+		// over the wire, so a filter that did not narrow shows up here as the
+		// whole bucket even though the rows it yields are still correct.
+		if reached != 1 {
+			t.Errorf("class %s was handed %d records for the 1 it wanted; the broker "+
+				"is not filtering and the walk is moving the other classes too",
+				class, reached)
+		}
+	}
+}
+
+// A CLASS FILTER MATCHES A KEY OF ANY DEPTH, which is the whole difference
+// between the `>` [coord.DocumentFilter] ends in and the `*` that would look
+// equivalent today.
+//
+// Every key class in this register is two segments deep right now, so `*`
+// matches all of them and the difference is invisible — until the first class
+// that composes a third segment, whose listing then silently returns nothing.
+// A walk that finds no rows and a class that has no rows are the same answer
+// at every caller, so the day that happens there is no symptom to notice.
+func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
+	store := openFleetForTest(t, nc, prefix)
+	ctx := context.Background()
+
+	want := map[string]bool{
+		coord.DocumentKey("node", "n-1"):               false,
+		coord.DocumentKey("node", "n-2", "shard-a"):    false,
+		coord.DocumentKey("node", "n-3", "shard", "b"): false,
+	}
+	for key := range want {
+		if _, err := store.positions.Put(ctx, key, []byte(`{}`)); err != nil {
+			t.Fatalf("seed %s: %v", key, err)
+		}
+	}
+
+	err := store.eachUnder(ctx, store.positions, coord.DocumentFilter("node"), "node",
+		func(kve jetstream.KeyValueEntry) error {
+			if _, ok := want[kve.Key()]; !ok {
+				t.Errorf("the walk was handed %q, which it did not seed", kve.Key())
+				return nil
+			}
+			want[kve.Key()] = true
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	for key, seen := range want {
+		if !seen {
+			t.Errorf("the class filter did not match %q; a filter that matches only "+
+				"one depth stops selecting a class the day it grows a segment, and "+
+				"an empty listing is indistinguishable from an empty class", key)
+		}
+	}
 }

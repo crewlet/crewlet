@@ -47,15 +47,25 @@ destroyed per call — paid continuously, since several of a node's fifteen-seco
 duty loops read a bucket on every tick and the state-log write fence reads the
 position register on every first write to a subject.
 
-**Where the broker can answer it, a whole bucket is ONE REQUEST and no
-consumer at all** — a batched direct get, which asks for the latest record on
-every key in a single request/reply. The embedded broker always can. An
+**Where the broker can answer it, a listing is ONE REQUEST and no consumer at
+all** — a batched direct get, which asks for the latest record on every
+matching key in a single request/reply. The embedded broker always can. An
 external cluster older than NATS 2.11 cannot, and neither can a bucket adopted
-from an older client without direct access enabled, or one holding more than
-1024 keys; each of those is something the broker says explicitly, and the read
-falls back to an ordered pass over a temporary consumer rather than reporting
-an outage that is not happening. Nothing above that layer can tell which one
-answered — the difference is what it cost, not what it said.
+from an older client without direct access enabled, or a read whose match set
+exceeds 1024 keys; each of those is something the broker says explicitly, and
+the read falls back to an ordered pass over a temporary consumer rather than
+reporting an outage that is not happening. Nothing above that layer can tell
+which one answered — the difference is what it cost, not what it said.
+
+**And a listing asks for its own key class, not the bucket.** A key is a
+subject path, so a class of keys is a wildcard the broker matches. The
+positions register holds seven of them — a node's log positions, a trim hold,
+a backup point, a domain's trim floor, a capacity operation, an admission and
+a maintenance acknowledgement — and a read of the trim floors now moves the
+floors alone, rather than all seven classes so that six can be discarded. It
+also sizes the 1024 against the class rather than against every key in the
+bucket, so one class is never pushed onto the slower transport by what its
+neighbours have grown to.
 
 ---
 
