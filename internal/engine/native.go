@@ -60,8 +60,8 @@ import (
 // EVERY FIELD IS WRITTEN ONCE, by [Engine.startNative], before the struct is
 // published to [Engine.native] — which is why there is no mutex here and why
 // adding one would be misleading rather than merely redundant. What the
-// running node mutates afterwards is the two fields that carry their own
-// synchronisation: the wait group, and the one-slot nudge channel.
+// running node mutates afterwards is the one field that carries its own
+// synchronisation: the wait group.
 type native struct {
 	// nodeID is who this node is: the name its own domain consumer takes,
 	// the writer stamped on every record it publishes, and what the
@@ -103,12 +103,6 @@ type native struct {
 	// search fan-out. Nil when there is no queue to serve on, which is
 	// every embedded engine and every test.
 	stopSlices queue.Unsubscribe
-
-	// skillNudge asks the sync worker to re-read the tool-skill
-	// container. Buffered by ONE, because the slot means "re-read" rather
-	// than "re-read once per change": the read is wholesale, so a second
-	// pending nudge would buy a second identical walk.
-	skillNudge chan struct{}
 
 	// run is the context every goroutine this node started runs under, and
 	// stop is what ends it.
@@ -158,10 +152,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		return err
 	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	n := &native{
-		run: runCtx, stop: cancel, nodeID: nodeID,
-		skillNudge: make(chan struct{}, 1),
-	}
+	n := &native{run: runCtx, stop: cancel, nodeID: nodeID}
 	// ONE FAILURE PATH FOR EVERYTHING BELOW, armed before the first thing
 	// that outlives this call and stood down only once the runtime is the
 	// engine's.
@@ -359,8 +350,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// a failure cleanup that ran after they had started would stop loops
 	// the engine is about to be asked to stop again.
 	started = true
-	// AFTER e.native is set, because the worker reads through it.
-	e.startNativeSkills()
 	// AND THE CHART, so the projects this company's units name are objects
 	// before any seat files into one. A create takes its key from its
 	// project's own counter, so a project that does not exist refuses
@@ -1503,69 +1492,68 @@ func EphemeralRisk(boot *config.Bootstrap, tracker, wiki bool) string {
 	return ""
 }
 
-// nudgeSkills asks the sync worker to re-read the tool-skill container.
+// nudgeSkills asks the skill sync to re-read the tool-skill container.
 //
-// # Why a signal and not the work
+// # Why it is a nudge and not a read
 //
-// It is called from the projection's POST-COMMIT HOOK, which runs on the
-// projector's own loop — so doing the read here would hold every subsequent
-// change behind a page walk and a registry replace. And it must not spawn a
-// goroutine per call either: an untracked one outlives [Engine.stopNative],
-// which would leave it reading a store that is being closed.
+// It is called from the page projection's post-commit hook, which runs on the
+// projector's own loop, so doing the read here would hold every subsequent
+// change behind a page walk and a registry replace. So it is a request to the
+// node's one sync loop, which coalesces however many arrive into one walk: the
+// read is wholesale, and one re-read after N changes is the same answer as N
+// of them.
 //
-// So it is a non-blocking send to the one tracked worker below. A send that
-// finds the channel full is DROPPED, and that is correct rather than
-// convenient: the buffered slot already means "re-read", the read is
-// wholesale, and one re-read after N changes is the same answer as N of them.
-func (e *Engine) nudgeSkills() {
-	if e.native == nil || e.native.skillNudge == nil {
-		return
-	}
-	select {
-	case e.native.skillNudge <- struct{}{}:
-	default:
-	}
-}
+// # Why this backend needs no fleet nudge
+//
+// Every node applies the page log itself, so every node's own projection sees
+// a skill page move and calls this. The broadcast the Confluence path needs
+// exists because a vendor webhook reaches one node; a log every node applies
+// already reaches all of them.
+//
+// NAMED AS THE NATIVE BACKEND'S, because the projection outlives an apply that
+// moves the company's skills to Confluence, and the loop ignores a refresh
+// from a backend its source is not on.
+func (e *Engine) nudgeSkills() { e.skillSync.Refresh(string(config.KnowledgeNative)) }
 
-// startNativeSkills runs the tool-skill sync for the life of this node.
+// walkNativeSkills reads the tool-skill container out of this node's own page
+// projection.
 //
-// # It reads at boot as well as on change
-//
-// A node joining a company whose skills were published months ago sees no
-// change at all, so a registry fed only by changes would be empty on every
-// restart until somebody happened to edit a page.
-//
-// # And it waits for hydration first
+// # It waits for hydration first
 //
 // A walk over a container this node has not applied through is a PARTIAL set,
-// and [Engine.SyncSkills] replaces wholesale — so reading early would silently
-// delete every skill the walk did not reach, and the next read is whenever
-// somebody next edits one.
-func (e *Engine) startNativeSkills() {
-	if e.native == nil || e.native.pageReader == nil {
-		return
+// and the registry replaces wholesale, so reading early would silently delete
+// every skill the walk did not reach. The wait is cancelled with the walk: a
+// source change or a stop ends it.
+func (e *Engine) walkNativeSkills(ctx context.Context, container string) ([]skills.Page, error) {
+	if !e.awaitHydration(ctx) {
+		return nil, ctx.Err()
 	}
-	e.native.done.Add(1)
-	go func() {
-		defer e.native.done.Done()
-		ctx := e.native.run
-		if !e.awaitHydration(ctx) {
-			return
-		}
-		e.syncNativeSkills(ctx)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-e.native.skillNudge:
-				e.syncNativeSkills(ctx)
-			}
-		}
-	}()
+	// STALE, and it is the strongest level this walk could HONESTLY name,
+	// not a saving.
+	//
+	// What the walk must not do is rebuild the registry without the change
+	// that asked for the rebuild. It cannot: [Engine.nudgeSkills] is called
+	// from the applier's POST-COMMIT hook, so by the time the sync loop
+	// runs, the record that woke it is already in this node's own committed
+	// prefix, which is exactly what a stale read serves. The causality is
+	// LOCAL, so no barrier and no high-water mark buys anything here.
+	found, err := e.native.pageReader.SkillPages(ctx, container,
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]skills.Page, 0, len(found))
+	for _, page := range found {
+		out = append(out, skills.Page{
+			ID: page.ID, Title: page.Title,
+			Version: page.Version, Text: page.Body,
+		})
+	}
+	return out, nil
 }
 
 // awaitHydration blocks until this node's own applied rows have caught up,
-// reporting false if the node stopped first.
+// reporting false if ctx ended first.
 func (e *Engine) awaitHydration(ctx context.Context) bool {
 	ticker := time.NewTicker(hydrationPoll)
 	defer ticker.Stop()
@@ -1577,46 +1565,6 @@ func (e *Engine) awaitHydration(ctx context.Context) bool {
 		}
 	}
 	return true
-}
-
-// syncNativeSkills reads the tool-skill container into the registry.
-func (e *Engine) syncNativeSkills(ctx context.Context) {
-	c := e.Company()
-	if c == nil || e.native == nil || e.native.pageReader == nil {
-		return
-	}
-	reader := e.native.pageReader
-	e.syncSkillsFrom(ctx, c, func(ctx context.Context, container string) ([]skills.Page, error) {
-		// STALE, and it is the strongest level this walk could
-		// HONESTLY name — not a saving.
-		//
-		// What the walk must not do is rebuild the registry without the
-		// change that asked for the rebuild. It cannot: [nudgeSkills]
-		// is called from the applier's POST-COMMIT hook, so by the time
-		// this worker runs, the record that woke it is already in this
-		// node's own committed prefix — which is exactly what a stale
-		// read serves. The causality is LOCAL, so no barrier and no
-		// high-water mark buys anything here.
-		//
-		// It read `session` before, which named a wait that never
-		// happened: nothing populated [statelog.Query.Session], so the
-		// target was the zero position and the read served this same
-		// prefix under a stronger name. The behaviour is unchanged and
-		// the claim is now true.
-		found, err := reader.SkillPages(ctx, container,
-			statelog.Freshness{Level: statelog.ReadStale})
-		if err != nil {
-			return nil, err
-		}
-		out := make([]skills.Page, 0, len(found))
-		for _, page := range found {
-			out = append(out, skills.Page{
-				ID: page.ID, Title: page.Title,
-				Version: page.Version, Text: page.Body,
-			})
-		}
-		return out, nil
-	})
 }
 
 // hydrationPoll is how often the first skill read checks whether the
