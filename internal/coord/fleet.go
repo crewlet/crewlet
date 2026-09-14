@@ -246,6 +246,23 @@ type Usage struct {
 	Scope     string
 	Used      int
 	UpdatedAt time.Time
+
+	// RefusedAt is when this scope last turned a charge away, and zero
+	// once it has admitted one since.
+	//
+	// It is what "exhausted" means, and Used compared against the cap is
+	// not: a refused charge increments nothing, so a seat charged in
+	// 3 000-token rounds against a 100 000 cap stops near 99 000 and never
+	// reads as full. Kept HERE, in the shared counter, because the refusal
+	// is the gate's own decision and every node reports this counter: a
+	// stamp one node kept in memory would appear and vanish on a dashboard
+	// as the reports of different nodes arrived.
+	//
+	// Cleared by an ADMITTED charge and by nothing weaker. A charge that
+	// was refused overall leaves every other scope's stamp alone, even
+	// when that scope would have had room, so the answer does not depend
+	// on which scope a backend happens to test first.
+	RefusedAt time.Time
 }
 
 // Budgets is the fleet's token counter.
@@ -290,6 +307,10 @@ type Budgets interface {
 	// A limit of 0 is UNLIMITED, matching the config: `token_budget: 0` is
 	// how an operator says "no ceiling", and reading it as "no allowance"
 	// would stop every company that never set one.
+	//
+	// A refusal stamps the refusing scope's [Usage.RefusedAt], and an
+	// admitted charge clears the stamp on both scopes it charged. See
+	// that field for why nothing weaker clears it.
 	Charge(ctx context.Context, agentScope string, tokens, orgLimit, agentLimit int) (Spend, error)
 
 	// Used reports one scope's spend. A scope never charged has spent
