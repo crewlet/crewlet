@@ -281,6 +281,7 @@ export function mountBuilder({
   hash = "#/org?lens=builder&view=canvas",
   surfaces = fakeSurfaces,
   storage,
+  query = () => null,
 }: {
   engine: Engine;
   org?: OrgProjection | null;
@@ -288,6 +289,8 @@ export function mountBuilder({
   hash?: string;
   surfaces?: BuilderSurfaces;
   storage?: DraftStorage | null;
+  /** What the socket's query channel answers, by name. */
+  query?: (what: string) => unknown;
 }) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
@@ -296,8 +299,8 @@ export function mountBuilder({
   if (connected) store.applyHealth({ status: "ok" });
   if (org) store.applyOrg(org);
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = () =>
-    Promise.resolve(null);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(query(what));
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>

@@ -108,7 +108,8 @@ import { saveRules } from "./model/scheduler.ts";
 import { seatsNeedingContact } from "./model/templates.ts";
 import type { KeySource } from "./model/keys.ts";
 import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
-import { recordSavedRevision } from "./savedRevision.ts";
+import { AfterSaveStrip } from "./AfterSaveStrip.tsx";
+import { clearSavedRevision, recordSavedRevision, useSavedRevision } from "./savedRevision.ts";
 import { browserClock, randomKeys, restTransport, sessionDraftStorage } from "./runtime.ts";
 import { useSave, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
@@ -735,6 +736,7 @@ function Lens({
 
   // ---- Saving -------------------------------------------------------------------
 
+  const savedRevision = useSavedRevision();
   const [reviewing, setReviewing] = useState(false);
   const reviewAfterUpdate = useRef(false);
   const changed = useMemo(() => hasChanges(state), [state]);
@@ -1144,6 +1146,8 @@ function Lens({
             <Surface component={viewSurface} name="The outline" />
           )}
         </TabPanel>
+
+        {savedRevision && <AfterSaveStrip saved={savedRevision} onDismiss={clearSavedRevision} />}
 
         {save.unsettled && !reviewing && (
           <Banner

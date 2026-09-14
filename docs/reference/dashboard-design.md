@@ -1043,6 +1043,13 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   the revision and clears the kept draft. `ReviewSaveDialog.tsx` states every
   change and consequence and gates the irreversible ones on an
   acknowledgement.
+- **A save is not an apply, and the screen says so.** `AfterSaveStrip.tsx`
+  keeps `{revision_id, epoch}` in a tab-lived store outside any screen
+  (`savedRevision.ts`), watches the `stream` query's `applied_epoch` and the
+  `fleet` query on `recheck.ts`'s cadence, and resolves to Applied, Applied on
+  N of M nodes, or the node that refused it with a link to the Fleet screen.
+  Until this node applies it, the Org screen's read lenses carry a note that
+  they draw the previous revision.
 - **The status is the last answer about the current draft**, whoever asked:
   a save's refusal is placed on the nodes like a check's, and the check
   machine decides the status only while a check is out or before any answer.

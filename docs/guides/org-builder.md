@@ -112,6 +112,29 @@ be asked, editing pauses and the review offers **Check again** and **Save
 again**; a second save carries the same write id, so a first save that did
 land is recognized as yours rather than replayed on top of itself.
 
+### After saving
+
+A save stores and activates a revision. It does not apply it: every node
+applies on its own reconcile tick (fifteen seconds at most), and a node can
+refuse a revision and go on serving the previous one. Until this node has
+applied it, the Chart, Directory and Charter lenses still draw the previous
+organization, and say so.
+
+The strip under the toolbar follows the revision:
+
+| It reads | Meaning |
+|---|---|
+| Saved revision `<id>`. The engine is applying it. | stored and activated; no node has reported this epoch yet |
+| Applied on N of M nodes. | the fleet is converging |
+| Applied. | every node reported this epoch |
+| Node `<id>` refused this revision: `<reason>`. | that node kept the previous epoch. **Open the fleet** for the rest |
+
+Beside it: **View changes**, which opens the revision's diff on the
+Configuration screen, and **Copy as YAML**, which reads the active company as
+YAML (credentials redacted, as every configuration read is) so a
+`company.yaml` kept in a repository can be brought back in step. `crewlet
+config import company.yaml` writes it back.
+
 ## A draft survives a reload
 
 The builder keeps the draft's list of changes (never the document itself,

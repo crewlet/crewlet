@@ -34,6 +34,7 @@ import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { Charter } from "./org/Charter.tsx";
 import { Chart } from "./org/Chart.tsx";
 import { Directory } from "./org/Directory.tsx";
+import { PreviousRevisionNote } from "./org/builder/AfterSaveStrip.tsx";
 import { Builder } from "./org/builder/Builder.tsx";
 import { builderSurfaces } from "./org/builder/surfaces.ts";
 
@@ -69,6 +70,11 @@ export function OrgScreen() {
           />
         }
       />
+      {/* A save is not an apply: until this node applies the revision the
+          builder saved, the projection every read lens draws is the previous
+          one, and the chart that has not moved would read as a save that did
+          nothing. */}
+      {lens !== "builder" && <PreviousRevisionNote />}
       <TabPanel id={panel} value={lens}>
         {lens === "chart" && <Chart index={index} />}
         {lens === "directory" && <Directory index={index} />}
