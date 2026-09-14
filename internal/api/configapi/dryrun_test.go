@@ -211,6 +211,37 @@ func TestADryRunAnswersTheBaseTheWarningsAndTheDerivedHierarchy(t *testing.T) {
 	}
 }
 
+// A CHECK OF A DRAFT THAT CHANGES NOTHING IS VALID.
+//
+// The first thing the dashboard's builder sends on every load is a check of a
+// draft with no operations in it, which is an empty merge patch: it is how the
+// lens gets the warnings and the hierarchy of the company as it stands. An
+// empty patch object is therefore not the empty BODY a write refuses, and a
+// check that answered invalid_patch would open the builder on a problem
+// nobody caused.
+func TestACheckOfADraftWithNoChangesIsValid(t *testing.T) {
+	t.Parallel()
+	s := newCountedSurface(t)
+	s.seed(t, companyDoc, nil)
+
+	res := s.do(t, http.MethodPatch, "/config?dry_run=true", `{}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("a check of an empty patch = %d, want 200: %s", res.Code, res.Body)
+	}
+	if derived, ok := decode(t, res)["derived"].(map[string]any); !ok || derived["seats"] == nil {
+		t.Errorf("the check carries no hierarchy for the company as it stands: %s", res.Body)
+	}
+	if got := s.writes(); got != [3]int32{} {
+		t.Errorf("a check stored %v", got)
+	}
+	// A body with nothing in it at all is still a patch that says nothing,
+	// and a write of it would mint an epoch every node reconciles onto.
+	empty := s.do(t, http.MethodPatch, "/config?dry_run=true", "", nil)
+	if empty.Code != http.StatusBadRequest || decode(t, empty)["error"] != "invalid_patch" {
+		t.Errorf("a check of an empty body = %d %s, want 400 invalid_patch", empty.Code, empty.Body)
+	}
+}
+
 // DRY_RUN IS READ FIRST, AND ONLY TRUE OR FALSE.
 //
 // A mistyped parameter must be reported as the parameter: guessed one way it
