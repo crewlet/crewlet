@@ -106,6 +106,23 @@ type probeFetch struct {
 	// failures is how many fetches the broker answers with an error
 	// before it answers normally again — a blip, as the loop sees one.
 	failures int
+
+	// after runs once, after the fetch with that NUMBER has handed its
+	// records over. It is how a case stages a REDELIVERY, which no single
+	// batch can: a batch is sorted and deduped on arrival, so a record
+	// that comes back has to arrive in a LATER fetch, while the loop still
+	// holds a higher one in the same run.
+	after map[int]func()
+}
+
+// afterFetch schedules a hook to run once the nth fetch has answered.
+func (f *probeFetch) afterFetch(n int, hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.after == nil {
+		f.after = map[int]func(){}
+	}
+	f.after[n] = hook
 }
 
 func newProbeFetch() *probeFetch { return &probeFetch{acked: map[uint64]int{}} }
@@ -148,7 +165,13 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 			n := min(deliverable, maxMessages)
 			out := f.queue[:n]
 			f.queue = f.queue[n:]
+			hook := f.after[f.fetches]
 			f.mu.Unlock()
+			if hook != nil {
+				// OUTSIDE THE LOCK, because a hook stages more
+				// records and offering one takes it.
+				hook()
+			}
 			return out, nil
 		}
 		f.mu.Unlock()
@@ -1692,5 +1715,73 @@ func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
 	seen := h.applier.seen()
 	if len(seen) != 3 || seen[2].Seq != 3 {
 		t.Fatalf("the applier saw %v across two runs, want 1, 2, 3 once each", seen)
+	}
+}
+
+// A LATE REDELIVERY MUST NOT MOVE THE CHECKPOINT BACKWARDS.
+//
+// [reorderBuffer.admit] deliberately hands a record already below the run's
+// high-water mark straight to the caller, because a redelivery nothing
+// acknowledges is redelivered for ever. A run therefore closes legitimately as
+// [1, 2, 1] — and the checkpoint is the HIGHEST position it applied, never the
+// tail.
+//
+// Checkpointing the tail wrote 1 in the same transaction that committed 2's
+// rows: a cursor understating its own database, which is the one thing the
+// checkpoint exists to rule out. It is not a self-correcting slip either. The
+// waiters release through the same value, so a linearizable read waiting for 2
+// is refused `behind` over rows this node already holds; and the next boot
+// resumes at 2 and re-applies a record whose anchor it already advanced past.
+func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+	h.fetch.offer(2, env(2, "object", "b", "op-2", 1))
+	// THE ACKNOWLEDGEMENT OF 1 WAS LOST, so the broker hands it back
+	// while the loop still holds 2 — in a later fetch, because a single
+	// batch is deduped on arrival and could never produce this run.
+	h.fetch.afterFetch(1, func() {
+		h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+	})
+
+	ctx, cancel := context.WithTimeout(h.t.Context(), 20*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- h.runner.Run(ctx) }()
+
+	// THE ACK IS THE SIGNAL THE RUN COMMITTED, and it happens whatever
+	// the checkpoint ended up saying — so a broken checkpoint fails these
+	// assertions promptly rather than waiting out a timeout.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) && h.fetch.ackCount(2) == 0 {
+		select {
+		case err := <-errs:
+			t.Fatalf("the applier stopped before the run committed: %v", err)
+		case <-time.After(2 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+
+	if got := h.runner.Committed().Seq; got != 2 {
+		t.Errorf("the loop reports itself committed through %d, want 2 — the "+
+			"run applied 2 and closed with a redelivery of 1", got)
+	}
+	at, _, found, err := statelog.CursorFor(h.t.Context(), h.db.Replicated(),
+		probeDomain{}.Stream().Name)
+	if err != nil {
+		t.Fatalf("read the checkpoint: %v", err)
+	}
+	if !found || at.Seq != 2 {
+		t.Errorf("the checkpoint row is at %s (found=%v), want sequence 2 — a "+
+			"cursor below rows its own transaction committed is the one state "+
+			"the checkpoint exists to rule out", at, found)
+	}
+	// AND THE REDELIVERY IS STILL ACKNOWLEDGED, which is why admit passes
+	// it through at all: dropping it to protect the checkpoint would
+	// leave the broker redelivering it for ever.
+	if got := h.fetch.ackCount(1); got != 2 {
+		t.Errorf("sequence 1 was acknowledged %d time(s), want 2 — the "+
+			"original delivery and the redelivery", got)
 	}
 }

@@ -913,6 +913,7 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 // things that must happen after the commit, in order.
 func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([]Record, error) {
 	var consumed []Record
+	var committedAt Position
 	var tally results
 	var rows int
 	var boundBy string
@@ -941,7 +942,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// transaction's body, so a counter accumulated across attempts
 		// counts the abandoned one too — and the metrics would report
 		// work that was rolled back.
-		consumed, tally, rows, boundBy = consumed[:0], results{}, 0, ""
+		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
 		txStart := r.now()
 
 		hasDeferred, err := r.anyDeferred(ctx, tx)
@@ -1053,8 +1054,27 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		if len(consumed) == 0 {
 			return nil
 		}
-		return r.tables.setCursor(ctx, tx,
-			consumed[len(consumed)-1].Position, r.created, r.now())
+		// THE HIGHEST POSITION THIS TRANSACTION HOLDS, never the tail of
+		// the run.
+		//
+		// A run's last element is a stale REDELIVERY whenever one
+		// arrived late: [reorderBuffer.admit] passes a record below the
+		// run's high-water mark straight through so the caller
+		// acknowledges it, so a run legitimately closes as [11, 12, 11].
+		// Checkpointing the tail there writes 11 in the same transaction
+		// that committed 12's rows — a cursor that UNDERSTATES its own
+		// database, which is the one thing the checkpoint exists to
+		// rule out. The damage outlives the transaction: the waiters
+		// release through 11, so a linearizable read waiting for 12 is
+		// refused `behind` over rows this node already holds; and the
+		// next boot resumes at 12 and re-applies a record whose anchor
+		// was already advanced past it.
+		//
+		// The floor is this node's committed cursor rather than zero,
+		// because a run made ENTIRELY of redeliveries below the
+		// checkpoint has to be acknowledged without moving it at all.
+		committedAt = highest(consumed, r.Committed())
+		return r.tables.setCursor(ctx, tx, committedAt, r.created, r.now())
 	})
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
@@ -1067,7 +1087,11 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	}
 
 	// AFTER THE OUTER TRANSACTION RETURNS, IN THIS ORDER.
-	at := consumed[len(consumed)-1].Position
+	//
+	// THE POSITION THE TRANSACTION COMMITTED, so what this node reports,
+	// releases waiters through and resumes from is the same value the
+	// checkpoint row holds — see the comment at the setCursor above.
+	at := committedAt
 	if tally.retained > 0 {
 		// WHAT THIS NODE CANNOT READ is what its readiness and its
 		// coverage both turn on, so it is refreshed the moment it
@@ -1083,7 +1107,11 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 
 	r.measureDrain(started, len(consumed))
 	r.countAborts(attempts)
-	r.observe(started, rows, boundBy, tally, consumed[len(consumed)-1])
+	// THE TOP RECORD, for the same reason: the apply LATENCY is measured
+	// from a record's own StoredAt, and a stale redelivery's is an hour
+	// old, so reading the tail reports the redelivery's age as this
+	// batch's latency.
+	r.observe(started, rows, boundBy, tally, topRecord(consumed))
 	return consumed, nil
 }
 

@@ -172,6 +172,28 @@ func chain(first, second func() error) func() error {
 // THE MAXIMUM AND NOT THE LAST ELEMENT: a run is appended to in fetch order,
 // and a fetch that delivered only a redelivery below the checkpoint leaves a
 // record at the end that is lower than everything before it.
+// topRecord is the RECORD at the highest position in a non-empty run.
+//
+// THE LAST ELEMENT IS NOT IT, which is the whole reason this exists. A run
+// closes with whatever the final fetch handed over, and [reorderBuffer.admit]
+// deliberately passes a record BELOW the run's high-water mark straight
+// through so that the caller acknowledges it — a redelivery nothing
+// acknowledges is redelivered for ever. So the tail of a run is a stale
+// redelivery whenever one arrived late, and everything derived from "where
+// this run got to" reads the maximum instead.
+func topRecord(run []Record) Record {
+	top := run[0]
+	for _, rec := range run[1:] {
+		if rec.Position.Packed() > top.Position.Packed() {
+			top = rec
+		}
+	}
+	return top
+}
+
+// highest is [topRecord]'s position, floored at a cursor the run may not have
+// reached — which is what makes it safe on a run that is ENTIRELY
+// redeliveries of records already committed.
 func highest(run []Record, cursor Position) Position {
 	top := cursor
 	for _, rec := range run {
