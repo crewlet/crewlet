@@ -11,7 +11,7 @@
 
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   Router,
   useLeaveGuard,
@@ -210,6 +210,27 @@ test("a reload or a closed tab asks while a leave or an unload guard holds, and 
   expect(unload()).toBe(true);
   view.rerender(null, false);
   expect(unload()).toBe(false);
+});
+
+// LISTENING ONLY WHILE SOMETHING HOLDS: some browsers keep a page with a
+// `beforeunload` listener out of their back-forward cache, which would have
+// every dashboard screen load from scratch on a Back from another site.
+test("the page listens for a reload only while something holds work", () => {
+  const added = vi.spyOn(window, "addEventListener");
+  const removed = vi.spyOn(window, "removeEventListener");
+  const unloads = (spy: typeof added) =>
+    spy.mock.calls.filter(([type]) => type === "beforeunload").length;
+  try {
+    const view = mount(null);
+    expect(unloads(added)).toBe(0);
+    view.rerender(holdAll().guard, true);
+    expect(unloads(added)).toBe(1);
+    view.rerender(null, false);
+    expect(unloads(removed)).toBe(1);
+  } finally {
+    added.mockRestore();
+    removed.mockRestore();
+  }
 });
 
 // A SCREEN MAY NAVIGATE IN ITS OWN FIRST EFFECT, which React runs before the

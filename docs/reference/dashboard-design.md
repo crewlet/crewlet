@@ -247,7 +247,9 @@ way to undo it. The guard that began to hold last is asked first, and agreeing
 to it asks the next one before the move is made. A reload or a closed tab gets
 the browser's own prompt while any guard holds, and `useUnloadGuard` asks for
 that prompt alone, for work a move within the page keeps but a closed tab does
-not (the builder's draft, kept in session storage).
+not (the builder's draft, kept in session storage). The page listens for a
+reload only while something holds, because some browsers keep a page with a
+`beforeunload` listener out of their back-forward cache.
 
 ### The attention queue
 

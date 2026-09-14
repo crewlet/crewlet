@@ -362,6 +362,24 @@ const guards: { readonly ask: LeaveGuard }[] = [];
 const unloadHolders = new Set<object>();
 
 /**
+ * Holds the browser's prompt for a reload or a closed tab until the result is
+ * called.
+ *
+ * LISTENING ONLY WHILE SOMETHING HOLDS. A page with a `beforeunload` listener
+ * is kept out of the browser's back-forward cache by some browsers, so every
+ * screen of the dashboard would be loaded from scratch on a Back from another
+ * site. The listener is added by the first holder and removed with the last.
+ */
+function holdUnload(holder: object): () => void {
+  if (unloadHolders.size === 0) window.addEventListener("beforeunload", onBeforeUnload);
+  unloadHolders.add(holder);
+  return () => {
+    unloadHolders.delete(holder);
+    if (unloadHolders.size === 0) window.removeEventListener("beforeunload", onBeforeUnload);
+  };
+}
+
+/**
  * Whether a guard holds a move to `to`, asking from the last guard down.
  * EVERY GUARD IS ASKED BEFORE THE MOVE IS MADE: the `leave` a guard is handed
  * asks the guards below it, and only the last agreement makes the move, so an
@@ -381,7 +399,6 @@ function held(to: Route, move: () => void): boolean {
 }
 
 function onBeforeUnload(e: BeforeUnloadEvent): void {
-  if (unloadHolders.size === 0) return;
   // The browser shows its own sentence; the page only says that it holds
   // something. Both halves, because browsers honour one or the other.
   e.preventDefault();
@@ -401,10 +418,10 @@ export function useLeaveGuard(guard: LeaveGuard | null): void {
     if (!holding) return;
     const entry = { ask: (to: Route, leave: () => void) => latest.current?.(to, leave) ?? false };
     guards.push(entry);
-    unloadHolders.add(entry);
+    const release = holdUnload(entry);
     return () => {
       guards.splice(guards.indexOf(entry), 1);
-      unloadHolders.delete(entry);
+      release();
     };
   }, [holding]);
 }
@@ -415,14 +432,7 @@ export function useLeaveGuard(guard: LeaveGuard | null): void {
  * builder's draft in session storage) but not the tab going away.
  */
 export function useUnloadGuard(holding: boolean): void {
-  useEffect(() => {
-    if (!holding) return;
-    const entry = {};
-    unloadHolders.add(entry);
-    return () => {
-      unloadHolders.delete(entry);
-    };
-  }, [holding]);
+  useEffect(() => (holding ? holdUnload({}) : undefined), [holding]);
 }
 
 export interface Navigator {
@@ -552,12 +562,10 @@ export function Router({ children }: { children: ReactNode }) {
     window.addEventListener("hashchange", follow);
     window.addEventListener("popstate", follow);
     window.addEventListener("crewlet:route", read);
-    window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
       window.removeEventListener("hashchange", follow);
       window.removeEventListener("popstate", follow);
       window.removeEventListener("crewlet:route", read);
-      window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, []);
 
