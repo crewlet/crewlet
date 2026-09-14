@@ -260,6 +260,11 @@ func TestARestartSizesTheLogsAsTheFirstBootDid(t *testing.T) {
 //
 // The broker's refusal names none of the three, and the operator who got it
 // went looking at a disk that had room for two of the three logs.
+//
+// And WHAT TO CHANGE is only what this node can reach. Shrinking a log that
+// already exists is `crewlet retention set-capacity`, which needs a node whose
+// state logs are up, and every mode starts them: the refusal once offered it,
+// sending the operator to a verb that fails the same way.
 func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -267,20 +272,24 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 		stream   config.Stream
 		needed   int64
 		says     []string
+		never    []string
 	}{
 		// Every derived ceiling is at its floor and three floors do not
 		// fit: the tracker and vector logs take two gibibytes, and the
-		// pages log's one is refused with half a gibibyte left.
+		// pages log's one is refused with half a gibibyte left. A ceiling
+		// at the floor goes no lower, so room is the only remedy.
 		"a derived ceiling at its floor": {
 			headroom: 5 * gib / 2,
 			needed:   gib,
 			says: []string{
 				"stream.pages_log_max_bytes is unset",
 				"no lower than 1073741824 bytes",
+				"Give the broker more room;",
 			},
+			never: []string{"to a smaller ceiling"},
 		},
 		// An explicit ceiling is never scaled, so the operator is told
-		// what would have fitted.
+		// what would have fitted, and that a smaller one is theirs to set.
 		"an explicit ceiling": {
 			headroom: 7 * gib / 2,
 			stream:   config.Stream{PagesLogMaxBytes: 2 * gib},
@@ -288,6 +297,8 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 			says: []string{
 				"stream.pages_log_max_bytes sets the ceiling",
 				"at most 1610612736 bytes fits",
+				"Give the broker more room, or set stream.pages_log_max_bytes " +
+					"to a smaller ceiling;",
 			},
 		},
 	} {
@@ -306,10 +317,16 @@ func TestARefusedReservationNamesWhatItNeededAndHad(t *testing.T) {
 				"CREWLET_PAGES_LOG needed " + itoa(tc.needed) + " bytes",
 				"the broker had " + itoa(budget.Available()) + " bytes left",
 				"stream.store_dir (/var/lib/crewlet/stream)",
-				"crewlet retention set-capacity",
+				"the state logs that already exist keep the ceilings they were created with",
 			}, tc.says...) {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q:\n%v", want, err)
+				}
+			}
+			for _, unreachable := range append([]string{"set-capacity"}, tc.never...) {
+				if strings.Contains(err.Error(), unreachable) {
+					t.Errorf("the refusal offers %q, which this node cannot do:\n%v",
+						unreachable, err)
 				}
 			}
 		})

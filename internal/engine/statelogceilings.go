@@ -331,6 +331,15 @@ func (s *stateLog) ceilingFor(domain statelog.Domain) (domainCeiling, error) {
 // all three. What the stream asked to reserve, what the broker had left and
 // what sets that limit, and the Tier A field the ceiling came from.
 //
+// # And only the remedies this node can reach
+//
+// A log that already exists keeps the ceiling it was created with, and
+// shrinking one is `crewlet retention set-capacity`, which runs on a node whose
+// state logs are up. Every mode starts them, maintenance and seal included, so
+// a node refused here cannot run it: offering it sent the operator to a verb
+// that fails the same way. What is left is more room for the broker, or a
+// smaller ceiling for the log it refused, which the floor bounds.
+//
 // The budget is read AGAIN, at the refusal, rather than carried from sizing:
 // the logs created before this one have reserved since, and the number that
 // matters is what the broker had when it said no.
@@ -359,11 +368,15 @@ func (s *stateLog) storageRefused(ctx context.Context, host domainHost,
 			from += fmt.Sprintf(", and at most %d bytes fits", fits)
 		}
 	}
+	remedy := "Give the broker more room"
+	if ceiling.Bytes > MinDomainCeiling {
+		remedy += fmt.Sprintf(", or set %s to a smaller ceiling", ceiling.Field)
+	}
 	return fmt.Errorf("engine: the broker refused to reserve the %s log's "+
-		"ceiling: %s needed %d bytes and %s. %s. Give the broker more room, lower "+
-		"a ceiling Tier A sets, or shrink a log that already exists with "+
-		"`crewlet retention set-capacity`: %w",
-		domain.Name(), domain.Stream().Name, ceiling.Bytes, had, from, cause)
+		"ceiling: %s needed %d bytes and %s. %s. %s; the state logs that already "+
+		"exist keep the ceilings they were created with, and no Tier A setting "+
+		"changes them: %w",
+		domain.Name(), domain.Stream().Name, ceiling.Bytes, had, from, remedy, cause)
 }
 
 // limitSource says who sets a broker's limit, in the terms an operator
