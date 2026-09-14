@@ -40,11 +40,17 @@ type AdoptDeps struct {
 	// Conn is the transfer's own connection.
 	Conn *nats.Conn
 
-	// Need and Generations are this node's view of what an artefact must
-	// name, per domain: one below the higher of the stream's first
-	// surviving sequence and the published trim floor, and the generation
-	// its live stream is on.
-	Need        func(ctx context.Context) (map[string]uint64, map[string]uint32, error)
+	// Need is this node's own acceptance test for an artefact, as the
+	// request it would make: per domain, the lowest position an artefact
+	// may name, the generation its live stream is on, and that stream's
+	// creation instant.
+	//
+	// THE REQUEST ITSELF RATHER THAN A TUPLE OF MAPS, because the terms
+	// grow: it was a sequence, then a sequence and a generation, and a
+	// generation cannot tell a rebuilt stream from the one it replaced.
+	// [OfferRequest.NodeID] is stamped by the adopter and whatever this
+	// returns in it is overwritten.
+	Need        func(ctx context.Context) (OfferRequest, error)
 	StillUsable func(ctx context.Context, m Manifest) error
 
 	// Hold pins the replay tail for the whole transfer and returns the
@@ -161,23 +167,19 @@ var ErrNoOffer = errors.New("statelog: no usable snapshot was offered")
 //  8. INSTALL, which is the one place the engine replaces a live database.
 //  9. COMPLETE, and only then release the hold.
 func (a *Adopter) Join(ctx context.Context) (Manifest, error) {
-	need, generations, err := a.deps.Need(ctx)
+	req, err := a.deps.Need(ctx)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: read what this node needs: %w", err)
 	}
+	req.NodeID = a.deps.NodeID
 
-	offers, err := CollectOffers(ctx, a.deps.Conn, OfferRequest{
-		NodeID:      a.deps.NodeID,
-		Need:        need,
-		Generations: generations,
-	}, OfferWindow)
+	offers, err := CollectOffers(ctx, a.deps.Conn, req, OfferWindow)
 	if err != nil {
 		return Manifest{}, err
 	}
 
 	var refusals []error
 	for _, offer := range offers {
-		req := OfferRequest{Need: need, Generations: generations}
 		if err := offer.Usable(req, a.deps.Domains); err != nil {
 			refusals = append(refusals, fmt.Errorf("%s: %w", offer.Manifest.NodeID, err))
 			continue
@@ -345,15 +347,42 @@ func (a *Adopter) verifyPositions(ctx context.Context, path string, m Manifest) 
 	for name, want := range m.Domains {
 		got, ok := cursors[want.Stream]
 		if !ok {
+			// NO CHECKPOINT ROW IS THE ZERO POSITION, not a missing
+			// one: a domain whose log nobody has written to has
+			// applied nothing, and the donor stamps it at zero for
+			// that reason. A manifest naming anything else for it is
+			// describing a file this is not.
+			if want.Seq == 0 && want.Generation == 0 {
+				continue
+			}
 			return fmt.Errorf("statelog: the artefact's manifest names %s at "+
-				"position %d and the file holds no checkpoint for it at all",
-				name, want.Seq)
+				"generation %d sequence %d and the file holds no checkpoint for "+
+				"it at all — a metadata claim the file does not keep is a corrupt "+
+				"snapshot", name, want.Generation, want.Seq)
 		}
-		if got.Seq != want.Seq || got.Generation != want.Generation {
+		if got.Position.Seq != want.Seq || got.Position.Generation != want.Generation {
 			return fmt.Errorf("statelog: the artefact's manifest names %s at "+
 				"generation %d sequence %d and the file says %d/%d — a metadata "+
 				"claim the file does not keep is a corrupt snapshot",
-				name, want.Generation, want.Seq, got.Generation, got.Seq)
+				name, want.Generation, want.Seq,
+				got.Position.Generation, got.Position.Seq)
+		}
+		// AND THE IDENTITY, which is a checkpoint field like the other
+		// two. A manifest naming a stream instance the file was not
+		// applying is describing a different artefact just as surely as
+		// one naming the wrong sequence — and it is the shape a donor
+		// produced for as long as the position came from the file and
+		// the identity came from the donor's live broker handle.
+		//
+		// A ZERO IN EITHER IS NO CLAIM rather than a mismatch: the
+		// column post-dates some rows, and a domain at the zero position
+		// was applying nothing.
+		if IdentityOf(got.StreamCreatedAt, want.StreamCreatedAt, true) == StreamRecreated {
+			return fmt.Errorf("statelog: the artefact's manifest says %s was "+
+				"applying the stream created at %s and the file says %s — a "+
+				"metadata claim the file does not keep is a corrupt snapshot",
+				name, want.StreamCreatedAt.UTC().Format(time.RFC3339Nano),
+				got.StreamCreatedAt.UTC().Format(time.RFC3339Nano))
 		}
 	}
 	return nil

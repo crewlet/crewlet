@@ -380,7 +380,7 @@ func TestRestatingAnEdgeIsNotASecondEdge(t *testing.T) {
 func (r *roundTrip) task(t *testing.T, id string) tracker.TaskDetail {
 	t.Helper()
 	got, err := r.reader.Task(t.Context(), id, tracker.DetailWants{Links: true},
-		statelog.ReadStale)
+		statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("read task %s: %v", id, err)
 	}

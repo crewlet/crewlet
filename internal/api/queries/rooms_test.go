@@ -135,7 +135,7 @@ func (emptyWork) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answe
 }
 
 func (emptyWork) Task(context.Context, string, tracker.DetailWants,
-	statelog.ReadLevel) (tracker.TaskDetail, error) {
+	statelog.Freshness) (tracker.TaskDetail, error) {
 
 	return tracker.TaskDetail{}, nil
 }
@@ -194,15 +194,15 @@ func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracke
 
 type emptyPages struct{}
 
-func (emptyPages) List(context.Context, pages.Filter, statelog.ReadLevel) (pages.Listing, error) {
+func (emptyPages) List(context.Context, pages.Filter, statelog.Freshness) (pages.Listing, error) {
 	return pages.Listing{}, nil
 }
 
-func (emptyPages) Get(context.Context, string, statelog.ReadLevel) (pages.Detail, error) {
+func (emptyPages) Get(context.Context, string, statelog.Freshness) (pages.Detail, error) {
 	return pages.Detail{}, nil
 }
 
-func (emptyPages) Containers(context.Context, statelog.ReadLevel) ([]pages.Container, error) {
+func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.Container, error) {
 	return nil, nil
 }
 

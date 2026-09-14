@@ -2,6 +2,7 @@ package builtin_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -33,6 +34,9 @@ type fakeTracker struct {
 	// params is what the tool handed the grammar, before it was parsed.
 	params map[string]string
 	tasks  map[string]tracker.TaskDetail
+
+	// reads is every freshness the point readers were handed.
+	reads []statelog.Freshness
 
 	created []tracker.Task
 	merged  []mergeCall
@@ -136,7 +140,9 @@ func (f *fakeTracker) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tr
 }
 
 func (f *fakeTracker) Task(_ context.Context, idOrKey string, _ tracker.DetailWants,
-	_ statelog.ReadLevel) (tracker.TaskDetail, error) {
+	fresh statelog.Freshness) (tracker.TaskDetail, error) {
+
+	f.reads = append(f.reads, fresh)
 
 	if f.readErr != nil {
 		return tracker.TaskDetail{}, f.readErr
@@ -199,7 +205,9 @@ func (f *fakeTracker) Person(context.Context, tracker.PersonQuery, time.Time) (t
 // was inferred, whose question is being answered — so a stub returning nothing
 // would let every one of those arms pass while doing nothing at all.
 func (f *fakeTracker) Thread(_ context.Context, q tracker.ThreadQuery,
-	_ statelog.ReadLevel) (tracker.ResolvedThread, error) {
+	fresh statelog.Freshness) (tracker.ResolvedThread, error) {
+
+	f.reads = append(f.reads, fresh)
 
 	f.threadQuery = q
 	if f.threadErr != nil {
@@ -495,6 +503,37 @@ func TestAWriteIsAttributedToTheTurnsSeat(t *testing.T) {
 	}
 	if actor.TurnID != "turn-1" || !slices.Equal(actor.Chain, []string{"pm"}) {
 		t.Errorf("provenance = %+v, want the turn's id and chain", actor)
+	}
+}
+
+// A WRITE'S ANSWER NAMES WHERE IT LANDED, in the form every read grammar
+// takes back as `min_position` — which is the whole of read-your-writes for a
+// caller outside the engine: an operator's assistant that created a task
+// through these same tools holds nothing else it could ask a board to include.
+func TestAWriteAnswersWithThePositionItLandedAt(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+	got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+		"title": "new work", "project": "ENG",
+	})
+	if got.Failed {
+		t.Fatalf("create failed: %s", got.Output)
+	}
+	var answer map[string]any
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("the answer is not json: %v", err)
+	}
+	// THE FAKE LANDS EVERY CREATE AT S@1:11, and the answer says so in
+	// the parseable form rather than as three numbers a caller would
+	// have to reassemble.
+	if answer["position"] != "S@1:11" {
+		t.Errorf("the answer carries position %v, want %q — a write that "+
+			"does not say where it landed leaves its caller nothing to "+
+			"read back at", answer["position"], "S@1:11")
+	}
+	if answer["outcome"] != string(statelog.OutcomeApplied) {
+		t.Errorf("outcome = %v, want applied beside the position", answer["outcome"])
 	}
 }
 

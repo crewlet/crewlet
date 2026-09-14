@@ -14,7 +14,7 @@ import (
 // QUERY, and this is the hop nothing above this package can see.
 //
 // A surface builds a `tracker.GoalQuery` with `MaxLagSeq: 250` and hands it
-// over; whether the field then reaches [statelog.Query.MaxLagPositions] is a
+// over; whether the field then reaches [statelog.Query.MaxLagSeq] is a
 // line inside each reader, and a reader that dropped it produces an answer
 // identical in every visible respect to one that honoured it — same rows, same
 // `read_level`, same position. The only way to observe the difference is to
@@ -173,6 +173,32 @@ func TestEveryReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 				_, err := reader.MyWork(ctx, tracker.MyWorkQuery{
 					Handle: "ana", Level: stale, MaxLagSeq: 1,
 				}, now)
+				return err
+			}},
+		// THE POINT READS TOO. They took the level alone, on the claim
+		// that a single row has no set for a bound to be enforced
+		// against — but the bound is about this node's LAG, and one
+		// row's read is exactly as far behind as a listing's.
+		{"work_item",
+			func() error {
+				_, err := reader.Task(ctx, "ENG-1", tracker.DetailWants{},
+					statelog.Freshness{Level: stale, MaxLag: time.Second})
+				return err
+			},
+			func() error {
+				_, err := reader.Task(ctx, "ENG-1", tracker.DetailWants{},
+					statelog.Freshness{Level: stale, MaxLagSeq: 1})
+				return err
+			}},
+		{"thread",
+			func() error {
+				_, err := reader.Thread(ctx, tracker.ThreadQuery{Task: "t-1"},
+					statelog.Freshness{Level: stale, MaxLag: time.Second})
+				return err
+			},
+			func() error {
+				_, err := reader.Thread(ctx, tracker.ThreadQuery{Task: "t-1"},
+					statelog.Freshness{Level: stale, MaxLagSeq: 1})
 				return err
 			}},
 	} {

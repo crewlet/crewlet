@@ -391,7 +391,14 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 			return Manifest{}, fmt.Errorf("backup: read the copy's own "+
 				"checkpoints: %w", err)
 		}
-		manifest.Domains = cursors
+		// THE POSITIONS ONLY. A backup names where the copy got to so a
+		// restore knows what the log still has to replay; which stream
+		// instance it was is a snapshot's concern, because only a
+		// snapshot is adopted into a running fleet.
+		manifest.Domains = make(map[string]statelog.Position, len(cursors))
+		for stream, cursor := range cursors {
+			manifest.Domains[stream] = cursor.Position
+		}
 		// READING A DATABASE CREATES SIDECARS, even for a read, so the
 		// copy is folded back into one file — a -wal left inside the
 		// artefact is debris carrying the reader's own umask rather

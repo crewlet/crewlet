@@ -252,7 +252,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		t.deps.settle(ctx, result.Position)
 		tags := map[string]any{
-			"outcome": string(result.Outcome), "version": result.Version,
+			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
 		if len(result.Warnings) > 0 {
 			tags["warnings"] = result.Warnings
@@ -267,7 +267,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		t.deps.settle(ctx, result.Position)
 		out["policy"] = map[string]any{
-			"outcome": string(result.Outcome), "version": result.Version,
+			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
 	}
 	return jsonResult(out)

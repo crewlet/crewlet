@@ -53,6 +53,15 @@ type Message struct {
 type Fetcher interface {
 	// Fetch pulls up to maxMessages records or maxBytes of them,
 	// whichever binds first, waiting up to wait for the first one.
+	//
+	// EVERYTHING THE BROKER DELIVERED IS RETURNED. An implementation may
+	// not take a prefix of what a pull handed over and drop the rest: a
+	// delivered record the loop never sees is one the broker holds
+	// against the consumer's ack-pending cap and redelivers only after
+	// its ack window — a hole in a strict log, on every pull, for as long
+	// as the window is. Where the broker cannot bound a pull by both
+	// count and bytes, the count is the consumer's own in-flight ceiling
+	// (see [FetchMessages]) and maxMessages is honoured by that.
 	Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]Message, error)
 
 	// Pending is how many records this consumer has not yet delivered. It
@@ -66,6 +75,29 @@ type Fetcher interface {
 // different build.
 var ErrStopped = errors.New("statelog: the applier stopped")
 
+// Estate is the replicated database as the applier needs it, RESOLVED PER
+// CALL rather than held.
+//
+// DECLARED HERE because the applier is the caller, and the shape is the
+// point: an adoption replaces the replicated file underneath a running node —
+// closed, renamed over, reopened — and every subsystem that captured the file's
+// handle at boot would go on answering from a database that is no longer at
+// that name. So nothing in this package holds one. What it holds is something
+// that reaches the CURRENT estate on every read and every pin, and answers
+// [store.ErrNoEstate] in the window where there is none.
+type Estate interface {
+	// Read runs fn in a read transaction on the current estate.
+	Read(ctx context.Context, fn func(*sql.Tx) error) error
+
+	// Tx runs fn in a write transaction on the current estate.
+	Tx(ctx context.Context, fn func(*sql.Tx) error) error
+
+	// Writer pins one connection on the current estate for the life of
+	// an apply loop, and the loop releases it before the estate can be
+	// replaced.
+	Writer(ctx context.Context) (*store.Writer, error)
+}
+
 // RunnerDeps is everything an applier needs that it does not own.
 type RunnerDeps struct {
 	Domain  Domain
@@ -75,16 +107,28 @@ type RunnerDeps struct {
 	// DB is the REPLICATED estate — the file this domain's rows, its
 	// operation ledger, its deferred records, its anchors and its
 	// checkpoint all live in, because contract 2 puts them in one
-	// transaction and a transaction is one file.
-	DB *store.DB
+	// transaction and a transaction is one file. Resolved per call, for
+	// the reason [Estate] gives: the file can be replaced under a running
+	// node.
+	DB Estate
 
 	// Generation is the estate's generation, read once per loop
 	// generation because only an operator's reanchor moves it.
 	Generation uint32
 
 	// StreamCreatedAt is the broker's own creation instant for this
-	// stream, stored beside the checkpoint as the DETECTOR: a recreated
-	// stream starts its sequences again, and this is what notices.
+	// stream, AS THE BROKER REPORTS IT NOW, stored beside the checkpoint as
+	// the DETECTOR: a recreated stream starts its sequences again, and this
+	// is what notices — the loop compares it against the instant the
+	// checkpoint was committed under and STOPS on a difference, because
+	// every position it holds names a number space that no longer exists.
+	//
+	// It must come from the broker, never from the checkpoint row: a
+	// value read back out of the row is compared against itself and
+	// detects nothing, which is exactly what the engine did until the
+	// wiring was tested. The zero value declares no identity at all, which
+	// skips the comparison; the engine never passes it, and a caller that
+	// cannot say which stream it is on is one that should refuse to run.
 	StreamCreatedAt time.Time
 
 	// Epoch is the per-epoch configuration the domain declared it reads.
@@ -116,7 +160,7 @@ type Runner struct {
 	domain  Domain
 	applier Applier
 	fetch   Fetcher
-	db      *store.DB
+	db      Estate
 	tables  tables
 	spec    StreamSpec
 	metrics *metrics.Recorder
@@ -134,6 +178,12 @@ type Runner struct {
 	hasDefer  bool
 	stopped   error
 	appliedAt time.Time
+
+	// fault is the transient error the loop is currently retrying, and
+	// faultSince when the first of the run of failures happened. Nil
+	// between faults. See [Runner.Fault] for what a reader does with it.
+	fault      error
+	faultSince time.Time
 
 	// drain is this loop's measured records per second, smoothed.
 	//
@@ -233,10 +283,39 @@ func (r *Runner) Committed() Position {
 }
 
 // Stopped is the error that halted this applier, or nil.
+//
+// A STOP IS PERMANENT and only [ErrStopped] is one: a gate this build cannot
+// read, a hole that will not close, a recreated stream, an envelope no build
+// could decode. Every other failure is retried in place — see [Runner.Run] —
+// and is reported through [Runner.Fault] instead.
 func (r *Runner) Stopped() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopped
+}
+
+// Fault is the transient failure this applier has been retrying for longer
+// than [ApplyRetryBudget], as of now, and false when there is none or it is
+// younger than that.
+//
+// # Why a fault is reported late and a stop at once
+//
+// A stop says this node cannot run this company's records; a fault says the
+// broker or the disk did not answer just now. The first is worth moving a
+// company's work for and the second is not — a two-second store blip is the
+// incident this whole engine's three-valued discipline was learned on — so a
+// fault is retried quietly inside the budget and reported only past it, when
+// the honest reading is that this node's rows have stopped moving. Reported,
+// it takes the same path a stop does: reads refuse `stalled` naming it, and
+// the seats move. It clears the moment a retry succeeds.
+func (r *Runner) Fault(now time.Time) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fault == nil || now.Sub(r.faultSince) < ApplyRetryBudget {
+		return "", false
+	}
+	return fmt.Sprintf("%v (retried since %s)", r.fault,
+		r.faultSince.UTC().Format(time.RFC3339)), true
 }
 
 // Deferred is the earliest record this node holds and cannot decode, and false
@@ -315,8 +394,9 @@ func (r *Runner) Anchor(ctx context.Context, subject string) (Position, error) {
 //
 // THIRTY DAYS, and it is derived from the client that actually retries rather
 // than from the machine one. The longest MACHINE retry is sixteen rounds
-// inside a two-second wait; but a SEAT is told to carry an op id forward and
-// re-ask, and it does that on its next wake — hours later, and after a weekend
+// inside a five-second wait ([DefaultResolveBudget]); but a SEAT is told to
+// carry an op id forward and re-ask, and it does that on its next wake —
+// hours later, and after a weekend
 // for a seat that only runs on a schedule. An op id that outlives its row
 // resolves `unknown` rather than `applied`, which sends a turn to re-decide
 // work it already did.
@@ -349,7 +429,124 @@ func (r *Runner) Op(ctx context.Context, opID string) (Position, bool, error) {
 }
 
 // Run drives the loop until the context ends or the applier stops.
+//
+// # It may be run AGAIN after it returns
+//
+// A node that falls below the trim floor while running adopts a peer's
+// snapshot: its apply loops are ended, the replicated file is replaced, and
+// the loops are started again over what arrived. Every subsystem that holds
+// this runner keeps holding it, so it is the same Runner that runs again —
+// from the checkpoint the new file keeps, with whatever it retained
+// reprocessed, and with a stop or a fault from the previous run re-evaluated
+// rather than remembered: they were verdicts about rows this node no longer
+// has.
 func (r *Runner) Run(ctx context.Context) error {
+	r.mu.Lock()
+	r.stopped, r.fault, r.faultSince = nil, nil, time.Time{}
+	r.mu.Unlock()
+
+	var w *store.Writer
+	defer func() {
+		if w != nil {
+			_ = w.Close()
+		}
+		// A WAITER LEFT ON A STOPPED APPLIER would wait out its whole
+		// budget for a position nothing will ever reach — and one merely
+		// RELEASED would read as satisfied and go on to read rows that
+		// never reached its position. It is told, instead.
+		r.waiters.abandonAll()
+	}()
+
+	// THE LOOP OUTLIVES A FAILURE. A fetch the broker did not answer, a
+	// transaction the disk refused, an applier that errored on a record:
+	// none of them says this node cannot run the company's records, and a
+	// loop that returned on any of them left the domain dead for the life
+	// of the process with nothing to restart it — a broker blip at the
+	// wrong moment took a node's tracker down until an operator noticed
+	// the seats had moved and restarted it. So a failure that is not a
+	// STOP is retried here, in place, on a pause that doubles to a
+	// ceiling, with the same run re-applied rather than abandoned to a
+	// thirty-second redelivery. What the outside sees is [Runner.Fault]:
+	// nothing inside the retry budget, and past it the honest report that
+	// this node's rows have stopped moving.
+	var tail []Record
+	var buffer reorderBuffer
+	var pause time.Duration
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// STARTUP IS INSIDE THE RETRY REGIME, and it is the same regime.
+		//
+		// Pinning the connection, reading the checkpoint and reprocessing
+		// what an earlier build retained are all database work, and all
+		// three sat ABOVE this loop: a store that was momentarily
+		// unavailable — the adoption bracket between a close and a
+		// reopen, a refused transaction, a disk that answered slowly —
+		// returned straight out of Run and left the domain with no
+		// applier for the life of the process. Nothing restarted it and
+		// nothing reported it either: Stopped stayed nil and no fault was
+		// recorded, so the node went on publishing a caught-up position
+		// for a domain that would never apply another record. That is the
+		// one failure this loop's whole retry design exists to rule out,
+		// and it was reachable through the door above it.
+		if w == nil {
+			pinned, err := r.startup(ctx)
+			if err != nil {
+				if stopped := r.faulted(ctx, err); stopped != nil {
+					return stopped
+				}
+				pause = r.backOff(ctx, pause)
+				continue
+			}
+			w = pinned
+			r.recovered(ctx)
+			pause = 0
+		}
+		run, err := r.nextRun(ctx, tail, &buffer)
+		if err != nil {
+			if stopped := r.faulted(ctx, err); stopped != nil {
+				return stopped
+			}
+			pause = r.backOff(ctx, pause)
+			continue
+		}
+		if len(run) == 0 {
+			// THE BROKER ANSWERED, with nothing: whatever was wrong
+			// is not wrong now.
+			r.recovered(ctx)
+			pause = 0
+			continue
+		}
+		consumed, err := r.applyRun(ctx, w, run)
+		if err != nil {
+			if stopped := r.faulted(ctx, err); stopped != nil {
+				return stopped
+			}
+			// THE SAME RUN, AGAIN. Its records are delivered and
+			// unacknowledged, contiguous from the checkpoint, and
+			// nothing about them changed; dropping them here would
+			// leave the loop fetching records above a hole for the
+			// whole ack window before the broker handed these back.
+			tail = run
+			pause = r.backOff(ctx, pause)
+			continue
+		}
+		r.recovered(ctx)
+		pause = 0
+		tail = run[len(consumed):]
+	}
+}
+
+// startup is everything the loop needs before it may consume a record: a
+// pinned connection, the checkpoint, and whatever an earlier build retained.
+//
+// IT CLEANS UP AFTER ITSELF, because it is RETRIED: a connection pinned by an
+// attempt that then failed to read the checkpoint would be leaked once per
+// attempt, and the pool this draws from is small enough that a few minutes of
+// retrying would exhaust it — turning a transient failure into the permanent
+// one the retry exists to avoid.
+func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 	// A PINNED CONNECTION for the loop's life. The pool is small and every
 	// reader on this node draws from it — and the readers are usually
 	// waiting on state this writer is about to commit, so under load they
@@ -357,41 +554,85 @@ func (r *Runner) Run(ctx context.Context) error {
 	// one that would unblock them.
 	w, err := r.db.Writer(ctx)
 	if err != nil {
-		return fmt.Errorf("statelog: pin the applier's connection: %w", err)
+		return nil, fmt.Errorf("statelog: pin the applier's connection: %w", err)
 	}
-	defer func() {
-		_ = w.Close()
-		// A WAITER LEFT ON A STOPPED APPLIER waits out its whole budget
-		// for a position nothing will ever reach.
-		r.waiters.releaseAll()
-	}()
-
 	if err := r.loadCursor(ctx); err != nil {
-		return err
+		_ = w.Close()
+		if errors.Is(err, ErrStopped) {
+			return nil, r.stop(ctx, err)
+		}
+		return nil, err
+	}
+	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
+	// record is applied by the build that can decode it, and the only
+	// moment a build changes is a boot — so this is where the promise is
+	// kept, before the loop consumes anything above it.
+	if err := r.reprocess(ctx, w); err != nil {
+		_ = w.Close()
+		return nil, err
 	}
 	r.logger.InfoContext(ctx, "statelog_applier_started",
 		"domain", r.domain.Name(), "stream", r.spec.Name,
 		"protocol", string(r.spec.Replay), "position", r.Committed().String())
+	return w, nil
+}
 
-	var tail []Record
-	var buffer reorderBuffer
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		run, err := r.nextRun(ctx, tail, &buffer)
-		if err != nil {
-			return err
-		}
-		if len(run) == 0 {
-			continue
-		}
-		consumed, err := r.applyRun(ctx, w, run)
-		if err != nil {
-			return err
-		}
-		tail = run[len(consumed):]
+// faulted classifies a failure: a STOP is returned to end the loop, anything
+// else is recorded as the fault being retried and swallowed.
+func (r *Runner) faulted(ctx context.Context, err error) error {
+	if errors.Is(err, ErrStopped) || ctx.Err() != nil {
+		return err
 	}
+	r.mu.Lock()
+	first := r.fault == nil
+	if first {
+		r.faultSince = r.now()
+	}
+	r.fault = err
+	since := r.faultSince
+	r.mu.Unlock()
+	if first {
+		r.logger.WarnContext(ctx, "statelog_apply_retrying",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"position", r.Committed().String(), "error", err.Error(),
+			"reported_after", ApplyRetryBudget)
+	} else if r.now().Sub(since) >= ApplyRetryBudget {
+		r.logger.ErrorContext(ctx, "statelog_apply_faulted",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"position", r.Committed().String(), "error", err.Error(),
+			"since", since, "detail", "this node's rows have stopped moving; "+
+				"its reads refuse and its seats move until a retry succeeds")
+	}
+	r.count(metrics.StatelogApplyRetries)
+	return nil
+}
+
+// recovered clears the fault a retry just outlived.
+func (r *Runner) recovered(ctx context.Context) {
+	r.mu.Lock()
+	had, since := r.fault, r.faultSince
+	r.fault, r.faultSince = nil, time.Time{}
+	r.mu.Unlock()
+	if had != nil {
+		r.logger.InfoContext(ctx, "statelog_apply_recovered",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"after", r.now().Sub(since).Round(time.Millisecond), "error", had.Error())
+	}
+}
+
+// backOff waits before the next attempt and returns the pause the attempt
+// after that will take: the beat on the first retry, doubling to the ceiling.
+func (r *Runner) backOff(ctx context.Context, pause time.Duration) time.Duration {
+	if pause <= 0 {
+		pause = ApplyRetryBeat
+	}
+	t := time.NewTimer(pause)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return min(pause*2, ApplyRetryCeiling)
 }
 
 // loadCursor reads this domain's checkpoint at boot.
@@ -409,20 +650,165 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 		defer r.mu.Unlock()
 		if found {
 			r.cursor = at
-			// A RECREATED STREAM IS DETECTED HERE and nowhere else. The
-			// generation is the response and this is what notices: the
-			// broker's own creation instant moving means every stored
-			// sequence is a number in a space it no longer belongs to.
-			if !r.created.IsZero() && !created.IsZero() && !created.Equal(r.created) {
-				r.logger.WarnContext(ctx, "statelog_stream_recreated",
-					"domain", r.domain.Name(), "stream", r.spec.Name,
-					"cursor_created_at", created, "stream_created_at", r.created,
-					"generation", r.gen)
-			}
 		}
 		r.deferred, r.hasDefer = d, hasDefer
+		// A RECREATED STREAM IS DETECTED HERE and nowhere else, and IT
+		// IS A STOP. The generation is the response and this is what
+		// notices: the broker's own creation instant moving means every
+		// stored sequence — the checkpoint, every anchor, every version —
+		// is a number in a space it no longer belongs to, and a consumer
+		// resumed from the checkpoint waits for a sequence that never
+		// arrives while reporting nothing pending. An operator reanchors;
+		// until then this node's rows are frozen and its health says so.
+		//
+		// Compared through [IdentityOf], at the resolution the row keeps,
+		// because the broker reports nanoseconds and the row keeps
+		// microseconds — compared exactly, every boot after the first
+		// would read as a recreation.
+		if !r.created.IsZero() {
+			if state := IdentityOf(created, r.created, found); state == StreamRecreated {
+				return fmt.Errorf("%w: %w — %s's checkpoint was committed against a "+
+					"stream created at %s and the broker's %s was created at %s, so "+
+					"every position this node holds names a sequence space that no "+
+					"longer exists; `crewlet retention reanchor -stream %s` is what "+
+					"follows the new stream from its head",
+					ErrStopped, ErrStreamRecreated, r.domain.Name(),
+					created.UTC().Format(time.RFC3339Nano),
+					r.spec.Name, r.created.UTC().Format(time.RFC3339Nano), r.spec.Name)
+			}
+		}
 		return nil
 	})
+}
+
+// ReprocessPage bounds how many retained records one read of the table takes,
+// so a node that sat out a long upgrade walks its backlog in pages rather than
+// loading it whole.
+const ReprocessPage = 256
+
+// reprocess applies every retained record this build can now decode, in
+// position order, and releases each one in the transaction that applied it.
+//
+// # The rule is the live loop's, replayed over the table
+//
+// The loop retained a record for one of two reasons: its version was above
+// what the build could read, or its scope met a record already retained. The
+// second is why order matters here and why a probe below the current position
+// is the one question asked: a record this build can read stays retained
+// while a record EARLIER in the log that covers its scope is still retained,
+// and applying it first would produce state no other node holds — the same
+// state the retain rule refused to produce live. Walked oldest first with each
+// applied record released as it goes, that check is exactly the live one.
+//
+// A record still above this build's version is left where it is, and so is
+// everything it covers, however many builds it waits through.
+//
+// # The checkpoint does not move and the anchor does not move
+//
+// Both advanced when the record was retained: the log CONSUMED it then, and
+// the anchor is a MAX so a replay at the original position is a no-op on it.
+// What a reprocess writes is the rows, the operation id and the release, in
+// one transaction per record — a transaction per record rather than one over
+// the whole backlog, because a retained record's own apply is the ordinary
+// one and holds the writer for exactly as long as it would have.
+//
+// Until this existed nothing read the retained table to apply from it. A node
+// that deferred a record on a rolling upgrade kept the deferral after it was
+// upgraded, refused every read and write about the objects it covered for the
+// life of the deployment, and reported the version it needed — which it was
+// already running.
+func (r *Runner) reprocess(ctx context.Context, w *store.Writer) error {
+	var after int64
+	var applied, kept int
+	for {
+		var page []retained
+		if err := r.db.Read(ctx, func(tx *sql.Tx) error {
+			var err error
+			page, err = r.tables.deferredAfter(ctx, tx, after, ReprocessPage)
+			return err
+		}); err != nil {
+			return err
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, row := range page {
+			after = row.position
+			if row.version > r.domain.RecordVersion() {
+				kept++
+				continue
+			}
+			env, err := r.domain.Envelope(row.payload)
+			if err != nil {
+				return fmt.Errorf("statelog: %s could not read the envelope of a "+
+					"retained record at packed position %d, which every build must "+
+					"be able to: %w", r.domain.Name(), row.position, err)
+			}
+			rec := Record{
+				Envelope: env,
+				Position: Position{
+					Stream:     r.spec.Name,
+					Generation: uint32(row.position / GenerationStride),
+					Seq:        uint64(row.position % GenerationStride),
+				},
+				Payload:  row.payload,
+				StoredAt: row.storedAt,
+			}
+			landed, err := r.reprocessOne(ctx, w, rec)
+			if err != nil {
+				return err
+			}
+			if landed {
+				applied++
+				r.applier.Committed(ctx)
+			} else {
+				kept++
+			}
+		}
+	}
+	if applied == 0 && kept == 0 {
+		return nil
+	}
+	if err := r.refreshDeferred(ctx); err != nil {
+		return err
+	}
+	r.logger.InfoContext(ctx, "statelog_retained_reprocessed",
+		"domain", r.domain.Name(), "applied", applied, "kept", kept,
+		"build_reads", r.domain.RecordVersion())
+	if applied > 0 && r.metrics != nil {
+		r.metrics.Add(metrics.StatelogApplyRecords, uint64(applied),
+			metrics.Attrs{"domain": r.domain.Name(), "result": "reprocessed"})
+	}
+	return nil
+}
+
+// reprocessOne applies one retained record unless an earlier retained record
+// still covers it, reporting whether it landed.
+func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) (bool, error) {
+	landed := false
+	err := w.Tx(ctx, func(tx *sql.Tx) error {
+		landed = false
+		if _, covered, err := r.tables.deferredBelow(ctx, tx, rec.Scope, &rec.Position); err != nil {
+			return err
+		} else if covered {
+			return nil
+		}
+		opts := r.opts
+		opts.Now = r.now()
+		if _, _, err := r.applyOne(ctx, tx, rec, opts); err != nil {
+			return err
+		}
+		if err := r.tables.release(ctx, tx, rec.Position); err != nil {
+			return err
+		}
+		landed = true
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("statelog: reprocess the retained record at %s: %w",
+			rec.Position, err)
+	}
+	return landed, nil
 }
 
 // nextRun fills a run toward the transaction budget, starting from whatever
@@ -482,17 +868,29 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 			}
 			return nil, fmt.Errorf("statelog: fetch from %s: %w", r.spec.Name, err)
 		}
-		records, err := r.decode(batch)
+		records, err := r.decode(ctx, batch)
 		if err != nil {
 			return nil, err
 		}
-		ready, err := buffer.admit(records, r.Committed(), r.spec.Replay, len(run))
+		ready, err := buffer.admit(records, r.Committed(), r.spec.Replay, run)
 		if err != nil {
 			return nil, r.stop(ctx, err)
 		}
 		run = append(run, ready...)
-		if len(run) == 0 && len(batch) == 0 {
-			return nil, nil
+		if len(batch) == 0 {
+			if len(run) == 0 {
+				return nil, nil
+			}
+			// THE LINGER EXPIRED WITH RECORDS IN HAND, so the run
+			// commits. A pull that handed over nothing while the
+			// broker still reports records pending is the broker
+			// WITHHOLDING them: the consumer's in-flight ceiling is
+			// reached by exactly the records this run holds, and it
+			// hands over no more until they are acknowledged — which
+			// happens only after this commit. A loop that kept pulling
+			// here waited for a delivery its own commit was the
+			// precondition of, and did so for ever.
+			return run, nil
 		}
 	}
 }
@@ -522,25 +920,26 @@ func (r *Runner) budgetWouldBind(run []Record) bool {
 
 // decode turns broker messages into records, with the envelope the domain can
 // always read.
-func (r *Runner) decode(batch []Message) ([]Record, error) {
+func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) {
 	out := make([]Record, 0, len(batch))
 	for _, m := range batch {
 		env, err := r.domain.Envelope(m.Payload)
 		if err != nil {
-			// AN UNREADABLE ENVELOPE IS A STOP, not a deferral. The
-			// envelope is the half every build can read, so failing
-			// on it means the record is not this domain's — and
+			// AN UNREADABLE ENVELOPE IS A STOP, not a deferral and not
+			// a retry. The envelope is the half every build can read,
+			// so failing on it means the record is not this domain's —
 			// retaining it would index nothing, because every field
-			// the index needs is inside the envelope.
-			return nil, fmt.Errorf("statelog: %s could not read the envelope at "+
-				"sequence %d, which every build must be able to: %w",
-				r.domain.Name(), m.Seq, err)
+			// the index needs is inside the envelope, and retrying it
+			// would read the same bytes the same way.
+			return nil, r.stop(ctx, fmt.Errorf("%w: %s could not read the envelope "+
+				"at sequence %d, which every build must be able to: %w",
+				ErrStopped, r.domain.Name(), m.Seq, err))
 		}
 		if env.Scope.Empty() {
-			return nil, fmt.Errorf("statelog: the record at sequence %d declares "+
-				"no scope — an empty scope claims it makes nothing stale, which "+
-				"is the one claim a record no build may be able to read cannot "+
-				"make", m.Seq)
+			return nil, r.stop(ctx, fmt.Errorf("%w: the record at sequence %d "+
+				"declares no scope — an empty scope claims it makes nothing "+
+				"stale, which is the one claim a record no build may be able to "+
+				"read cannot make", ErrStopped, m.Seq))
 		}
 		out = append(out, Record{
 			Envelope: env,
@@ -557,6 +956,7 @@ func (r *Runner) decode(batch []Message) ([]Record, error) {
 // things that must happen after the commit, in order.
 func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([]Record, error) {
 	var consumed []Record
+	var committedAt Position
 	var tally results
 	var rows int
 	var boundBy string
@@ -585,7 +985,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		// transaction's body, so a counter accumulated across attempts
 		// counts the abandoned one too — and the metrics would report
 		// work that was rolled back.
-		consumed, tally, rows, boundBy = consumed[:0], results{}, 0, ""
+		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
 		txStart := r.now()
 
 		hasDeferred, err := r.anyDeferred(ctx, tx)
@@ -697,8 +1097,27 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 		if len(consumed) == 0 {
 			return nil
 		}
-		return r.tables.setCursor(ctx, tx,
-			consumed[len(consumed)-1].Position, r.created, r.now())
+		// THE HIGHEST POSITION THIS TRANSACTION HOLDS, never the tail of
+		// the run.
+		//
+		// A run's last element is a stale REDELIVERY whenever one
+		// arrived late: [reorderBuffer.admit] passes a record below the
+		// run's high-water mark straight through so the caller
+		// acknowledges it, so a run legitimately closes as [11, 12, 11].
+		// Checkpointing the tail there writes 11 in the same transaction
+		// that committed 12's rows — a cursor that UNDERSTATES its own
+		// database, which is the one thing the checkpoint exists to
+		// rule out. The damage outlives the transaction: the waiters
+		// release through 11, so a linearizable read waiting for 12 is
+		// refused `behind` over rows this node already holds; and the
+		// next boot resumes at 12 and re-applies a record whose anchor
+		// was already advanced past it.
+		//
+		// The floor is this node's committed cursor rather than zero,
+		// because a run made ENTIRELY of redeliveries below the
+		// checkpoint has to be acknowledged without moving it at all.
+		committedAt = highest(consumed, r.Committed())
+		return r.tables.setCursor(ctx, tx, committedAt, r.created, r.now())
 	})
 	if err != nil {
 		if errors.Is(err, ErrStopped) {
@@ -711,7 +1130,11 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	}
 
 	// AFTER THE OUTER TRANSACTION RETURNS, IN THIS ORDER.
-	at := consumed[len(consumed)-1].Position
+	//
+	// THE POSITION THE TRANSACTION COMMITTED, so what this node reports,
+	// releases waiters through and resumes from is the same value the
+	// checkpoint row holds — see the comment at the setCursor above.
+	at := committedAt
 	if tally.retained > 0 {
 		// WHAT THIS NODE CANNOT READ is what its readiness and its
 		// coverage both turn on, so it is refreshed the moment it
@@ -727,7 +1150,11 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 
 	r.measureDrain(started, len(consumed))
 	r.countAborts(attempts)
-	r.observe(started, rows, boundBy, tally, consumed[len(consumed)-1])
+	// THE TOP RECORD, for the same reason: the apply LATENCY is measured
+	// from a record's own StoredAt, and a stale redelivery's is an hour
+	// old, so reading the tail reports the redelivery's age as this
+	// batch's latency.
+	r.observe(started, rows, boundBy, tally, topRecord(consumed))
 	return consumed, nil
 }
 

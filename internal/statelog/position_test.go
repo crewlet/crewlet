@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -137,5 +138,31 @@ func TestAPositionOutsideThePackedRangeIsRefusedWhereItIsMinted(t *testing.T) {
 	if top.Packed() <= 0 {
 		t.Fatalf("the highest legal position packs to %d, which is not positive",
 			top.Packed())
+	}
+}
+
+// A POSITION RENDERS WITH THE KEYS ITS READERS INDEX.
+//
+// The dashboard's protocol types declare `{stream, generation, seq}` and its
+// coverage banner reads `incomplete.from.seq`; untagged, the encoder wrote
+// Go's own field names, so the banner printed "from sequence undefined" while
+// every Go test decoded the same bytes back into the same struct and passed.
+func TestAPositionRendersTheKeysTheDashboardReads(t *testing.T) {
+	t.Parallel()
+	at := statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 2, Seq: 4711}
+	raw, err := json.Marshal(at)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	want := `{"stream":"CREWLET_TRACKER_LOG","generation":2,"seq":4711}`
+	if string(raw) != want {
+		t.Fatalf("a position rendered as %s, want %s", raw, want)
+	}
+	var back statelog.Position
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if back != at {
+		t.Fatalf("round-tripped to %+v, want %+v", back, at)
 	}
 }

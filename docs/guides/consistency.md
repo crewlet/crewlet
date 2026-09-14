@@ -31,16 +31,18 @@ a reader can tell. A tile that took a barrier append to redraw would put the
 fleet's whole read rate on the log to remove a staleness the next redraw
 removes anyway.
 
-**`session` is the write path's level, and no read surface offers it.** It
-waits for *your own* high-water mark, which you have to supply — and nothing
-outside the engine can. An HTTP request holds no position, and a seat's tools
-carry none either. A surface that accepted `session` would wait for the zero
+**`session` is the write path's level, and a read surface offers it only
+with a position.** It waits for *your own* high-water mark, which you have to
+supply. A surface that accepted the level bare would wait for the zero
 position, serve whatever that node happened to hold, and label the answer
-`session`: a wrong label rather than a weaker answer. So `read_level=session`
-is **refused** by the read grammar, naming the two honest asks — `linearizable`,
-or `stale` with `max_lag_seq`. Inside the engine the level is real and used:
-a write waits for its own last write to be applied before it opens the snapshot
-it decides from.
+`session`: a wrong label rather than a weaker answer. So the read grammar
+accepts `read_level=session` **only beside `min_position`** — the position the
+write you are reading back answered with — and refuses it without one, naming
+the key and the two other honest asks, `linearizable` or `stale` with
+`max_lag_seq`. A seat's tools carry no position and choose no level, so there
+the ask is unreachable. Inside the engine the level is real and used: a write
+waits for its own last write to be applied before it opens the snapshot it
+decides from.
 
 That wait is **per log, not per object**. A node that has just published a bulk
 update waits for it to apply locally before its next write on that log — any
@@ -68,7 +70,7 @@ happened to omit the key. There are four:
 |---|---|---|
 | A seat's own tools, inside a turn | `linearizable` | No |
 | The operator MCP, about tracker content | `linearizable` | No |
-| The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale` or `consistent_prefix` |
+| The dashboard and the REST read path | `stale` | Yes — `linearizable`, `stale`, `consistent_prefix`, or `session` beside a `min_position` |
 | Any answer **about replication** — the retention report, the Fleet screen's lag, whether a purge landed | `stale`, weakening to `consistent_prefix` | No — it is derived, not chosen |
 
 **Only the screen chooses**, and the reason is that only the screen can see
@@ -120,6 +122,39 @@ A zero bound is not a bound: it accepts anything, which is what makes
 declaring one the caller's own decision rather than a default somebody
 inherits.
 
+## Reading your own write back
+
+Every write answers with the **position** its record landed at —
+`<stream>@<generation>:<sequence>` — on the tool answer, the operator MCP's
+answer and the retention routes alike, and every read takes it back as
+`min_position`. The answer is then served from no earlier than that position,
+**at whatever level was asked**:
+
+- At `linearizable` it costs nothing: the barrier the read appends is already
+  past any position a write on the same log answered with.
+- At `session` it *is* the high-water mark the level waits for, which is what
+  makes the level offerable to a caller outside the engine at all.
+- At `stale` and `consistent_prefix` it turns "whatever this node holds" into
+  "whatever this node holds, from here on". The lag is still checked against
+  any bound and still reported on the answer; what changes is that a node
+  which has not reached the position within the read budget refuses `behind`
+  — with the same derived retry hint — rather than serving rows from before
+  the write.
+
+A position on another domain's log is refused `wrong_stream`, not waited for.
+
+Two spellings, one triple: inside an answer a position is the object
+`{stream, generation, seq}` (`seen_through`, `incomplete.from`, a listing's
+`position`), and as a parameter — `min_position`, a cursor, `since` — it is the
+token `<stream>@<generation>:<sequence>`, because a query string carries no
+object. A tool answer's `position` is already the token, since that is what
+its reader pastes back.
+
+This is the wire's half of read-your-writes. A seat needs none of it, because
+its reads are `linearizable`; a person's assistant filing an item over the
+operator MCP and redrawing a board over the REST route holds nothing else it
+could ask that board to include.
+
 ## How `linearizable` actually works
 
 It is a **barrier append**, not a field check.
@@ -153,7 +188,7 @@ rather than downgraded. Each code names a different thing to do.
 |---|---|---|
 | `behind` | This node has not reached the position the read needs. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
 | `too_stale` | This node's lag is past what the read said it would accept. | Same, or accept more staleness. |
-| `stalled` | This node's applied prefix has stopped moving. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain and its position. |
+| `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. |
 | `no_quorum` | The barrier did not commit: the broker answered and a majority did not agree. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
 | `broker_unreachable` | The broker did not answer at all. | Retry. Not the same as `no_quorum`, and the difference is where to look. |
 | `log_full` | The log is at its byte ceiling and refuses appends, so no barrier can be written. | Raise the ceiling with `crewlet retention set-capacity`, or unblock the trim — `crewlet retention status` names the term. **`stale` keeps answering**, so a full log costs `linearizable` reads — every seat tool read among them — rather than every read. |
@@ -162,7 +197,7 @@ rather than downgraded. Each code names a different thing to do.
 | `below_floor` | Records this node never applied have been trimmed. | Its rows are missing state no replay can supply. The node has to adopt a peer's snapshot; see [Retention](retention.md). |
 | `floor_unknown` | The published trim floor could not be read. | The third value blocks: guessing here keeps a node serving over a hole it cannot see. Check coordination. |
 | `evicted` | This node has been removed from the fleet. | Nothing it holds is authoritative. Readmit it, or route elsewhere. |
-| `wrong_stream` | The position this read was asked to reach is on another stream. | A caller bug, or a cursor from before a reanchor. |
+| `wrong_stream` | The position this read was asked to reach is on another stream — including a `min_position` naming another domain's log, which is refused at every level rather than quietly dropped. Or this node's own log is not the one its rows are keyed to: its checkpoint is past the log's end, or the stream was deleted and rebuilt under it, which the position heartbeat names from the broker's own creation instant. | A caller bug, a cursor from before a reanchor, or a recreated stream; see [Retention](retention.md#re-anchoring-a-recreated-stream). |
 
 Four of them are worth coming back to **this** node for — `behind`,
 `no_quorum`, `broker_unreachable` and `stalled`. The rest are not, and the

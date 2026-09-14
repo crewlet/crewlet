@@ -44,8 +44,8 @@ func PageWrites() []string {
 // writes, and that is what stops a turn that just created a page from
 // concluding the page does not exist and creating it again.
 type PageReader interface {
-	List(ctx context.Context, f pages.Filter, level statelog.ReadLevel) (pages.Listing, error)
-	Get(ctx context.Context, ref string, level statelog.ReadLevel) (pages.Detail, error)
+	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
+	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
 }
 
 // PageWriter is what these tools need from the write side.
@@ -205,7 +205,7 @@ func (t *listPages) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		Label:     strings.TrimSpace(argString(args, "label")),
 		Status:    []pages.Status{pages.StatusPublished},
 		Limit:     argInt(args, "limit", 0),
-	}, seatReadLevel)
+	}, seatRead)
 	if err != nil {
 		return failed(readFailure(ListPagesTool, err)), nil
 	}
@@ -268,7 +268,7 @@ func (t *getPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map[
 	if ref == "" {
 		return failed("get_page needs a `page` — an id, or \"CONTAINER/Title\"."), nil
 	}
-	detail, err := t.deps.Reader.Get(ctx, ref, seatReadLevel)
+	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q. Check the container and "+
@@ -448,7 +448,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 			"get_page and pass its `version` back, so an edit somebody else " +
 			"made in the meantime is a refusal rather than a silent overwrite."), nil
 	}
-	detail, err := t.deps.Reader.Get(ctx, ref, seatReadLevel)
+	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil
@@ -588,7 +588,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	case body == "":
 		return failed("comment_on_page needs a `body`."), nil
 	}
-	detail, err := t.deps.Reader.Get(ctx, ref, seatReadLevel)
+	detail, err := t.deps.Reader.Get(ctx, ref, seatRead)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return failed(fmt.Sprintf("There is no page %q.", clip(ref))), nil

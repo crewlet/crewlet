@@ -149,13 +149,13 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 
 	var listing ViewListing
 	served, err := r.log.Read(ctx, statelog.Query{
-		Level:           q.Level,
-		Scope:           viewScope(q.Container),
-		Session:         q.Session,
-		MinPosition:     q.MinPosition,
-		MaxLag:          q.MaxLag,
-		MaxLagPositions: q.MaxLagSeq,
-		Set:             true,
+		Level:       q.Level,
+		Scope:       viewScope(q.Container),
+		Session:     q.Session,
+		MinPosition: q.MinPosition,
+		MaxLag:      q.MaxLag,
+		MaxLagSeq:   q.MaxLagSeq,
+		Set:         true,
 	}, func(tx *sql.Tx) error {
 		pinned, err := pinnedViews(ctx, tx, q.Viewer)
 		if err != nil {

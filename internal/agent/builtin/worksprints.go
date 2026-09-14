@@ -154,7 +154,7 @@ func (t *manageSprint) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.deps.settle(ctx, result.Position)
 		return jsonResult(map[string]any{
 			"project": project, "sprint": number, "state": "active",
-			"outcome": string(result.Outcome), "version": result.Version,
+			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		})
 	case "close":
 		result, err := writer.CloseSprint(ctx, opID, project, number)
@@ -164,7 +164,7 @@ func (t *manageSprint) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		t.deps.settle(ctx, result.Position)
 		out := map[string]any{
 			"project": project, "sprint": number, "state": "closed",
-			"outcome": string(result.Outcome), "version": result.Version,
+			"outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 		}
 		// A CLOSE MAY CARRY ITS OWN SPILLOVER DECISION, which is what a
 		// lead ending a sprint early usually means — and saves them a

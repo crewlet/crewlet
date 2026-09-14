@@ -281,7 +281,7 @@ func (t *writeWorkGoal) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	t.deps.settle(ctx, result.Position)
 	return jsonResult(map[string]any{
-		"id": id, "outcome": string(result.Outcome), "version": result.Version,
+		"id": id, "outcome": string(result.Outcome), "position": positionOf(result.Position), "version": result.Version,
 	})
 }
 

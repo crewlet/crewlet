@@ -67,7 +67,7 @@ import (
 // [statelog.LevelFor], and a dashboard is the one caller allowed to choose at
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
-func freshness(p Params) (tracker.Freshness, error) {
+func freshness(p Params) (statelog.Freshness, error) {
 	got, err := tracker.ParseFreshness(p)
 	if err != nil {
 		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
@@ -81,7 +81,7 @@ func freshness(p Params) (tracker.Freshness, error) {
 	// linearizable read would be a caller who believes they asked for
 	// something they did not — the same refusal, one step later, where
 	// the surface is finally known.
-	if got.Level != statelog.ReadStale && (got.MaxLag > 0 || got.MaxLagSeq > 0) {
+	if got.Level != statelog.ReadStale && got.Bounded() {
 		return got, fmt.Errorf("%w: a staleness bound belongs to read_level="+
 			"stale and this read resolved to %s, which is not a staleness "+
 			"bound at all", ErrBadParams, got.Level)
@@ -100,7 +100,7 @@ func freshness(p Params) (tracker.Freshness, error) {
 type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-		level statelog.ReadLevel) (tracker.TaskDetail, error)
+		fresh statelog.Freshness) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
@@ -121,9 +121,9 @@ type WorkReader interface {
 
 // PageReader is the knowledge read side this surface calls.
 type PageReader interface {
-	List(ctx context.Context, f pages.Filter, level statelog.ReadLevel) (pages.Listing, error)
-	Get(ctx context.Context, ref string, level statelog.ReadLevel) (pages.Detail, error)
-	Containers(ctx context.Context, level statelog.ReadLevel) ([]pages.Container, error)
+	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
+	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
+	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.Container, error)
 }
 
 // ---- work -------------------------------------------------------------- //
@@ -233,13 +233,14 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// THE LEVEL ONLY, because [WorkReader.Task] takes one rather than a
-	// query: a single row's read has no set to be incomplete about, so
-	// the staleness bound has nowhere to be enforced and carrying it
-	// would be a promise nothing keeps.
+	// THE WHOLE FRESHNESS. This handed over the level alone once, on the
+	// claim that a single row has no set for a bound to be enforced
+	// against — but the bound is about this node's LAG, checked before
+	// any row is read, and a detail is exactly as far behind as a board
+	// on the same node. The floor travels for the same reason.
 	detail, err := s.Work.Task(ctx, ref, tracker.DetailWants{
 		Comments: true, History: true, Links: true,
-	}, fresh.Level)
+	}, fresh)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return nil, ErrNotFound
@@ -280,6 +281,7 @@ func (s Sources) workViews(ctx context.Context, p Params) (any, error) {
 		// said nothing — which is `stale`, like every other dashboard
 		// poll. See [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -345,6 +347,7 @@ func (s Sources) workGoals(ctx context.Context, p Params) (any, error) {
 		Archived: p.Bool("archived", false),
 		// THE CALLER'S OWN — see [freshness].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -375,10 +378,11 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	answer, err := s.Work.Catalogue(ctx, tracker.CatalogueQuery{
-		Archived:  p.Bool("archived", false),
-		Level:     fresh.Level,
-		MaxLag:    fresh.MaxLag,
-		MaxLagSeq: fresh.MaxLagSeq,
+		Archived:    p.Bool("archived", false),
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	})
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -404,10 +408,11 @@ func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	state, err := s.Work.Person(ctx, tracker.PersonQuery{
-		Handle:    handle,
-		Level:     fresh.Level,
-		MaxLag:    fresh.MaxLag,
-		MaxLagSeq: fresh.MaxLagSeq,
+		Handle:      handle,
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -448,14 +453,15 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	// round trip to do it would put the fleet's whole read rate on the
 	// log. See [freshness] and [Sources.workItems].
 	//
-	// THE LEVEL ONLY, because [PageReader.List] takes one rather than a
-	// query. A staleness bound has nowhere to be enforced on this call,
-	// and carrying it would be a promise nothing keeps.
+	// THE WHOLE FRESHNESS — the bounds and the floor beside the level.
+	// This handed over the level alone once, on the claim that a bound
+	// had nowhere to be enforced on a page read; it is enforced against
+	// this node's lag before any row is read, on every read alike.
 	fresh, err := freshness(p)
 	if err != nil {
 		return nil, err
 	}
-	list, err := s.Pages.List(ctx, f, fresh.Level)
+	list, err := s.Pages.List(ctx, f, fresh)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
@@ -475,7 +481,7 @@ func (s Sources) page(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	detail, err := s.Pages.Get(ctx, ref, fresh.Level)
+	detail, err := s.Pages.Get(ctx, ref, fresh)
 	switch {
 	case errors.Is(err, pages.ErrNotFound):
 		return nil, ErrNotFound
@@ -490,7 +496,7 @@ func (s Sources) containers(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	list, err := s.Pages.Containers(ctx, fresh.Level)
+	list, err := s.Pages.Containers(ctx, fresh)
 	if err != nil {
 		return nil, unavailableIfBehind(err)
 	}
@@ -595,6 +601,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 		Units:    s.chartUnits(),
 		// THE CALLER'S OWN — see [freshness].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
 		return nil, unavailableIfBehind(err)
@@ -617,12 +624,13 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	detail, err := s.Work.Project(ctx, tracker.ProjectDetailQuery{
-		Project:   key,
-		ForType:   strings.TrimSpace(p.String("for_type")),
-		Units:     s.chartUnits(),
-		Level:     fresh.Level,
-		MaxLag:    fresh.MaxLag,
-		MaxLagSeq: fresh.MaxLagSeq,
+		Project:     key,
+		ForType:     strings.TrimSpace(p.String("for_type")),
+		Units:       s.chartUnits(),
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
@@ -647,13 +655,14 @@ func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	listing, err := s.Work.Sprints(ctx, tracker.SprintQuery{
-		Project:   project,
-		Number:    p.Int("sprint", 0),
-		Sprints:   p.Int("sprints", 0),
-		Archived:  p.Bool("archived", false),
-		Level:     fresh.Level,
-		MaxLag:    fresh.MaxLag,
-		MaxLagSeq: fresh.MaxLagSeq,
+		Project:     project,
+		Number:      p.Int("sprint", 0),
+		Sprints:     p.Int("sprints", 0),
+		Archived:    p.Bool("archived", false),
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	switch {
 	case errors.Is(err, tracker.ErrNoProject):
@@ -699,6 +708,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = fresh.Level, fresh.MaxLag, fresh.MaxLagSeq
+	q.MinPosition = fresh.MinPosition
 	if raw := strings.TrimSpace(p.String("container")); raw != "" {
 		//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 		container, err := viewContainer(p)
@@ -782,6 +792,7 @@ func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
 		// somebody's day, not a read-back of a write they just made —
 		// see [freshness] and [Sources.workItems].
 		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	if err != nil {
 		return nil, unavailableIfBehind(err)

@@ -833,7 +833,7 @@ func TestADetailReadNamesEachFieldAndItsState(t *testing.T) {
 	r.drain()
 
 	detail, err := r.reader.Task(t.Context(), "t-1",
-		tracker.DetailWants{Fields: true}, statelog.ReadStale)
+		tracker.DetailWants{Fields: true}, statelog.Freshness{Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatalf("Task: %v", err)
 	}

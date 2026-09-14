@@ -55,7 +55,7 @@ func WorkWrites() []string { return tracker.WriteTools() }
 type WorkReader interface {
 	Tasks(ctx context.Context, q tracker.Query, now time.Time) (tracker.Answer, error)
 	Task(ctx context.Context, idOrKey string, want tracker.DetailWants,
-		level statelog.ReadLevel) (tracker.TaskDetail, error)
+		fresh statelog.Freshness) (tracker.TaskDetail, error)
 	Views(ctx context.Context, q tracker.ViewQuery) (tracker.ViewListing, error)
 	ExpandedQuery(ctx context.Context, params map[string]any,
 		viewer tracker.Viewer, now time.Time, loc *time.Location) (tracker.Query, error)
@@ -63,7 +63,7 @@ type WorkReader interface {
 	Catalogue(ctx context.Context, q tracker.CatalogueQuery) (tracker.CatalogueAnswer, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 	Thread(ctx context.Context, q tracker.ThreadQuery,
-		level statelog.ReadLevel) (tracker.ResolvedThread, error)
+		fresh statelog.Freshness) (tracker.ResolvedThread, error)
 }
 
 // WorkWriter is what these tools need from the tracker's write side.
@@ -908,7 +908,7 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	if refusal != "" {
 		return failed(refusal), nil
 	}
-	detail, err := t.deps.Reader.Task(ctx, id, want, seatReadLevel)
+	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q. Check the key, or "+
@@ -1153,7 +1153,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
 		"key": got.Key, "id": task.ID, "status": task.Status,
-		"assignee": task.Assignee, "outcome": string(got.Outcome),
+		"assignee": task.Assignee, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"labels_created": declared, "version": got.Version,
 	}
 	if len(got.Warnings) > 0 {
@@ -1201,7 +1201,7 @@ func (d WorkDeps) resolveRef(ctx context.Context, tool, field, ref string) (stri
 	if d.Reader == nil {
 		return "", unconfiguredText(tool)
 	}
-	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
+	got, err := d.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return "", fmt.Sprintf("%s names %s %q and there is no such work item. "+
@@ -1475,7 +1475,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 	if ref == "" {
 		return failed("update_work_item needs an `item` — a key like ENG-42, or an id."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -1584,6 +1584,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		}
 		t.deps.settle(ctx, got.Position)
 		answer["outcome"], answer["version"] = string(got.Outcome), got.Version
+		answer["position"] = positionOf(got.Position)
 		// THE WARNINGS THE WRITE PRODUCED, which today is the one the
 		// coercion table can raise: a timestamp truncated to its date on
 		// a field that holds no time. A change the engine made to a
@@ -1606,6 +1607,7 @@ func (t *updateWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 		t.deps.settle(ctx, result.Position)
 		if _, held := answer["outcome"]; !held {
 			answer["outcome"], answer["version"] = string(result.Outcome), result.Version
+			answer["position"] = positionOf(result.Position)
 		}
 		// THE HALF-WRITTEN EDGES ARE REPORTED, never swallowed. A
 		// dependency whose mirror lost its race is durable on the
@@ -1898,7 +1900,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	case body == "":
 		return failed("comment_on_work_item needs a `body`. Say the substantive thing, once."), nil
 	}
-	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatReadLevel)
+	before, err := t.deps.Reader.Task(ctx, ref, tracker.DetailWants{}, seatRead)
 	switch {
 	case errors.Is(err, tracker.ErrNoTask):
 		return failed(fmt.Sprintf("There is no work item %q.", clip(ref))), nil
@@ -1998,7 +2000,7 @@ func (t *commentOnWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	t.deps.settle(ctx, got.Position)
 	answer := map[string]any{
 		"comment_id": comment.ID, "item": before.Task.Key,
-		"mentioned": comment.Mentions, "outcome": string(got.Outcome),
+		"mentioned": comment.Mentions, "outcome": string(got.Outcome), "position": positionOf(got.Position),
 		"version": got.Version,
 	}
 	if comment.Ask != "" {
@@ -2167,7 +2169,30 @@ func joinValues[T ~string](values []T) string {
 	return strings.Join(out, ", ")
 }
 
-// seatReadLevel is what every read on this surface uses.
+// positionOf is the `position` a write's answer carries: where its record
+// landed, in the form every read grammar takes back as `min_position`.
+//
+// THE ANSWER NAMES THE POSITION because that is what read-your-writes costs
+// over a wire: a caller that reads through the dashboard, the REST route or
+// its own client holds nothing else it could wait for. A seat's own reads are
+// `linearizable` and need it for nothing — but the same tool answers are what
+// the operator MCP returns to a person's assistant, and what a turn's trace
+// shows a person redrawing a board, and "created at tracker@1:4711" is the one
+// fact that lets either of them ask for an answer that includes it.
+//
+// NIL FOR AN UNKNOWN OUTCOME rather than a zero position: `unknown` means the
+// broker never answered where the record went, and "@0:0" is a position that
+// parses, which a client would hand straight back as a floor nothing waits
+// for.
+func positionOf(at statelog.Position) any {
+	if at.IsZero() {
+		return nil
+	}
+	return at.String()
+}
+
+// seatReadLevel is what every read on this surface uses, and [seatRead] is
+// the same decision in the shape the point readers take.
 //
 // # Why it is a name and not the literal it replaced
 //
@@ -2193,3 +2218,11 @@ func joinValues[T ~string](values []T) string {
 // company is not helped by a faster wrong answer. Neither surface lets the
 // caller choose — see [statelog.LevelSettable].
 var seatReadLevel = statelog.DefaultReadLevel(statelog.SurfaceSeat)
+
+// seatRead is [seatReadLevel] for the readers that take a whole freshness.
+//
+// NO BOUND AND NO FLOOR, deliberately: a seat reads `linearizable`, which
+// establishes the log's end itself and takes no staleness bound, and the floor
+// a wake carried was waited for before the turn opened (read-your-trigger),
+// so there is nothing left for a tool call to name.
+var seatRead = statelog.Freshness{Level: seatReadLevel}

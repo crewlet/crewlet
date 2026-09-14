@@ -73,7 +73,7 @@ func TestAPageReportsItsChildren(t *testing.T) {
 // which is what the harness has just applied.
 func (r *roundTrip) list(f pages.Filter) pages.Listing {
 	r.t.Helper()
-	got, err := r.reader.List(r.t.Context(), f, statelog.ReadSession)
+	got, err := r.reader.List(r.t.Context(), f, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		r.t.Fatalf("list %+v: %v", f, err)
 	}

@@ -227,7 +227,7 @@ func (r *roundTrip) write(actor pages.Actor, in pages.NewPage) pages.Written {
 // get reads one page back.
 func (r *roundTrip) get(ref string) pages.Detail {
 	r.t.Helper()
-	detail, err := r.reader.Get(r.t.Context(), ref, statelog.ReadSession)
+	detail, err := r.reader.Get(r.t.Context(), ref, statelog.Freshness{Level: statelog.ReadSession})
 	if err != nil {
 		r.t.Fatalf("get %q: %v", ref, err)
 	}

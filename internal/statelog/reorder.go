@@ -37,11 +37,22 @@ type reorderBuffer struct {
 // admit takes a fetched batch and returns the records that may be applied now,
 // holding back anything above a hole.
 //
-// inRun is how many records the caller already holds for this transaction,
-// which is what makes the contiguity test start from the right place: a run
-// filled across two fetches is contiguous from the checkpoint through
-// everything already in it.
-func (b *reorderBuffer) admit(batch []Record, cursor Position, protocol ReplayProtocol, inRun int) ([]Record, error) {
+// run is what the caller already holds for this transaction, which is what
+// makes the contiguity test start from the right place: a run filled across
+// two fetches is contiguous from the checkpoint through everything already in
+// it.
+//
+// THE RUN ITSELF, NOT ITS LENGTH. The next sequence is one past the HIGHEST
+// position the run carries, and a run legitimately carries records that are
+// not part of its contiguous prefix — a redelivery at or below the checkpoint
+// that is passed through so it can be acknowledged, or a second copy of a
+// record already in the run. Deriving the next sequence from the count
+// overshoots by one for each of those, and an overshoot admits a record PAST
+// A HOLE: with the checkpoint at 10 and a run of [5, 11, 12], the count says
+// 14 is next when 13 is, so 14 and 15 are applied with 13 missing. That is the
+// one failure a replicated log cannot notice afterwards, and it was reachable
+// from an ordinary lost acknowledgement.
+func (b *reorderBuffer) admit(batch []Record, cursor Position, protocol ReplayProtocol, run []Record) ([]Record, error) {
 	if protocol != ReplayStrict {
 		// NO CONTIGUITY TEST AND NO BUFFER. The stream keeps one
 		// message per subject, so an ordinary write removes an interior
@@ -63,8 +74,8 @@ func (b *reorderBuffer) admit(batch []Record, cursor Position, protocol ReplayPr
 	b.held = dedupe(b.held)
 
 	// The next sequence this loop may apply is one past whatever it
-	// already holds — the checkpoint, plus anything already in the run.
-	next := cursor.Seq + uint64(inRun) + 1
+	// already holds — the checkpoint, or the highest record in the run.
+	next := highest(run, cursor).Seq + 1
 	var ready []Record
 	for _, rec := range b.held {
 		switch {
@@ -153,4 +164,42 @@ func chain(first, second func() error) func() error {
 	// BOTH ARE CALLED, always. One broker error must not leave the other
 	// delivery open, which is what returning early on the first would do.
 	return func() error { return errors.Join(first(), second()) }
+}
+
+// highest is the furthest position a run carries, or the cursor for an empty
+// run.
+//
+// THE MAXIMUM AND NOT THE LAST ELEMENT: a run is appended to in fetch order,
+// and a fetch that delivered only a redelivery below the checkpoint leaves a
+// record at the end that is lower than everything before it.
+// topRecord is the RECORD at the highest position in a non-empty run.
+//
+// THE LAST ELEMENT IS NOT IT, which is the whole reason this exists. A run
+// closes with whatever the final fetch handed over, and [reorderBuffer.admit]
+// deliberately passes a record BELOW the run's high-water mark straight
+// through so that the caller acknowledges it — a redelivery nothing
+// acknowledges is redelivered for ever. So the tail of a run is a stale
+// redelivery whenever one arrived late, and everything derived from "where
+// this run got to" reads the maximum instead.
+func topRecord(run []Record) Record {
+	top := run[0]
+	for _, rec := range run[1:] {
+		if rec.Position.Packed() > top.Position.Packed() {
+			top = rec
+		}
+	}
+	return top
+}
+
+// highest is [topRecord]'s position, floored at a cursor the run may not have
+// reached — which is what makes it safe on a run that is ENTIRELY
+// redeliveries of records already committed.
+func highest(run []Record, cursor Position) Position {
+	top := cursor
+	for _, rec := range run {
+		if rec.Position.Packed() > top.Packed() {
+			top = rec.Position
+		}
+	}
+	return top
 }

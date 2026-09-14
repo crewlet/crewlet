@@ -57,13 +57,51 @@ const (
 	// bound on a catch-up replay fetches whatever the largest records
 	// happen to be. The vendored client fixes a byte-bounded fetch's
 	// message count at a million, so the two cannot both be asked of one
-	// call — the count is applied by the framework to what comes back.
+	// call.
 	//
-	// 29.3 MiB is a fetch that fits comfortably inside the apply loop's
-	// own working set at the largest record this design admits; 256 is the
-	// count at which the per-message overhead stops mattering.
-	FetchMessages = 256
+	// # The count is enforced by the CONSUMER, never by the caller
+	//
+	// It used to be applied by the loop to what came back: take the first
+	// FetchMessages of a byte-bounded batch and drop the rest. The rest had
+	// already been DELIVERED — the broker counts every one of them against
+	// the consumer's ack-pending cap, which defaults to a thousand, and
+	// redelivers them only after the thirty-second ack window. Measured on
+	// the embedded broker: the first pull handed over records 1 to 256,
+	// every later pull handed over nothing, and at thirty seconds the same
+	// 1 to 256 came back. With the loop refusing to commit while records
+	// were pending, a backlog of 257 records wedged the applier for the
+	// life of the process.
+	//
+	// So the count is the broker-side consumer's MaxAckPending — the
+	// number of records it may hand this node before one is acknowledged —
+	// and a [Fetcher] returns EVERYTHING a pull delivered. A record the
+	// broker handed over and the loop did not take is a hole for an ack
+	// window, on every pull.
+	//
+	// FOUR THOUSAND, which is [ApplyTxRowBudget]: the loop estimates a row
+	// per record when it decides whether another pull could fit, so a
+	// consumer that can hand over one transaction's worth of records in
+	// flight is one whose every pull the loop can commit whole. Larger
+	// buys nothing, because the run closes at the budget; smaller commits
+	// more often than the budget asks.
+	FetchMessages = ApplyTxRowBudget
 	FetchBytes    = 29_360_128
+
+	// ApplyRetryBeat and ApplyRetryCeiling pace the retry of a failure
+	// that is not a stop: the first retry waits the beat, and each one
+	// after that waits twice the last, up to the ceiling.
+	//
+	// THE BEAT IS THE LINGER, because a retry inside it is
+	// indistinguishable from an ordinary partial batch closing. THE
+	// CEILING IS FIVE SECONDS, which is a broker election's own scale
+	// and the write path's resolve budget: a broker that has not
+	// answered in five seconds is one without a quorum rather than a
+	// slow one, and asking it more often than that adds load to the
+	// thing that is failing. Against [ApplyRetryBudget] the ceiling
+	// leaves a fault at least six attempts before it is reported, so a
+	// single failed call never sheds a seat.
+	ApplyRetryBeat    = ApplyLinger
+	ApplyRetryCeiling = 5 * time.Second
 
 	// FetchWait is how long a pull waits when the stream is idle.
 	//

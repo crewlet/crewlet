@@ -110,6 +110,20 @@ const (
 	// interval.
 	SkipRecent SkipReason = "recent"
 
+	// SkipAheadOfLog — this node's checkpoint sits PAST the log's last
+	// sequence, so what it holds is a different stream's history.
+	//
+	// IT IS NOT COVERED BY THE LAGGING TERM, and that is the whole
+	// reason it is a reason of its own: lag is clamped at zero, so a node
+	// past the end reports itself zero records behind and CAUGHT UP, and
+	// both terms above wave it through. What it would copy is rows keyed
+	// to a sequence space the live stream no longer has — the signature of
+	// a stream that was deleted and recreated — and the artefact would
+	// name a position no recipient can ever replay from. The same state
+	// refuses reads, refuses writes and refuses readiness through
+	// [Health.AheadOfLog]; a donor is the one place it was still allowed.
+	SkipAheadOfLog SkipReason = "ahead_of_log"
+
 	// SkipFailed — the attempt RAN and errored, which is the one reason
 	// here that is not a declined precondition.
 	//
@@ -127,14 +141,19 @@ const (
 // rather than discovering them one production incident at a time.
 var SkipReasons = []SkipReason{
 	SkipLagging, SkipUnhydrated, SkipSoleNode,
-	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipFailed,
+	SkipInsufficientSpace, SkipDeferred, SkipRecent, SkipAheadOfLog, SkipFailed,
 }
 
 // Valid reports whether a skip reason off the wire is one this build knows.
 func (s SkipReason) Valid() bool { return slices.Contains(SkipReasons, s) }
 
 // ManifestVersion is the artefact format this build writes.
-const ManifestVersion = 1
+//
+// TWO SINCE THE MANIFEST NAMES ITS OWN FILE. Before that the name was DERIVED
+// from the positions, in three places independently, and an artefact whose
+// manifest does not name its file is one this build cannot find — so it is
+// refused as a version it does not read rather than resolved to an empty path.
+const ManifestVersion = 2
 
 // DomainPosition is what a manifest says about one registered domain.
 //
@@ -192,6 +211,26 @@ type Manifest struct {
 	Domains       map[string]DomainPosition `json:"domains"`
 	Bytes         int64                     `json:"bytes"`
 	SHA256        string                    `json:"sha256"`
+
+	// Artifact is the name of the database file this manifest describes,
+	// in the same directory as the manifest.
+	//
+	// # Why the manifest names its file instead of the name being derived
+	//
+	// Because the derivation was the bug. The pair was called
+	// `snapshot-<highest sequence>`, computed in three places that had to
+	// agree, and nothing required that sequence to have MOVED since the
+	// last take — so a second snapshot on a quiet company resolved to the
+	// previous pair's name and published over it. That made publication
+	// destructive: the old manifest was removed, the old database was
+	// renamed over, and a failure writing the new manifest removed the
+	// replacement, leaving a node with no artefact at all where it had
+	// had a perfectly good one.
+	//
+	// A name the manifest CARRIES can be unique per take, which is what
+	// lets the new pair be written beside the old one and the old one be
+	// rotated away only once the new manifest is durable.
+	Artifact string `json:"artifact"`
 }
 
 // Registered is one domain as the framework holds it, for the surfaces that
@@ -323,42 +362,24 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		return Manifest{}, err
 	}
 
-	positions := make(map[string]DomainPosition, len(s.deps.Domains))
-	for _, reg := range s.deps.Domains {
-		h := reg.Health()
-		spec := reg.Domain.Stream()
-		pos := DomainPosition{
-			Stream:          spec.Name,
-			Generation:      h.Position.Generation,
-			StreamCreatedAt: reg.StreamCreatedAt,
-			Seq:             h.Position.Seq,
-			RecordVersion:   reg.Domain.RecordVersion(),
-			Replay:          spec.Replay,
-		}
-		if h.FirstSeq != nil {
-			pos.FirstSeqAtTake = *h.FirstSeq
-		}
-		if h.Lag != nil {
-			pos.LastSeqAtTake = h.Position.Seq + *h.Lag
-		}
-		positions[reg.Domain.Name()] = pos
-	}
-
 	taken := s.now().UTC()
-	base := filepath.Join(s.deps.Dir, fmt.Sprintf("snapshot-%d", newestSeq(positions)))
-	copyPath := base + ".db"
-	manifestPath := base + ".json"
-
 	if err := os.MkdirAll(s.deps.Dir, 0o700); err != nil {
 		return Manifest{}, fmt.Errorf("statelog: create %s: %w", s.deps.Dir, err)
 	}
-	// A PART FILE FROM A CRASHED ATTEMPT IS DEBRIS, not data: only this
-	// function writes these names, and the manifest is what makes a pair a
-	// snapshot.
-	_ = os.Remove(copyPath)
-	_ = os.Remove(manifestPath)
+	// THE COPY IS WRITTEN UNDER A PART NAME, because its final name is its
+	// own position and that is not known until the copy exists: the
+	// checkpoint commits with the rows, so the position inside the file is
+	// the only one that describes it, and the applier is committing while
+	// the copy is taken. A PART FILE FROM A CRASHED ATTEMPT IS DEBRIS, not
+	// data, and so are its sidecars — a stale -wal beside a fresh copy is
+	// applied to it on the next open.
+	part := filepath.Join(s.deps.Dir, snapshotPartName)
+	if err := store.RemoveCopy(part); err != nil {
+		return Manifest{}, fmt.Errorf("statelog: clear the previous attempt: %w", err)
+	}
+	discard := func() { _ = store.RemoveCopy(part) }
 
-	info, err := s.deps.DB.Replicated().Backup(ctx, copyPath)
+	info, err := s.deps.DB.Replicated().Backup(ctx, part)
 	if err != nil {
 		return Manifest{}, fmt.Errorf("statelog: copy the replicated estate: %w", err)
 	}
@@ -366,24 +387,47 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 	// THE DONOR SCRUBS, on a list DERIVED from what every domain declares
 	// about its own tables rather than written out here. A hardcoded list
 	// would silently omit whatever a deployment actually has.
-	scrubbed, err := store.ScrubFile(ctx, copyPath, s.scrubList())
+	scrubbed, err := store.ScrubFile(ctx, part, s.scrubList())
 	if err != nil {
-		_ = os.Remove(copyPath)
+		discard()
+		return Manifest{}, err
+	}
+
+	// THE POSITIONS ARE READ FROM THE COPY, never from the live node.
+	//
+	// A recipient verifies the manifest against the checkpoint the file
+	// keeps and refuses one that differs, because a metadata claim the
+	// file does not keep is a corrupt snapshot. This node's live health
+	// was read before the copy started and the applier committed in
+	// between — so a manifest stamped from health described the file
+	// only on an idle fleet, and every snapshot taken under write load
+	// was refused by the very node that needed it. The same read serves
+	// the backup manifest, for the same reason.
+	positions, err := s.positionsIn(ctx, part)
+	if err != nil {
+		discard()
+		return Manifest{}, err
+	}
+	// AND THE COPY IS MADE SELF-CONTAINED AGAIN before it is measured:
+	// reading it opened it, which grows a -wal and a -shm beside it, and
+	// what is digested and offered is one file.
+	if err = store.QuiesceCopy(ctx, part); err != nil {
+		discard()
 		return Manifest{}, err
 	}
 
 	// THE CHECKSUM COVERS THE SCRUBBED BYTES, which is the second reason
 	// the scrub is the donor's: a checksum taken before it would certify
 	// a file nobody sends.
-	digest, err := store.FileDigest(copyPath)
+	digest, err := store.FileDigest(part)
 	if err != nil {
-		_ = os.Remove(copyPath)
+		discard()
 		return Manifest{}, err
 	}
-	size, err := os.Stat(copyPath)
+	size, err := os.Stat(part)
 	if err != nil {
-		_ = os.Remove(copyPath)
-		return Manifest{}, fmt.Errorf("statelog: measure %s: %w", copyPath, err)
+		discard()
+		return Manifest{}, fmt.Errorf("statelog: measure %s: %w", part, err)
 	}
 
 	m := Manifest{
@@ -397,20 +441,101 @@ func (s *Snapshotter) Take(ctx context.Context) (Manifest, error) {
 		Bytes:         size.Size(),
 		SHA256:        digest,
 	}
+	// A NAME OF ITS OWN, so this pair never lands on the last one's.
+	//
+	// The position alone is not one: nothing requires it to have moved
+	// since the last take, so a second snapshot on a quiet company
+	// resolved to the previous pair's name and published THROUGH it —
+	// removing the old manifest, renaming over the old database, and, if
+	// writing the new manifest then failed, removing the replacement too.
+	// A disk that filled between the copy and the manifest therefore
+	// destroyed the last usable artefact, which is the one moment a node
+	// most needs to still have one.
+	//
+	// The take's own instant disambiguates, and the sequence stays in the
+	// name because an operator reading the directory wants it.
+	base := filepath.Join(s.deps.Dir, fmt.Sprintf("snapshot-%d-%d",
+		newestSeq(positions), taken.UnixNano()))
+	m.Artifact = filepath.Base(base) + ".db"
+	copyPath := base + ".db"
+	manifestPath := base + ".json"
+	if err := os.Rename(part, copyPath); err != nil {
+		discard()
+		return Manifest{}, fmt.Errorf("statelog: place %s: %w", copyPath, err)
+	}
 	if err := writeManifest(manifestPath, m); err != nil {
+		// ONLY WHAT THIS ATTEMPT PUT THERE. The previous pair is
+		// untouched and still complete, which is the whole point of
+		// publishing under a new name.
 		_ = os.Remove(copyPath)
 		return Manifest{}, err
 	}
 
 	// THE PREVIOUS SNAPSHOT GOES LAST, transiently costing twice the
 	// store: deleting first leaves a window in which this node can donate
-	// nothing at all.
+	// nothing at all — and doing it before the manifest above is durable
+	// leaves one in which it can donate nothing EVER AGAIN.
 	s.rotate(ctx, base)
 
 	s.log.InfoContext(ctx, "statelog_snapshot_taken",
 		"node", s.deps.NodeID, "path", copyPath, "bytes", m.Bytes,
 		"domains", len(m.Domains), "scrubbed", len(m.Scrubbed))
 	return m, nil
+}
+
+// snapshotPartName is what a copy is called until its position is known.
+//
+// It does not start with `snapshot-`, so the rotation never mistakes it for a
+// finished pair and the newest-manifest walk never finds a manifest beside it.
+const snapshotPartName = "snapshot.part.db"
+
+// positionsIn is every registered domain's position AS THE COPY KEEPS IT.
+//
+// A domain with no checkpoint row in the file is at the ZERO position: it has
+// applied nothing, which is a real state of a domain whose log nobody has
+// written to yet, and the artefact covers it exactly as a node at zero would.
+// The recipient reads an absent row the same way, so a fleet's newest domain
+// does not leave every snapshot unadoptable until its first record.
+func (s *Snapshotter) positionsIn(ctx context.Context, path string) (map[string]DomainPosition, error) {
+	cursors, err := CursorsInFile(ctx, path)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: read the positions the copy keeps: %w", err)
+	}
+	positions := make(map[string]DomainPosition, len(s.deps.Domains))
+	for _, reg := range s.deps.Domains {
+		h := reg.Health()
+		spec := reg.Domain.Stream()
+		// EVERY CHECKPOINT FIELD OUT OF THE FILE, the identity included.
+		//
+		// The generation and the sequence were read from the copy and the
+		// creation instant from this donor's live registration, which are
+		// the same stream only until one is recreated. A donor that had
+		// been restarted onto a rebuilt stream therefore stamped OLD rows
+		// with the NEW stream's identity, and the artefact passed every
+		// check a recipient could make: its generation and sequence
+		// matched the file, its identity matched the recipient's live
+		// stream, and what it carried was a dead history.
+		at := cursors[spec.Name]
+		pos := DomainPosition{
+			Stream:          spec.Name,
+			Generation:      at.Position.Generation,
+			StreamCreatedAt: at.StreamCreatedAt,
+			Seq:             at.Position.Seq,
+			RecordVersion:   reg.Domain.RecordVersion(),
+			Replay:          spec.Replay,
+		}
+		// The stream's own bounds at the take are ADVISORY, for the
+		// operator reading why an offer was refused, and they come
+		// from the live health because the file cannot know them.
+		if h.FirstSeq != nil {
+			pos.FirstSeqAtTake = *h.FirstSeq
+		}
+		if h.Lag != nil {
+			pos.LastSeqAtTake = h.Position.Seq + *h.Lag
+		}
+		positions[reg.Domain.Name()] = pos
+	}
+	return positions, nil
 }
 
 // gate is the five preconditions, in the order that answers cheapest first.
@@ -436,6 +561,18 @@ func (s *Snapshotter) gate(ctx context.Context) error {
 					"artefact, so a checkpoint above a retained record would hand "+
 					"an adopter a resume point above bytes it never received",
 				h.Deferred, name, h.DeferredFrom)}
+		}
+		// BEFORE THE CAUGHT-UP TERM, because in this state that term is
+		// TRUE: the lag is clamped at zero, so a checkpoint past the
+		// log's end reads as caught up through it and every other
+		// precondition here is satisfied by a node holding a dead
+		// sequence space.
+		if h.AheadOfLog() {
+			return &ErrSkipped{Reason: SkipAheadOfLog, Detail: fmt.Sprintf(
+				"this node's %s checkpoint is at %d and the log ends at %d, so "+
+					"its rows are keyed to a sequence space this stream no "+
+					"longer has — a copy would name a position no recipient "+
+					"could replay from", name, h.Position.Seq, *h.LastSeq)}
 		}
 		if !h.CaughtUp {
 			return &ErrSkipped{Reason: SkipUnhydrated, Detail: fmt.Sprintf(
