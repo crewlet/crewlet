@@ -278,6 +278,29 @@ describe("the tree", () => {
     );
     expect(within(item("Engineering")).queryByText("Lead names no seat")).toBeNull();
   });
+
+  test("a unit's other warnings are not read as a lead that names no seat", () => {
+    const doc = fixtureCompany();
+    const state = answered(checkedEdit(doc), {
+      status: "clean",
+      warnings: [
+        {
+          kind: "admission",
+          ref: "",
+          path: "units[1].name",
+          segments: ["units", 1, "name"],
+          seat: "",
+          unit: "Sales",
+          from: "",
+          to: "",
+          message: "units[1].name: another unit is also called Sales",
+        },
+      ],
+      derived: fixtureDerived(doc, PLACED),
+    });
+    mount(state);
+    expect(within(item("Sales")).queryByText("Lead names no seat")).toBeNull();
+  });
 });
 
 describe("keys", () => {
@@ -463,6 +486,25 @@ describe("menus", () => {
     expect(
       screen.getByRole("button", { name: "Lead after the check", hidden: true }),
     ).toBeDefined();
+  });
+
+  test("a lead declared outside the unit is still the checked answer, and another seat is chosen in the editor", () => {
+    const doc = fixtureCompany();
+    doc.units![1]!.lead = "CEO";
+    const { spies } = mount(checkedEdit(doc));
+    const sales = within(item("Sales").closest<HTMLElement>(".bchart-card")!);
+    fireEvent.click(sales.getByRole("button", { name: "CEO", hidden: true }));
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .map((a) => [a.textContent, a.getAttribute("aria-checked")]),
+    ).toEqual([
+      ["No lead", "false"],
+      ["Account Executive", "false"],
+      ["CEO", "true"],
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Choose another seat/ }));
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Sales"));
   });
 
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
