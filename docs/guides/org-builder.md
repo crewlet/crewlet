@@ -66,7 +66,8 @@ creates the company with `PUT /config` and `If-None-Match: *`, which is
 refused if a company exists anywhere in the fleet. If one was created while
 you were writing yours, the builder says so and offers to discard your draft
 and open the company: a draft that starts a company is never applied to one
-that exists, and never replayed onto it.
+that exists, and never replayed onto it. **Keep my draft** leaves it on screen
+to read, read-only, with the same offer beside it.
 
 After a successful create, two steps remain that the dashboard cannot take:
 connecting chat and trackers on the Integrations screen, and adding a model

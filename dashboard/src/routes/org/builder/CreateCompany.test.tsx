@@ -164,3 +164,29 @@ test("a company created meanwhile is offered instead of the draft, never written
   await waitFor(() => expect(engine.checks().at(-1)!.method).toBe("PATCH"));
   expect(engine.checks().at(-1)!.body).toEqual({});
 });
+
+// KEEPING THE DRAFT IS NOT A DEAD END. It can never be saved, and the lens is
+// read-only over it, so what it offers instead has to stay on screen after
+// the dialog is closed: without it the only way out was a reload.
+test("a create draft kept after a company appeared still offers the company", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await startCompany({});
+  await screen.findByText("No problems");
+  engine.document = company();
+  engine.revision = "r1";
+  fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
+  const refused = await screen.findByRole("dialog", {
+    name: "A company already exists on this engine",
+  });
+  fireEvent.click(within(refused).getByRole("button", { name: "Keep my draft" }));
+  expect(
+    screen.getByText(
+      "A company was created on this engine while this draft was being written, so this draft cannot be saved.",
+    ),
+  ).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Discard it and open the company" }));
+  expect(await screen.findByText("CEO")).toBeDefined();
+  await waitFor(() => expect(engine.checks().at(-1)!.method).toBe("PATCH"));
+  expect(engine.requests.filter(isWrite)).toHaveLength(0);
+});

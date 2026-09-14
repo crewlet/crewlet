@@ -838,6 +838,13 @@ function Lens({
   // A company that appeared while a create draft was being written: the draft
   // cannot be applied to it, and must never be replayed onto it.
   const [companyExists, setCompanyExists] = useState(false);
+  // The one way on from such a draft, offered by the dialog that reports it
+  // and by the banner that stays once the operator keeps the draft to read.
+  const openExistingCompany = useCallback(() => {
+    setCompanyExists(false);
+    dispatchRaw({ type: "discard" });
+    load(true);
+  }, [load]);
   const [reviewing, setReviewing] = useState(false);
   const reviewAfterUpdate = useRef(false);
   const changed = useMemo(() => hasChanges(state), [state]);
@@ -1267,6 +1274,23 @@ function Lens({
             This process cannot write the configuration because it has no coordination store.
           </Banner>
         )}
+        {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
+            refused while the lens is read-only over it, so the way on stays
+            on screen after the dialog that first offered it is closed. */}
+        {conflict && conflict.reason === "already_configured" && !companyExists && (
+          <Banner
+            tone="caution"
+            icon="alert"
+            action={
+              <Button size="sm" variant="primary" onClick={openExistingCompany}>
+                Discard it and open the company
+              </Button>
+            }
+          >
+            A company was created on this engine while this draft was being written, so this draft
+            cannot be saved.
+          </Banner>
+        )}
         {conflict && conflict.reason === "no_active_revision" && (
           <Banner
             tone="caution"
@@ -1464,14 +1488,7 @@ function Lens({
             footer={
               <>
                 <Button onClick={() => setCompanyExists(false)}>Keep my draft</Button>
-                <Button
-                  variant="danger"
-                  onClick={() => {
-                    setCompanyExists(false);
-                    dispatchRaw({ type: "discard" });
-                    load(true);
-                  }}
-                >
+                <Button variant="danger" onClick={openExistingCompany}>
                   Discard it and open the company
                 </Button>
               </>
