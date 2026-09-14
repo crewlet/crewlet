@@ -62,10 +62,15 @@ import {
 /** A write id: letters, digits, `_` and `-`, bounded like a minted key. */
 const WRITE_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
+/** Whether a value is shaped like a write id, as one read back from storage must be. */
+export function isWriteId(value: unknown): value is string {
+  return typeof value === "string" && WRITE_ID.test(value);
+}
+
 /** A fresh write id. Call it in the event handler that saves. */
 export function newWriteId(source: KeySource): string {
   const id = source.next();
-  if (!WRITE_ID.test(id)) {
+  if (!isWriteId(id)) {
     throw new RangeError(
       `newWriteId: the key source produced an unusable token: ${JSON.stringify(id)}`,
     );

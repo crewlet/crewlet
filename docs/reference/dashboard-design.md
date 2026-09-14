@@ -1086,7 +1086,11 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   A lost answer is settled from the revision history before anything else
   happens; while it is unknown the lens records nothing. A write in flight is
   never aborted, and a save that lands after the lens was left still records
-  the revision and clears the kept draft. `ReviewSaveDialog.tsx` states every
+  the revision and clears the kept draft. The kept log is marked with the
+  write id before the save is sent and unmarked once the save is known not to
+  have landed, so an answer lost after the lens was left, or across a reload,
+  is settled on the next visit (`useSave.resume`) before the kept log is
+  offered: replayed onto its own revision it would apply every change twice. `ReviewSaveDialog.tsx` states every
   change and consequence and gates the irreversible ones on an
   acknowledgement.
 - **Create mode is a form, one template operation, and a create-only write.**

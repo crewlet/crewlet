@@ -110,6 +110,8 @@ describe("the save", () => {
     expect(
       (within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled,
     ).toBe(true);
+    // Refused, so nothing was stored: the kept log carries no save to settle.
+    expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toBeUndefined();
   });
 });
 
@@ -180,6 +182,144 @@ describe("a save whose answer never arrives", () => {
     answer(new Response());
     // A kept log of a saved draft would be offered for replay onto its own revision.
     await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
+  });
+
+  // LEFT BEFORE THE ANSWER CAME, AND THE ANSWER NEVER CAME. The save may have
+  // landed, and its kept log offered as an update onto its own revision would
+  // replay every operation a second time; so the next visit settles it first.
+  describe("after the lens was left", () => {
+    /** Saves an edit of the CEO, leaves the lens while the save is out, and loses its answer. */
+    async function loseTheAnswer(engine: Engine, { lands }: { lands: boolean }) {
+      let offline = false;
+      let lose: () => void = () => {};
+      engine.script = (r, e) => {
+        if (offline && r.method === "GET") return Promise.reject(new TypeError("offline"));
+        if (!isWrite(r)) return null;
+        if (lands) e.commit(r);
+        return new Promise<Response>((_, reject) => {
+          lose = () => {
+            offline = true;
+            reject(new TypeError("network connection was lost"));
+          };
+        });
+      };
+      const dialog = await reviewEdit(engine);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(engine.requests.filter(isWrite)).toHaveLength(1));
+      // Marked before it went, so a reload now would find it too.
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
+      cleanup();
+      const asked = engine.sent("GET").length;
+      lose();
+      // Settling from the unmounted lens could not reach the engine either.
+      await waitFor(() => expect(engine.sent("GET").length).toBeGreaterThan(asked));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toMatch(/^[0-9a-f]+$/);
+      engine.script = () => null;
+    }
+
+    test("a save that landed is found on the next visit, and its log is not offered", async () => {
+      const engine = new Engine(company());
+      await loseTheAnswer(engine, { lands: true });
+      expect(engine.revision).toBe("r-saved");
+
+      mountBuilder({ engine });
+      expect(
+        await screen.findByText(
+          "The last save from this tab was stored. The engine is applying it.",
+        ),
+      ).toBeDefined();
+      await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
+      expect(engine.sent("GET", "/config/revisions/r-saved").length).toBeGreaterThan(0);
+      // Neither offered back nor replayed: nothing more was written.
+      expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Update my draft and review" })).toBeNull();
+      expect(engine.requests.filter(isWrite)).toHaveLength(1);
+    });
+
+    // Given back as any kept draft is: here restored at once, because this
+    // page kept it (after a reload it would be offered to keep or discard).
+    test("a save that did not land gives its log back, and nothing was stored", async () => {
+      const engine = new Engine(company());
+      await loseTheAnswer(engine, { lands: false });
+      expect(engine.revision).toBe("r1");
+      const before = engine.checks().length;
+
+      mountBuilder({ engine });
+      await waitFor(() =>
+        expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toBeUndefined(),
+      );
+      await waitFor(() =>
+        expect(
+          engine
+            .checks()
+            .slice(before)
+            .some((c) => JSON.stringify(c.body).includes("Lead and more")),
+        ).toBe(true),
+      );
+      expect(engine.revisions.size).toBe(0);
+      expect(engine.requests.filter(isWrite)).toHaveLength(1);
+    });
+
+    // Not landed, and somebody else saved since: the log is a kept draft of
+    // an older revision, updated onto the newer one like any other, never
+    // treated as this visit's own save that met a conflict.
+    test("a save that did not land while the company moved on is updated as a kept draft", async () => {
+      const engine = new Engine(company());
+      await loseTheAnswer(engine, { lands: false });
+      engine.commit({
+        method: "PATCH",
+        path: "/config",
+        query: new URLSearchParams(),
+        headers: {},
+        body: { mission: "Somebody else's", _summary: "A colleague's save" },
+      });
+
+      mountBuilder({ engine });
+      const update = await screen.findByRole("dialog", { name: "Restore the kept draft" });
+      expect(within(update).getByText("Every change still applies.")).toBeDefined();
+      expect(JSON.parse(sessionStorage.getItem(DRAFT_STORAGE_KEY)!).write).toBeUndefined();
+      const before = engine.checks().length;
+      fireEvent.click(within(update).getByRole("button", { name: "Restore the draft" }));
+      // Replayed onto the colleague's revision, and checked there.
+      await waitFor(() => {
+        const after = engine.checks().slice(before);
+        expect(after.some((c) => JSON.stringify(c.body).includes("Lead and more"))).toBe(true);
+        expect(after.every((c) => c.headers["If-Match"] === '"r-saved"')).toBe(true);
+      });
+      expect(engine.requests.filter(isWrite)).toHaveLength(1);
+      // Nothing of this visit was being saved, so nothing goes on to a review
+      // or to a second update of a draft it never had on screen.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    test("while the engine still cannot say, the lens waits and edits nothing", async () => {
+      const engine = new Engine(company());
+      await loseTheAnswer(engine, { lands: true });
+      engine.script = (r) =>
+        r.path.startsWith("/config/revisions/") ? json({ error: "internal" }, 500) : null;
+
+      mountBuilder({ engine });
+      expect(
+        await screen.findByText(
+          "The engine did not confirm whether the last save was stored. Editing is paused until it does.",
+        ),
+      ).toBeDefined();
+      expect(screen.getByText("read only")).toBeDefined();
+      // There is no draft on screen to review, only the save to settle.
+      expect(screen.queryByRole("button", { name: "Open the review" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
+
+      engine.script = () => null;
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      expect(
+        await screen.findByText(
+          "The last save from this tab was stored. The engine is applying it.",
+        ),
+      ).toBeDefined();
+      await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
+    });
   });
 
   test("a second press is recognized as the same write rather than replayed as a conflict", async () => {

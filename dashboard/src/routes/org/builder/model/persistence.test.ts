@@ -21,6 +21,7 @@ import {
   clearDraft,
   isOperation,
   keepDraft,
+  markPendingWrite,
   parseKeptDraft,
   persistencePlan,
   restoreDraft,
@@ -281,6 +282,7 @@ describe("persistencePlan", () => {
       baseRevision: "rev-1",
       log: { ops, undone: [] },
       keep: true,
+      write: null,
     };
     expect(persistencePlan(state, 42)).toEqual({
       action: "keep",
@@ -288,5 +290,42 @@ describe("persistencePlan", () => {
     });
     expect(persistencePlan({ ...state, keep: false }, 42)).toEqual({ action: "clear" });
     expect(persistencePlan({ ...state, log: EMPTY_LOG }, 42)).toEqual({ action: "clear" });
+    // A save of the log that is out travels with it.
+    expect(persistencePlan({ ...state, write: "write-0001" }, 42)).toEqual({
+      action: "keep",
+      kept: kept({ ops, savedAt: 42, write: "write-0001" }),
+    });
+  });
+});
+
+describe("a save of the kept log whose answer may be lost", () => {
+  test("is marked on the kept log before it goes, and the mark is cleared once it is known", () => {
+    const storage = new MemoryStorage();
+    const draft = kept({ ops: everyOperation().slice(0, 1) });
+    expect(keepDraft(storage, draft)).toBe("kept");
+    expect(markPendingWrite(storage, "write-0001")).toBe("kept");
+    expect(restoreDraft(storage)).toEqual({
+      kind: "restored",
+      kept: { ...draft, write: "write-0001" },
+    });
+    expect(markPendingWrite(storage, null)).toBe("kept");
+    expect(restoreDraft(storage)).toEqual({ kind: "restored", kept: draft });
+  });
+
+  // A log no storage holds is never offered again, so no lost answer could
+  // replay it; storage that refuses says so rather than pretending.
+  test("marks nothing where no draft is kept, and says when storage refuses", () => {
+    expect(markPendingWrite(new MemoryStorage(), "write-0001")).toBe("cleared");
+    expect(markPendingWrite(null, "write-0001")).toBe("unavailable");
+    expect(markPendingWrite(new RefusingStorage(), "write-0001")).toBe("refused");
+  });
+
+  test("a mark that is not a write id is not a draft this build kept", () => {
+    const storage = new MemoryStorage();
+    storage.setItem(
+      DRAFT_STORAGE_KEY,
+      JSON.stringify({ ...kept({ ops: everyOperation().slice(0, 1) }), write: "not one" }),
+    );
+    expect(restoreDraft(storage)).toEqual({ kind: "discarded" });
   });
 });

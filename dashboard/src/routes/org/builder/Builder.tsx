@@ -606,16 +606,26 @@ function Lens({
   // What a save's answer leads to. A ref, because a save outlives the render
   // that started it, and may outlive the Builder.
   const saveEvents = useRef<SaveEvents>({
+    onSending: () => {},
+    onNotLanded: () => {},
     onLanded: () => {},
     onConflict: () => {},
     onRefused: () => {},
   });
   const save = useSave({ stateRef, transport, keys, events: saveEvents });
 
+  // A SAVE A PREVIOUS VISIT NEVER HEARD BACK FROM is settled before its kept
+  // log is offered: it may have landed, and the log replayed onto its own
+  // revision would apply every operation twice (see `useDraftKeeping`).
+  const { resume } = save;
+  useEffect(() => {
+    if (keeping.unsettled) resume(keeping.unsettled);
+  }, [keeping.unsettled, resume]);
+
   // Read at render: a token change always dispatches, so this is current.
   const tokenStored = apiToken() !== "";
   const readOnlyReason = useMemo((): string | null => {
-    if (save.unsettled) return "the outcome of the last save is not known yet";
+    if (save.unsettled || keeping.unsettled) return "the outcome of the last save is not known yet";
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
     if (posture.kind === "guarded" || status === "guarded") {
       return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
@@ -624,7 +634,16 @@ function Lens({
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
     return null;
-  }, [save.unsettled, keeping.offer, posture.kind, status, loaded, state, tokenStored]);
+  }, [
+    save.unsettled,
+    keeping.unsettled,
+    keeping.offer,
+    posture.kind,
+    status,
+    loaded,
+    state,
+    tokenStored,
+  ]);
   const readOnly = !loaded || readOnlyReason !== null;
 
   const dispatch = useCallback(
@@ -875,23 +894,31 @@ function Lens({
   }, [save]);
 
   saveEvents.current = {
+    // These run even when the Builder has gone away while the save was out,
+    // so each works on storage and the tab-lived store directly.
+    onSending: (attempt) => keeping.markWrite(attempt.writeId),
+    onNotLanded: () => keeping.markWrite(null),
     onLanded: (landed) => {
-      // Recorded and cleared first: this runs even when the Builder has gone
-      // away while the save was in flight, and a kept log of a saved draft
-      // would be offered for replay onto its own revision.
+      // Recorded and cleared first: a kept log of a saved draft would be
+      // offered for replay onto its own revision.
       recordSavedRevision({
         revisionId: landed.revisionId,
         parentRevisionId: landed.parentRevisionId,
         epoch: landed.epoch,
       });
       clearDraft(storage);
+      keeping.markWrite(null);
       dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
       setReviewing(false);
       if (landed.mode === "create") setCreated(true);
       // THE TOAST IS THE ANNOUNCEMENT: its host is a polite live region of
       // its own, so saying the same sentence through the Builder's region as
       // well had a screen reader read it twice.
-      toast.ok("Saved. The engine is applying it.");
+      toast.ok(
+        landed.resumed
+          ? "The last save from this tab was stored. The engine is applying it."
+          : "Saved. The engine is applying it.",
+      );
       load(true);
     },
     onConflict: ({ reason, currentRevisionId }) => {
@@ -1347,9 +1374,13 @@ function Lens({
                 <Button size="sm" onClick={() => void save.checkAgain()}>
                   Check again
                 </Button>
-                <Button size="sm" variant="primary" onClick={openReview}>
-                  Open the review
-                </Button>
+                {/* A save a previous visit sent has no draft on screen to
+                    review: its log waits in storage until the save is known. */}
+                {changed && (
+                  <Button size="sm" variant="primary" onClick={openReview}>
+                    Open the review
+                  </Button>
+                )}
               </span>
             }
           >

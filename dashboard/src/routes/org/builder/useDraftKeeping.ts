@@ -24,12 +24,22 @@
  * WHAT CLEARS IT: whatever makes the plan say so (a save, a discard, an empty
  * log), and a state that may no longer be kept (`keep` false after a token
  * change or a refused token), which also withdraws an offer still on screen.
+ *
+ * A KEPT DRAFT A SAVE WAS SENT FOR IS SETTLED BEFORE IT IS DECIDED. A save
+ * marks the kept log with its write id before it goes (`markWrite`), and
+ * the mark stays until the save is known not to have landed. A draft found
+ * still marked is a save whose answer this tab lost, perhaps after the
+ * operator left the lens, and it may have landed: offered as an update onto
+ * its own revision it would replay every operation a second time. So the
+ * decision waits (`unsettled`) while the Builder settles that save through
+ * the model's lost-answer resolution, and resumes once it is known.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearDraft,
   keepDraft,
+  markPendingWrite,
   persistencePlan,
   restoreDraft,
   restoreOffer,
@@ -37,6 +47,7 @@ import {
   type KeptDraft,
 } from "./model/persistence.ts";
 import { isBaseKeyed, type BuilderAction, type BuilderState } from "./model/reducer.ts";
+import type { SaveAttempt } from "./model/writes.ts";
 
 /**
  * When this page last kept a draft, by its `savedAt`. Module state, because a
@@ -60,6 +71,18 @@ export interface DraftKeeping {
   readonly survives: boolean;
   /** True until the kept draft, if any, is decided. */
   readonly pending: boolean;
+  /**
+   * A save of the kept draft whose answer a previous visit lost, which the
+   * Builder settles before the draft is decided; `null` otherwise.
+   */
+  readonly unsettled: SaveAttempt | null;
+  /**
+   * Marks the kept draft with the write id of a save being sent, or clears
+   * the mark once the save is known not to have landed (`null`), which also
+   * lets a draft held for it be decided. Works on storage directly, so a save
+   * settling after the lens was left still marks what it must.
+   */
+  markWrite(write: string | null): void;
   readonly notice: KeepNotice | null;
   keep(): void;
   discard(): void;
@@ -90,6 +113,10 @@ export function useDraftKeeping({
 }): DraftKeeping {
   const [decided, setDecided] = useState(false);
   const [offer, setOffer] = useState<KeptDraft | null>(null);
+  const [unsettled, setUnsettled] = useState<SaveAttempt | null>(null);
+  // The write id every keep carries while a save of the log is out, so a
+  // rewrite of the log never drops the mark the save set.
+  const pendingWrite = useRef<string | null>(null);
   // Two notices, because they end differently: what the decision found stays
   // until dismissed, and what storage refused lasts until storage accepts.
   const [decisionNotice, setDecisionNotice] = useState<KeepNotice | null>(null);
@@ -108,7 +135,8 @@ export function useDraftKeeping({
 
   // Decide the kept draft once the base can take it.
   useEffect(() => {
-    if (decided || offer || restoringFrom.current || !loaded || !isBaseKeyed(state)) return;
+    if (decided || offer || unsettled || restoringFrom.current || !loaded || !isBaseKeyed(state))
+      return;
     const restored = restoreDraft(storage);
     switch (restored.kind) {
       case "none":
@@ -133,6 +161,10 @@ export function useDraftKeeping({
         return;
       case "restored": {
         const kept = restored.kept;
+        if (kept.write !== undefined) {
+          setUnsettled({ writeId: kept.write, mode: kept.mode, baseRevision: kept.baseRevision });
+          return;
+        }
         const decision = restoreOffer(kept, { mode: state.mode, revision: state.base.revision });
         if (decision.kind === "discard_mode_changed") {
           clearDraft(storage);
@@ -153,7 +185,7 @@ export function useDraftKeeping({
         setOffer(kept);
       }
     }
-  }, [decided, offer, loaded, state, storage, restore]);
+  }, [decided, offer, unsettled, loaded, state, storage, restore]);
 
   // Read a restore's outcome: adopted, refused, or an update that has ended.
   useEffect(() => {
@@ -187,6 +219,7 @@ export function useDraftKeeping({
         baseRevision: state.base.revision,
         log: state.log,
         keep: state.keep,
+        write: pendingWrite.current,
       },
       now(),
     );
@@ -223,9 +256,19 @@ export function useDraftKeeping({
   const forget = useCallback(() => {
     clearDraft(storage);
     setOffer(null);
+    setUnsettled(null);
     restoringFrom.current = null;
     setDecided(true);
   }, [storage]);
+
+  const markWrite = useCallback(
+    (write: string | null) => {
+      pendingWrite.current = write;
+      markPendingWrite(storage, write);
+      if (write === null) setUnsettled(null);
+    },
+    [storage],
+  );
 
   const dismissNotice = useCallback(() => setDecisionNotice(null), []);
 
@@ -233,10 +276,12 @@ export function useDraftKeeping({
     offer,
     survives: storageNotice === null,
     pending: !decided,
+    unsettled,
     notice: storageNotice ?? decisionNotice,
     keep,
     discard,
     forget,
+    markWrite,
     dismissNotice,
   };
 }

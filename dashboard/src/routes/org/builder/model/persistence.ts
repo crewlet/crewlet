@@ -2,8 +2,9 @@
  * Keeping the operator's work across a reload of the tab.
  *
  * ONLY THE LOG IS KEPT. One key, `crewlet_org_draft`, holds
- * `{ v, mode, baseRevision, ops, undone, savedAt }` and nothing else: never
- * the base document, the draft or the problems. The document holds contact
+ * `{ v, mode, baseRevision, ops, undone, savedAt }`, and `write` while a save
+ * of that log is out, and nothing else: never the base document, the draft
+ * or the problems. The document holds contact
  * identities, emails, policies and `${VAR}` names; kept in storage it would
  * outlive the operator's token and be offered to whoever uses the tab next.
  * The log refers to the company only by keys and the values its own edits
@@ -31,6 +32,16 @@
  * and a colleague's draft is not something to offer the next operator.
  * [persistencePlan] turns the builder's state into the one write or removal
  * that matches it.
+ *
+ * A SAVE WHOSE ANSWER IS LOST IS KEPT WITH ITS LOG. A save can land without
+ * its answer, and the lens that sent it may be gone by then (the operator
+ * left it, or the tab reloaded). A kept log of a save that DID land, offered
+ * again as an update onto its own revision, would replay every operation a
+ * second time. So a save marks the kept log with its write id before it is
+ * sent (`markPendingWrite`), the mark is cleared once the save is known not
+ * to have landed, and a landed save removes the log whole; a log still marked
+ * when the builder next opens is a save nobody settled, and is settled
+ * before it is offered.
  */
 
 import type { ConfigRole, ConfigUnit } from "~/protocol/index.ts";
@@ -46,6 +57,7 @@ import {
 } from "./operations.ts";
 import type { Log } from "./history.ts";
 import type { BuilderMode } from "./transport.ts";
+import { isWriteId } from "./writes.ts";
 
 /** The storage key. */
 export const DRAFT_STORAGE_KEY = "crewlet_org_draft";
@@ -82,6 +94,11 @@ export interface KeptDraft {
   readonly undone: readonly Operation[];
   /** Milliseconds since the epoch, from the injected clock. */
   readonly savedAt: number;
+  /**
+   * The write id of a save of this log whose outcome is not known yet; absent
+   * otherwise. See the module doc.
+   */
+  readonly write?: string;
 }
 
 export type KeepResult = "kept" | "cleared" | "too_large" | "refused" | "unavailable";
@@ -97,6 +114,28 @@ export function keepDraft(storage: DraftStorage | null, kept: KeptDraft): KeepRe
     return "kept";
   } catch {
     return "refused";
+  }
+}
+
+/**
+ * Marks the kept draft with the write id of a save of it that is being sent,
+ * or clears the mark (`null`) once the save is known not to have landed.
+ * Nothing to mark when no draft is kept: a log no storage holds is never
+ * offered again, so there is nothing a lost answer could have replayed.
+ */
+export function markPendingWrite(storage: DraftStorage | null, write: string | null): KeepResult {
+  const restored = restoreDraft(storage);
+  switch (restored.kind) {
+    case "restored": {
+      const { write: _stale, ...kept } = restored.kept;
+      return keepDraft(storage, write === null ? kept : { ...kept, write });
+    }
+    case "refused":
+    case "unavailable":
+      return restored.kind;
+    case "none":
+    case "discarded":
+      return "cleared";
   }
 }
 
@@ -180,9 +219,10 @@ export function restoreOffer(
 export function parseKeptDraft(value: unknown): KeptDraft | undefined {
   if (
     !isRecord(value) ||
-    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"])
+    !exactKeys(value, ["v", "mode", "baseRevision", "ops", "undone", "savedAt"], ["write"])
   )
     return undefined;
+  if (value.write !== undefined && !isWriteId(value.write)) return undefined;
   if (value.v !== OPERATIONS_VERSION) return undefined;
   if (value.mode !== "edit" && value.mode !== "create") return undefined;
   if (value.mode === "edit" ? !isNonEmptyString(value.baseRevision) : value.baseRevision !== null)
@@ -439,6 +479,8 @@ export interface PersistableState {
   readonly log: Log;
   /** False from a token change or a refused check until the next operation. */
   readonly keep: boolean;
+  /** The write id of a save of this log whose outcome is not known yet, or `null`. */
+  readonly write: string | null;
 }
 
 /** The one storage action a state calls for. */
@@ -462,6 +504,7 @@ export function persistencePlan(state: PersistableState, now: number): Persisten
       ops: state.log.ops,
       undone: state.log.undone,
       savedAt: now,
+      ...(state.write !== null ? { write: state.write } : {}),
     },
   };
 }

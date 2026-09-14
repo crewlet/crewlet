@@ -404,6 +404,15 @@ be asked, editing pauses and the review offers **Check again** and **Save
 again**; a second save carries the same write id, so a first save that did
 land is recognized as yours rather than replayed on top of itself.
 
+The same holds when you leave the builder, or the tab reloads, before the
+answer arrives. The kept draft is marked with the save's write id before the
+save is sent, so the next time the builder opens in this tab it settles that
+save first: if it landed, the builder says "The last save from this tab was
+stored" and does not offer the draft again (replaying it onto its own revision
+would apply every change twice); if it did not, the draft comes back as any
+kept draft does. While the engine still cannot say, editing stays paused, with
+**Check again**.
+
 ### After saving
 
 A save stores and activates a revision. It does not apply it: every node

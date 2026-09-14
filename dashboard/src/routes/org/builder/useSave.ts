@@ -21,6 +21,13 @@
  * into one nobody hears about. The answer is still handled, and a save that
  * landed after the Builder went away is still recorded and clears the kept
  * draft, so a later visit does not offer to replay it.
+ *
+ * AND ONE WHOSE ANSWER IS LOST IS SETTLED LATER. Before a save is sent the
+ * Builder marks the kept log with its write id (`onSending`), and the mark is
+ * cleared only once the save is known not to have landed (`onNotLanded`). A
+ * save whose outcome is still unknown when the lens is left, or the tab
+ * reloaded, leaves the mark behind, and the next visit hands that attempt to
+ * [Save.resume], which settles it exactly as a lost answer is settled here.
  */
 
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
@@ -59,9 +66,15 @@ export interface Landed {
   readonly mode: BuilderMode;
   /** The revision active now: the write, or a later one built on it. */
   readonly activeRevisionId: string;
+  /** Whether it was found by settling a save a previous visit sent and never heard back from. */
+  readonly resumed: boolean;
 }
 
 export interface SaveEvents {
+  /** A save is about to be sent: its write id is marked on the kept log first. */
+  onSending(attempt: SaveAttempt): void;
+  /** The attempt is known not to have landed: nothing a lost answer could replay. */
+  onNotLanded(attempt: SaveAttempt): void;
   onLanded(landed: Landed): void;
   onConflict(conflict: { reason: ConflictReason; currentRevisionId: string | null }): void;
   /** A refusal about the document or the request, for the Builder to place and re-check. */
@@ -79,6 +92,14 @@ export interface Save {
   save(summary: string): Promise<void>;
   /** Asks the engine again whether an unanswered save landed. */
   checkAgain(): Promise<void>;
+  /**
+   * Takes over a save a previous visit sent and never heard back from, found
+   * marked on the kept log, and settles it. Once it is known not to have
+   * landed the kept log is the operator's to decide again (`onNotLanded`),
+   * rather than a draft to save again or update: this visit never had it on
+   * screen.
+   */
+  resume(attempt: SaveAttempt): void;
   /** Forgets a finished outcome's message. */
   acknowledge(): void;
 }
@@ -114,6 +135,8 @@ export function useSave({
   const [unsettled, setUnsettled] = useState(false);
   const unsettledRef = useRef(false);
   const lastAttempt = useRef<SaveAttempt | null>(null);
+  // Whether the last attempt is one a previous visit sent (see `resume`).
+  const resumed = useRef(false);
 
   const markUnsettled = (value: boolean) => {
     unsettledRef.current = value;
@@ -157,10 +180,18 @@ export function useSave({
             derived: null,
             mode: attempt.mode,
             activeRevisionId: result.activeRevisionId,
+            resumed: resumed.current,
           });
           return;
         case "not_landed": {
           markUnsettled(false);
+          events.current.onNotLanded(attempt);
+          if (resumed.current) {
+            // This visit never had the draft on screen: it goes back to being
+            // decided like any kept draft, not saved again or updated here.
+            setPhase({ kind: "idle" });
+            return;
+          }
           const nothingMoved =
             attempt.mode === "edit"
               ? result.currentRevisionId === attempt.baseRevision
@@ -203,7 +234,11 @@ export function useSave({
         signedSummary(summary, id),
       );
       lastAttempt.current = attempt;
+      resumed.current = false;
       setPhase({ kind: "saving" });
+      // Marked before it goes: a tab that reloads while the request is out
+      // must still find the save to settle.
+      events.current.onSending(attempt);
       const answer = await transport.send(request, new AbortController().signal);
       const outcome = classifySave(answer, attempt, unsettledRef.current);
       switch (outcome.kind) {
@@ -217,6 +252,7 @@ export function useSave({
             derived: outcome.derived,
             mode: attempt.mode,
             activeRevisionId: outcome.revisionId,
+            resumed: false,
           });
           return;
         case "unknown":
@@ -224,23 +260,25 @@ export function useSave({
           await settle(attempt, outcome.currentRevisionId);
           return;
         case "refused": {
-          // A refusal says nothing about an EARLIER attempt whose answer was
-          // lost, so an unsettled outcome stays unsettled through it.
           const refused = outcome.outcome;
-          if (refused.status === "conflict") {
-            setPhase({ kind: "idle" });
-            events.current.onConflict({
-              reason: refused.reason,
-              currentRevisionId: refused.currentRevisionId,
-            });
-            return;
-          }
           if (refused.status === "clean" || refused.status === "unreachable") {
             // A success that is not a 201 stored nothing this client can name,
             // and a failure the classifier could not place is not a refusal:
             // both are settled as an unknown outcome rather than believed.
             markUnsettled(true);
             await settle(attempt, null);
+            return;
+          }
+          // This attempt stored nothing. A refusal says nothing about an
+          // EARLIER attempt whose answer was lost, though, so an unsettled
+          // outcome, and the mark on the kept log, stay through it.
+          if (!unsettledRef.current) events.current.onNotLanded(attempt);
+          if (refused.status === "conflict") {
+            setPhase({ kind: "idle" });
+            events.current.onConflict({
+              reason: refused.reason,
+              currentRevisionId: refused.currentRevisionId,
+            });
             return;
           }
           setPhase({ kind: "refused", message: refusalMessage(refused) });
@@ -263,11 +301,25 @@ export function useSave({
     await settle(attempt, null);
   }, [settle]);
 
+  const resume = useCallback(
+    (attempt: SaveAttempt) => {
+      // Once per attempt: the effect that hands it over may run again.
+      if (resumed.current && lastAttempt.current?.writeId === attempt.writeId) return;
+      lastAttempt.current = attempt;
+      resumed.current = true;
+      write.current = { id: attempt.writeId, generation: stateRef.current.generation };
+      setWriteId(attempt.writeId);
+      markUnsettled(true);
+      void settle(attempt, null);
+    },
+    [settle, stateRef],
+  );
+
   const acknowledge = useCallback(() => {
     setPhase((current) =>
       current.kind === "refused" || current.kind === "retry" ? { kind: "idle" } : current,
     );
   }, []);
 
-  return { phase, writeId, unsettled, prepare, save, checkAgain, acknowledge };
+  return { phase, writeId, unsettled, prepare, save, checkAgain, resume, acknowledge };
 }
