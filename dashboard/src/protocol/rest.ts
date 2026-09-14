@@ -116,12 +116,23 @@ export interface RequestOptions {
    * "unreachable" state on a screen whose only fault was being quick.
    */
   signal?: AbortSignal;
+  /**
+   * How a SUCCESSFUL body is read. `json` (the default) parses it; `text`
+   * hands it over as the string the engine sent, for the one kind of answer
+   * that is a file rather than a document: `GET /config?format=yaml`, which a
+   * JSON parse turned into an `unreadable_body` refusal. A refusal is read as
+   * JSON either way, because every refusal the engine writes is one.
+   */
+  read?: "json" | "text";
 }
 
 /** What the engine answered, whole: the status and entity-tag beside the body. */
 export interface RestResponse {
   status: number;
-  /** The parsed JSON body, or null for an empty one (a 204, a 304). */
+  /**
+   * The parsed JSON body, or null for an empty one (a 204, a 304). With
+   * `read: "text"` a success's body is the text itself, empty included.
+   */
   body: unknown;
   /**
    * The `ETag` header verbatim, quoted as the engine writes it, or null. The
@@ -171,7 +182,7 @@ async function request(
   path: string,
   options: RequestOptions = {},
 ): Promise<RestResponse> {
-  const { body, headers = {}, query, signal } = options;
+  const { body, headers = {}, query, signal, read = "json" } = options;
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
   let encoded: string | undefined;
   if (body !== undefined) {
@@ -256,6 +267,10 @@ async function request(
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", forward);
+  }
+
+  if (read === "text" && response.ok) {
+    return { status: response.status, body: text, etag: response.headers.get("ETag") };
   }
 
   let parsed: unknown = null;

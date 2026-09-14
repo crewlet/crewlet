@@ -113,6 +113,33 @@ describe("the whole answer", () => {
   });
 });
 
+describe("a text answer", () => {
+  // A FILE IS NOT A DOCUMENT. `GET /config?format=yaml` answers the company
+  // as YAML, and parsing it as JSON turned the export into an
+  // `unreadable_body` refusal.
+  test("a success is handed over as the text the engine sent", async () => {
+    stub(
+      () =>
+        new Response("name: Acme\n", {
+          status: 200,
+          headers: { "Content-Type": "application/yaml", ETag: '"01JREV"' },
+        }),
+    );
+    const answer = await rest.request("GET", "/config", {
+      query: { format: "yaml" },
+      read: "text",
+    });
+    expect(answer).toEqual({ status: 200, body: "name: Acme\n", etag: '"01JREV"' });
+  });
+
+  test("a refusal is still read as the engine's JSON", async () => {
+    stub(() => json({ error: "invalid_token", detail: "set a token" }, 401));
+    const err = await rest.request("GET", "/config", { read: "text" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RestError);
+    expect((err as RestError).code).toBe("invalid_token");
+  });
+});
+
 describe("what a request sends", () => {
   test("query parameters are merged into the path's own", async () => {
     const sent = stub(() => json({}));
