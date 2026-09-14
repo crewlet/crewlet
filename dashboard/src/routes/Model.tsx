@@ -399,7 +399,7 @@ export function ModelActivity() {
           </>
         )}
         <span className="spacer" />
-        <a className="t-link" href={href(["spend"])}>
+        <a className="t-link" href={href(["cost"])}>
           where the tokens go →
         </a>
       </div>

@@ -231,7 +231,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
           </span>
           {agent.last_error.event_id && (
-            <a className="t-link" href={href(["events", agent.last_error.event_id])}>
+            <a className="t-link" href={href(["activity", "events", agent.last_error.event_id])}>
               event →
             </a>
           )}
@@ -501,7 +501,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Section title="Direct reports" hint={`${reports.length}`}>
                 <div className="seat-grid">
                   {reports.map((r) => (
-                    <a key={r.handle} className="seat-card" href={href(["seats", r.handle])}>
+                    <a
+                      key={r.handle}
+                      className="seat-card"
+                      href={href(["company", "people", r.handle])}
+                    >
                       <div className="row">
                         <Avatar name={r.name} human={r.kind === "human"} />
                         <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>

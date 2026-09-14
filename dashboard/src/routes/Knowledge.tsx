@@ -178,8 +178,14 @@ export function Knowledge() {
                     <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
                       {hit.title} <Icon name="external" size="xs" style={{ display: "inline" }} />
                     </a>
-                  ) : hit.id ? (
-                    <a className="hit-title" href={href(["pages", hit.id])}>
+                  ) : hit.container ? (
+                    // THE CONTAINER AND THE TITLE, which is how a page is
+                    // addressed now: the engine's own Get takes
+                    // `CONTAINER/Title` and matches the title the way the
+                    // fleet claimed it. A hit with no container has no page
+                    // route, so it renders as text rather than as a link to
+                    // nowhere.
+                    <a className="hit-title" href={href(["knowledge", hit.container, hit.title])}>
                       {hit.title}
                     </a>
                   ) : (
@@ -227,7 +233,7 @@ export function Knowledge() {
                 <a
                   key={seat.handle}
                   className="seat-card"
-                  href={href(["seats", seat.handle], { tab: "memory" })}
+                  href={href(["company", "people", seat.handle], { tab: "memory" })}
                 >
                   <div className="row">
                     <span className="attention-icon" data-severity="info">

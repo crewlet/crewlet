@@ -168,7 +168,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
                 header: "Title",
                 sortValue: (r) => r.title,
                 cell: (r) => (
-                  <a href={href(["pages", r.id])} className="truncate">
+                  <a href={href(["knowledge", r.container, r.title])} className="truncate">
                     {r.title}
                   </a>
                 ),
@@ -300,11 +300,11 @@ export function PageView({ container, title }: { container: string; title: strin
             {/* THE BREADCRUMB IS THE ANCESTOR CHAIN, outermost first — a
                   page's place is what makes it findable, and a title alone
                   says nothing about which team's tree it is in. */}
-            <a href={href(["pages"]) + `?container=${page.container}`}>{page.container}</a>
+            <a href={href(["knowledge", page.container])}>{page.container}</a>
             {(data.ancestors ?? []).map((a) => (
               <span key={a.id}>
                 {" / "}
-                <a href={href(["pages", a.id])}>{a.title}</a>
+                <a href={href(["knowledge", page.container, a.title])}>{a.title}</a>
               </span>
             ))}
           </span>
@@ -329,7 +329,7 @@ export function PageView({ container, title }: { container: string; title: strin
                 <ul className="list">
                   {data.children.map((child) => (
                     <li key={child.id}>
-                      <a href={href(["pages", child.id])}>{child.title}</a>
+                      <a href={href(["knowledge", page.container, child.title])}>{child.title}</a>
                     </li>
                   ))}
                 </ul>

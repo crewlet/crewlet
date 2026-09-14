@@ -267,7 +267,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
               )}
               <span className="spacer" />
               {triggerId && (
-                <a className="t-link" href={href(["events", triggerId])}>
+                <a className="t-link" href={href(["activity", "events", triggerId])}>
                   the trigger →
                 </a>
               )}
@@ -464,7 +464,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
   return (
     <a
       className={cx("turn-row", event.failed && "failed")}
-      href={href(["events", event.id])}
+      href={href(["activity", "events", event.id])}
       title={fmtDateTime(event.timestamp)}
     >
       <time className="feed-time" dateTime={event.timestamp}>

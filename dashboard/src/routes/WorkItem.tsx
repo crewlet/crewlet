@@ -464,7 +464,7 @@ function History({
             {entry.turn_id && (
               <>
                 {" "}
-                <a className="t-link" href={href(["turns", entry.turn_id])}>
+                <a className="t-link" href={href(["activity", "turns", entry.turn_id])}>
                   turn →
                 </a>
               </>
@@ -582,7 +582,7 @@ export function ItemProps({
       {row(
         "Sprint",
         item.sprint !== undefined ? (
-          <a className="t-link" href={href(["sprints"], { project: item.project })}>
+          <a className="t-link" href={href(["work", item.project, "sprints"])}>
             Sprint {item.sprint}
           </a>
         ) : (

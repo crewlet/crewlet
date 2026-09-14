@@ -14,6 +14,8 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
+import { RAIL } from "./nav.ts";
+
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 
 /** Every component source, excluding the suites themselves. */
@@ -71,4 +73,39 @@ test("no JSX guard is a bare number", () => {
     offenders,
     'these render the string "0" when the count is zero: compare with `> 0` or use a ternary',
   ).toEqual([]);
+});
+
+/**
+ * EVERY INTERNAL LINK NAMES A LIVE ROUTE.
+ *
+ * `href(["seats", handle])` compiles, renders, and takes the reader to a
+ * screen that says "there is no such screen" — a dead link with no error, no
+ * warning and no type failure, and the only way to find one is to click it.
+ *
+ * Nine files carried them after the routes moved: an event's link from a phase
+ * card, a seat's from a colleague chip, a page's from a search hit, a turn's
+ * from an item's history, the sprint report's from an item. Every one of them
+ * is a way OUT of the screen a reader is on, which is the half of navigation
+ * the rail cannot provide.
+ *
+ * The check is on the FIRST SEGMENT, because that is what route dispatch
+ * switches on: a literal that names a segment no workspace owns cannot reach
+ * a screen whatever follows it.
+ */
+test("every href names a segment a workspace owns", () => {
+  const owned = new Set(RAIL.flatMap((r) => r.owns));
+  const literal = /href\(\[\s*"([a-z0-9_-]+)"/g;
+  const dead: string[] = [];
+  for (const { path, text } of sources()) {
+    const lines = text.split("\n");
+    lines.forEach((line, i) => {
+      literal.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = literal.exec(line))) {
+        const head = m[1];
+        if (head && !owned.has(head)) dead.push(`${path}:${i + 1} — #/${head}`);
+      }
+    });
+  }
+  expect(dead, "these links go to a screen that does not exist").toEqual([]);
 });

@@ -148,7 +148,11 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               const start = tsKey(event.timestamp);
               const left = to > from ? ((start - from) / (to - from)) * 100 : 0;
               return (
-                <a key={event.id} className="feed-row" href={href(["events", event.id])}>
+                <a
+                  key={event.id}
+                  className="feed-row"
+                  href={href(["activity", "events", event.id])}
+                >
                   <time className="feed-time" dateTime={event.timestamp}>
                     {fmtTime(event.timestamp)}
                   </time>
