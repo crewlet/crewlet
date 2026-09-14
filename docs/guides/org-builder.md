@@ -64,7 +64,9 @@ Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
 creates the company with `PUT /config` and `If-None-Match: *`, which is
 refused if a company exists anywhere in the fleet. If one was created while
-you were writing yours, the builder says so and offers to discard your draft
+you were writing yours (the builder hears of it as soon as the node reports
+the new organization, not only when you save), the builder says so and
+offers to discard your draft
 and open the company: a draft that starts a company is never applied to one
 that exists, and never replayed onto it. **Keep my draft** leaves it on screen
 to read, read-only, with the same offer beside it.

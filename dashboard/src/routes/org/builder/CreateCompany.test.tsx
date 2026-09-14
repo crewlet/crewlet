@@ -4,7 +4,7 @@
  * company that appeared meanwhile is never written over or replayed onto.
  */
 
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { CompanyDocument } from "~/protocol/index.ts";
 import { clearSavedRevision } from "./savedRevision.ts";
@@ -133,6 +133,22 @@ test("a company created while the draft is open is found by the check, before an
   engine.revision = "r1";
   // The next check of the draft is refused as already configured.
   fireEvent.click(screen.getByRole("button", { name: "Edit Chief Executive" }));
+  expect(
+    await screen.findByRole("dialog", { name: "A company already exists on this engine" }),
+  ).toBeDefined();
+  expect(engine.requests.filter(isWrite)).toHaveLength(0);
+});
+
+// THE ORG PUSH SAYS A COMPANY EXISTS before any edit or save does, so a
+// create draft hears of it at once rather than when its next check runs.
+test("a company another node creates is reported by the org push, with no edit", async () => {
+  const engine = new Engine(null);
+  const { store } = mountBuilder({ engine });
+  await startCompany({});
+  await screen.findByText("No problems");
+  engine.document = company();
+  engine.revision = "r1";
+  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
   expect(
     await screen.findByRole("dialog", { name: "A company already exists on this engine" }),
   ).toBeDefined();

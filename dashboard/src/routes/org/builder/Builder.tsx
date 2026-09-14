@@ -576,13 +576,17 @@ function Lens({
   );
 
   // An org push follows every apply, so the configuration may have moved
-  // under the draft: check again rather than wait for the next edit.
+  // under the draft: check again rather than wait for the next edit. A create
+  // draft has no configuration to move, and hears only of one appearing: a
+  // push that names a company is exactly that, and its check is the refusal
+  // that says so.
   const lastOrg = useRef(org);
   useEffect(() => {
     if (lastOrg.current === org) return;
     lastOrg.current = org;
-    if (loaded && stateRef.current.mode === "edit") reset();
-  }, [org, loaded, reset]);
+    if (!loaded) return;
+    if (stateRef.current.mode === "edit" || orgName !== "") reset();
+  }, [org, orgName, loaded, reset]);
 
   // ---- Editing ------------------------------------------------------------
 
