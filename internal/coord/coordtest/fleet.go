@@ -1022,6 +1022,45 @@ var budgetCases = []fleetCase{{
 		}
 	},
 }, {
+	name: "an exhausted company is reported before a charge the seat cap can never hold",
+	fn: func(h *fleetHarness) {
+		// The same ordering rule, reached through the other door. A charge
+		// larger than the seat's WHOLE cap is screened before anything is
+		// written, and a screen that tested each scope's cap alone named
+		// the seat while the company was out of room too: the org holds 90
+		// of 100 and 50 more fits neither. An operator sent to raise the
+		// seat's ceiling would raise it and still be refused.
+		if got := h.charge(testSeat, 90, 100, 0); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		got := h.charge(testSeat, 50, 100, 40)
+		if got.OK {
+			h.t.Fatal("a charge past both caps was accepted")
+		}
+		if got.RefusedScope != "org" || got.RefusedUsed != 90 || got.RefusedLimit != 100 {
+			h.t.Fatalf("refusal = %+v, want the org scope at 90 of 100", got)
+		}
+		if h.used(coord.OrgScope) != 90 || h.used(testSeat) != 90 {
+			h.t.Fatal("a refused charge still moved a counter")
+		}
+	},
+}, {
+	name: "a charge the seat cap can never hold names the seat while the company has room",
+	fn: func(h *fleetHarness) {
+		// The counterpart, so the case above cannot be passed by naming
+		// the org for every oversized charge.
+		got := h.charge(testSeat, 50, 100, 40)
+		if got.OK {
+			h.t.Fatal("a charge larger than the seat's whole cap was accepted")
+		}
+		if got.RefusedScope != "agent" || got.RefusedLimit != 40 {
+			h.t.Fatalf("refusal = %+v, want the agent scope and its limit", got)
+		}
+		if h.used(coord.OrgScope) != 0 || h.used(testSeat) != 0 {
+			h.t.Fatal("a refused charge still moved a counter")
+		}
+	},
+}, {
 	name: "a charge larger than the whole cap is refused before anything is written",
 	fn: func(h *fleetHarness) {
 		// The first-ever charge, against an empty counter. A backend

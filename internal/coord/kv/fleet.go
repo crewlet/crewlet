@@ -919,20 +919,35 @@ func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgL
 	}
 
 	// A charge larger than a whole cap can never fit, so it is screened
-	// before anything is written — org first, matching the order below, and
-	// so a seat whose own cap is smaller than the charge never costs the
-	// org a bump and an unwind.
-	for _, scope := range []struct {
-		name, key string
-		limit     int
-	}{{"org", coord.OrgScope, orgLimit}, {"agent", agentScope, agentLimit}} {
-		if scope.limit > 0 && tokens > scope.limit {
-			used, err := f.Used(ctx, scope.key)
+	// before anything is written, and a seat whose own cap is smaller than
+	// the charge never costs the org a bump and an unwind.
+	if orgLimit > 0 && tokens > orgLimit {
+		used, err := f.Used(ctx, coord.OrgScope)
+		if err != nil {
+			return coord.Spend{}, err
+		}
+		return coord.Spend{RefusedScope: "org", RefusedUsed: used, RefusedLimit: orgLimit}, nil
+	}
+	if agentLimit > 0 && tokens > agentLimit {
+		// ORG FIRST even here, which is why the screen reads the org's
+		// counter before naming the seat. Testing each cap alone reported
+		// the seat for a charge the company had no room for either, and
+		// the contract's ordering rule exists for exactly that case: an
+		// operator who raised this seat's ceiling would still be refused.
+		if orgLimit > 0 {
+			orgUsed, err := f.Used(ctx, coord.OrgScope)
 			if err != nil {
 				return coord.Spend{}, err
 			}
-			return coord.Spend{RefusedScope: scope.name, RefusedUsed: used, RefusedLimit: scope.limit}, nil
+			if orgUsed+tokens > orgLimit {
+				return coord.Spend{RefusedScope: "org", RefusedUsed: orgUsed, RefusedLimit: orgLimit}, nil
+			}
 		}
+		used, err := f.Used(ctx, agentScope)
+		if err != nil {
+			return coord.Spend{}, err
+		}
+		return coord.Spend{RefusedScope: "agent", RefusedUsed: used, RefusedLimit: agentLimit}, nil
 	}
 
 	orgUsed, fits, err := f.bump(ctx, coord.OrgScope, tokens, orgLimit)
