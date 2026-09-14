@@ -26,7 +26,7 @@ import {
 } from "~/protocol/index.ts";
 import { Builder, type BuilderSurfaces } from "./Builder.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
-import { allSeats } from "./model/draft.ts";
+import { allSeats, allUnits } from "./model/draft.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 
@@ -234,6 +234,27 @@ export function FakeView() {
       >
         Rename the company
       </button>
+      <ul aria-label="Units">
+        {[...allUnits(api.state.draft)].map(({ unit }) => (
+          <li key={unit.key}>
+            <span>{unit.data.name}</span>
+            <button type="button" onClick={() => api.selection.select(unit.key)}>
+              {`Select ${unit.data.name}`}
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                api.dispatch({
+                  type: "record",
+                  intent: { type: "renameUnit", target: unit.key, name: `${unit.data.name} Two` },
+                })
+              }
+            >
+              {`Rename ${unit.data.name}`}
+            </button>
+          </li>
+        ))}
+      </ul>
       <ul aria-label="Seats">
         {[...allSeats(api.state.draft)].map(({ seat }) => (
           <li key={seat.key}>

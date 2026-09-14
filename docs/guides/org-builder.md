@@ -80,6 +80,11 @@ a **Reporting** view) and the **Outline**. Below 860 pixels wide the lens
 opens on the outline. The view, the chart and the selected unit or seat are
 in the URL, so a link opens the builder where it was.
 
+Selecting a unit or a seat names it in the URL (`unit=` and `seat=`), and the
+toolbar carries that node's own actions, so every one of them is reachable
+from the keyboard. A rename rewrites the name in the URL rather than leaving a
+link pointing at something that no longer exists.
+
 The check status beside the view controls says what the engine made of the
 current draft:
 

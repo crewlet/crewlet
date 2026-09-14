@@ -1015,6 +1015,11 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   render inside it, because a fullscreen element renders only its subtree.
   The control is not drawn where the Fullscreen API is missing. The shell's
   token dialog is outside it, so asking for a token leaves fullscreen first.
+- **The selection is in the URL, and the toolbar mirrors it.** `unit=` and
+  `seat=` are filters that name the selected node; a link naming one selects
+  it, a rename rewrites it, and a removed node clears it. The toolbar carries
+  the selected node's own actions, because a canvas tree item may contain no
+  tab stops of its own.
 - **One polite live region** says what each operation, undo and redo did, and
   focus moves to the node it touched through the mounted view's registered
   handle (`useBuilderView`).

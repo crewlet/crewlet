@@ -219,6 +219,34 @@ test("a company with no model provider is told so, and one with a provider is no
   expect(screen.queryByText(/No model provider is configured/)).toBeNull();
 });
 
+describe("the selection in the URL", () => {
+  test("a selected unit is named in the URL, and a rename rewrites it", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select Engineering" }));
+    await waitFor(() => expect(location.hash).toContain("unit=Engineering"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Rename Engineering" }));
+    // The key is the unit's identity, so the name in the URL follows the draft.
+    await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
+  });
+
+  test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine, hash: "#/org?lens=builder&view=canvas&seat=ceo" });
+    await screen.findByText("No problems");
+    const actions = await screen.findByRole("button", { name: "CEO" });
+    expect(actions.getAttribute("aria-haspopup")).toBe("menu");
+    fireEvent.click(actions);
+    const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Open seat" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Move to" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Delete" })).toBeDefined();
+  });
+});
+
 describe("a token change mid-edit", () => {
   test("keeps the draft, reads the configuration again and checks under the new token", async () => {
     storeToken("first");

@@ -622,33 +622,36 @@ function Lens({
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
 
-  // The URL names the selection: resolve it when it changes from outside.
+  // THE URL AND THE DRAFT BOTH MOVE THE SELECTION, and one effect answers
+  // both: a link (or the command palette) naming a unit or a seat selects it,
+  // and a rename in the draft rewrites the name the URL holds. Which of the
+  // two moved is read off the draft: a URL that names a node still in the
+  // draft is a new selection, and a selected node whose name the URL no
+  // longer matches was renamed.
   useEffect(() => {
     const params = { unit: unitParam, seat: seatParam };
-    if (!params.unit && !params.seat) {
-      setSelected(null);
-      return;
-    }
-    const key = keyOfParams(stateRef.current, params);
-    if (key) setSelected(key);
-  }, [unitParam, seatParam]);
-
-  // A rename moves the name the URL holds: follow it, replacing the entry.
-  useEffect(() => {
+    const named = params.unit !== "" || params.seat !== "";
     const key = selectedRef.current;
-    if (!key) return;
-    if (!locate(state.draft, key)) {
-      setSelected(null);
-      if (unitParam || seatParam) nav.filter({ unit: null, seat: null });
+    const present = key !== null && locate(state.draft, key) !== undefined;
+    if (present) {
+      const now = paramsOf(state, key);
+      if (!now || (now.unit === params.unit && now.seat === params.seat)) return;
+      const fromUrl = keyOfParams(state, params);
+      if (fromUrl && fromUrl !== key) setSelected(fromUrl);
+      else nav.filter({ unit: now.unit || null, seat: now.seat || null });
       return;
     }
-    const params = paramsOf(state, key);
-    if (params && (params.unit !== unitParam || params.seat !== seatParam)) {
-      nav.filter({ unit: params.unit || null, seat: params.seat || null });
+    const resolved = named ? keyOfParams(state, params) : null;
+    if (resolved) {
+      setSelected(resolved);
+      return;
     }
-    // The URL is read, not followed: this effect answers changes of the draft
-    // and of the handles its check reported, never a change of the URL.
-  }, [state.draft, state.check]);
+    if (key !== null) {
+      // The selected node was removed: the selection goes with it.
+      setSelected(null);
+      if (named) nav.filter({ unit: null, seat: null });
+    }
+  }, [state, unitParam, seatParam, nav]);
 
   const select = useCallback(
     (key: NodeKey | null) => {
@@ -884,6 +887,69 @@ function Lens({
     collapseAll: () => viewHandle.current?.collapseAll(),
     discard: () => setDialog({ type: "discard" }),
   };
+  // THE TOOLBAR MIRRORS THE SELECTED NODE'S ACTIONS. A canvas card's own
+  // buttons are pointer-only (a tree item may not contain tab stops), so this
+  // is where a keyboard reaches them, and it is also where a node's actions
+  // are when the outline is the view.
+  const selectedNode = selected ? locate(state.draft, selected) : undefined;
+  const selectedName = selectedNode?.node.data.name || "the selected node";
+  const addItems = (parent: NodeKey | null): MenuEntry[] => [
+    {
+      key: "add-unit",
+      label: "Add unit",
+      icon: "folder",
+      onSelect: () => api.openAdd(parent, "unit"),
+    },
+    {
+      key: "add-agent",
+      label: "Add agent seat",
+      icon: "cpu",
+      onSelect: () => api.openAdd(parent, "agent"),
+    },
+    {
+      key: "add-human",
+      label: "Add human seat",
+      icon: "user",
+      onSelect: () => api.openAdd(parent, "human"),
+    },
+  ];
+  const nodeItems = (): MenuEntry[] => {
+    if (!selectedNode || !selected) return addItems(null);
+    const seatHandle = handleOfKey(selected) ?? currentHandles(state).get(selected);
+    const items: MenuEntry[] = [
+      { key: "edit", label: "Edit", icon: "pencil", onSelect: () => api.openEditor(selected) },
+    ];
+    if (selectedNode.kind === "unit")
+      items.push({ kind: "separator", key: "s" }, ...addItems(selected));
+    else if (seatHandle) {
+      items.push({
+        key: "open",
+        label: "Open seat",
+        icon: "external",
+        onSelect: () => nav.to(["seats", seatHandle]),
+      });
+      items.push({
+        key: "kind",
+        label:
+          selectedNode.node.data.kind === "human" ? "Change to agent seat" : "Change to human seat",
+        icon: "users",
+        onSelect: () => api.openChangeKind(selected),
+      });
+    }
+    items.push(
+      { kind: "separator", key: "s2" },
+      { key: "move", label: "Move to", icon: "move", onSelect: () => api.openMove(selected) },
+      {
+        key: "delete",
+        label: "Delete",
+        icon: "trash",
+        danger: true,
+        onSelect: () => api.openDelete(selected),
+      },
+    );
+    return items;
+  };
+
   const more: MenuEntry[] = [
     {
       key: "undo",
@@ -977,6 +1043,14 @@ function Lens({
           <span className="org-builder-narrow">
             <Menu label="More builder actions" items={more} />
           </span>
+          <Menu
+            label={selected ? `Actions for ${selectedName}` : "Add to the organization"}
+            icon={selected ? "more" : "plus"}
+            items={nodeItems()}
+            size="sm"
+          >
+            {selected ? selectedName : "Add"}
+          </Menu>
           <span className="spacer" />
           <FullscreenToggle container={container} />
           <Badge tone={look.tone} icon={look.icon}>
