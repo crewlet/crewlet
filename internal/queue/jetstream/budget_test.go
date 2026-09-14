@@ -102,6 +102,41 @@ func TestARefusedReservationIsNamed(t *testing.T) {
 	}
 }
 
+// A LONE BROKER'S GROWTH BUDGET IS EXACTLY THE ROOM IT HOLDS AN UPDATE TO.
+//
+// The capacity verb refuses a raise past it before a window opens, so a figure
+// that understated the room would refuse raises the broker grants, and one that
+// overstated it would let through the refusal the check exists to catch. Both
+// directions are the broker's own answer here, one byte apart.
+func TestAGrowthBudgetIsTheRoomAnUpdateIsHeldTo(t *testing.T) {
+	t.Parallel()
+	q := fileQueue(t)
+	const ceiling = int64(1) << 30
+	if err := q.EnsureDomainStream(t.Context(), budgetLog("GROW", ceiling)); err != nil {
+		t.Fatalf("EnsureDomainStream: %v", err)
+	}
+	room, err := q.GrowthBudget(t.Context())
+	if err != nil {
+		t.Fatalf("GrowthBudget: %v", err)
+	}
+	if room.Source != BudgetServerStore || room.Available() <= 0 {
+		t.Fatalf("a lone file-store broker's growth budget = %+v, want its own stated room", room)
+	}
+	grow, err := q.DomainLog(t.Context(), "GROW")
+	if err != nil {
+		t.Fatalf("DomainLog: %v", err)
+	}
+	err = grow.SetMaxBytes(t.Context(), uint64(ceiling+room.Available()+1))
+	if !refusedStorage(err) {
+		t.Fatalf("a raise one byte past the stated room returned %v, want the "+
+			"broker's refusal: the budget understates what it grants", err)
+	}
+	if err := grow.SetMaxBytes(t.Context(), uint64(ceiling+room.Available())); err != nil {
+		t.Fatalf("a raise of exactly the stated room was refused, so the budget "+
+			"overstates it: %v", err)
+	}
+}
+
 // WHETHER A DOMAIN STREAM EXISTS IS THREE ANSWERS, and the ceiling it holds is
 // the one it was created with.
 func TestADomainStreamsCeilingIsReadBack(t *testing.T) {

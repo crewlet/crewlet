@@ -720,7 +720,11 @@ check that quietly proves nothing.
 A target at or below what the log already holds is refused before the window
 opens, naming both numbers: that ceiling would refuse every append the moment
 it applied. A target under the current ceiling and above the usage is
-accepted, and is how a log gives a reservation back.
+accepted, and is how a log gives a reservation back. A raise the broker cannot
+reserve is refused before the window opens too, naming what it reserves and
+what the broker has left, wherever the node can read that limit: a lone
+embedded node, or a NATS account's own limit. A clustered member cannot, and
+there the broker refuses such a raise when the window applies it.
 
 Run from a node in `normal` mode it refuses outright, naming the restart. Run
 from `maintenance` it opens, baselines and applies; run from `seal` it collects

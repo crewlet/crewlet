@@ -413,7 +413,7 @@ func TestAnAdmissionBlocksTakingTheExclusion(t *testing.T) {
 
 	_, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, jetstream.LogStats{MaxBytes: 1 << 32})
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
 	if err == nil {
 		t.Fatal("the exclusion was taken while a node held an admission")
 	}
@@ -440,7 +440,7 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	for _, target := range []uint64{4 << 30, 5 << 30} {
 		_, err := e.openCapacity(ctx, CapacityRequest{
 			Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: target, By: "ops-3",
-		}, current)
+		}, current, unstatedRoom)
 		if err == nil {
 			t.Fatalf("a %d-byte target on a log holding %d bytes was accepted",
 				target, current.Bytes)
@@ -458,13 +458,73 @@ func TestATargetTheLogAlreadyExceedsIsRefused(t *testing.T) {
 	// that reclaims a reservation.
 	op, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: 6 << 30, By: "ops-3",
-	}, current)
+	}, current, unstatedRoom)
 	if err != nil {
 		t.Fatalf("a target above the usage and under the ceiling was refused: %v", err)
 	}
 	if op.OriginalMaxBytes != current.MaxBytes {
 		t.Errorf("the window recorded an original ceiling of %d, want %d",
 			op.OriginalMaxBytes, current.MaxBytes)
+	}
+}
+
+// unstatedRoom is a broker that states no limit this node can read, which
+// holds no target back.
+var unstatedRoom = jetstream.StorageBudget{Limit: -1, Source: jetstream.BudgetUnstated}
+
+// A RAISE THE BROKER CANNOT RESERVE IS REFUSED BEFORE THE WINDOW OPENS.
+//
+// The broker refuses that update when the window applies it, and an apply that
+// returned an error is an unknown only the seal retires: a raise past the
+// broker's room cost the fleet its restarts, and its attempts, to learn a
+// number the node could read before any of them. So the room is decided with
+// the usage, and only where it is stated.
+func TestARaiseTheBrokerCannotReserveIsRefused(t *testing.T) {
+	ctx := context.Background()
+	current := jetstream.LogStats{Bytes: 1 << 30, MaxBytes: 4 << 30}
+	room := jetstream.StorageBudget{Limit: 10 << 30, Committed: 8 << 30,
+		Source: jetstream.BudgetServerStore}
+
+	e, fleet := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+	_, err := e.openCapacity(ctx, CapacityRequest{
+		Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: 6<<30 + 1, By: "ops-3",
+	}, current, room)
+	if err == nil {
+		t.Fatal("a raise one byte past what the broker has left was accepted")
+	}
+	for _, want := range []string{
+		"reserves 2147483649 more", "the broker has 2147483648 left",
+		"at most 6442450944 bytes",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q: %v", want, err)
+		}
+	}
+	if op, found, _ := fleet.Maintenance(ctx, "CREWLET_PAGES_LOG"); found {
+		t.Fatalf("a window was opened anyway: %+v", op)
+	}
+
+	for name, tc := range map[string]struct {
+		target uint64
+		room   jetstream.StorageBudget
+	}{
+		"a raise of exactly what is left": {6 << 30, room},
+		// UNSTATED HOLDS NOTHING BACK: a limit this node cannot read is
+		// the broker's to apply, not a guess to refuse on.
+		"a raise against an unstated limit": {64 << 30, unstatedRoom},
+		// LOWERING RESERVES NOTHING, so a spent broker does not refuse it:
+		// it is how a log gives a reservation back.
+		"a lowering on a spent broker": {2 << 30, jetstream.StorageBudget{
+			Limit: 8 << 30, Committed: 8 << 30, Source: jetstream.BudgetServerStore}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, _ := capacityFixture(t, "node-1", statelog.ModeMaintenance)
+			if _, err := e.openCapacity(ctx, CapacityRequest{
+				Stream: "CREWLET_PAGES_LOG", TargetMaxBytes: tc.target, By: "ops-3",
+			}, current, tc.room); err != nil {
+				t.Fatalf("a %d-byte target was refused: %v", tc.target, err)
+			}
+		})
 	}
 }
 
@@ -488,7 +548,7 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 
 	held, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-4",
-	}, jetstream.LogStats{MaxBytes: 1 << 32})
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
 	if err != nil {
 		t.Fatalf("the same target did not resume the open operation: %v", err)
 	}
@@ -498,7 +558,7 @@ func TestAnOpenOperationIsResumedAtItsOwnTargetAndNeverRetargeted(t *testing.T) 
 
 	_, err = e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 34, By: "ops-4",
-	}, jetstream.LogStats{MaxBytes: 1 << 32})
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
 	if err == nil {
 		t.Fatal("an open operation was retargeted, which makes a later " +
 			"mismatch unreadable")
@@ -522,7 +582,7 @@ func TestAnUnknownCreateRetriesWithTheSameIdRatherThanOpeningASecondWindow(t *te
 
 	op, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, jetstream.LogStats{MaxBytes: 1 << 32})
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
 	if err != nil {
 		t.Fatalf("openCapacity: %v", err)
 	}
@@ -546,7 +606,7 @@ func TestAnUnknownCreateThatNeverResolvesRefusesRatherThanReportingNoWindow(t *t
 
 	_, err := e.openCapacity(ctx, CapacityRequest{
 		Stream: "CREWLET_TRACKER_LOG", TargetMaxBytes: 1 << 33, By: "ops-3",
-	}, jetstream.LogStats{MaxBytes: 1 << 32})
+	}, jetstream.LogStats{MaxBytes: 1 << 32}, unstatedRoom)
 	if err == nil {
 		t.Fatal("a create whose outcome was never established reported success")
 	}

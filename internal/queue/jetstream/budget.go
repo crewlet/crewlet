@@ -101,23 +101,59 @@ func (s BudgetSource) Valid() bool { return slices.Contains(BudgetSources, s) }
 // stated (an embedded member whose account an operator limited), the one with
 // less room is the one a reservation meets first.
 func (q *Queue) StreamBudget(ctx context.Context) (StorageBudget, error) {
+	return q.budget(ctx, q.embedded != nil)
+}
+
+// GrowthBudget is how far a running stream's ceiling may be raised before the
+// broker refuses the update, stated only where this node can read the limit
+// the broker holds the update to.
+//
+// # Why it is not [Queue.StreamBudget]
+//
+// A create and an update are refused by different rules. A create is PLACED,
+// so a clustered member's own room is what the cluster weighs, and that is what
+// StreamBudget reads. An update is checked by the server that leads the
+// metadata group, against that server's own reservations, and a member cannot
+// read another server's. So the server half is stated here only on a lone
+// embedded server, where the leader is this process, and elsewhere only an
+// account's limit, which every server shares, is held against a raise. A
+// number this node cannot read exactly would refuse raises the broker grants.
+func (q *Queue) GrowthBudget(ctx context.Context) (StorageBudget, error) {
+	return q.budget(ctx, q.embedded != nil && !q.embedded.clustered)
+}
+
+// budget is the account's stated limit and, when withServer says the embedded
+// server's own cap is this node's to hold a request to, that cap as well,
+// whichever a reservation meets first.
+func (q *Queue) budget(ctx context.Context, withServer bool) (StorageBudget, error) {
 	memory := q.storage() == jetstream.MemoryStorage
 	info, err := q.js.AccountInfo(ctx)
 	if err != nil {
 		return StorageBudget{}, fmt.Errorf("jetstream: read the account's storage limits: %w", err)
 	}
 	budget := accountBudget(info, max(q.cfg.Replicas, 1), memory)
-	if q.embedded == nil {
+	if !withServer {
 		return budget, nil
 	}
 	server, err := q.embedded.budget(memory)
 	if err != nil {
 		return StorageBudget{}, err
 	}
-	if budget.Limit < 0 || server.Available() < budget.Available() {
-		return server, nil
+	return tighter(budget, server), nil
+}
+
+// tighter is whichever of two budgets a reservation meets first: the one with
+// less room, and a stated one over one that states nothing.
+func tighter(a, b StorageBudget) StorageBudget {
+	switch {
+	case a.Limit < 0:
+		return b
+	case b.Limit < 0:
+		return a
+	case b.Available() < a.Available():
+		return b
 	}
-	return budget, nil
+	return a
 }
 
 // accountBudget is the account's stated limit for a stream of this storage

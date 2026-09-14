@@ -296,6 +296,14 @@ maintenance window**, and the reason is not caution:
   Anything above the usage is fair, including a target under the current
   ceiling, which is how a log created larger than its budget gives the
   reservation back.
+- A raise is a reservation too, and the broker refuses one it cannot honour.
+  Where the node can read the limit the broker holds an update to (a lone
+  embedded node, or a NATS account's own JetStream limit on any topology), a
+  raise past it is refused before the window opens, naming what it reserves
+  and what the broker has left. A clustered member cannot read that limit,
+  because the member leading the cluster checks an update against its own
+  reservations, so there the broker refuses such a raise when the window
+  applies it, and the seal retires the attempt.
 - What retires a configuration request the broker has already queued is the
   **broker process restarting**, not a client closing its connection. So an
   apply whose outcome is unknown can only be resolved by everything restarting.
