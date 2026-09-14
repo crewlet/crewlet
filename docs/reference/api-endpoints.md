@@ -363,14 +363,14 @@ Four rules follow from that:
   move: nothing that points at the old identity travels with the splice. A
   seat's durable id is a UUIDv5 over (company name, handle), so a renamed
   handle strands that seat's diary, onboarding marker and counterparty
-  profiles behind an id nothing derives any more; a unit's or an MCP server's
-  name is referenced by every `manages:`, `lead:`, `unit:` and per-seat
-  credential block that names it. For a role the check is on the **derived**
-  handle, so a body that omits `handle` and changes `name` is refused too —
-  that is a rename, just an accidental one. Send the identity back unchanged
-  (changing a seat's display name while keeping its handle is an ordinary
-  edit); rename through `PUT /config`, where what has to move with it is
-  visible.
+  profiles behind an id nothing derives any more; a unit's name is referenced
+  by every `manages:` entry and root seat `unit:` that names it, and an MCP
+  server's name by every per-seat credential block keyed on it. For a role
+  the check is on the **derived** handle, so a body that omits `handle` and
+  changes `name` is refused too: that is a rename, just an accidental one.
+  Send the identity back unchanged (changing a seat's display name while
+  keeping its handle is an ordinary edit); rename through `PUT /config`, where
+  what has to move with it is visible.
 - **The same summary and `If-Match` rules apply**, and a node with no
   active revision answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.

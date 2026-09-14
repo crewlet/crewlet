@@ -61,10 +61,10 @@ var ErrNoSuchEntity = errors.New("configapi: no such entity")
 // seat's durable id is a UUIDv5 over (company name, handle), so a handle that
 // changes under an operator strands that seat's diary, its onboarding marker
 // and its counterparty profiles behind an id nothing derives any more, and
-// its inbox subject with them. A unit's name and an MCP server's name are
-// referenced by every `manages:`, `lead:`, `unit:` and per-seat credential
-// block that names them. None of that moves with a splice, and the URL is
-// left naming something that no longer exists.
+// its inbox subject with them. A unit's name is referenced by every
+// `manages:` entry and root seat `unit:` that names it, and an MCP server's
+// name by every per-seat credential block keyed on it. None of that moves with
+// a splice, and the URL is left naming something that no longer exists.
 var ErrIdentityMismatch = errors.New("configapi: identity mismatch")
 
 // identityMismatch names both halves, because the caller has to be able to

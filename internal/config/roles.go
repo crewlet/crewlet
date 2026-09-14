@@ -679,9 +679,9 @@ type Unit struct {
 	Schedules []org.Schedule `yaml:"schedules,omitempty" json:"schedules,omitempty" desc:"Recurring work owned by this unit."`
 }
 
-// IdentityKey is the unit's name, which is what every `manages:` and `unit:`
-// reference addresses it by. A `lead:` names a seat, never a unit, so it is
-// no reference to a unit's identity.
+// IdentityKey is the unit's name, which is what a `manages:` entry and a root
+// seat's `unit:` reference address it by. A `lead:` is not one of them: it is
+// written on a unit and names a seat, by the seat's name.
 func (u Unit) IdentityKey() string { return u.Name }
 
 // identityIsDocumentWide marks the name as unique across the whole tree, so a
