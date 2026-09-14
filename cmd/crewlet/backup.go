@@ -135,11 +135,13 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 		// backed up at the cluster instead. Every node holds its own
 		// store, whatever its roles, so the other half is never the
 		// missing one.
+		//
+		// No other node offers a way round it: a fleet shares one stream, so
+		// every node of this one dialled the same cluster.
 		fmt.Fprintln(stdout, "\nThis node holds only part of the deployment's state: "+
 			"its stream estate lives on the external NATS cluster it dialled. "+
 			"Back that up there, from the same moment as this copy "+
-			"(`nats account backup`), or take backups on a node running the "+
-			"embedded stream.")
+			"(`nats account backup`).")
 	}
 	return nil
 }
