@@ -89,6 +89,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -225,7 +226,15 @@ type Options struct {
 	// the store copies and no streams. The CLI says so when it prints one.
 	Conn *nats.Conn
 
-	// NodeID names the node in the manifest.
+	// NodeID is this node's RESOLVED id (config.ResolveNodeID), never the
+	// raw `node.id` field. Required, and [New] refuses a blank one.
+	//
+	// It is more than a label in the manifest: it keys this node's trim
+	// hold and the backup point announced to the fleet. The raw field is
+	// empty on the node a container orchestrator runs, which names itself
+	// through CREWLET_NODE_ID, and a blank id is a hold every such node
+	// shares (one node's copy releasing another's pin) and a point the
+	// register refuses, so the trim waits on a backup nobody can announce.
 	NodeID string
 
 	// Holds is the fleet's trim-hold register. Required: every node opens
@@ -287,9 +296,14 @@ const HoldHeartbeat = statelog.TrimHoldStale / 4
 // builds this beside an engine holding all three, so a nil is a wiring mistake,
 // and a backup that quietly did less around it (the streams without the store,
 // a copy with no trim pin or no announcement) would be an artefact the trim
-// cannot see or one missing the node's own estate.
+// cannot see or one missing the node's own estate. A blank node id is refused
+// for the same reason: see [Options.NodeID].
 func New(opts Options) (*Service, error) {
 	switch {
+	case strings.TrimSpace(opts.NodeID) == "":
+		return nil, errors.New("backup: Options.NodeID is required: it keys this " +
+			"node's trim hold and its announced backup point, so pass the id " +
+			"config.ResolveNodeID answers rather than the raw node.id field")
 	case opts.Store == nil:
 		return nil, errors.New("backup: Options.Store is required: a node's " +
 			"backup starts with its own store, which the engine opens")

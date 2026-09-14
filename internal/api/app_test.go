@@ -117,6 +117,9 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 	if opts.Sources.Events == nil {
 		opts.Sources.Events = sharedEvents
 	}
+	if opts.Sources.NodeID == "" {
+		opts.Sources.NodeID = config.DefaultNodeID
+	}
 	fleet := coordmemory.NewFleet()
 	if opts.Inbound.Publisher == nil {
 		opts.Inbound.Publisher = queuememory.New()
@@ -168,7 +171,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		t.Fatal("an app wired to nothing was built")
 	}
 	for _, field := range []string{
-		"Runtime", "Sources.Company", "Sources.Events",
+		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
 		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
 	} {
@@ -486,31 +489,26 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	}
 }
 
+// THE NODE ID NAMES THE PROCESS THAT ANSWERED, and it is the RESOLVED one.
+//
+// The field that turns "the config apply failed" into "the config apply failed
+// on node-2" once a load balancer sits in front of more than one process, and
+// the only way a caller can tell which one it reached. It used to be read off
+// the raw `node.id` field, which is empty on a node named through
+// CREWLET_NODE_ID: every such node answered as the default, node-0, while its
+// presence lease and the fleet view named it correctly. So the Bootstrap here
+// names a DIFFERENT node, and the body must not report it.
 func TestTheNodeIDNamesTheProcessThatAnswered(t *testing.T) {
 	t.Parallel()
-	// The field that turns "the config apply failed" into "the config
-	// apply failed on node-2" once a load balancer sits in front of more
-	// than one process — and the only way a caller can tell which one it
-	// reached.
 	b := config.DefaultBootstrap()
-	b.Node.ID = "node-2"
-	a := newApp(t, api.Options{Bootstrap: &b})
+	b.Node.ID = "the-raw-field"
+	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{NodeID: "node-2"}})
 
 	if _, body := get(t, a, "/health"); body["node"] != "node-2" {
-		t.Errorf("health node = %v, want node-2", body["node"])
+		t.Errorf("health node = %v, want the resolved node-2", body["node"])
 	}
 	if _, body := get(t, a, "/ready"); body["node"] != "node-2" {
-		t.Errorf("ready node = %v, want node-2", body["node"])
-	}
-}
-
-func TestAnUnnamedNodeTakesTheDefault(t *testing.T) {
-	t.Parallel()
-	// The counterfactual: a single-process deployment names nothing, and
-	// an empty node field would tell a reader less than a default does.
-	a := newApp(t, api.Options{})
-	if _, body := get(t, a, "/health"); body["node"] != config.DefaultNodeID {
-		t.Errorf("node = %v, want the default", body["node"])
+		t.Errorf("ready node = %v, want the resolved node-2", body["node"])
 	}
 }
 

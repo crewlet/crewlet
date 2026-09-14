@@ -132,6 +132,7 @@ func wireAPI(
 		Sources: queries.Sources{
 			Events:  backends.Store.Events(),
 			Company: company,
+			NodeID:  nodeID,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,

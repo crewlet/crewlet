@@ -1184,7 +1184,7 @@ second round trip.
 | Field | Meaning |
 |-------|---------|
 | `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. Precedence is `shutting_down` > that posture > `unconfigured` > `ok`: a draining engine is draining first whatever else is true of it, and the posture outranks `unconfigured` because it names the cause of it. |
-| `node` | This process's `node.id`, which is the only way a caller can tell which node a load balancer sent it to. |
+| `node` | This node's resolved id (`node.id`, else `CREWLET_NODE_ID`, else `node-0`), the same name its presence lease carries in the fleet view. The only way a caller can tell which node a load balancer sent it to. |
 | `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` every inbound webhook is answered `503` rather than routed, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
 | `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |

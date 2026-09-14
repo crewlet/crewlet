@@ -314,6 +314,62 @@ func TestANodeServesItsOwnHealth(t *testing.T) {
 	}
 }
 
+// A NODE NAMED THROUGH CREWLET_NODE_ID ANSWERS AS ITSELF, on its health body
+// and in its backups.
+//
+// The raw `node.id` is empty on exactly the node a container orchestrator runs,
+// which injects the variable and leaves the key out, and both surfaces used to
+// read that raw field: /health answered as the default node-0 while the node's
+// presence lease named it correctly, and a backup was keyed on a blank id, a
+// trim hold every such node shared and a backup point the fleet's register
+// refuses. Not parallel, because it sets the process environment.
+func TestANodeNamedByTheEnvironmentAnswersAsItself(t *testing.T) {
+	const name = "node-from-env"
+	t.Setenv(config.NodeIDEnvVar, name)
+	e := testEngine(t)
+	boot := bootstrapFor(t, 0)
+	boot.API.Port = freePort(t)
+	boot.API.Auth.Tokens = []config.APIToken{{ID: "ops", Token: "a-test-token"}}
+	if boot.Node.ID != "" {
+		t.Fatalf("the bootstrap names node %q itself, so this case proves nothing",
+			boot.Node.ID)
+	}
+
+	surface, err := serveNode(t, boot, e)
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
+
+	if got := getJSON(t, base+"/health")["node"]; got != name {
+		t.Errorf("health node = %v, want %q from %s", got, name, config.NodeIDEnvVar)
+	}
+
+	dir := filepath.Join(t.TempDir(), "backup")
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost,
+		base+"/backup?dir="+dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer a-test-token")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST /backup: %v", err)
+	}
+	defer func() { _ = res.Body.Close() }()
+	var manifest map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&manifest); err != nil {
+		t.Fatalf("decode the backup answer: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("POST /backup = %d: %v", res.StatusCode, manifest)
+	}
+	if manifest["node_id"] != name {
+		t.Errorf("the backup is keyed on node %v, want %q", manifest["node_id"], name)
+	}
+}
+
 // serveNode builds the API half of a node the way runEngine does: the config
 // surface first (a node with api.port 0 still needs a config WRITER), the
 // reconciler that owns the posture, then the listener.

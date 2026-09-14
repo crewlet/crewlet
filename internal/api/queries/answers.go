@@ -201,7 +201,9 @@ type Sources struct {
 	Retention func(ctx context.Context) any
 
 	// NodeID names this node in the fleet answer, so a reader can tell
-	// which row is the one they are talking to.
+	// which row is the one they are talking to. The RESOLVED id
+	// (config.ResolveNodeID), which is also the name the node's presence
+	// lease carries, never the raw `node.id` field.
 	NodeID string
 
 	// Now is injectable so a test can pin the lease countdowns and the
