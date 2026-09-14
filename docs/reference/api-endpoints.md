@@ -1260,10 +1260,12 @@ up.
   `used >= max`, is what "exhausted" means: a refused charge increments
   nothing, so the counter stops short of the cap by the size of the round
   that would not fit.
-- `{}` means no engine has reported one yet, which is a node whose first
-  charge has not happened. Per-agent, `budget: null` means the same, or
-  that the seat has no per-agent cap at all, because the engine seeds one
-  only for a non-zero `token_budget`.
+- `{}` means no engine has reported one since this node's projection
+  started: the feed begins at the stream's tail, so a node that has just
+  started shows none until the company's next charge on any node.
+  Per-agent, `budget: null` means the same, or that the seat has no
+  per-agent cap at all, because the engine seeds one only for a non-zero
+  `token_budget`.
 
 It is deliberately never persisted: replaying a live meter from history
 would show a dead process's counters as the current ones.
