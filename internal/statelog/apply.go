@@ -146,8 +146,8 @@ type RunnerDeps struct {
 //
 // # The order after the commit, and why it is a list rather than a habit
 //
-// The store RE-RUNS a conflicted transaction's body, so anything with an
-// effect outside the transaction must happen after the outer call returns. A
+// The store MAY RE-RUN a transaction's body, so anything with an effect
+// outside the transaction must happen after the outer call returns. A
 // *sql.Tx in hand makes updating the cache or waking a waiter look natural
 // inside the loop, and both are wrong there: the attempt may be rolled back
 // and run again, so the cache would announce a position that never committed
@@ -968,23 +968,27 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	// never written, so the series was permanently absent and the gauge
 	// documented as "measured on the operator's own hardware rather than on
 	// a benchmark's" read as no-data for ever. What it answers is whether
-	// this driver's transaction conflicts are row-scoped or
-	// database-scoped, which is the assumption fourteen of this design's
-	// throughput figures rest on.
+	// an apply's body is ever run twice, which is the assumption fourteen
+	// of this design's throughput figures rest on. The driver detects
+	// conflicts per file, so the store's write transactions hold the lock
+	// from their BEGIN and nothing committing elsewhere can abort one (see
+	// internal/store's writelock.go): this reads zero by construction, and
+	// a count here is a transient failure that surfaced from inside a body
+	// the store then ran again.
 	//
-	// It cannot be counted in the store: [store.retryStale] is where the
-	// abort happens, and internal/store may not import a metrics package
+	// It cannot be counted in the store: [store.DB.Tx]'s retry is where the
+	// re-run happens, and internal/store may not import a metrics package
 	// the whole engine sits above. But the store RE-RUNS the body, so this
-	// closure's own invocation count is the same number — attempts minus
-	// the one that committed — read from the layer that owns the
+	// closure's own invocation count is the same number (attempts minus
+	// the one that committed) read from the layer that owns the
 	// instrument.
 	attempts := 0
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
 		attempts++
-		// RESET ON EVERY ATTEMPT. The store re-runs a conflicted
-		// transaction's body, so a counter accumulated across attempts
-		// counts the abandoned one too — and the metrics would report
-		// work that was rolled back.
+		// RESET ON EVERY ATTEMPT. The store re-runs the body of an
+		// attempt that failed transiently, so a counter accumulated
+		// across attempts counts the abandoned one too, and the metrics
+		// would report work that was rolled back.
 		consumed, committedAt, tally, rows, boundBy = consumed[:0], Position{}, results{}, 0, ""
 		txStart := r.now()
 

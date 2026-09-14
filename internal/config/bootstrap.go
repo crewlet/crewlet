@@ -699,7 +699,9 @@ type Store struct {
 	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty" js:"min=0" desc:"Connection pool bound; 0 takes the store default."`
 
 	// BusyTimeoutSeconds is how long a statement waits for the file lock
-	// before giving up; 0 takes the store's own default.
+	// before giving up; 0 takes the store's own default. A write
+	// transaction's place in the store's queue for that lock is bounded by
+	// it too, so it is the one knob for both halves of the same wait.
 	BusyTimeoutSeconds float64 `yaml:"busy_timeout_seconds,omitempty" json:"busy_timeout_seconds,omitempty" js:"min=0" desc:"Lock wait before a statement fails; 0 takes the store default."`
 }
 

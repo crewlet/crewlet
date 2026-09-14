@@ -244,8 +244,8 @@ func (f *CommitFault) Disarm() { f.armed.Store(false) }
 // Fired reports whether the fault actually reached its commit.
 //
 // An assertion that the injector RAN, and it is not ceremony: the store
-// retries a conflicted transaction, so a test that armed a fault and asserted
-// only the outcome can pass because the fault never fired at all.
+// retries a transaction that failed transiently, so a test that armed a fault
+// and asserted only the outcome can pass because the fault never fired at all.
 func (f *CommitFault) Fired() bool { return f.fired.Load() }
 
 // commitErr decides what this commit does. It is called once per commit while

@@ -63,6 +63,17 @@
 // two. [Capabilities] still measures what the pinned driver can do, and is
 // still the tripwire for the two features Turso announces and does not yet
 // reach Go — an ANN vector index and a full-text index.
+//
+// # Every write holds the lock from its BEGIN
+//
+// The driver allows one writer per file, detects a write conflict per FILE
+// rather than per row, and serves its write lock to nobody in order: a waiter
+// polls, and a writer committing back to back can starve it. So [DB.Tx] and
+// [Writer.Tx] take the lock at BEGIN, through a first-come-first-served queue
+// this process keeps per file, and a write transaction is neither aborted by a
+// commit elsewhere in the file nor starved by a writer beside it. [DB.Read]
+// takes neither, and must not write. writelock.go carries what was read from
+// the driver's source and measured against it.
 package store
 
 import (
@@ -167,6 +178,12 @@ type Options struct {
 
 	// BusyTimeout is how long a statement waits for the file lock before
 	// giving up; 0 means defaultBusyTimeout.
+	//
+	// It bounds BOTH halves of a write transaction's wait for the lock: its
+	// place in this process's queue, and the driver's own busy handler
+	// behind that (see writelock.go). One knob, because they are one wait
+	// done in two places, and a second setting would let an operator raise
+	// one and watch the other time out.
 	BusyTimeout time.Duration
 
 	// EmbeddingDim is the width of the vectors the active company config's
@@ -272,6 +289,13 @@ type DB struct {
 		declared int
 		held     int
 	}
+
+	// writes orders this file's write transactions, pooled and pinned
+	// alike and across every handle on the file, first come first served.
+	// See writelock.go for why the driver's own lock cannot be what orders
+	// them. busy is how long one of this handle's writers waits in it.
+	writes *writeQueue
+	busy   time.Duration
 }
 
 var log = logging.Get("store")
@@ -407,7 +431,8 @@ func openEstate(ctx context.Context, estate Estate, path string, opts Options) (
 		return nil, err
 	}
 
-	db := &DB{sql: pool, path: path, lock: lock, estate: estate}
+	db := &DB{sql: pool, path: path, lock: lock, estate: estate,
+		writes: lock.queue(), busy: opts.busyTimeout()}
 	// THE PINS ARE THE REPLICATED ESTATE'S. A pinned connection is an
 	// applier's, and an applier writes there — so the node estate keeps
 	// its four readers and the pool that grows is the one the writers are
@@ -652,7 +677,11 @@ func openPool(path string, busy time.Duration,
 	if err != nil {
 		return nil, fmt.Errorf("store: driver %q: %w", driverName, err)
 	}
-	drv := probeHandle.Driver()
+	// THE BEGIN ADAPTER FIRST, and the fault injector around it: a write
+	// transaction's IMMEDIATE begin is this package's, and an injector that
+	// sat beneath it would intercept a transaction nothing here begins. See
+	// writelock.go.
+	drv := driver.Driver(beginDriver{inner: probeHandle.Driver()})
 	_ = probeHandle.Close()
 	if wrap != nil {
 		drv = wrap(drv)
@@ -738,82 +767,112 @@ func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 
 func (c *connector) Driver() driver.Driver { return c.drv }
 
-// Tx runs fn inside a transaction, committing when it returns nil and rolling
-// back otherwise.
+// Tx runs fn inside a WRITE transaction, committing when it returns nil and
+// rolling back otherwise.
+//
+// IT HOLDS THE FILE'S WRITE LOCK FROM ITS BEGIN, having queued for it behind
+// every write transaction on this database that asked first (see
+// writelock.go). So fn reads a snapshot no other writer can advance: a
+// read-then-write inside it cannot lose a race, and no commit anywhere in the
+// file can abort it. A transaction that only reads belongs in [DB.Read], which
+// takes no lock and queues behind nothing.
 //
 // A PANIC rolls back and re-panics rather than leaving the transaction open.
 // Without that, a panic in fn returns through the runtime with the connection
-// still holding an uncommitted transaction — and on a single-writer database
+// still holding an uncommitted transaction, and on a single-writer database
 // that connection going back to the pool with an open transaction blocks every
 // subsequent write, so one bug in one handler wedges the whole process.
 //
 // The rollback error is deliberately discarded on the failure paths: fn's error
 // is what the caller needs, and replacing it with "rollback failed" would hide
 // the reason the rollback was necessary.
-func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	// A CONFLICTED TRANSACTION IS RETRIED, and fn may therefore run more
-	// than once. That is safe by construction: the driver reports the
-	// conflict on a statement inside the transaction, everything the
-	// attempt wrote is rolled back before the next one begins, and fn sees
-	// a fresh snapshot each time. A caller whose fn has side effects
-	// OUTSIDE the transaction — a publish, a counter in memory — must make
-	// them idempotent or move them out, which is what a transaction body
-	// should be anyway.
-	//
-	// The driver's BeginTx ignores its options and always issues a plain
-	// BEGIN, so a read-then-write that loses a race does not wait out a
-	// busy timeout: it fails IMMEDIATELY with "database snapshot is
-	// stale". Without a retry that error reaches the caller as a lost
-	// write on a database with no other writer than this process, which is
-	// how a conversation entry, a memory row or a config revision went
-	// missing under nothing more than two goroutines. internal/learning
-	// carried a private copy of this loop for one of its twelve callers;
-	// the other eleven had none.
-	return retryStale(ctx, func() error { return d.tx(ctx, fn) })
+func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	// fn MAY STILL RUN MORE THAN ONCE. Nothing can abort it, but an attempt
+	// can fail for a transient reason (see [retryable]) and the retry runs
+	// fn again on a fresh transaction when that failure surfaces from inside
+	// it. A caller whose fn has side effects OUTSIDE the transaction, such as
+	// a publish or a counter in memory, must make them idempotent or move
+	// them out, which is what a transaction body should be anyway.
+	return retryTransient(ctx, func() error {
+		if d == nil || d.sql == nil {
+			return ErrNoEstate
+		}
+		// THE CONNECTION BEFORE THE QUEUE. Drawn the other way round, a
+		// writer at the front of the queue could be waiting on the pool,
+		// behind readers that are waiting on the very commit a pinned
+		// applier queued behind it is about to make: the feedback loop
+		// [Writer] exists to break, rebuilt one layer up. A writer waiting
+		// here holds a pooled connection instead, which is exactly what one
+		// polling the driver's busy handler used to hold.
+		conn, err := d.sql.Conn(ctx)
+		if err != nil {
+			return fmt.Errorf("store: begin: %w", err)
+		}
+		defer func() { _ = conn.Close() }()
+		return d.writeOn(ctx, conn, fn)
+	})
 }
 
-// retryStale runs one attempt at a time until it succeeds, fails for a reason
-// a retry cannot fix, or exhausts [txAttempts].
+// writeOn is one write attempt on conn: its place in the queue, then an
+// IMMEDIATE begin, then fn. [DB.Tx] and [Writer.Tx] differ only in where conn
+// comes from, which is why both reach the lock through here.
+func (d *DB) writeOn(ctx context.Context, conn *sql.Conn, fn func(*sql.Tx) error) error {
+	if err := d.writes.acquire(ctx, d.busy); err != nil {
+		return err
+	}
+	defer d.writes.release()
+	return attempt(ctx, conn.BeginTx, writeTx, fn)
+}
+
+// retryTransient runs one attempt at a time until it succeeds, fails for a
+// reason a retry cannot fix, or exhausts [txAttempts].
 //
-// ONE LOOP, and that is the whole reason it is a function: [DB.Tx] and
-// [Writer.Tx] both need it, and a second copy is how one of them comes to
-// classify an error the other retries — which is exactly what the eleven
-// callers without internal/learning's private copy paid for.
-func retryStale(ctx context.Context, once func() error) error {
+// ONE LOOP, and that is the whole reason it is a function: [DB.Tx],
+// [Writer.Tx] and [DB.Read] all need it, and a second copy is how one of them
+// comes to classify an error the other retries.
+func retryTransient(ctx context.Context, once func() error) error {
 	for attempt := 0; ; attempt++ {
 		err := once()
-		if err == nil || attempt+1 >= txAttempts || !staleSnapshot(err) {
+		if err == nil || attempt+1 >= txAttempts {
 			return err
 		}
-		log.WarnContext(ctx, "store_tx_retry", "attempt", attempt+1, "error", err.Error(),
-			"detail", "the transaction read a snapshot another writer had already "+
-				"advanced past; retrying on a fresh one")
+		why, retry := retryable(err)
+		if !retry {
+			return err
+		}
+		log.WarnContext(ctx, "store_tx_retry", "attempt", attempt+1,
+			"error", err.Error(), "detail", why)
 		sleepFor(ctx, txRetryBeat(attempt))
 	}
 }
 
-// txAttempts is how many times a conflicted transaction is retried.
+// txAttempts is how many times a transaction is attempted before its
+// transient failure is returned.
 //
-// Eight, and the number is measured rather than chosen: four goroutines each
-// incrementing one row twelve times — the sharpest contention this store
-// sees, since every one of them reads and writes the SAME row — still lost an
-// update at three attempts even with a jittered pause. What fails at a budget
-// this size is contention no retry loop should absorb silently anyway, and
-// the caller gets the error rather than a lost write.
+// Eight, and what it buys has changed. It was measured against four
+// goroutines racing read-then-write on one row, which still lost an update at
+// three attempts; that race is gone, because a write transaction holds the
+// lock from its BEGIN. What is left to retry is a WAIT, and every such attempt
+// already waited the busy timeout before it failed, so this is now the ceiling
+// on how long a write waits for the lock in total: eight busy timeouts, forty
+// seconds at the default. That is the ceiling a write had before this package
+// queued its writers, kept rather than moved in the same change: fewer turns
+// a burst the queue would have absorbed into a failed write, and more holds a
+// turn or an applier past any deadline it has.
 const txAttempts = 8
 
 // txRetryBeat is the jittered, WIDENING pause between attempts.
 //
-// Two properties, and both were paid for. Jittered because the conflict
-// returns with no wait of its own, so retries fired back to back re-collide
-// inside the same contention window and spend the whole budget in a few
-// microseconds. Widening because with a fixed window every loser of one round
-// is a contender in the next at the same density: the window has to grow with
-// the number of writers still fighting over the row, and the attempt count is
-// the only estimate of that available here.
+// Two properties, and both were paid for. Jittered because a failure that
+// returns with no wait of its own, fired back to back, re-collides inside the
+// same window and spends the whole budget in a few microseconds. Widening
+// because with a fixed window every loser of one round is a contender in the
+// next at the same density: the window has to grow with the number of callers
+// still waiting, and the attempt count is the only estimate of that available
+// here.
 //
-// The base is sized to what is being waited out — one local write transaction
-// committing, which is microseconds — so even the last attempt's ceiling is a
+// The base is sized to what is being waited out, one local write transaction
+// committing, which is microseconds, so even the last attempt's ceiling is a
 // pause a caller never notices.
 func txRetryBeat(attempt int) time.Duration {
 	const base = 1_000 // microseconds
@@ -821,38 +880,59 @@ func txRetryBeat(attempt int) time.Duration {
 	return time.Duration(base+rand.N(spread)) * time.Microsecond
 }
 
-// staleSnapshot reports whether an error is the driver's read-then-write
-// conflict.
+// retryable reports whether an attempt failed for a reason the next attempt
+// can outlive, and says which, for the log line that records the retry.
 //
-// MATCHED ON TEXT, deliberately and with a comment saying so: the driver
-// returns a bare error for this with no sentinel and no code to compare
-// against, so the alternative to a string match is no retry at all. Kept
-// narrow — two spellings, both of which are the driver's own — so an
-// unrelated failure is never retried into a second side effect.
-func staleSnapshot(err error) bool {
+// MATCHED ON TEXT where the error is the driver's, deliberately and with a
+// comment saying so: the driver returns bare errors with no sentinel and no
+// code to compare against, so the alternative to a string match is no retry at
+// all. Kept narrow, so an unrelated failure is never retried into a second
+// side effect.
+//
+// A STALE SNAPSHOT IS NOT ON THE LIST, and that is the point of writelock.go
+// rather than an omission. The driver refuses a deferred transaction's first
+// write when another commit advanced the file past its snapshot, and every
+// transaction this package begins either holds the write lock from BEGIN
+// ([DB.Tx], [Writer.Tx]) or never writes ([DB.Read]). The one way left to
+// reach it is a body that writes inside a read, and re-running that would
+// repeat a write its caller declared to be a read.
+func retryable(err error) (string, bool) {
 	if err == nil {
-		return false
+		return "", false
+	}
+	if errors.Is(err, errWritersQueued) {
+		return "the write transactions queued ahead of this one held the " +
+			"database past the busy timeout; waiting again", true
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "snapshot is stale") ||
-		strings.Contains(msg, "database is locked") ||
+	switch {
+	case strings.Contains(msg, "database is locked"):
+		// THE DRIVER'S OWN LOCK, waited on by its busy handler for the
+		// busy timeout: a statement outside this package's queue held
+		// it, and will not for long.
+		return "the database's write lock was held past the busy timeout " +
+			"by a statement outside this process's queue; waiting again", true
+	case strings.Contains(msg, "transaction within a transaction"):
 		// A CONNECTION THE POOL HANDED BACK WITH A TRANSACTION STILL
 		// OPEN, which the driver reports on the next BEGIN over it.
 		//
 		// It is retryable for a reason that is about the POOL rather
 		// than about the database: the next attempt draws a different
 		// connection, and a clean one begins normally. Without this a
-		// caller that happened to draw the dirty one fails permanently
-		// — the projector's boot reconcile did exactly that, restarting
+		// caller that happened to draw the dirty one fails permanently;
+		// the projector's boot reconcile did exactly that, restarting
 		// every two seconds against the same connection and never
 		// hydrating, with the failure visible only as a WARN nobody was
 		// watching.
 		//
 		// It is NOT the whole fix. What leaves a connection dirty is a
-		// rollback that failed and was discarded, which [DB.tx] now
-		// reports instead — see there. This clause is what keeps a
-		// caller working while that report reaches somebody.
-		strings.Contains(msg, "transaction within a transaction")
+		// rollback that failed and was discarded, which [rollback] now
+		// reports instead. This clause is what keeps a caller working
+		// while that report reaches somebody.
+		return "the pooled connection this attempt drew still had a " +
+			"transaction open; drawing another", true
+	}
+	return "", false
 }
 
 // sleepFor waits, or returns early if the context is done.
@@ -865,20 +945,17 @@ func sleepFor(ctx context.Context, d time.Duration) {
 	}
 }
 
-// tx runs one attempt.
+// attempt runs ONE transaction: begin with opts through begin, run fn, then
+// commit or roll back.
 //
-// A NIL HANDLE IS AN ERROR, NOT A CRASH, and it is a state a caller can
-// legitimately be holding: [DB.Replicated] answers nil while an adoption has
-// the peer closed between its rename and its reopen, and again after [DB.Close].
-// Both are documented and deliberate — so the honest answer to a read issued
-// through one is the same shape every other late read already gets ("this
-// estate is not open"), rather than a segfault that takes the process with it.
-// Measured: a maintenance tick racing a shutdown panicked the whole engine.
-func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	if d == nil || d.sql == nil {
-		return ErrNoEstate
-	}
-	tx, err := d.sql.BeginTx(ctx, nil)
+// One body for every transaction this package runs, pooled or pinned, read or
+// write. Each used to carry its own copy of these twenty lines, and the copies
+// had already begun to differ in what their comments claimed.
+func attempt(ctx context.Context,
+	begin func(context.Context, *sql.TxOptions) (*sql.Tx, error),
+	opts *sql.TxOptions, fn func(*sql.Tx) error,
+) error {
+	tx, err := begin(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("store: begin: %w", err)
 	}
@@ -907,16 +984,18 @@ func (d *DB) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 // the pool does not know: the next caller to draw it gets "cannot start a
 // transaction within a transaction" from its own BEGIN, on a connection it did
 // nothing to. The driver reports the failure and does not answer ErrBadConn, so
-// nothing retires the connection either.
+// nothing retires the connection either. On a PINNED connection the
+// consequence is worse: it is the one connection that writer will ever use, so
+// every subsequent attempt is refused its own BEGIN.
 //
-// This does not repair it — there is nothing here that can, short of closing a
+// This does not repair it; there is nothing here that can, short of closing a
 // connection the pool owns. What it does is make it VISIBLE, at WARN, naming
 // the consequence. Discarding it made a poisoned pool entry into a mystery that
 // surfaced somewhere else entirely, as a subsystem that had been failing every
 // two seconds for as long as the process had been up.
 //
-// [staleSnapshot] classifies the downstream symptom as retryable, so a caller
-// that draws the dirty connection recovers on the next one. The two halves are
+// [retryable] classifies the downstream symptom as retryable, so a caller that
+// draws the dirty connection recovers on the next one. The two halves are
 // deliberately separate: one keeps the engine working, and this one is how
 // anybody finds out it had to.
 func rollback(ctx context.Context, tx *sql.Tx) {

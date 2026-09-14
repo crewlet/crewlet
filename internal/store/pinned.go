@@ -27,10 +27,15 @@ import (
 //
 // # It is not a second transaction implementation
 //
-// Tx below carries the SAME retry loop and the SAME stale-snapshot classifier
-// [DB.Tx] does, through retryStale, because a second copy is how one of them
-// comes to retry an error the other returns. The only difference is which
+// Tx below takes the SAME place in the SAME queue, begins the SAME IMMEDIATE
+// transaction and carries the SAME retry loop [DB.Tx] does, because a second
+// copy is how one of them comes to retry an error the other returns, or to
+// take the write lock the way the other does not. The only difference is which
 // connection the transaction begins on.
+//
+// The pin keeps a writer out of the POOL's competition, not out of the
+// queue's: every write transaction on this file, pinned or pooled, is served
+// in the order it asked for the lock (see writelock.go).
 //
 // A Writer is NOT safe for concurrent use: it is one connection, and its
 // owner is one goroutine. Two goroutines sharing one would interleave
@@ -70,39 +75,12 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 	return &Writer{db: d, conn: conn}, nil
 }
 
-// Tx runs fn inside a transaction on the pinned connection, with [DB.Tx]'s
-// retry and rollback semantics exactly — including that fn MAY RUN MORE THAN
-// ONCE, so anything with an effect outside the transaction belongs after Tx
-// returns rather than inside it.
+// Tx runs fn inside a write transaction on the pinned connection, with
+// [DB.Tx]'s lock, retry and rollback semantics exactly, including that fn MAY
+// RUN MORE THAN ONCE, so anything with an effect outside the transaction
+// belongs after Tx returns rather than inside it.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryStale(ctx, func() error { return w.tx(ctx, fn) })
-}
-
-// tx is one attempt: begin, run, commit or roll back.
-func (w *Writer) tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := w.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: begin: %w", err)
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			rollback(ctx, tx)
-			panic(p)
-		}
-	}()
-	if err := fn(tx); err != nil {
-		// THROUGH THE SAME HELPER, and here the consequence is worse
-		// than on the pool: this connection is PINNED, so a rollback
-		// that failed leaves a transaction open on the one connection
-		// this applier will ever use — every subsequent attempt is
-		// refused its own BEGIN and the domain stops applying entirely.
-		rollback(ctx, tx)
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit: %w", err)
-	}
-	return nil
+	return retryTransient(ctx, func() error { return w.db.writeOn(ctx, w.conn, fn) })
 }
 
 // Conn exposes the pinned connection for statements that are not transactions
@@ -144,18 +122,27 @@ func (w *Writer) Close() error {
 // page under it. A transaction is what makes the two statements one answer.
 //
 // database/sql has sql.TxOptions{ReadOnly: true} for exactly this and it is
-// deliberately not passed: the driver's BeginTx IGNORES its options and always
-// issues a plain BEGIN (see the note on DB.Tx). Passing one would read as a
-// guarantee the driver does not make — a caller could believe a write inside
-// fn is refused, and it is not. The read-only-ness here is the caller's
+// deliberately not passed: the driver cannot make a transaction read-only, and
+// this package's BEGIN refuses the option rather than ignoring it the way the
+// driver does (see writelock.go). The read-only-ness here is the caller's
 // discipline and this doc, which is the honest description of what the layer
 // underneath actually provides.
 //
-// It carries the same retry as [DB.Tx]: a read transaction can lose a snapshot
-// race too, and a reader that surfaced "database snapshot is stale" to a
-// dashboard would be reporting the store's internals as the answer.
+// IT TAKES NO LOCK AND QUEUES BEHIND NOTHING: a plain BEGIN is deferred, the
+// snapshot is taken at the first statement, and under the write-ahead log a
+// reader and the one writer never wait on each other. That is also why it
+// must not write. A write inside it would upgrade a snapshot another commit
+// may already have advanced past, which the driver refuses, and which
+// [retryable] deliberately does not retry.
+//
+// It carries the same retry as [DB.Tx] for the failures a read can meet: a
+// connection some other caller left dirty, and the driver's lock held past the
+// busy timeout while a snapshot is being established.
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryStale(ctx, func() error {
-		return d.tx(ctx, func(tx *sql.Tx) error { return fn(tx) })
+	return retryTransient(ctx, func() error {
+		if d == nil || d.sql == nil {
+			return ErrNoEstate
+		}
+		return attempt(ctx, d.sql.BeginTx, nil, fn)
 	})
 }

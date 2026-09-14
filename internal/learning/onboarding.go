@@ -259,19 +259,15 @@ func (o *Onboarding) Mark(ctx context.Context, m Marker, at time.Time) error {
 // re-reading the same pages and writing the same conventions — and not
 // running one costs a turn.
 //
-// The claim is ONE statement, and that is a decision about what the LOSER is
-// told. A read-then-write inside store.Tx is not unsafe — store.Tx begins
-// DEFERRED, both claimants take their snapshot before either writes, and the
-// second commit is refused rather than silently overwriting the first
-// (measured, TestWhyTheClaimIsOneStatement: turso answers "database snapshot
-// is stale"). But the loser
-// learns it lost through an ERROR, and an error is the one thing this package
-// keeps distinct from a definite answer. Both shapes skip the pass, so the
-// difference never surfaces as a duplicate onboarding; it surfaces as a store
-// that looks broken every time two turns race one seat. The conditional
-// upsert evaluates its predicate under the write lock instead, so the loser
-// gets (Pass{}, nil) — definitely somebody else's — and an error keeps
-// meaning what it means everywhere else here.
+// The claim is ONE statement. A read-then-write inside store.Tx would be as
+// correct: a write transaction holds the database's lock from its BEGIN, so
+// the second claimant reads only after the first has committed, sees the
+// lease, and declines (measured, TestAReadThenWriteClaimIsSerialized). The
+// statement is the smaller shape for the same answer. It evaluates its
+// predicate under the write lock without a transaction around it, so it costs
+// one round trip rather than four, and it does not depend on a body being safe
+// to run twice. Either way the loser gets (Pass{}, nil), definitely somebody
+// else's, and an error keeps meaning what it means everywhere else here.
 //
 // A claim for a never-marked seat INSERTS the row with an empty chain_hash,
 // which Onboarded reads correctly as "not onboarded" — the lease and the
