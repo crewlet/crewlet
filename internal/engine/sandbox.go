@@ -290,7 +290,9 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	}
 	// PINNED ONCE, for the reason runTurn pins it: two reads can straddle
 	// an apply, and the seat would then be looked up in one company and
-	// resumed into another's org.
+	// resumed into another's org. The pin travels on the input, so
+	// resumeTurn builds the runner from this same epoch rather than
+	// reading it again.
 	company := r.engine.Company()
 	if company == nil {
 		// A node with no applied revision has no seat to resume into, and
@@ -308,8 +310,9 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 			sandbox.ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return r.engine.resumeTurn(ctx, resumeInput{
-		Run:   req.Run,
-		State: state,
+		Company: company,
+		Run:     req.Run,
+		State:   state,
 		Turn: &turnctx.Turn{
 			ID: req.Run.TurnID, Seat: seat, Org: company.Org,
 			Depth: req.Run.DelegationDepth, Chain: req.Run.DelegationChain,
@@ -358,6 +361,14 @@ func (e *Engine) resumePanicked(ctx context.Context, run sandbox.PendingRun, pan
 
 // resumeInput is one re-entry, assembled.
 type resumeInput struct {
+	// Company is the epoch the resume runs under, read ONCE by the resumer.
+	// Turn's seat and org were resolved from it, so everything resumeTurn
+	// builds (the runner, its registry, its meter, its judge) must come
+	// from it too: a second read can land on the far side of an apply, and
+	// the turn would then act as a seat of one revision with the tools and
+	// caps of another. Required; a resume without one is refused.
+	Company *Company
+
 	Run     sandbox.PendingRun
 	State   execstate.State
 	Turn    *turnctx.Turn
@@ -405,7 +416,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.turn_id", in.Run.TurnID))
 	defer span.End()
 
-	company := e.Company()
+	company := in.Company
+	if company == nil {
+		// Not a second read of the epoch, which is the one thing this
+		// must not do (see [resumeInput.Company]). Handed back rather
+		// than settled: a caller that assembled a resume without its
+		// epoch is a defect here, and a peer can still resume the run.
+		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
+			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
+	}
 	tel := e.describeResume(ctx, company, in)
 	resumedReply := turn.ParseReply(in.Run.Reply)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
