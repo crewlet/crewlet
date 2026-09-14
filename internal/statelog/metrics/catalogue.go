@@ -246,14 +246,20 @@ func Catalogue() []Instrument {
 		{
 			Name: StatelogApplyTxAborts, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"domain"},
-			Shows: "Apply transactions the store aborted on a conflict and the " +
-				"loop retried. It is the number that says whether this " +
-				"driver's transaction conflicts are row-scoped or " +
-				"database-scoped, on the operator's own hardware rather than " +
-				"on a benchmark's — measured at zero against a writer " +
-				"committing to tables the applier never touches, so a " +
-				"non-zero count means the retry budget is being spent rather " +
-				"than held in reserve.",
+			Shows: "Apply transactions the driver ABORTED — a snapshot it " +
+				"invalidated after the attempt had already written against " +
+				"it — and the loop retried. It is the number that says " +
+				"whether this driver's transaction conflicts are row-scoped " +
+				"or database-scoped, on the operator's own hardware rather " +
+				"than on a benchmark's. A write lock the driver refused " +
+				"inside busy_timeout is deliberately NOT counted here: that " +
+				"attempt wrote nothing and rises with load on the box, so " +
+				"counting it made this metric answer a question about CPU " +
+				"while claiming to answer one about the driver. Measured at " +
+				"zero against a writer committing to tables the applier " +
+				"never touches, so a non-zero count means the driver's " +
+				"conflict detection reaches beyond the rows a transaction " +
+				"wrote.",
 			// AND IT IS THE ONLY RETRY THE APPLIER HAS. A catalogued
 			// `apply.retries` sat beside this one, declared as
 			// "transient apply failures retried in place" — a

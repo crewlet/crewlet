@@ -972,15 +972,19 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	// database-scoped, which is the assumption fourteen of this design's
 	// throughput figures rest on.
 	//
-	// It cannot be counted in the store: [store.retryStale] is where the
-	// abort happens, and internal/store may not import a metrics package
-	// the whole engine sits above. But the store RE-RUNS the body, so this
-	// closure's own invocation count is the same number — attempts minus
-	// the one that committed — read from the layer that owns the
-	// instrument.
-	attempts := 0
-	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		attempts++
+	// It cannot be counted in the store: that is where the conflict is
+	// seen, and internal/store may not import a metrics package the whole
+	// engine sits above. So the store REPORTS the causes and this layer,
+	// which owns the instrument, counts the ones the metric is named for.
+	//
+	// It used to count this closure's own invocations instead, which was
+	// wrong twice. A conflict raised by the COMMIT lands after the body has
+	// already returned nil, so the body never saw it; and a write lock the
+	// driver refused inside busy_timeout re-ran the body having written
+	// NOTHING, which is load on the box rather than an abort. The metric
+	// therefore rose with CPU pressure while claiming to describe this
+	// driver's conflict detection — see [store.Conflict].
+	conflicts, err := w.TxConflicts(ctx, func(tx *sql.Tx) error {
 		// RESET ON EVERY ATTEMPT. The store re-runs a conflicted
 		// transaction's body, so a counter accumulated across attempts
 		// counts the abandoned one too — and the metrics would report
@@ -1149,7 +1153,7 @@ func (r *Runner) applyRun(ctx context.Context, w *store.Writer, run []Record) ([
 	r.ack(ctx, consumed)
 
 	r.measureDrain(started, len(consumed))
-	r.countAborts(attempts)
+	r.countAborts(conflicts)
 	// THE TOP RECORD, for the same reason: the apply LATENCY is measured
 	// from a record's own StoredAt, and a stale redelivery's is an hour
 	// old, so reading the tail reports the redelivery's age as this
@@ -1342,16 +1346,28 @@ type results struct {
 	skipped  int
 }
 
-// countAborts records the transactions the store rolled back under this apply.
+// countAborts records the transactions the driver ABORTED under this apply.
 //
-// ATTEMPTS MINUS ONE, because the last one is the one that committed. Zero on
-// the ordinary path, which is why it is a counter rather than a gauge: what an
+// ONLY the aborts, out of every conflict the store reported. A write lock that
+// was not granted inside busy_timeout is a retry too, and counting it here put
+// the box's CPU pressure into a metric that is supposed to answer whether this
+// driver's conflict detection is row-scoped or database-scoped. Zero on the
+// ordinary path, which is why it is a counter rather than a gauge: what an
 // operator watches is whether it moves at all.
-func (r *Runner) countAborts(attempts int) {
-	if r.metrics == nil || attempts <= 1 {
+func (r *Runner) countAborts(conflicts []store.Conflict) {
+	if r.metrics == nil {
 		return
 	}
-	r.metrics.Add(metrics.StatelogApplyTxAborts, uint64(attempts-1),
+	var aborts uint64
+	for _, c := range conflicts {
+		if c == store.ConflictAbort {
+			aborts++
+		}
+	}
+	if aborts == 0 {
+		return
+	}
+	r.metrics.Add(metrics.StatelogApplyTxAborts, aborts,
 		metrics.Attrs{"domain": r.domain.Name()})
 }
 
