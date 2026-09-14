@@ -239,13 +239,14 @@ Choose **Edit** on the company, a unit or a seat to open its editor at the side
 of the chart. **Edit reports** opens a seat's editor at **Manages**, and a
 lead chip's **Choose another seat** opens a unit's at **Lead**, so an action
 about one field starts on that field. The editor holds your changes in its
-own form until you press
-**Apply**, which adds them to the draft as **one step**: one Undo takes the
-whole edit back. Closing an editor that holds changes (Cancel, Close, Escape or
-a click outside it) asks before discarding them, and so does anything that
-would leave the page under it: one of its links, the browser's Back or
-Forward, or a reload. **Keep editing** leaves you where you were, form and
-all.
+own form until you press **Apply**, which adds them to the draft as **one
+step**: one Undo takes the whole edit back. Closing an editor that holds
+changes (Cancel, Close, Escape or a click outside it) asks before discarding
+them, and so does anything that would leave the builder under it: one of its
+links, the browser's Back or Forward to another screen or lens, or a reload.
+**Keep editing** leaves you where you were, form and all. Moving between the
+builder's own views (Back from the outline to the canvas, say) keeps the
+editor open with your changes, so it asks nothing.
 
 If the engine refused something about the node at the last check, the problem
 is shown beside the field it names. Problems that name no field in the editor

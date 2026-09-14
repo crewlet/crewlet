@@ -74,6 +74,7 @@ import { ToastProvider, useToast } from "~/ui/Toast.tsx";
 import { isModalOpen } from "~/ui/useModal.ts";
 import {
   BuilderContext,
+  keepsTheLens,
   type AddKind,
   type BuilderApi,
   type BuilderViewHandle,
@@ -905,7 +906,7 @@ function Lens({
   useLeaveGuard(
     changed && !keeping.survives
       ? (to, leave) => {
-          if (to.path[0] === "org" && to.query.get("lens") === "builder") return false;
+          if (keepsTheLens(to)) return false;
           setLeaving({ leave });
           return true;
         }

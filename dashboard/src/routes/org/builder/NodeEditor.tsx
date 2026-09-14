@@ -7,9 +7,12 @@
  * typed, a refusal keeps the form open with the engine's reason on screen,
  * and Undo takes back the whole of what Apply did. Closing a form with
  * changes in it, by Cancel, Close, Escape or the veil, asks first, because a
- * form's changes exist nowhere else, and so does every move away from the
- * page it is on (one of its links, Back or Forward, a reload): the form holds
+ * form's changes exist nowhere else, and so does every move that leaves the
+ * Builder lens (one of its links, Back or Forward, a reload): the form holds
  * a leave guard (`app/router.useLeaveGuard`) for as long as it has changes.
+ * A move within the lens (Back from the outline to the canvas) keeps the
+ * editor open with its form, so it is let go without a question
+ * (`BuilderContext.keepsTheLens`).
  *
  * WHAT IS EDITABLE IS DECIDED FIELD BY FIELD (the field coverage of the
  * builder's spec). A field the builder can write is a field. A field it shows
@@ -51,7 +54,12 @@ import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { ListField } from "~/ui/ListField.tsx";
 import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
 import { Banner, Button, Empty } from "~/ui/primitives.tsx";
-import { useBuilder, type BuilderApi, type EditorSectionName } from "./BuilderContext.tsx";
+import {
+  keepsTheLens,
+  useBuilder,
+  type BuilderApi,
+  type EditorSectionName,
+} from "./BuilderContext.tsx";
 import {
   companyForm,
   companyParts,
@@ -211,12 +219,14 @@ function EditorShell({
 }) {
   // `leave` is the move the router held (a link, Back or Forward) when the
   // question came from one, so the same question serves a close and a move,
-  // and discarding then makes the move.
+  // and discarding then makes the move. Only a move off the lens is held: the
+  // Builder keeps this editor, form and all, through a move within it.
   const [confirming, setConfirming] = useState<{ leave: (() => void) | null } | null>(null);
   const requestClose = () => (dirty ? setConfirming({ leave: null }) : onClose());
   useLeaveGuard(
     dirty
-      ? (_to, leave) => {
+      ? (to, leave) => {
+          if (keepsTheLens(to)) return false;
           setConfirming({ leave });
           return true;
         }
@@ -281,7 +291,7 @@ function EditorShell({
           <p className="t-body">
             {confirming.leave === null
               ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
-              : `The changes to ${name} have not been applied to the draft, and you are leaving this page. Discarding them leaves the draft as it was and goes on to where you were going.`}
+              : `The changes to ${name} have not been applied to the draft, and you are leaving the builder. Discarding them leaves the draft as it was and goes on to where you were going.`}
           </p>
         </Dialog>
       )}

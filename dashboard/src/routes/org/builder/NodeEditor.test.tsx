@@ -242,7 +242,7 @@ describe("the unsaved-changes prompt", () => {
     type("Goal", "Ship");
     fireEvent.click(link());
     const asked = await prompt();
-    expect(asked.textContent).toContain("you are leaving this page");
+    expect(asked.textContent).toContain("you are leaving the builder");
     // Held, and undone: the page is where it was, and so is the form.
     await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
     fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));

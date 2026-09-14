@@ -231,20 +231,23 @@ arrives with the data after the route is revealed when it appears, unless the
 reader has already started reading. The ring is static: nothing on a live
 screen animates for data.
 
-**Work that exists nowhere else is not left behind unasked.** A surface holding
-it registers a leave guard (`useLeaveGuard`, the org builder's node editor
-while it has typed changes), and every move to another entry is put to that
-guard first: a push from code, a link, and Back or Forward. A replace is never
-held, because by the table above it stays on the entry. Back has already
-happened by the time a page hears of it, so a held one is undone at once and
-made again only when the reader agrees to lose the work; every entry carries
-its place in the session (`crewletIndex`) beside its scroll key, which is how
-the router knows which way to undo it. The guard that began to hold last is
-asked first, and agreeing to it asks the next one before the move is made. A
-reload or a closed tab gets the browser's own prompt while any guard holds,
-and `useUnloadGuard` asks for that prompt alone, for work a move within the
-page keeps but a closed tab does not (the builder's draft, kept in session
-storage).
+**Work that exists nowhere else is not left behind unasked.** A surface
+holding it registers a leave guard (`useLeaveGuard`, the org builder's node
+editor while it has typed changes), and every move to another entry is put to
+that guard first: a push from code, a link, and Back or Forward. A guard is
+handed the route the move goes to and holds only a move that would lose its
+work: the org builder keeps its draft and an open editor through a move within
+the lens (a view or a chart), so its guards let that go
+(`BuilderContext.keepsTheLens`). A replace is never held, because by the table
+above it stays on the entry. Back has already happened by the time a page
+hears of it, so a held one is undone at once and made again only when the
+reader agrees to lose the work; every entry carries its place in the session
+(`crewletIndex`) beside its scroll key, which is how the router knows which
+way to undo it. The guard that began to hold last is asked first, and agreeing
+to it asks the next one before the move is made. A reload or a closed tab gets
+the browser's own prompt while any guard holds, and `useUnloadGuard` asks for
+that prompt alone, for work a move within the page keeps but a closed tab does
+not (the builder's draft, kept in session storage).
 
 ### The attention queue
 

@@ -160,25 +160,58 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   );
 });
 
-// BACK HAS ALREADY HAPPENED by the time the page hears of it, and it used to
-// take the lens and the editor with it, typed changes and all.
-test("Back over a changed editor asks first, and keeping the changes keeps the page", async () => {
-  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
-  await screen.findByText("No problems");
-  fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+/** Opens the CEO's editor from its outline row and types a goal into it. */
+async function typeIntoTheEditor(): Promise<HTMLElement> {
   const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
-  const onOutline = location.hash;
   const row = within(grid)
     .getAllByRole("row")
     .find((r) => r.getAttribute("data-row-id") === "seat:ceo")!;
   fireEvent.keyDown(row, { key: "Enter" });
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   fireEvent.change(within(editor).getByLabelText(/^Goal/), { target: { value: "Grow" } });
+  return editor;
+}
+
+// BACK HAS ALREADY HAPPENED by the time the page hears of it, and it used to
+// take the lens and the editor with it, typed changes and all.
+test("Back off the lens over a changed editor asks first, and keeping the changes keeps the page", async () => {
+  // Reached from the screen's Chart lens, which Back goes back to: another
+  // lens of the same screen is as much a departure as another screen.
+  mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=chart",
+  });
+  act(() => {
+    location.hash = "#/org?lens=builder&view=outline";
+  });
+  await screen.findByText("No problems");
+  const onOutline = location.hash;
+  const editor = await typeIntoTheEditor();
 
   act(() => history.back());
   const asked = await screen.findByRole("dialog", { name: "Discard your changes?" });
+  expect(asked.textContent).toContain("you are leaving the builder");
   await waitFor(() => expect(location.hash).toBe(onOutline));
   fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
+  expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
+});
+
+// A MOVE WITHIN THE LENS LOSES NOTHING. The Builder keeps the editor open,
+// form and all, when Back only turns the outline back into the canvas, so
+// asking first would be a question about nothing, worded as a departure.
+test("Back within the lens asks nothing, and the editor keeps what was typed", async () => {
+  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
+  await screen.findByText("No problems");
+  const onCanvas = location.hash;
+  fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+  const editor = await typeIntoTheEditor();
+
+  act(() => history.back());
+  await waitFor(() => expect(location.hash).toBe(onCanvas));
+  await screen.findByRole("tree", { name: "Structure chart" });
+  expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+  expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });
 

@@ -26,6 +26,7 @@
  */
 
 import { createContext, useContext, useEffect } from "react";
+import type { Route } from "~/app/router.tsx";
 import type {
   AgentRow,
   ConfigProblem,
@@ -39,6 +40,21 @@ import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 
 /** What the Add dialog is asked to add. */
 export type AddKind = "unit" | "agent" | "human";
+
+/**
+ * Whether a move to `to` keeps the Builder lens mounted: the Org screen's
+ * Builder lens under any view, chart or selection.
+ *
+ * WHAT A LEAVE GUARD HOLDS IS A MOVE THAT LOSES WORK. The Builder owns the
+ * draft and the dialog that is open, form and all, so a move that keeps the
+ * lens (Back from the outline to the canvas, say) loses none of it, and
+ * asking before it would be a question about nothing, worded as a departure
+ * that is not one. Every guard in the lens asks this one rule, so the draft's
+ * and an editor's agree on what leaving is.
+ */
+export function keepsTheLens(to: Route): boolean {
+  return to.path[0] === "org" && to.query.get("lens") === "builder";
+}
 
 /**
  * Which chart the canvas draws. The Builder owns the `chart` section param
