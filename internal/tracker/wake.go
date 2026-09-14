@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/textcut"
 )
@@ -389,8 +388,25 @@ func TaskDeltas(before, after Task) map[string]Delta {
 	// which renders as the bare kind, and reads as a change that lost what
 	// it changed.
 	add("sprint", sprintText(before.Sprint), sprintText(after.Sprint))
-	add("due", dayText(before.DueAt), dayText(after.DueAt))
-	add("start", dayText(before.StartAt), dayText(after.StartAt))
+	// THE WHOLE INSTANT, which is [instantText] — the same helper a GOAL's
+	// due and start deltas already take, for the same two field names.
+	//
+	// A DAY IS NOT A DELTA. Rendered as a calendar day these compared
+	// equal whenever a move stayed inside one, so pulling a due time from
+	// 09:00 to 17:00 produced NO entry at all: the history row and the
+	// notification card carried the change's kind and nothing it changed,
+	// which is the exact failure the block above this one was added to
+	// end. The day form was also wrong about WHICH day for any company
+	// east or west of UTC — an all-day due date is stored as the
+	// company's own midnight, so truncating it in UTC moved it a day —
+	// and a delta written by the APPLIER cannot consult the company's
+	// zone to fix that: these rows are the state log's N identical
+	// copies, and text derived from live configuration would differ
+	// between two nodes at different epochs. The instant is the value
+	// that is both lossless and the same everywhere; rendering a day from
+	// it belongs to a surface, which knows the zone.
+	add("due", instantText(before.DueAt), instantText(after.DueAt))
+	add("start", instantText(before.StartAt), instantText(after.StartAt))
 	add("estimate", minutesText(before.EstimateMinutes), minutesText(after.EstimateMinutes))
 	add("points", pointsText(before.Points), pointsText(after.Points))
 	if len(moved) == 0 {
@@ -463,18 +479,6 @@ func sprintText(n *int) string {
 		return ""
 	}
 	return strconv.Itoa(*n)
-}
-
-// dayText is the CALENDAR DAY, in UTC.
-//
-// The day rather than the instant, because that is the granularity a due date
-// is set at and a delta reading "2031-04-16T00:00:00Z → 2031-04-17T00:00:00Z"
-// asks a person to diff two timestamps to see that something moved by a day.
-func dayText(at *time.Time) string {
-	if at == nil || at.IsZero() {
-		return ""
-	}
-	return at.UTC().Format(time.DateOnly)
 }
 
 // minutesText is the estimate in minutes, or empty when there is none.
