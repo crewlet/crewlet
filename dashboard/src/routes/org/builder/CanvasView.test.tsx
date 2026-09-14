@@ -713,5 +713,21 @@ describe("live state", () => {
     cleanup();
     mount(added);
     expect(within(item("Closer")).queryByText("offline")).toBeNull();
+
+    // A saved seat that becomes human in this draft will not run, and says
+    // nothing live; nor does a seat the saved company already holds as human.
+    const doc = fixtureCompany();
+    doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
+    const human = record(checkedEdit(doc), {
+      type: "changeKind",
+      target: seatKey("dev"),
+      kind: "human",
+      contact: { slack: "U0DEV" },
+    });
+    cleanup();
+    mount(human);
+    expect(within(item("Dev")).queryByText("offline")).toBeNull();
+    expect(within(item("CEO")).queryByText("offline")).toBeNull();
+    expect(within(item("SRE")).getByText("offline")).toBeDefined();
   });
 });
