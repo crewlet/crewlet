@@ -93,7 +93,10 @@ export interface UnitView {
   readonly type: "unit";
   readonly key: NodeKey;
   readonly name: string;
-  /** The type as written, else the engine's effective type, else "". */
+  /**
+   * The type as written; else the engine's effective type, while the check
+   * saw the unit write none either; else "".
+   */
   readonly unitType: string;
   /** Declared or inherited; `null` when it has none, `undefined` until a check says what it inherits. */
   readonly lead: LeadView | null | undefined;
@@ -356,7 +359,14 @@ export function structure(inputs: ChartInputs): Structure {
         type: "unit",
         key: unit.key,
         name: unit.data.name,
-        unitType: text(unit.data.type) || engine.unitByKey.get(unit.key)?.type || "",
+        // The engine's type stands in for one the unit does not write only
+        // while the check saw none written either: a type cleared since is
+        // not the type that check reported.
+        unitType:
+          text(unit.data.type) ||
+          (checked !== undefined && text(checked.type) === ""
+            ? (engine.unitByKey.get(unit.key)?.type ?? "")
+            : ""),
         lead,
         inheritable,
         seats,

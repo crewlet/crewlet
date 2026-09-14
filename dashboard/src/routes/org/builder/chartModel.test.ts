@@ -255,6 +255,21 @@ describe("structure", () => {
     });
   });
 
+  test("a unit's type is the one it writes, else the engine's while the check saw none written", () => {
+    const doc = fixtureCompany();
+    const state = checkedEdit(doc);
+    expect(unitOf(state, unitKey("Engineering")).unitType).toBe("department");
+    // Sales writes none, so the engine's effective type stands in.
+    expect(unitOf(state, unitKey("Sales")).unitType).toBe("unit");
+    // Cleared since the check: the check reported the type it wrote.
+    const cleared = record(state, {
+      type: "updateUnit",
+      target: unitKey("Engineering"),
+      set: [{ path: ["type"] }],
+    });
+    expect(unitOf(cleared, unitKey("Engineering")).unitType).toBe("");
+  });
+
   test("a created seat's checked handle holds only while it is still called what the check saw", () => {
     const added = record(checkedEdit(fixtureCompany()), {
       type: "addSeat",
