@@ -53,6 +53,15 @@ const rowOf = (id: string) =>
   screen.getAllByRole("row").find((r) => r.getAttribute("data-row-id") === id)!;
 const press = (key: string, init: Partial<KeyboardEventInit> = {}) =>
   fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+/**
+ * A pointer press on a button, as a browser makes one: the press moves focus
+ * to the button unless the view stops it, which jsdom leaves to the caller.
+ */
+const pointerPress = (name: string) => {
+  const button = screen.getByRole("button", { name, hidden: true });
+  if (fireEvent.mouseDown(button)) button.focus();
+  fireEvent.click(button);
+};
 const focusedRow = () =>
   (document.activeElement as HTMLElement | null)
     ?.closest("[data-row-id]")
@@ -191,6 +200,28 @@ describe("keys", () => {
     fireEvent.click(within(menu).getByRole("menuitem", { name: /Move to/ }));
     expect(spies.openMove).toHaveBeenCalledWith(unitKey("Sales"));
     expect(document.activeElement).toBe(rowOf(unitKey("Sales")));
+  });
+
+  test("a press keeps the one tab stop where focus actually went", () => {
+    const { probe } = mount();
+    const tabStops = () => [
+      ...screen.getByRole("treegrid").querySelectorAll<HTMLElement>("[tabindex='0']"),
+    ];
+    // The chevron is pointer-only and hidden from assistive technology, so it
+    // takes no focus: the row does.
+    pointerPress("Collapse Engineering");
+    expect(document.activeElement).toBe(rowOf(unitKey("Engineering")));
+    expect(rowOf(unitKey("Engineering")).getAttribute("aria-expanded")).toBe("false");
+    expect(probe.selection).toBe(unitKey("Engineering"));
+    expect(tabStops()).toEqual([document.activeElement]);
+
+    // A menu's trigger keeps the focus the press gave it and hands it back on
+    // Escape, so the tab stop is that cell.
+    pointerPress("Actions for Sales");
+    expect(screen.getByRole("menu", { name: "Actions for Sales" })).toBeDefined();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Actions for Sales");
+    expect(tabStops()).toEqual([document.activeElement]);
   });
 
   test("an add row's buttons ask for their kind under their parent", () => {

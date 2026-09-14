@@ -11,7 +11,10 @@
  * Right opens a closed row or steps into its cells, Left steps back out,
  * closes the row or climbs to its parent, Up and Down keep the column. A cell
  * holding a control (a unit's lead choice, the actions menu, an add button)
- * focuses the control itself, so what the cell does is one Enter away.
+ * focuses the control itself, so what the cell does is one Enter away. The
+ * grid's one tab stop is wherever focus is: a press that opens a cell's menu
+ * moves it to that cell, and the row's chevron, which is pointer-only and
+ * hidden from assistive technology, takes no focus at all.
  *
  * AN INLINE ADD ROW closes every unit's rows and the company's: Add agent
  * seat, Add human seat, Add unit, each asking the Builder's Add dialog for
@@ -390,6 +393,14 @@ export function OutlineView() {
   });
   /** Whether the active cell of `id` is column `col`: its control is then the tab stop. */
   const stop = (id: string, col: number) => id === active && column === col;
+  // A POINTER OPENING A CELL'S CONTROL MOVES THE TAB STOP TO IT. The control
+  // keeps the focus the press gave it and hands it back when the menu closes,
+  // so the grid's one tab stop has to be that cell rather than the row it sits
+  // in. Focus is not moved here: the menu is taking it.
+  const markCell = (id: string, col: number) => {
+    setActive(id);
+    setColumn(col);
+  };
 
   return (
     <div className="boutline-wrap">
@@ -461,6 +472,7 @@ export function OutlineView() {
                   expandable={isExpandable(model, id)}
                   tabStop={stop(id, 1)}
                   onToggle={() => toggle(id)}
+                  onPress={() => focusAt(id, null)}
                 />
                 <Cell col={2} tabStop={stop(id, 2)}>
                   {view.type === "seat" ? (
@@ -485,6 +497,7 @@ export function OutlineView() {
                     structure={structure}
                     view={view}
                     tabStop={stop(id, 4)}
+                    onOpen={() => markCell(id, 4)}
                   />
                 </Cell>
                 <Cell col={5} tabStop={stop(id, 5)}>
@@ -499,7 +512,9 @@ export function OutlineView() {
                       triggerTabIndex={stop(id, 6) ? 0 : -1}
                       open={menuFor === id}
                       onOpenChange={(opened) => {
-                        if (opened) setActive(id);
+                        // Only a press reports an opening: the ContextMenu key
+                        // sets `menuFor` itself, and focus goes back to the row.
+                        if (opened) markCell(id, 6);
                         setMenuFor((was) => (opened ? id : was === id ? null : was));
                       }}
                     />
@@ -547,6 +562,7 @@ function NameCell({
   expandable,
   tabStop,
   onToggle,
+  onPress,
 }: {
   api: BuilderApi;
   view: NodeView;
@@ -554,11 +570,25 @@ function NameCell({
   expandable: boolean;
   tabStop: boolean;
   onToggle: () => void;
+  /** Takes the press the hidden chevron must not take: see the toggle below. */
+  onPress: () => void;
 }) {
   const name = view.name || (view.type === "company" ? "Unnamed company" : "");
   return (
     <div role="gridcell" aria-colindex={1} tabIndex={tabStop ? 0 : -1} className="boutline-name">
-      <span className="boutline-toggle" aria-hidden="true">
+      {/* THE PRESS LANDS ON THE ROW. The chevron is a pointer-only control
+          hidden from assistive technology (the keyboard opens and closes a row
+          with Right and Left), and focus inside a hidden subtree is focus
+          nowhere, so the press is stopped from focusing it and the row takes
+          the focus instead. */}
+      <span
+        className="boutline-toggle"
+        aria-hidden="true"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onPress();
+        }}
+      >
         {expandable && (
           <Button
             size="sm"
@@ -593,11 +623,14 @@ function LeadOrManager({
   structure,
   view,
   tabStop,
+  onOpen,
 }: {
   api: BuilderApi;
   structure: Structure;
   view: NodeView;
   tabStop: boolean;
+  /** Says a press opened the lead choice, so the tab stop follows the focus into this cell. */
+  onOpen: () => void;
 }) {
   if (view.type === "company") return null;
   if (view.type === "seat") {
@@ -618,6 +651,7 @@ function LeadOrManager({
         icon="crown"
         items={leadMenu(api, structure, unit)}
         triggerTabIndex={tabStop ? 0 : -1}
+        onOpenChange={(opened) => opened && onOpen()}
       >
         {leadLabel(unit)}
       </Menu>

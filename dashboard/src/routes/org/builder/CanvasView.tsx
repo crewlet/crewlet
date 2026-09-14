@@ -28,7 +28,10 @@
  * assistive technology and out of the tab order, because a control inside a
  * treeitem is a control a screen reader cannot reach and a keyboard user
  * would Tab through by the hundred; the menu they open is the same one the
- * ContextMenu key opens, and the toolbar mirrors the focused node.
+ * ContextMenu key opens, and the toolbar mirrors the focused node. A press on
+ * that strip never leaves focus in it: the treeitem takes the focus, so what
+ * holds it is always a node a screen reader can announce and the arrows can
+ * move from.
  *
  * FOCUS NEVER SCROLLS BEHIND THE TRANSFORM'S BACK. A node is focused with
  * `preventScroll` and then revealed by panning the canvas, and a node inside
@@ -283,7 +286,7 @@ function StructureCard({
         <div {...ctx.item(id)} className="bchart-head">
           <SeatBody api={api} view={view} />
         </div>
-        <CardActions>
+        <CardActions ctx={ctx} id={id}>
           <MoreMenu ctx={ctx} id={id} label={view.name} items={nodeMenu(api, view, open)} />
         </CardActions>
       </div>
@@ -308,7 +311,7 @@ function StructureCard({
             <ProblemCount api={api} nodeKey={id} />
           </span>
         </div>
-        <CardActions>
+        <CardActions ctx={ctx} id={id}>
           <ToggleButton ctx={ctx} id={id} name={view.name || "the company"} />
           <AddMenu ctx={ctx} view={view} api={api} />
           <MoreMenu
@@ -339,7 +342,7 @@ function StructureCard({
           <ProblemCount api={api} nodeKey={id} />
         </span>
       </div>
-      <CardActions>
+      <CardActions ctx={ctx} id={id}>
         <ToggleButton ctx={ctx} id={id} name={view.name} />
         <AddMenu ctx={ctx} view={view} api={api} />
         <MoreMenu ctx={ctx} id={id} label={view.name} items={nodeMenu(api, view, open)} />
@@ -359,7 +362,7 @@ function StructureCard({
                 <div {...ctx.item(key)} className="bchart-row-item">
                   <SeatBody api={api} view={seat} />
                 </div>
-                <CardActions>
+                <CardActions ctx={ctx} id={key}>
                   <MoreMenu
                     ctx={ctx}
                     id={key}
@@ -434,7 +437,7 @@ function ReportingCard({
           {seat && <ProblemCount api={api} nodeKey={seat.key} />}
         </span>
       </div>
-      <CardActions>
+      <CardActions ctx={ctx} id={item.id}>
         {item.reports.length > 0 && <ToggleButton ctx={ctx} id={item.id} name={item.name} />}
         {seat && (
           <MoreMenu
@@ -462,7 +465,7 @@ function CycleGroupCard({ ctx, count }: { ctx: CardContext; count: number }) {
           </span>
         </span>
       </div>
-      <CardActions>
+      <CardActions ctx={ctx} id={CYCLE_GROUP}>
         <ToggleButton ctx={ctx} id={CYCLE_GROUP} name="the reporting cycles" />
       </CardActions>
     </div>
@@ -473,10 +476,17 @@ function CycleGroupCard({ ctx, count }: { ctx: CardContext; count: number }) {
  * The pointer's buttons for a card or row: beside the treeitem, out of the
  * tab order and hidden from assistive technology, whose way to the same
  * actions is the treeitem's own keys (see the module doc).
+ *
+ * THE PRESS LANDS ON THE NODE, NOT ON THE BUTTON. A press is stopped from
+ * focusing the button it lands on and focuses the treeitem instead, because
+ * focus inside a subtree hidden from assistive technology is focus nowhere:
+ * a screen reader would have nothing to announce, and the menu the press
+ * opens would hand focus back there when it closed. Focused on the node, the
+ * arrows carry on from the card the operator pressed.
  */
-function CardActions({ children }: { children: ReactNode }) {
+function CardActions({ ctx, id, children }: { ctx: CardContext; id: string; children: ReactNode }) {
   return (
-    <div className="bchart-actions" aria-hidden="true">
+    <div className="bchart-actions" aria-hidden="true" {...ctx.press(id)}>
       {children}
     </div>
   );
@@ -552,10 +562,10 @@ function LeadChip({
 }) {
   const layer = useCanvasOverlay();
   return (
-    <div className="bchart-lead" aria-hidden="true">
+    <div className="bchart-lead" aria-hidden="true" {...ctx.press(unit.key)}>
       <Icon name="crown" size="xs" />
       {api.readOnly ? (
-        <span className="bchart-lead-text truncate">{leadLabel(unit)}</span>
+        <span className="truncate">{leadLabel(unit)}</span>
       ) : (
         <Menu
           label={`Lead of ${unit.name}`}
@@ -591,6 +601,8 @@ interface CardContext {
   toggle(id: string): void;
   /** Makes `id` the tree's current node without moving focus, as a pointer action on its card does. */
   activate(id: string): void;
+  /** The props that make a press anywhere in a hidden strip land on `id` rather than on the button. */
+  press(id: string): { onMouseDown(e: MouseEvent<HTMLElement>): void };
   menuOpen(id: string): boolean;
   setMenuOpen(id: string, open: boolean): void;
 }
@@ -821,6 +833,15 @@ function TreeCanvas({
     expandable: (id) => isExpandable(model, id),
     toggle,
     activate: (id) => setActive(id),
+    press: (id) => ({
+      onMouseDown: (e) => {
+        // The press must not focus the button it landed on: see CardActions.
+        e.preventDefault();
+        select(id);
+        setActive(id);
+        items.current.get(id)?.focus({ preventScroll: true });
+      },
+    }),
     menuOpen: (id) => menuFor === id,
     setMenuOpen: (id, open) => {
       if (open) setActive(id);

@@ -90,6 +90,15 @@ const item = (name: string) =>
     .find((el) => within(el).queryAllByText(name, { exact: true }).length > 0)!;
 const press = (key: string, init: Partial<KeyboardEventInit> = {}) =>
   fireEvent.keyDown(document.activeElement ?? document.body, { key, ...init });
+/**
+ * A pointer press on a button, as a browser makes one: the press moves focus
+ * to the button unless the view stops it, which jsdom leaves to the caller.
+ */
+const pointerPress = (name: string) => {
+  const button = screen.getByRole("button", { name, hidden: true });
+  if (fireEvent.mouseDown(button)) button.focus();
+  fireEvent.click(button);
+};
 const focused = () => document.activeElement?.getAttribute("data-tree-id");
 /** A menu item's label, without the shortcut hint beside it. */
 const label = (el: HTMLElement) => el.querySelector(".menu-item-label")!.textContent;
@@ -136,6 +145,26 @@ describe("the tree", () => {
       expect(button.closest("[aria-hidden='true']")).not.toBeNull();
       expect(button.closest("[role='treeitem']")).toBeNull();
     }
+  });
+
+  test("a press on a card's hidden buttons focuses the node, never the button", () => {
+    const { probe } = mount();
+    pointerPress("Actions for Dev");
+    expect(screen.getByRole("menu", { name: "Actions for Dev" })).toBeDefined();
+    press("Escape");
+    // Focus in a subtree hidden from assistive technology is focus nowhere, so
+    // the menu hands it back to the node rather than to the button.
+    expect(document.activeElement).toBe(item("Dev"));
+    expect(probe.selection).toBe(seatKey("dev"));
+
+    pointerPress("Collapse Engineering");
+    expect(document.activeElement).toBe(item("Engineering"));
+    expect(item("Engineering").getAttribute("aria-expanded")).toBe("false");
+
+    // The lead chip is drawn in the same hidden strip.
+    pointerPress("VP Engineering");
+    press("Escape");
+    expect(document.activeElement).toBe(item("Engineering"));
   });
 
   test("a human seat is drawn with the dashed edge, by kind rather than by colour", () => {
