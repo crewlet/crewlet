@@ -288,7 +288,9 @@ seat goes:
 - **The Datadog fallback.** An alert whose tags name no seat wakes the fallback
   seat, and the engine refuses a Datadog block whose `route_to` names no agent
   seat. Deleting the fallback seat therefore asks for the agent seat that takes
-  over, and writes it with the removal.
+  over, and writes it with the removal. When the removal would leave no agent
+  seat at all, the dialog says so instead: add an agent seat first, or
+  disconnect Datadog.
 - **A GitLab access level.** The per-handle override is removed with the seat,
   because an entry left behind would grant its level to the next seat that
   derives the same handle.
@@ -317,7 +319,9 @@ a credential, so it cannot type one back in and the value is gone for good once
 the change is saved.
 
 Becoming a human seat needs one contact identity, and cannot be done to the
-Datadog fallback without choosing the agent seat that takes over. The
+Datadog fallback without choosing the agent seat that takes over. Where the
+seat is the company's only agent seat, the dialog says so and the change waits
+until another agent seat exists or Datadog is disconnected. The
 schedules the change would strand, and a turn the seat is running now, are
 named first. A seat that becomes human stops running; its memory is kept but
 unused while it is a human seat.

@@ -34,7 +34,7 @@ import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Button, Segmented } from "~/ui/primitives.tsx";
+import { Banner, Button, Segmented } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -298,16 +298,29 @@ function OutsideTheChart({
   const parts: ReactNode[] = [];
 
   if (fallbackSeat) {
+    // NO REPLACEMENT IS A DEAD END, AND IT SAYS SO. Delete stays unavailable
+    // until a fallback is chosen, so with nothing to choose the dialog has to
+    // name the way out rather than leave a button that never becomes
+    // available and a picker with nothing in it.
     parts.push(
-      <Field
-        key="datadog"
-        label="Datadog fallback"
-        kind="choice"
-        choices={replacements}
-        value={routeTo}
-        onChange={onRouteTo}
-        help={`${fallbackSeat.data.name} is the Datadog fallback: an alert whose tags name no seat wakes it. Choose the agent seat that takes over; the engine refuses a Datadog fallback that names no agent seat.`}
-      />,
+      replacements.length === 0 ? (
+        <Banner key="datadog" tone="critical">
+          {fallbackSeat.data.name} is the Datadog fallback, and the engine refuses a Datadog
+          fallback that names no agent seat. This removal would leave no agent seat to take it over,
+          so add one first, or disconnect Datadog.{" "}
+          <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+        </Banner>
+      ) : (
+        <Field
+          key="datadog"
+          label="Datadog fallback"
+          kind="choice"
+          choices={replacements}
+          value={routeTo}
+          onChange={onRouteTo}
+          help={`${fallbackSeat.data.name} is the Datadog fallback: an alert whose tags name no seat wakes it. Choose the agent seat that takes over; the engine refuses a Datadog fallback that names no agent seat.`}
+        />
+      ),
     );
   }
   if (accessLevels.length > 0) {

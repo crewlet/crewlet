@@ -84,6 +84,25 @@ describe("outside the chart", () => {
     ).toBe("dev");
   });
 
+  // Delete stays unavailable until a fallback is chosen, so with nothing to
+  // choose the dialog has to name the way out rather than leave a button that
+  // never becomes available beside a picker with nothing in it.
+  test("with no agent seat left to take the fallback, the dialog says so instead of offering an empty choice", () => {
+    const doc: CompanyDocument = {
+      name: "X",
+      integrations: { datadog: { route_to: "only" } },
+      roles: [{ name: "Only" }, { name: "Pat", kind: "human", contact: { github_login: "pat" } }],
+    };
+    open(keyedState(doc), "seat:only");
+    expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
+    expect(
+      screen.getByText(
+        /This removal would leave no agent seat to take it over, so add one first, or disconnect Datadog/,
+      ),
+    ).toBeDefined();
+    expect(deleteButton().disabled).toBe(true);
+  });
+
   test("a removed seat's GitLab access level goes with it, so no later seat inherits it", () => {
     open(keyedState(fixtureCompany()), "seat:dev");
     expect(

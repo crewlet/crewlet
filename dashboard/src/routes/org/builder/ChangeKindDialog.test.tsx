@@ -102,6 +102,27 @@ test("the Datadog fallback cannot become a human seat without a replacement", ()
   ).toBe("dev");
 });
 
+// The change stays unavailable until a fallback is chosen, so the company's
+// only agent seat would otherwise leave a button that never becomes available
+// beside a picker with nothing in it.
+test("the company's only agent seat is told why it cannot become human, not offered an empty choice", () => {
+  const doc: CompanyDocument = {
+    name: "X",
+    integrations: { datadog: { route_to: "only" } },
+    roles: [{ name: "Only" }, { name: "Pat", kind: "human", contact: { github_login: "pat" } }],
+  };
+  open(keyedState(doc), "seat:only");
+  expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
+  expect(
+    screen.getByText(
+      /It is the company's only agent seat, so add another before changing this one, or disconnect Datadog/,
+    ),
+  ).toBeDefined();
+  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "only" } });
+  expect(toHuman().disabled).toBe(true);
+});
+
 test("a schedule the change strands, and the seat's work in flight, are said first", () => {
   const doc: CompanyDocument = {
     name: "X",

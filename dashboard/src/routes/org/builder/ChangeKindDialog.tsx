@@ -26,12 +26,13 @@ import { useState } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Button } from "~/ui/primitives.tsx";
+import { Banner, Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   ContactField,
   EditorSection,
   Refusal,
+  ScreenLink,
   StrandedNotes,
   WorkingNotes,
 } from "./dialogParts.tsx";
@@ -175,16 +176,28 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
         </EditorSection>
       )}
 
-      {isFallback && (
-        <Field
-          label="Datadog fallback"
-          kind="choice"
-          choices={replacements}
-          value={routeTo}
-          onChange={setRouteTo}
-          help={`${name} is the Datadog fallback, and an alert whose tags name no seat has to wake an agent seat. Choose the one that takes over.`}
-        />
-      )}
+      {isFallback &&
+        // NO REPLACEMENT IS A DEAD END, AND IT SAYS SO: the change stays
+        // unavailable until a fallback is chosen, so with nothing to choose
+        // the dialog names the way out rather than leaving a button that never
+        // becomes available and a picker with nothing in it.
+        (replacements.length === 0 ? (
+          <Banner tone="critical">
+            {name} is the Datadog fallback, and an alert whose tags name no seat has to wake an
+            agent seat. It is the company's only agent seat, so add another before changing this
+            one, or disconnect Datadog.{" "}
+            <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
+          </Banner>
+        ) : (
+          <Field
+            label="Datadog fallback"
+            kind="choice"
+            choices={replacements}
+            value={routeTo}
+            onChange={setRouteTo}
+            help={`${name} is the Datadog fallback, and an alert whose tags name no seat has to wake an agent seat. Choose the one that takes over.`}
+          />
+        ))}
 
       <StrandedNotes stranded={stranded} />
       <WorkingNotes names={working} />
