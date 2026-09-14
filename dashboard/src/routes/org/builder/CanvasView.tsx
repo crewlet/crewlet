@@ -90,6 +90,7 @@ import {
   isDeletable,
   leadLabel,
   leadMenu,
+  leadSentence,
   nodeKeyAction,
   nodeMenu,
   reportingMenu,
@@ -250,8 +251,8 @@ function ReportingChart({
         // with every check would resize the viewport under the operator.
         stale && (
           <p className="bchart-note">
-            These reporting lines are from the last check. They update when the current check
-            finishes.
+            These reporting lines are from the last check. Changes made since then appear after the
+            next one.
           </p>
         )
       }
@@ -353,7 +354,7 @@ function StructureCard({
             </span>
           </span>
         </span>
-        <span className="sr-only">Lead: {leadLabel(view)}.</span>
+        <span className="sr-only">{leadSentence(view)}</span>
         <span className="bchart-marks">
           <UnitMarks api={api} nodeKey={id} />
           <ProblemCount api={api} nodeKey={id} />

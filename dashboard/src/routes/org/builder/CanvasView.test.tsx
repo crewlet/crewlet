@@ -432,6 +432,8 @@ describe("menus", () => {
     const platform = probe.state.draft.units[0]!.children[0]!;
     expect(platform.data.lead).toBe("SRE");
     expect(within(item("Platform")).getByText("Lead: SRE.")).toBeDefined();
+    // Engineering's own lead is unchanged, and so is what the check said of it.
+    expect(within(item("Engineering")).getByText("Lead: VP Engineering.")).toBeDefined();
     // Now declared, the choice says so, and No lead offers the parent's lead.
     fireEvent.click(screen.getByRole("button", { name: "SRE", hidden: true }));
     expect(
@@ -443,6 +445,20 @@ describe("menus", () => {
       ["SRE", "true"],
       ["Designer", "false"],
     ]);
+    press("Escape");
+
+    // Engineering cleared: it inherits what no check of this draft has
+    // reported yet, and says so rather than that a check is running.
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: { type: "setLead", target: unitKey("Engineering") },
+      }),
+    );
+    expect(within(item("Engineering")).getByText("Lead after the check.")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Lead after the check", hidden: true }),
+    ).toBeDefined();
   });
 });
 
@@ -490,6 +506,24 @@ describe("the reporting chart", () => {
       expect.stringMatching(/^Edit reports/),
       "Open seat",
     ]);
+  });
+
+  test("says its lines are the last check's once the draft has moved past it", () => {
+    const { probe } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
+    const note = () => screen.queryByText(/These reporting lines are from the last check/);
+    expect(note()).toBeNull();
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: { type: "setManages", target: seatKey("chief"), manages: [] },
+      }),
+    );
+    // Drawn over the canvas, so it neither resizes the viewport nor takes a press.
+    const shown = note()!;
+    expect(shown.closest(".canvas-overlay")).not.toBeNull();
+    expect(shown.textContent).not.toMatch(/current check/);
+    // The chart itself is still the last check's forest.
+    expect(nameOf(item("Ops"))).toBe("Ops");
   });
 
   test("says there is nobody to draw when the checked draft holds no seat", () => {

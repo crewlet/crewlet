@@ -192,11 +192,22 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
   return entries;
 }
 
-/** What a lead chip says: the lead, whether it is inherited, or that none is known yet. */
+/**
+ * What a lead chip says: the lead, whether it is inherited, or that it is
+ * known after the check. Never that a check is running: whether one is on its
+ * way (or the engine cannot be reached at all) is the toolbar's to say.
+ */
 export function leadLabel(unit: UnitView): string {
-  if (unit.lead === undefined) return "Checking the lead";
+  if (unit.lead === undefined) return "Lead after the check";
   if (unit.lead === null) return "No lead";
   return unit.lead.inherited ? `${unit.lead.name} (inherited)` : unit.lead.name;
+}
+
+/** What a unit's treeitem says about its lead to a screen reader: one sentence. */
+export function leadSentence(unit: UnitView): string {
+  if (unit.lead === undefined) return "Lead after the check.";
+  if (unit.lead === null) return "No lead.";
+  return `Lead: ${leadLabel(unit)}.`;
 }
 
 /**

@@ -1113,7 +1113,13 @@ to.
   after an edit the chart says it is waiting for the check rather than showing
   a placement or a lead the engine has not confirmed. A seat's primary
   manager follows from the whole organization, so no single field says it
-  still holds: it is shown only from a check of the draft as it stands.
+  still holds: it is shown only from a check of the draft as it stands. A
+  value the engine has not given yet reads "Lead after the check", "Manager
+  after the check" or "Handle after the check", never that a check is
+  running: whether one is on its way, or the engine cannot be reached at all,
+  is the toolbar's check status to say, and a card cannot know. The reporting
+  chart, drawn from the last check while the draft has moved past it, says so
+  in a note over the canvas.
 - **The canvas is a tree of cards.** The structure chart has the company card
   at the root, root seats as cards and units as cards with their seats
   stacked inside as rows. The reporting chart is the engine's forest: seats

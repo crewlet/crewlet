@@ -77,6 +77,7 @@ import {
   SeatMarks,
   UnitMarks,
   handleLabel,
+  managerLabel,
   seatKindLabel,
 } from "./nodeMarks.tsx";
 import { treeStep, useOpenScreen, useStructure, useTreeState } from "./useCharts.ts";
@@ -640,15 +641,7 @@ function LeadOrManager({
   onOpen: () => void;
 }) {
   if (view.type === "company") return null;
-  if (view.type === "seat") {
-    const text =
-      view.manager === undefined
-        ? "Checking the reporting line"
-        : view.manager === null
-          ? "No manager"
-          : view.manager;
-    return <span className="truncate">{text}</span>;
-  }
+  if (view.type === "seat") return <span className="truncate">{managerLabel(view.manager)}</span>;
   const unit = view as UnitView;
   if (!leadWidget(api, unit)) return <span className="truncate">{leadLabel(unit)}</span>;
   return (

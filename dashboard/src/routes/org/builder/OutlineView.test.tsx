@@ -24,7 +24,7 @@ import { toDocument } from "./model/document.ts";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived, type DerivedOverrides } from "./model/testkit.ts";
-import { checkedEdit } from "./stateTestkit.ts";
+import { checkedEdit, PLACED } from "./stateTestkit.ts";
 import {
   BuilderHarness,
   builderSpies,
@@ -129,6 +129,29 @@ describe("the grid", () => {
     expect(
       within(rowOf(unitKey("Engineering"))).queryByRole("button", { name: "VP Engineering" }),
     ).toBeNull();
+  });
+
+  test("the lead or reports-to column says what the engine derived, and waits after an edit", () => {
+    const { probe } = mount(
+      checkedEdit(fixtureCompany(), {
+        seats: { ...PLACED.seats, "units[0].roles[1]": { manager: "vp-engineering" } },
+      }),
+    );
+    const leadOrManager = (id: string) => within(rowOf(id)).getAllByRole("gridcell")[3]!;
+    expect(leadOrManager(seatKey("dev")).textContent).toBe("VP Engineering");
+    expect(leadOrManager(seatKey("sre")).textContent).toBe("No manager");
+    expect(leadOrManager(unitKey("Engineering")).textContent).toBe("VP Engineering");
+
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: { type: "setLead", target: unitKey("Engineering") },
+      }),
+    );
+    // Nothing the engine has not derived for this draft is named, and nothing
+    // claims a check is running: that is the toolbar's to say.
+    expect(leadOrManager(seatKey("dev")).textContent).toBe("Manager after the check");
+    expect(leadOrManager(unitKey("Engineering")).textContent).toBe("Lead after the check");
   });
 
   test("a human seat is marked by its dashed avatar and its kind, not a colour", () => {

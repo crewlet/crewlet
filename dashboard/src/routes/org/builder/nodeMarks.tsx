@@ -33,6 +33,12 @@ export function handleLabel(handle: string | undefined): string {
   return handle ? `@${handle}` : "Handle after the check";
 }
 
+/** A seat's primary manager, "No manager", or what stands in while no check of this draft has said. */
+export function managerLabel(manager: string | null | undefined): string {
+  if (manager === undefined) return "Manager after the check";
+  return manager ?? "No manager";
+}
+
 /** The problem count badge: nothing when the last check placed none on the node. */
 export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeKey }) {
   const count = api.problemsFor(nodeKey).length;
