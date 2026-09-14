@@ -27,14 +27,14 @@ import (
 // to avoid.
 
 // Budgets answers the whole budget surface.
+//
+// Registered only beside a company source, so [Sources.Company] is never nil
+// here; what can be nil is the epoch it returns.
 func (s Sources) budgets(ctx context.Context, _ Params) (any, error) {
 	out := map[string]any{
 		"org":     map[string]any{"durable_used": 0, "max_tokens": 0},
 		"seats":   []any{},
 		"durable": false,
-	}
-	if s.Company == nil {
-		return out, nil
 	}
 	company := s.Company()
 	if company == nil {

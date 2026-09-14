@@ -1032,10 +1032,9 @@ func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 
 // A STORE AND A PLANE ARE REQUIRED, and a missing one is refused by name.
 //
-// Both used to be optional, for an API process with no store or coordination:
-// the surface went unregistered, or every write answered 503. No process runs
-// that way, so a nil is a wiring mistake, and building a narrower surface around
-// it would hide the mistake behind an answer that looks deliberate.
+// The engine beside every API holds both, so a nil is a wiring mistake, and a
+// narrower surface built around it (an unregistered /config, every write
+// answering 503) would hide the mistake behind an answer that looks deliberate.
 func TestNewRefusesAMissingStoreOrPlane(t *testing.T) {
 	t.Parallel()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})

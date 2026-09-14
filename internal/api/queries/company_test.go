@@ -746,8 +746,7 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 			InFlight: 4, Posture: "shed",
 		}.Meta(),
 	})
-	// A peer that publishes no status at all — an older build, or one
-	// whose engine is not co-located.
+	// A peer that publishes no status at all: a build older than the field.
 	claim(coord.NodeResource("node-b"), "node-b:1", map[string]any{
 		"roles": []any{"ingress"},
 	})

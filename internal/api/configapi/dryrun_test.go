@@ -338,37 +338,6 @@ func TestADryRunNeedsNoSummaryAndLiftsOneOut(t *testing.T) {
 	}
 }
 
-// A DRY RUN ON A PROCESS THAT CANNOT ACTIVATE IS REFUSED AS THE WRITE IS.
-//
-// Refused before validation, in the write and the check alike: a check that
-// answered a clean 200 here would promise a save that then fails with 503,
-// and one that answered the document's problems would send the operator to
-// fix a document no fix makes writable on this process.
-func TestADryRunWithoutAControlPlaneIsRefusedAsTheWriteIs(t *testing.T) {
-	t.Parallel()
-	s := newSurfaceWith(t, func(o *configapi.Options) { o.Plane = nil })
-	s.seed(t, companyDoc, nil)
-
-	invalid := strings.Replace(companyDoc, "llm: zulu", "llm: nowhere", 1)
-	for _, tc := range []struct{ name, method, query, body string }{
-		{"a valid put check", http.MethodPut, "?dry_run=true", companyDoc},
-		{"an invalid put check", http.MethodPut, "?dry_run=true", invalid},
-		{"an invalid put", http.MethodPut, "", invalid},
-		{"a valid patch check", http.MethodPatch, "?dry_run=true", `{"mission": "x"}`},
-		{"an invalid patch check", http.MethodPatch, "?dry_run=true", `{"roles": [{"name": "CEO", "llm": "nowhere"}]}`},
-		{"an invalid patch", http.MethodPatch, "", `{"roles": [{"name": "CEO", "llm": "nowhere"}]}`},
-	} {
-		res := s.do(t, tc.method, "/config"+tc.query, tc.body, summaryHeader)
-		if res.Code != http.StatusServiceUnavailable {
-			t.Errorf("%s = %d, want 503: %s", tc.name, res.Code, res.Body)
-			continue
-		}
-		if got := decode(t, res)["error"]; got != "no_control_plane" {
-			t.Errorf("%s error = %v, want no_control_plane", tc.name, got)
-		}
-	}
-}
-
 // A DRY RUN KEEPS EACH ROUTE'S CHECK ORDER, so it is refused for the same
 // reasons, in the same order, as the write it stands for.
 func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {

@@ -157,11 +157,10 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is refused
 // by name.
 //
-// Each used to be optional, for an API process with no engine beside it, and
-// each nil became a narrower surface that looked deliberate: no status store
-// refused every disconnect, no resolver answered `resolved: null` for every
-// requirement, no app flow refused every GitHub App. No process runs that way,
-// so a nil is a wiring mistake and the constructor is where it has to surface.
+// The engine beside every API holds all of them, so a nil is a wiring mistake,
+// and a narrower surface built around it would look deliberate: every
+// disconnect refused, every requirement answering `resolved: null`, every
+// GitHub App refused. The constructor is where it has to surface.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
 	cfg, _ := newConfigSurface(t)

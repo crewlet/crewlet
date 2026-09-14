@@ -41,12 +41,16 @@ const (
 
 // Sources are what the answers read from.
 //
-// Every field is optional, and an absent one makes its questions report
-// themselves unavailable rather than answer emptily. A node without a source is
-// a real shape (a company on Jira has no native tracker, one on Confluence no
-// native wiki, one with no embeddings no recall), and "there is no tracker
-// here" and "the tracker is empty" are answers a screen must be able to tell
-// apart.
+// Every field is optional, and an absent one leaves its questions UNREGISTERED
+// rather than answered emptily: "there is no tracker here" and "the tracker is
+// empty" are answers a screen must be able to tell apart.
+//
+// Only a few are absent on a real node: Work and Pages on a company that runs
+// the vendor tracker and wiki, Knowledge where no knowledge backend is
+// configured, and Retention where no state log runs. The rest are held by every
+// node, and the API wires every one of them. Leaving one of those out is what a
+// caller that asks a subset of the questions does, which is how this package's
+// own suite exercises one question at a time.
 type Sources struct {
 	State  *livestate.LiveState
 	Events *store.EventLog
@@ -63,9 +67,8 @@ type Sources struct {
 	// process booted on would describe a company that is no longer running.
 	Company func() *config.Company
 
-	// Coord is the lease table — the fleet's one shared answer to "which
-	// node holds what". Nil leaves the fleet question unregistered, which
-	// is honest for a process with no coordination backend.
+	// Coord is the lease table: the fleet's one shared answer to "which
+	// node holds what". Nil leaves the fleet question unregistered.
 	Coord coord.Backend
 
 	// Plane is the control plane, for the config columns of the fleet view.
@@ -128,10 +131,8 @@ type Sources struct {
 		Usage(ctx context.Context) ([]coord.Usage, error)
 	}
 
-	// Sandbox is the durable record of detached coding runs. Nil leaves
-	// the question unregistered, which is honest for a node with no
-	// sandbox backend: without one no run can be parked, so there is
-	// nothing this question could describe.
+	// Sandbox is the durable record of detached coding runs, the fleet's
+	// rather than this node's. Nil leaves the question unregistered.
 	Sandbox PendingRuns
 
 	// Config serves the config family, and every one of those is
@@ -349,9 +350,9 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Company != nil {
 		// Gated on the COMPANY, not on the durable counter: the caps are
-		// what the screen is about, and a node with a company and no store
-		// answers "these are the ceilings, and nobody can read the usage"
-		// — which is a real state an operator needs to see, and is not the
+		// what the screen is about, and a counter that cannot be read
+		// answers "these are the ceilings, and nobody can read the usage",
+		// which is a real state an operator needs to see and is not the
 		// same as the question being unavailable here.
 		r.Register("budgets", s.budgets)
 		// Both are projections of the epoch: what the company DECLARES,
@@ -694,10 +695,11 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
 	}
 	if s.Events == nil {
-		// No event store: the honest answer for a window this node cannot
-		// see is an EMPTY rollup labelled with the window asked for, not
-		// the live one relabelled — which would put a week's heading over
-		// an hour's numbers.
+		// A registry wired without the event log (a caller asking only the
+		// projection's questions) cannot see this window. The honest answer
+		// is an EMPTY rollup labelled with the window asked for, not the
+		// live one relabelled, which would put a week's heading over an
+		// hour's numbers.
 		return tokens.Aggregate(nil, opts), nil
 	}
 	records, err := s.Events.PhaseTokens(ctx, q)

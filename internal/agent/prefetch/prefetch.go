@@ -182,9 +182,8 @@ type Onboarding interface {
 // Sources are the stores the blocks are rendered from.
 //
 // EVERY ONE IS OPTIONAL. A nil source renders an empty block, which is what
-// a company with reflection off, or no knowledge backend, or no database
-// actually has — and each of those is a supported configuration rather than
-// a degraded one.
+// a company with reflection off or no knowledge backend actually has, and each
+// of those is a supported configuration rather than a degraded one.
 type Sources struct {
 	Diary          Diary
 	Knowledge      knowledge.Searcher

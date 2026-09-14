@@ -95,12 +95,10 @@ type Emitter interface {
 // Options wire the receiver.
 //
 // Secrets, Publisher, Events, Claims, Stream, Configured and AppFlow are
-// REQUIRED, and [New] refuses a missing one by name. Each used to be optional,
-// for a receiver built with nothing beside it: no secrets refused everything, no
-// event log recorded nothing, no claim registry deduplicated nothing, no
-// configured flag read as serving. No process builds one that way. The API
-// mounts this beside an engine that supplies every one, so a nil is a wiring
-// mistake, and a receiver that quietly did less around it would hide the mistake
+// REQUIRED, and [New] refuses a missing one by name. The API mounts this beside
+// an engine that supplies every one, so a nil is a wiring mistake, and a
+// receiver that quietly did less around it (refusing every delivery, recording
+// none, deduplicating nothing, reading as configured) would hide the mistake
 // until a duplicate turn or an empty feed gave it away.
 type Options struct {
 	// Secrets reads the current epoch's verification material. Called per

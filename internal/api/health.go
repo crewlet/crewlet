@@ -13,12 +13,11 @@ import (
 
 // The statuses a health body reports.
 //
-// Precedence is shutting_down > a diverged posture > unconfigured > ok. A
-// draining engine is draining first, whatever else is true of it. A diverged
-// posture outranks unconfigured because it names the CAUSE: a node that is
+// Precedence is shutting_down > a posture other than serve or wait >
+// unconfigured > ok. A draining engine is draining first, whatever else is true
+// of it. The posture outranks unconfigured because it names the CAUSE: a node
 // stuck applying its first revision is unconfigured because it is stuck, and
-// `configured: false` still says the rest beside it. This comment used to put
-// unconfigured first, which the code never did.
+// `configured: false` still says the rest beside it.
 const (
 	StatusOK           = "ok"
 	StatusUnconfigured = "unconfigured"
@@ -32,10 +31,9 @@ const (
 // snapshot and the periodic push together — and a reconnect restores it with no
 // second round trip.
 //
-// Every field the engine answers is ALWAYS PRESENT. They were pointers, omitted
-// beside an `engine: false` flag, for an API process with no engine to ask; no
-// such process exists, because every process that serves the API runs the
-// engine beside it. A zero here is therefore a real zero.
+// Every field the engine answers is ALWAYS PRESENT, and a zero here is a real
+// zero: every process that serves the API runs the engine beside it, so there is
+// no answer this body could honestly leave out.
 type Health struct {
 	Status string `json:"status"`
 
@@ -54,12 +52,10 @@ type Health struct {
 
 	Version string `json:"version"`
 
-	// StartedAt is when this node's engine started. ONE start, where there
-	// used to be two: the API's own `started_at` beside the engine's
-	// `engine_started_at`, kept apart because an API process on its own
-	// would have had its own clock. Every API runs inside the engine's
-	// process, so the engine's start is the node's, and it is the same
-	// instant the fleet view reports for this node.
+	// StartedAt is when this node's engine was built, which is the node's
+	// start: the API runs inside the engine's process. ONE start rather
+	// than one per surface, and the same instant the fleet view reports
+	// for this node off its presence heartbeat.
 	StartedAt string `json:"started_at"`
 
 	Queue   string `json:"queue"`

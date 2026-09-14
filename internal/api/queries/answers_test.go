@@ -315,11 +315,12 @@ func TestOneRoleCanBeAskedForAlone(t *testing.T) {
 	}
 }
 
-func TestANodeWithNoEventStoreLabelsTheWindowItWasAsked(t *testing.T) {
+func TestAWindowNobodyCanSeeIsLabelledAsAsked(t *testing.T) {
 	t.Parallel()
-	// An empty rollup labelled with the window ASKED for, not the live one
-	// relabelled: a week's heading over an hour's numbers is a lie about
-	// what a reader is looking at.
+	// A registry holding the projection and no event log cannot see a
+	// fourteen-day window. It answers an empty rollup labelled with the
+	// window ASKED for, not the live one relabelled: a week's heading over an
+	// hour's numbers is a lie about what a reader is looking at.
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
 	if width := windowWidth(t, got); width != 14*24*time.Hour || got.Totals.Calls != 0 {

@@ -55,10 +55,10 @@ func buildService(t *testing.T, opts stream.Options) *stream.Service {
 
 // EVERY SURFACE FUNCTION IS REQUIRED, and a missing one is refused by name.
 //
-// Each used to be optional, for an API process with no engine to ask. With the
-// health fields always present, a missing health function would push a
-// confident zero in flight rather than an honest absence, so the constructor
-// is where the mistake has to surface.
+// The engine beside every API answers each of them. With the health fields
+// always present, a missing health function would push a confident zero in
+// flight rather than an honest absence, so the constructor is where the mistake
+// has to surface.
 func TestNewServiceRefusesEveryMissingFunctionByName(t *testing.T) {
 	t.Parallel()
 	_, err := stream.NewService(livestate.New(), stream.Options{})
@@ -393,7 +393,7 @@ func TestStoppingEndsTheTickAndTheClients(t *testing.T) {
 	if s.Hub().Clients() != 0 {
 		t.Error("Stop left clients registered")
 	}
-	// Idempotent: the merged topology can reach this from either half.
+	// Idempotent: a second Stop returns rather than closing a closed channel.
 	s.Stop()
 }
 

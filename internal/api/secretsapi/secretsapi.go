@@ -76,11 +76,10 @@ type Options struct {
 
 // New builds the service.
 //
-// A MISSING FLEET IS REFUSED rather than served as an absent surface. It used to
-// leave /secrets unregistered, for an API process that could not reach the
-// fleet's coordination store. No process runs that way: `crewlet run` builds
-// this beside an engine whose fleet store is open on every topology, so a nil
-// here is a wiring mistake, and a 404 would hide it.
+// A MISSING FLEET IS REFUSED rather than served as an absent surface: `crewlet
+// run` builds this beside an engine whose fleet store is open on every
+// topology, so a nil here is a wiring mistake, and an unregistered /secrets
+// answering 404 would hide it.
 func New(opts Options) (*Service, error) {
 	if opts.Fleet == nil {
 		return nil, errors.New("secretsapi: Options.Fleet is required: the " +

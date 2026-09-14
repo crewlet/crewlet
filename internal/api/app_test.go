@@ -161,11 +161,10 @@ func withRequired(t *testing.T, opts api.Options) api.Options {
 // EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is
 // refused by name.
 //
-// Each used to be optional, for a "standalone API" with no engine beside it,
-// and each nil had an answer built around it that looked deliberate: a health
-// body saying engine=false, a 503 naming no_coordination_store, an absent
-// /config. No process ever took any of them. A nil is a wiring mistake, and the
-// constructor is the one place it can surface before an operator is misled.
+// A nil is a wiring mistake, because the engine beside every API holds all of
+// them, and an answer built around it would look deliberate (a health body
+// missing the engine's fields, a 503, an absent /config). The constructor is the
+// one place it can surface before an operator is misled.
 func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
 	_, err := api.New(api.Options{})
@@ -272,9 +271,9 @@ func TestConfiguredFollowsTheLiveEpoch(t *testing.T) {
 
 // THE ENGINE'S FIELDS ARE ALWAYS ON THE BODY, and a zero is a real zero.
 //
-// They were omitted, beside `engine: false`, for an API process with no engine
-// to ask. No such process exists, so an idle node says 0 in flight and an
-// empty seat list rather than leaving a client to guess what an absence means.
+// Every process that serves the API runs the engine that answers them, so an
+// idle node says 0 in flight and an empty seat list rather than leaving a client
+// to guess what an absence means.
 func TestAnIdleNodeReportsItsZerosRatherThanOmittingThem(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{})
