@@ -773,26 +773,56 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 }
 
 // retryStale runs one attempt at a time until it succeeds, fails for a reason
-// a retry cannot fix, or exhausts [txAttempts].
+// a retry cannot fix, or exhausts [TxAttempts].
 //
 // ONE LOOP, and that is the whole reason it is a function: [DB.Tx] and
 // [Writer.Tx] both need it, and a second copy is how one of them comes to
 // classify an error the other retries — which is exactly what the eleven
 // callers without internal/learning's private copy paid for.
 func retryStale(ctx context.Context, once func() error) error {
+	_, err := retryStaleConflicts(ctx, once)
+	return err
+}
+
+// retryStaleConflicts is [retryStale], reporting WHY each retry happened.
+//
+// The causes are the store's to report because the store is the only layer
+// that sees them all: a conflict raised by the COMMIT lands after the caller's
+// body has already returned nil, so a caller classifying its own error
+// undercounts by exactly the aborts that matter most. It returns them rather
+// than counting them because internal/store may not import a metrics package
+// the whole engine sits above — see the applier's countAborts, which is what
+// reads this.
+func retryStaleConflicts(ctx context.Context, once func() error) ([]Conflict, error) {
+	var causes []Conflict
 	for attempt := 0; ; attempt++ {
 		err := once()
-		if err == nil || attempt+1 >= txAttempts || !staleSnapshot(err) {
-			return err
+		kind := Classify(err)
+		if err == nil || attempt+1 >= TxAttempts || !kind.Retryable() {
+			if kind != ConflictNone {
+				causes = append(causes, kind)
+			}
+			return causes, err
 		}
+		causes = append(causes, kind)
+		// THE CAUSE, not one sentence covering all of them. This said
+		// "the transaction read a snapshot another writer had already
+		// advanced past" for a busy write lock and for a dirty pooled
+		// connection too, which sends whoever reads it looking for a
+		// contending writer that does not exist.
 		log.WarnContext(ctx, "store_tx_retry", "attempt", attempt+1, "error", err.Error(),
-			"detail", "the transaction read a snapshot another writer had already "+
-				"advanced past; retrying on a fresh one")
+			"cause", string(kind), "detail", retryDetail[kind])
 		sleepFor(ctx, txRetryBeat(attempt))
 	}
 }
 
-// txAttempts is how many times a conflicted transaction is retried.
+// TxAttempts is how many times a conflicted transaction is retried.
+//
+// EXPORTED because a test that bounds how much of this budget a workload may
+// spend has to be written against the budget itself: spelled as a literal 8 at
+// the assertion, the bound silently stops meaning "the whole budget" the day
+// this number changes. Nothing outside a test reads it — a caller does not get
+// to choose, which is the point of having one loop (see [retryStale]).
 //
 // Eight, and the number is measured rather than chosen: four goroutines each
 // incrementing one row twelve times — the sharpest contention this store
@@ -800,7 +830,21 @@ func retryStale(ctx context.Context, once func() error) error {
 // update at three attempts even with a jittered pause. What fails at a budget
 // this size is contention no retry loop should absorb silently anyway, and
 // the caller gets the error rather than a lost write.
-const txAttempts = 8
+const TxAttempts = 8
+
+// retryDetail is what to do about each cause, for the person reading the WARN.
+//
+// One line each, because the three send a reader to three different places:
+// the driver's concurrency model, the box's load, and this process's own
+// rollback path.
+var retryDetail = map[Conflict]string{
+	ConflictAbort: "the driver invalidated a snapshot this attempt had already " +
+		"written against; retrying on a fresh one",
+	ConflictLock: "the write lock was not granted inside busy_timeout, so this " +
+		"attempt wrote nothing; it is load on the box rather than a data conflict",
+	ConflictDirty: "the pool handed back a connection with a transaction still " +
+		"open; the next attempt draws a different one",
+}
 
 // txRetryBeat is the jittered, WIDENING pause between attempts.
 //
@@ -821,21 +865,71 @@ func txRetryBeat(attempt int) time.Duration {
 	return time.Duration(base+rand.N(spread)) * time.Microsecond
 }
 
-// staleSnapshot reports whether an error is the driver's read-then-write
-// conflict.
+// Conflict is WHY the store will retry a transaction, and the three are not
+// one fact.
+//
+// An ABORT means the driver threw away work the attempt had already done. A
+// LOCK means it never let the attempt start, so nothing was lost but time. A
+// DIRTY connection is not about the database at all — it is about the POOL.
+// The remedies differ in kind: an abort is the driver's concurrency model and
+// bounds how big a transaction may usefully be, a lock is scheduler pressure
+// that more CPU or a longer busy timeout fixes, and a dirty connection is a
+// rollback this process discarded.
+//
+// They were ONE BOOL for as long as this loop existed, and two things read it
+// wrongly as a result: retryStale logged "read a snapshot another writer had
+// already advanced past" over all three, and the applier counted every one of
+// them into `crewlet.statelog.apply.tx.aborts` — a metric whose whole job is
+// to answer whether THIS DRIVER aborts on commits elsewhere in the file, and
+// which therefore could not answer it, because a busy lock under load is
+// indistinguishable there from the abort it is named for.
+type Conflict string
+
+// The four values. ConflictNone is the zero value and means "not retryable",
+// which is the honest reading of an error this loop does not recognise.
+const (
+	ConflictNone  Conflict = ""
+	ConflictAbort Conflict = "abort"
+	ConflictLock  Conflict = "lock"
+	ConflictDirty Conflict = "dirty"
+)
+
+// Valid reports whether c is one this build knows.
+func (c Conflict) Valid() bool {
+	switch c {
+	case ConflictNone, ConflictAbort, ConflictLock, ConflictDirty:
+		return true
+	}
+	return false
+}
+
+// Retryable reports whether a conflict of this kind is worth another attempt.
+func (c Conflict) Retryable() bool { return c != ConflictNone && c.Valid() }
+
+// Classify says why the driver refused a transaction, or ConflictNone.
 //
 // MATCHED ON TEXT, deliberately and with a comment saying so: the driver
-// returns a bare error for this with no sentinel and no code to compare
-// against, so the alternative to a string match is no retry at all. Kept
-// narrow — two spellings, both of which are the driver's own — so an
-// unrelated failure is never retried into a second side effect.
-func staleSnapshot(err error) bool {
+// returns a bare error for each of these with no sentinel and no code to
+// compare against, so the alternative to a string match is no retry at all.
+// Kept narrow — every spelling here is the driver's own — so an unrelated
+// failure is never retried into a second side effect.
+func Classify(err error) Conflict {
 	if err == nil {
-		return false
+		return ConflictNone
 	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "snapshot is stale") ||
-		strings.Contains(msg, "database is locked") ||
+	switch {
+	case strings.Contains(msg, "snapshot is stale"):
+		// THE ONE THAT COSTS WORK: the driver invalidated a snapshot
+		// this attempt had already written against.
+		return ConflictAbort
+	case strings.Contains(msg, "database is locked"):
+		// The write lock was not granted inside busy_timeout. The
+		// attempt wrote nothing, so this costs only the wait — and it
+		// rises with load on the box rather than with anything about
+		// the data.
+		return ConflictLock
+	case strings.Contains(msg, "transaction within a transaction"):
 		// A CONNECTION THE POOL HANDED BACK WITH A TRANSACTION STILL
 		// OPEN, which the driver reports on the next BEGIN over it.
 		//
@@ -852,7 +946,9 @@ func staleSnapshot(err error) bool {
 		// rollback that failed and was discarded, which [DB.tx] now
 		// reports instead — see there. This clause is what keeps a
 		// caller working while that report reaches somebody.
-		strings.Contains(msg, "transaction within a transaction")
+		return ConflictDirty
+	}
+	return ConflictNone
 }
 
 // sleepFor waits, or returns early if the context is done.

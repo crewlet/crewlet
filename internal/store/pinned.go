@@ -75,7 +75,24 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // ONCE, so anything with an effect outside the transaction belongs after Tx
 // returns rather than inside it.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryStale(ctx, func() error { return w.tx(ctx, fn) })
+	_, err := w.TxConflicts(ctx, fn)
+	return err
+}
+
+// TxConflicts is [Writer.Tx], reporting WHY the store retried.
+//
+// One entry per conflict, in order, so a caller can tell an ABORT — work the
+// driver threw away — from a write lock it was never granted. They are
+// opposite facts with opposite remedies, and the applier's
+// `crewlet.statelog.apply.tx.aborts` counted both as the first for as long as
+// the store answered this question with a bool: under load that metric rose
+// with the box's CPU pressure while claiming to describe the driver's
+// conflict detection, which is the one thing it exists to report.
+//
+// A caller that does not care uses [Writer.Tx]; nothing is lost by it, since
+// the retry policy is the store's either way.
+func (w *Writer) TxConflicts(ctx context.Context, fn func(*sql.Tx) error) ([]Conflict, error) {
+	return retryStaleConflicts(ctx, func() error { return w.tx(ctx, fn) })
 }
 
 // tx is one attempt: begin, run, commit or roll back.
