@@ -53,11 +53,13 @@ export const ACKNOWLEDGEMENT_TEXT: Record<Acknowledgement, string> = {
   mass_removal: "This removes more than half of the company's seats.",
 };
 
-const ONBOARDING_CAUSE: Record<OnboardingCause, string> = {
-  company_rename: "because the company is renamed",
-  seat_rename: "because they are renamed",
-  unit_rename: "because a unit they belong to is renamed",
-  move: "because they move to another unit",
+/** Why a group of seats onboards again, agreeing with how many there are. */
+const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
+  company_rename: () => "because the company is renamed",
+  seat_rename: (one) => (one ? "because it is renamed" : "because they are renamed"),
+  unit_rename: (one) =>
+    one ? "because a unit it belongs to is renamed" : "because a unit they belong to is renamed",
+  move: (one) => (one ? "because it moves to another unit" : "because they move to another unit"),
 };
 
 const names = (refs: readonly EntityRef[]) => refs.map((r) => r.name).join(", ");
@@ -88,9 +90,9 @@ export function changeSentences(changes: ChangeSet): { changes: string[]; conseq
     follow.push(`${h.ref.name} changes handle from @${h.before} to @${h.after}.`);
   }
   for (const group of changes.onboarding) {
-    const onboard = group.seats.length === 1 ? "onboards" : "onboard";
+    const one = group.seats.length === 1;
     follow.push(
-      `${plural(group.seats.length, "seat")} ${onboard} again ${ONBOARDING_CAUSE[group.cause]}: ${names(group.seats)}.`,
+      `${plural(group.seats.length, "seat")} ${one ? "onboards" : "onboard"} again ${ONBOARDING_CAUSE[group.cause](one)}: ${names(group.seats)}.`,
     );
   }
   for (const u of changes.unitRenames) {

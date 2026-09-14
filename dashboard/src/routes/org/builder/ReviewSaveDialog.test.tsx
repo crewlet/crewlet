@@ -228,6 +228,12 @@ describe("the review", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     expect(within(dialog).getByText("Renames the company from Acme to Acme Labs.")).toBeDefined();
+    // And for many: every agent seat onboards again under the new id.
+    expect(
+      within(dialog).getByText(
+        "3 seats onboard again because the company is renamed: CEO, Designer, Dev.",
+      ),
+    ).toBeDefined();
     const save = within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     // The consequence as the engine keys it: the agent id moves, the handle
@@ -253,7 +259,7 @@ describe("the review", () => {
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     expect(
       within(dialog).getByText(
-        "1 seat onboards again because a unit they belong to is renamed: Dev.",
+        "1 seat onboards again because a unit it belongs to is renamed: Dev.",
       ),
     ).toBeDefined();
   });
