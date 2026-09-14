@@ -193,7 +193,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 
 | You can change | Notes |
 |---|---|
-| Name | Seat names are unique. An existing seat keeps its handle through a rename. |
+| Name | Seat names are unique. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
 | Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle after the next check. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
 | Email, goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
@@ -247,6 +247,13 @@ Not in the builder: per-seat allow or block lists for GitLab, Atlassian,
 Datadog or Mattermost (the engine provisions every agent seat), a per-seat
 Datadog role, GitLab tiers beyond developer and maintainer, and flags that
 grant access to everything (an empty repository list already does).
+
+Two more things the builder deliberately does not have. A seat has no colour
+of its own: colour on the dashboard shows state, never identity, so seats are
+told apart by their names. And the canvas has no box for typing a zoom
+percentage: zoom in, zoom out and fit are buttons on the canvas and keys while
+it has focus (plus, minus and zero), and Ctrl or Command with the wheel zooms
+toward the pointer.
 
 ## Moving a node
 
