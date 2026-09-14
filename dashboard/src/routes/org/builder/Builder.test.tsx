@@ -37,6 +37,12 @@ const named: OrgProjection = { name: "Acme", roles: [], units: [] };
 /** The Builder's one polite live region. */
 const liveRegion = () => document.querySelector(".org-builder-live")!;
 
+/** A menu's entries by their labels, without the key hints some of them carry. */
+const labels = (menu: HTMLElement) =>
+  within(menu)
+    .getAllByRole("menuitem")
+    .map((item) => item.querySelector(".menu-item-label")!.textContent);
+
 describe("the posture table", () => {
   test("a served configuration opens edit mode", async () => {
     const engine = new Engine(company());
@@ -343,11 +349,8 @@ describe("the selection in the URL", () => {
     const actions = await screen.findByRole("button", { name: "Acme" });
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for Acme" });
-    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toBeDefined();
-    expect(within(menu).getByRole("menuitem", { name: "Add unit" })).toBeDefined();
     // Nothing moves or deletes the document the company IS.
-    expect(within(menu).queryByRole("menuitem", { name: "Move to" })).toBeNull();
-    expect(within(menu).queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    expect(labels(menu)).toEqual(["Add unit", "Add agent seat", "Add human seat", "Edit"]);
     fireEvent.keyDown(menu, { key: "Escape" });
 
     // And it survives the next answer about the draft, which is what a
@@ -367,11 +370,14 @@ describe("the selection in the URL", () => {
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
     // The same actions, in the same order, as the seat's own card offers.
-    expect(
-      within(menu)
-        .getAllByRole("menuitem")
-        .map((item) => item.textContent),
-    ).toEqual(["Edit", "Open seat", "Edit reports", "Change to human seat", "Move to", "Delete"]);
+    expect(labels(menu)).toEqual([
+      "Edit",
+      "Open seat",
+      "Edit reports",
+      "Change to human seat",
+      "Move to",
+      "Delete",
+    ]);
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
     // The path only: this harness keeps the Builder mounted under any route,
     // where the app replaces the whole screen.

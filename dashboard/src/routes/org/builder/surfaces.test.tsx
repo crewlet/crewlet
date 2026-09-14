@@ -74,3 +74,62 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
   fireEvent.click(within(menu).getByRole("menuitem", { name: /^Delete/ }));
   await waitFor(() => expect(screen.getByRole("dialog", { name: "Delete CEO" })).toBeDefined());
 });
+
+/** A menu's entries as a person meets them: the label and the icon drawn beside it. */
+const entries = (menu: HTMLElement) =>
+  [...menu.querySelectorAll<HTMLElement>(".menu-item")].map((item) => ({
+    label: item.querySelector(".menu-item-label")!.textContent,
+    icon: item.querySelector("svg path")?.getAttribute("d") ?? null,
+    disabled: item.getAttribute("aria-disabled") === "true",
+  }));
+
+// THE TOOLBAR IS WHERE A KEYBOARD REACHES A CARD'S ACTIONS, since a tree item
+// may hold no tab stop of its own. It once built its own list, which put the
+// entries in another order, left out Edit reports and offered Open seat for a
+// seat that existed only in the draft.
+test("the toolbar offers the selected seat's own card menu: its entries, order and icons", async () => {
+  const { view } = mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=canvas&seat=ceo",
+  });
+  await screen.findByText("No problems");
+  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+  const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
+  fireEvent.keyDown(screen.getByRole("menu", { name: "Actions for CEO" }), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+
+  const card = view.container.querySelector<HTMLElement>(
+    '[role="treeitem"][data-tree-id="seat:ceo"]',
+  )!;
+  card.focus();
+  fireEvent.keyDown(card, { key: "ContextMenu" });
+  const own = view.container.querySelector<HTMLElement>(".canvas-overlay [role='menu']")!;
+  expect(own.getAttribute("aria-label")).toBe("Actions for CEO");
+  expect(toolbar).toEqual(entries(own));
+  expect(toolbar.map((e) => e.label)).toContain("Edit reports");
+});
+
+test("the toolbar offers no screen for a seat that exists only in the draft", async () => {
+  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Analyst" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Add agent seat" }));
+  // The new seat is selected by the focus the Builder moves to it; select it
+  // through the outline, whose rows take the selection with focus.
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
+  const row = within(grid)
+    .getAllByRole("row")
+    .find((r) => r.textContent?.includes("Analyst"))!;
+  fireEvent.click(row);
+  fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
+  const labels = entries(menu).map((e) => e.label);
+  expect(labels).toContain("Edit reports");
+  expect(labels).not.toContain("Open seat");
+});

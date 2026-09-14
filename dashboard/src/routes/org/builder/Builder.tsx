@@ -50,7 +50,6 @@ import {
 } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
-import { seatPath } from "~/lib/seats.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
@@ -81,7 +80,7 @@ import {
   type ChartKind,
 } from "./BuilderContext.tsx";
 import { allUnits, locate, type Draft } from "./model/draft.ts";
-import { COMPANY_KEY, handleOfKey, seatKey, type NodeKey } from "./model/keys.ts";
+import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
   builderReducer,
@@ -118,6 +117,8 @@ import { browserClock, randomKeys, restTransport, sessionDraftStorage } from "./
 import { useSave, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
+import { addMenu, nodeMenu } from "./nodeActions.tsx";
+import { useOpenScreen, useStructure } from "./useCharts.ts";
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -952,6 +953,10 @@ function Lens({
     registerView,
   ]);
 
+  // The structure chart the views draw, for the toolbar's node actions.
+  const structure = useStructure(state);
+  const openScreen = useOpenScreen();
+
   // ---- Rendering --------------------------------------------------------------
 
   if (!loaded) {
@@ -989,119 +994,18 @@ function Lens({
   // THE TOOLBAR MIRRORS THE SELECTED NODE'S ACTIONS. A canvas card's own
   // buttons are pointer-only (a tree item may not contain tab stops), so this
   // is where a keyboard reaches them, and it is also where a node's actions
-  // are when the outline is the view.
-  const companySelected = selected === COMPANY_KEY;
-  const selectedNode = selected && !companySelected ? locate(state.draft, selected) : undefined;
-  const selectedName = companySelected
-    ? state.draft.company.name || "the company"
-    : selectedNode?.node.data.name || "the selected node";
-  // READ-ONLY DISABLES, IT DOES NOT HIDE. A menu that loses half its entries
-  // teaches an operator nothing about what the builder does, and an entry
-  // that is offered and then only answers into the live region tells a
-  // sighted operator nothing at all. Edit, Edit reports and Open seat change
-  // no draft and stay available.
-  //
-  // THE SAME ACTIONS, IN THE SAME ORDER, UNDER THE SAME NAMES as a card's or
-  // a row's own menu, so an operator who learned them on the canvas finds
-  // them here.
-  const addItems = (parent: NodeKey | null): MenuEntry[] => [
-    {
-      key: "add-unit",
-      label: "Add unit",
-      icon: "folderPlus",
-      disabled: readOnly,
-      onSelect: () => api.openAdd(parent, "unit"),
-    },
-    {
-      key: "add-agent",
-      label: "Add agent seat",
-      icon: "userPlus",
-      disabled: readOnly,
-      onSelect: () => api.openAdd(parent, "agent"),
-    },
-    {
-      key: "add-human",
-      label: "Add human seat",
-      icon: "userPlus",
-      disabled: readOnly,
-      onSelect: () => api.openAdd(parent, "human"),
-    },
-  ];
-  const nodeItems = (): MenuEntry[] => {
-    if (!selected || (!selectedNode && !companySelected)) return addItems(null);
-    const edit: MenuEntry = {
-      key: "edit",
-      label: "Edit",
-      icon: "pencil",
-      onSelect: () => api.openEditor(selected),
-    };
-    // The company holds seats and units as a unit does, and its Edit is the
-    // charter's. Nothing moves or deletes the document the company IS, so
-    // its menu ends there.
-    if (companySelected) return [...addItems(null), { kind: "separator", key: "s" }, edit];
-    const move: MenuEntry = {
-      key: "move",
-      label: "Move to",
-      icon: "move",
-      disabled: readOnly,
-      onSelect: () => api.openMove(selected),
-    };
-    const remove: MenuEntry = {
-      key: "delete",
-      label: "Delete",
-      icon: "trash",
-      danger: true,
-      disabled: readOnly,
-      onSelect: () => api.openDelete(selected),
-    };
-    if (selectedNode!.kind === "unit") {
-      return [
-        ...addItems(selected),
-        { kind: "separator", key: "s" },
-        edit,
-        move,
-        { kind: "separator", key: "s-delete" },
-        remove,
-      ];
-    }
-    const items: MenuEntry[] = [edit];
-    // OPEN SEAT ONLY FOR A SEAT THE SAVED COMPANY HAS. A seat added in this
-    // draft has a handle as soon as a check derives one, and no screen until
-    // it is saved: the link would open a seat that does not exist yet.
-    const saved = locate(state.baseDraft, selected);
-    if (saved?.kind === "seat") {
-      const path = seatPath({
-        handle: text(saved.node.data.handle) || (handleOfKey(selected) ?? ""),
-        name: saved.node.data.name,
-      });
-      items.push({
-        key: "open",
-        label: "Open seat",
-        icon: "arrowUpRight",
-        onSelect: () => nav.to(path),
-      });
-    }
-    const human = selectedNode!.node.data.kind === "human";
-    items.push(
-      {
-        key: "reports",
-        label: "Edit reports",
-        icon: "sitemap",
-        onSelect: () => api.openEditor(selected),
-      },
-      {
-        key: "kind",
-        label: human ? "Change to agent seat" : "Change to human seat",
-        icon: human ? "cpu" : "user",
-        disabled: readOnly,
-        onSelect: () => api.openChangeKind(selected),
-      },
-      move,
-      { kind: "separator", key: "s-delete" },
-      remove,
-    );
-    return items;
-  };
+  // are when the outline is the view. They are the card's and the row's own
+  // list (`nodeActions.nodeMenu`), not a copy of it: the same entries in the
+  // same order under the same names and icons, Edit reports and the rule for
+  // Open seat included, so what an operator learned on the canvas holds here.
+  // With nothing selected it offers what the company's Add menu offers.
+  const selectedView = selected !== null ? structure.nodes.get(selected) : undefined;
+  const selectedName = selectedView
+    ? selectedView.name || (selectedView.type === "company" ? "the company" : "the selected node")
+    : "";
+  const toolbarItems = selectedView
+    ? nodeMenu(api, selectedView, openScreen)
+    : addMenu(api, structure.nodes.get(COMPANY_KEY)!);
 
   const more: MenuEntry[] = [
     {
@@ -1193,12 +1097,12 @@ function Lens({
               <Menu label="More builder actions" items={more} />
             </span>
             <Menu
-              label={selected ? `Actions for ${selectedName}` : "Add to the organization"}
-              icon={selected ? "more" : "plus"}
-              items={nodeItems()}
+              label={selectedView ? `Actions for ${selectedName}` : "Add to the organization"}
+              icon={selectedView ? "more" : "plus"}
+              items={toolbarItems}
               size="sm"
             >
-              {selected ? selectedName : "Add"}
+              {selectedView ? selectedName : "Add"}
             </Menu>
             <span className="spacer" />
             <FullscreenToggle container={container} />
