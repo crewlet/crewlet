@@ -316,7 +316,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 
 	if res.Suspended {
-		r.recordSuspension(round, surface, res.Result, history)
+		r.recordSuspension(round, surface, res.Result, history, res.Elapsed)
 		// A suspended phase submitted nothing and is not finished. It
 		// returns with the ledger intact; the resumed turn comes back
 		// through Resume and submits then.
@@ -604,6 +604,14 @@ type phaseRun struct {
 	// good and the round numbers claiming to be the phase's first.
 	prior toolloop.Result
 
+	// priorElapsed is the wall clock that same pre-suspend half already
+	// spent, folded in so the resumed phase's `duration_ms` covers the WHOLE
+	// phase rather than the re-entry. Seeded into the clock below rather than
+	// added at each stamp, because there are four places a duration leaves
+	// this function and one that forgot would report a detached coding run as
+	// near-instant on exactly the screen built to show what it cost.
+	priorElapsed time.Duration
+
 	// allowSuspend permits a tool to stop this loop with its call
 	// unanswered. ONLY EXECUTE sets it: a phase that never persists a
 	// partial conversation cannot resume one, so a suspend elsewhere would
@@ -655,7 +663,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	// is the event store's, and the two disagreeing about one phase is worse
 	// than either being absent. A monotonic reading, so a clock correction
 	// mid-phase cannot report a negative duration.
-	began := time.Now()
+	began := time.Now().Add(-in.priorElapsed)
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter

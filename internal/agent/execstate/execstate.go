@@ -108,6 +108,27 @@ type State struct {
 	RoundsUsed     int                    `json:"rounds_used,omitempty"`
 	RoundNarration []types.RoundNarration `json:"round_narration,omitempty"`
 
+	// ElapsedMS is how long this phase had already been running when it
+	// suspended, so the resumed half reports the WHOLE phase rather than the
+	// re-entry.
+	//
+	// Every other aggregate on this state folds across the suspend —
+	// RoundsUsed, the tokens, the tool executions — and a duration that did
+	// not would be the one number on `agent_phase_completed` that means
+	// something different for a sandboxed phase than for every other. It
+	// would also be wrong in the direction that hides the cost: a detached
+	// coding run is minutes of the most expensive work a seat does, and the
+	// record would report only the seconds spent collecting its answer.
+	//
+	// Milliseconds because that is the resolution the event carries, and it
+	// is a wire field: a time.Duration would serialize as a nanosecond count
+	// nothing else here speaks.
+	//
+	// Additive within v2: a row written before this existed decodes to zero,
+	// which resumes as a phase whose prior half was not measured — exactly
+	// what it was.
+	ElapsedMS int `json:"elapsed_ms,omitempty"`
+
 	// Iterations is the closed-round ledger of the suspended TURN. The
 	// resume is the same turn, so without this it would forget every round
 	// that closed before the suspend.
