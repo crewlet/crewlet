@@ -19,7 +19,9 @@ import {
   handleOf,
   hasGitLabProvisioning,
   isConnected,
+  isWholeReference,
   isWorking,
+  mattermostBotUsername,
   nameOfHandle,
   providerOrder,
   referenceNames,
@@ -84,6 +86,23 @@ describe("integrations", () => {
     expect(gitLabAccessLevel(company, "ceo")).toBe("");
     expect(gitLabAccessLevel(company, undefined)).toBe("");
     expect(datadogFallback(company)).toBe("sre");
+  });
+
+  // A provisioner acts only where the document names a secret store entry, and
+  // it creates the bot under a name a screen must not guess: the prefix and
+  // the handle, lowercased, because Mattermost usernames are.
+  test("only a whole reference marks a provisioned credential, and the bot's default name carries the prefix", () => {
+    expect(isWholeReference("${DEV_MM_TOKEN}")).toBe(true);
+    expect(isWholeReference(" ${DEV_MM_TOKEN} ")).toBe(true);
+    expect(isWholeReference("__redacted__")).toBe(false);
+    expect(isWholeReference("Bearer ${DEV_MM_TOKEN}")).toBe(false);
+    expect(isWholeReference(undefined)).toBe(false);
+
+    const prefixed: CompanyDocument = {
+      integrations: { mattermost: { provisioning: { username_prefix: "Agent-" } } },
+    };
+    expect(mattermostBotUsername(prefixed, "Dev")).toBe("agent-dev");
+    expect(mattermostBotUsername({ integrations: { mattermost: {} } }, "Dev")).toBe("dev");
   });
 });
 

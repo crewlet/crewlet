@@ -350,7 +350,7 @@ describe("integrations", () => {
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();
     expect(
       screen.getByText(
-        "The bot is provisioned under this name. Changing it would make the provisioner find or create a second bot.",
+        "The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot.",
       ),
     ).toBeDefined();
     expect(
@@ -366,6 +366,34 @@ describe("integrations", () => {
     expect(
       screen.getByText(
         "The app's permissions were fixed when it was created. Raise them at GitHub as well.",
+      ),
+    ).toBeDefined();
+  });
+
+  // A LITERAL TOKEN IS A BOT SOMEBODY MANAGES. The provisioner only mints into
+  // the secret store entry a whole ${VAR} names; every other seat it notes and
+  // leaves alone. A literal reaches this screen as its mask, so a screen that
+  // read "has a token" as "is provisioned" locked the username of a bot the
+  // engine never touches, with copy saying the opposite.
+  test("a bot whose token is a literal is managed by hand, and its username stays editable", () => {
+    const doc = connected();
+    doc.integrations!.mattermost = {
+      enabled: true,
+      url: "https://chat.example.com",
+      team: "acme",
+      provisioning: { username_prefix: "Agent-" },
+    };
+    doc.units![0]!.roles![1]!.integrations!.mattermost = {
+      bot_token: "__redacted__",
+      channel: "eng",
+    };
+    edit(keyedState(doc), "seat:dev");
+    const username = field("Bot username") as HTMLInputElement;
+    expect(username.disabled).toBe(false);
+    expect(username.value).toBe("");
+    expect(
+      screen.getByText(
+        "The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand. Empty uses agent-dev.",
       ),
     ).toBeDefined();
   });

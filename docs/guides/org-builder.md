@@ -220,8 +220,12 @@ credential is ever shown.
   of a seat whose app exists, raise the app's permissions at GitHub as well.
 - **Slack:** the default channel ID, for a seat that has its own Slack app.
 - **Mattermost:** the default channel name, for a seat that has its own bot.
-  The bot username is read-only once the bot is provisioned, because changing
-  it would make the provisioner find or create a second bot.
+  The engine provisions a bot only where the seat's `bot_token` is a whole
+  `${NAME}` reference, so for such a seat the bot username is read-only:
+  changing it would make the provisioner find or create a second bot. A seat
+  whose token is a literal is a bot somebody manages by hand, and its username
+  stays editable. Empty means the provisioning username prefix and the seat's
+  handle, lowercased.
 - **GitLab:** the access level (developer or maintainer) the seat's account
   joins with, when GitLab provisioning is set up. Access levels are kept by
   handle, so a seat added in this draft can have one once the check reports

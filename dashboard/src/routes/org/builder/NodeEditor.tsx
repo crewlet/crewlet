@@ -90,6 +90,8 @@ import {
   handleOf,
   hasGitLabProvisioning,
   isConnected,
+  isWholeReference,
+  mattermostBotUsername,
   nameOfHandle,
   providerOrder,
   toolCredentialNames,
@@ -1119,8 +1121,13 @@ function IntegrationsSection({
   const tierChanged = appSlug !== "" && form.githubTier !== initial.githubTier;
   const slack = getPath(data, ["integrations", "slack"]);
   const mattermost = getPath(data, ["integrations", "mattermost"]);
-  const provisioned =
-    isRecord(mattermost) && typeof mattermost.bot_token === "string" && mattermost.bot_token !== "";
+  // A BOT IS THE ENGINE'S ONLY WHERE ITS TOKEN NAMES A SECRET STORE ENTRY.
+  // The provisioner mints into the entry a whole `${VAR}` points at and skips
+  // every other seat with a note (`mattermost.PlanFor`), so a literal token,
+  // which reaches this screen as its mask, is a bot somebody manages by hand
+  // and whose username is theirs to correct.
+  const provisioned = isRecord(mattermost) && isWholeReference(mattermost.bot_token);
+  const defaultUsername = handle === undefined ? "" : mattermostBotUsername(company, handle);
   const gitlabDefault = defaultGitLabAccessLevel(company);
 
   return (
@@ -1212,9 +1219,9 @@ function IntegrationsSection({
             {provisioned ? (
               <ReadOnlyFact
                 label="Bot username"
-                reason="The bot is provisioned under this name. Changing it would make the provisioner find or create a second bot."
+                reason="The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot."
               >
-                <code className="inline">{form.mattermostUsername || handle || ""}</code>
+                <code className="inline">{form.mattermostUsername || defaultUsername}</code>
               </ReadOnlyFact>
             ) : (
               <Field
@@ -1224,7 +1231,11 @@ function IntegrationsSection({
                 onChange={(mattermostUsername) => set({ mattermostUsername })}
                 required={false}
                 disabled={disabled}
-                help="Set it only when the bot account already exists under another name. Empty uses the seat's handle."
+                help={
+                  defaultUsername
+                    ? `The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand. Empty uses ${defaultUsername}.`
+                    : "The engine provisions a bot only where its token names a secret store entry, so this one is managed by hand."
+                }
                 error={errorFor(MATTERMOST_USERNAME)}
               />
             )}

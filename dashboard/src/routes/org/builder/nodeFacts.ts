@@ -155,6 +155,26 @@ export function gitLabAccessLevel(company: CompanyDocument, handle: string | und
   return typeof level === "string" ? level : "";
 }
 
+/**
+ * The username the Mattermost provisioner gives a seat's bot when the seat
+ * names none: the provisioning prefix and the handle, lowercased.
+ *
+ * RESTATES `mattermost.BotUsername`, and the lowercasing is the load-bearing
+ * half: Mattermost usernames are lowercase, so a bot for a mixed-case handle
+ * is created as one name and looked up as another, which reads as a missing
+ * bot and makes a second one. A screen offering the handle as the default
+ * would name an account that never exists.
+ */
+export function mattermostBotUsername(company: CompanyDocument, handle: string): string {
+  const prefix = getPath(company, [
+    "integrations",
+    "mattermost",
+    "provisioning",
+    "username_prefix",
+  ]);
+  return `${typeof prefix === "string" ? prefix.trim() : ""}${handle}`.toLowerCase();
+}
+
 /** The handle of the Datadog fallback seat, when Datadog names one. */
 export function datadogFallback(company: CompanyDocument): string | undefined {
   const handle = getPath(company, ["integrations", "datadog", "route_to"]);
@@ -213,6 +233,20 @@ export const PHASE_MODEL_FIELDS = [
 
 /** A value that is exactly one `${NAME}` reference, as `envref.Whole` reads one. */
 const WHOLE_REFERENCE = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/;
+
+/**
+ * Whether a value is exactly one `${NAME}` reference.
+ *
+ * WHICH IS WHAT MAKES A CREDENTIAL PROVISIONABLE. A provisioner mints into the
+ * secret store and points the document at it, so it acts only where the
+ * document already names an entry (`provision.SoleVar`); anything else is a
+ * value somebody wrote by hand, which it reports and leaves alone. The
+ * configuration surface sends a literal as its mask, so a screen cannot tell
+ * the two apart by looking at the value, only by its shape.
+ */
+export function isWholeReference(value: unknown): boolean {
+  return typeof value === "string" && WHOLE_REFERENCE.test(value.trim());
+}
 
 /**
  * Every secret store entry a value refers to by a whole `${NAME}`, sorted and
