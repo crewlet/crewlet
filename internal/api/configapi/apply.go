@@ -135,7 +135,7 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // /setup.
 //
 // EMPTY, NEVER NIL, for an error that is not about a document. Every caller
-// adds its own words to what comes back — a detail, a hint, an id — and a nil
+// adds its own words to what comes back (a detail, a hint, an id), and a nil
 // map is the one value in Go that reads fine and panics on the write. The
 // caller that needs to know whether there was a structured half reads its
 // length.
@@ -492,9 +492,9 @@ func readPatched(patch, merged []byte) (*config.Company, error) {
 	// merged document, so the merged document cannot be what decides. Asked
 	// only when the merged document already showed the key, the null form
 	// answered 201 and changed nothing, since the write carries back every
-	// key it cannot represent that the write does not name — the one silent
-	// no-op on a surface whose whole rule is that an unknown key in a patch
-	// is refused rather than ignored.
+	// key it cannot represent that the write does not name. It was the one
+	// silent no-op on a surface whose whole rule is that an unknown key in a
+	// patch is refused rather than ignored.
 	if patchErr := onlyUnknownField(parseDocument(patch)); patchErr != nil {
 		return nil, patchErr
 	}
