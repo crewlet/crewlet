@@ -186,29 +186,27 @@ authoritative list, generated from the engine's own map, is
 this is the shape of it, with the notes that need a sentence.
 
 ```text
-# lifecycle — the org and its seats coming and going, plus the config
-#             changes an operator goes looking for after the fact
+# lifecycle: the org coming and going, plus the config changes an operator
+#            goes looking for after the fact
 OrgStarted, OrgStopped
-AgentSpawned, AgentTerminated, AgentReassigned
-RoleUpdated                # role definition changed during a config apply
 ConfigRevisionActivated    # a new revision is the one to serve
 ConfigRevisionApplied      # one node's outcome, and how far it got
 
-# task — work created, assigned and done, including a detached coding run
-#        (the execution of a task) and a schedule firing (which creates one)
-TaskCreated, TaskAssigned, TaskStarted
-TaskCompleted, TaskFailed, TaskDelegated
-SandboxRunStarted, SandboxClarificationRequested, SandboxRunCompleted
+# not stored: a seat acquired or released by this node. Live-only, because
+# placement moves seats on every rebalance; they drive the live projection
+AgentSpawned, AgentTerminated
+
+# task: work reaching a seat, including a detached coding run (the execution
+#       of one) and a schedule firing (which creates one). There is no task
+#       lifecycle here: work's own record is the tracker's history
+TaskAssigned
+SandboxRunStarted, SandboxClarificationRequested
+SandboxRunCompleted, SandboxRunFailed
 ScheduledTaskFired
 
-# communication
-MessageSent                # agent sent a message to a channel
-
-# a2a — one ask, one answer, then closed
-A2AChannelOpened, A2AMessageSent, A2AMessageDelivered, A2AChannelClosed
-
-# knowledge
-DocumentCreated, DocumentUpdated
+# a2a: one ask, one answer, then closed. The ask and the answer also travel
+#      as inbox wakes (A2ARequest, A2AMessage), which are not stored
+A2AChannelOpened, A2AMessageSent, A2AChannelClosed
 
 # decision — DACI is behavioural guidance on the org's own chat surfaces,
 #            so NOTHING in Crewlet publishes these four. They stay mapped as
@@ -316,12 +314,12 @@ Events carry **OpenTelemetry-compatible trace context** (W3C Trace Context forma
 
 ```mermaid
 flowchart TD
-    W["Slack webhook (trace starts here)"] --> N["NotificationService routes to agent"]
-    N --> E["Executor wraps turn in OTel span"]
-    E --> A["TaskStarted"]
-    E --> B["Tool: send_message"]
-    E --> C["AgentTurnCompleted"]
-    E --> D["TaskCompleted"]
+    W["Slack webhook (the trace starts here)"] --> N["The notify service routes it to a seat's inbox"]
+    N --> E["The turn opens its agent.turn span under the delivery's trace"]
+    E --> A["AgentPhaseStarted"]
+    E --> B["A tool call, such as a Slack post through the MCP server"]
+    E --> C["AgentPhaseCompleted"]
+    E --> D["AgentTurnCompleted"]
 ```
 
 **How it works:**
