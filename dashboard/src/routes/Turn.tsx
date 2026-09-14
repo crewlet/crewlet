@@ -48,7 +48,6 @@
  */
 
 import { useCallback, useMemo, type ReactNode } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -98,6 +97,8 @@ import {
 } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -675,10 +676,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
-      <ScreenHead
-        title="Turn"
-        sub={<code className="inline">{turnId}</code>}
-        badges={
+      <PageActions>
+        {
           <>
             {role && <Badge outline>{role}</Badge>}
             <Badge outline>{own.length} phases</Badge>
@@ -724,7 +723,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             )}
           </>
         }
-        actions={
+        {
           <>
             {role && (
               <Button size="sm" icon="user" onClick={() => nav.to(["seats", role])}>
@@ -773,7 +772,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             />
           </>
         }
-      />
+      </PageActions>
+      <PageNote>{<code className="inline">{turnId}</code>}</PageNote>
 
       {loading && <Skeleton rows={6} />}
       <QueryState

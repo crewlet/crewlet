@@ -27,7 +27,6 @@
 import { useMemo } from "react";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Chip, Meter, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { Select } from "~/ui/primitives.tsx";
@@ -36,6 +35,8 @@ import { useParam } from "~/app/router.tsx";
 import { fmtDate, plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { WorkGoal, WorkGoalTarget } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 /** The health values, and their tone. A closed set, so one the engine adds
  *  later renders as itself rather than vanishing. */
@@ -86,11 +87,12 @@ export function Goals() {
 
   return (
     <>
-      <ScreenHead
-        title="Goals"
-        sub="The tier above projects: an outcome, who owns it, and what its targets say. The percentage is computed from the work every time it is read — nothing stores one, so nothing can disagree with the board."
-        badges={<Badge outline>{plural(goals.length, "goal")}</Badge>}
-      />
+      <PageActions>{<Badge outline>{plural(goals.length, "goal")}</Badge>}</PageActions>
+      <PageNote>
+        The tier above projects: an outcome, who owns it, and what its targets say. The percentage
+        is computed from the work every time it is read — nothing stores one, so nothing can
+        disagree with the board.
+      </PageNote>
 
       {!loading && !error && goals.length > 0 && (
         <StatRow cols={3}>
@@ -299,18 +301,15 @@ export function Goal({ id }: { id: string }) {
 
   return (
     <>
-      <ScreenHead
-        title={goal?.name || "Goal"}
-        sub={
-          goal?.description ||
-          "A goal is the tier above projects: what the company is trying to move, and what says whether it moved."
-        }
-        badges={
-          goal?.health && HEALTH[goal.health] ? (
-            <Badge tone={HEALTH[goal.health]!.tone}>{HEALTH[goal.health]!.label}</Badge>
-          ) : undefined
-        }
-      />
+      <PageActions>
+        {goal?.health && HEALTH[goal.health] ? (
+          <Badge tone={HEALTH[goal.health]!.tone}>{HEALTH[goal.health]!.label}</Badge>
+        ) : undefined}
+      </PageActions>
+      <PageNote>
+        {goal?.description ||
+          "A goal is the tier above projects: what the company is trying to move, and what says whether it moved."}
+      </PageNote>
       {loading && !goal && <Skeleton rows={4} />}
       <QueryState
         error={error}

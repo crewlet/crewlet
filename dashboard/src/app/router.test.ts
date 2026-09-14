@@ -1,18 +1,25 @@
 /**
- * The router's rules, which are invisible in a URL.
+ * The router's rules, which are invisible in a URL — and the NAVIGATION
+ * GRAMMAR, which is invisible everywhere.
  *
- * All three of these shipped wrong once, and none of them shows up in an
- * address bar: from a redirected route Back could not escape at all, Back from
- * a screen's fourth lens left the screen entirely, and Back to a list somebody
- * had scrolled halfway down landed at the top.
+ * Both of the router's rules shipped wrong once and neither shows up in an
+ * address bar: Back from a screen's fourth lens left the screen entirely, and
+ * Back to a list somebody had scrolled halfway down landed at the top.
+ *
+ * The grammar is the other half, and it is the one that decays: rail row is a
+ * workspace, sidebar row is a destination with its OWN PATH, tab is a query on
+ * the path you are already on. Nothing is two of those. It is lost one pull
+ * request at a time — "just one more row under a project" — and the loss is
+ * invisible until the product has three levels of navigation and no rule for
+ * which one a thing belongs in.
  */
 
 // @vitest-environment node
 
 import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
-import { ALL_NAV, activeNavKey, titleFor } from "./nav.ts";
-import { MOVED_PATHS } from "./router.tsx";
+import { DESTINATIONS, RAIL, RESERVED_SEGMENTS, workspaceOf } from "./nav.ts";
+import { crumbsFor, titleOf } from "./workspaces/crumbs.ts";
 
 describe("parsing", () => {
   test("a bare hash is the overview", () => {
@@ -47,35 +54,41 @@ describe("parsing", () => {
 });
 
 describe("navigation identity", () => {
-  test("a detail screen keeps the reader's place in the sidebar", () => {
-    // Otherwise opening one event loses the highlight on the screen you came
-    // from, which reads as having navigated somewhere unrelated.
-    expect(activeNavKey(["seats", "pm"])).toBe("people");
-    expect(activeNavKey(["traces", "abc"])).toBe("model");
-    expect(activeNavKey(["turns", "abc"])).toBe("model");
-    expect(activeNavKey(["events", "abc"])).toBe("activity");
-    expect(activeNavKey([])).toBe("overview");
+  // A DETAIL KEEPS THE READER'S PLACE IN THE RAIL. Otherwise opening one
+  // event loses the mark on the workspace you came from, which reads as
+  // having navigated somewhere unrelated.
+  test("a detail resolves to the workspace that holds it", () => {
+    expect(workspaceOf(["company", "people", "pm"])).toBe("company");
+    expect(workspaceOf(["activity", "turns", "abc"])).toBe("activity");
+    expect(workspaceOf(["activity", "events", "abc"])).toBe("activity");
+    expect(workspaceOf(["work", "ENG-42"])).toBe("work");
+    // GOALS IS WORK'S, although its first segment is its own: the tier above
+    // projects belongs with the projects, and a rail row that unmarked itself
+    // whenever somebody opened a goal would be the proof it does not.
+    expect(workspaceOf(["goals"])).toBe("work");
+    expect(workspaceOf([])).toBe("inbox");
   });
 
-  test("every nav entry resolves to a titled screen", () => {
-    for (const item of ALL_NAV) {
-      expect(titleFor(item.path), item.key).toBe(item.label);
-    }
+  // A ROUTE NOTHING OWNS RESOLVES TO NOTHING rather than to the first row: a
+  // rail that marked a workspace for a path it does not hold would tell the
+  // reader they are somewhere they are not.
+  test("an unowned route marks no workspace", () => {
+    expect(workspaceOf(["nowhere"])).toBe("");
   });
 
-  test("no two nav entries claim the same first path segment", () => {
-    // Route dispatch is a switch on that segment, so a duplicate would make
-    // one of the two unreachable — silently.
-    const heads = ALL_NAV.map((i) => i.path[0] ?? "");
-    expect(new Set(heads).size).toBe(heads.length);
-  });
-
-  test("every nav entry says what it answers", () => {
+  test("every destination says what it answers", () => {
     // The hint is what the command palette shows. An entry with none is an
     // entry a reader has to click to understand.
-    for (const item of ALL_NAV) {
-      expect(item.hint.length, item.key).toBeGreaterThan(10);
+    for (const d of DESTINATIONS) {
+      expect(d.hint.length, d.key).toBeGreaterThan(10);
     }
+  });
+
+  test("every rail row has its own jump chord", () => {
+    // `g` then a letter. Two rows sharing one makes the second unreachable
+    // by keyboard, silently.
+    const chords = RAIL.map((r) => r.chord);
+    expect(new Set(chords).size).toBe(chords.length);
   });
 });
 
@@ -114,20 +127,124 @@ describe("am I already here", () => {
   });
 });
 
-describe("moved routes", () => {
-  // A REDIRECT WHOSE OLD PATH IS NOW A LIVE ROUTE takes every reader of the
-  // new screen somewhere else — silently, with the address bar agreeing with
-  // them, for ever. That is strictly worse than the dead link the redirect
-  // was added to avoid, because a dead link is visible.
-  //
-  // It happened: `#/work` redirected to `#/runs` from when "work" meant a
-  // coding run, and the tracker later took the name. The routing smoke
-  // test did not catch it — it asserts a screen rendered, and the wrong
-  // screen renders perfectly well.
-  test("no redirect claims a path a live screen now owns", () => {
-    const live = new Set(ALL_NAV.map((item) => item.path[0]).filter(Boolean));
-    for (const from of MOVED_PATHS) {
-      expect(live.has(from), `#/${from} is both a redirect and a live screen`).toBe(false);
+describe("the navigation grammar", () => {
+  // A SIDEBAR ROW IS A DESTINATION WITH ITS OWN PATH. A row that differed
+  // from the page you are on only by a query key is a TAB wearing a sidebar
+  // row's clothes, and the moment one exists the two levels stop meaning
+  // anything: the reader cannot tell what is a place from what is a filter.
+  test("every fixed destination differs from its workspace by its PATH", () => {
+    for (const d of DESTINATIONS) {
+      const row = RAIL.find((r) => r.key === d.workspace);
+      expect(row, `${d.key} names workspace ${d.workspace}, which is not a rail row`).toBeTruthy();
+      // A DESTINATION IS A PATH, never a query on one: the grammar's whole
+      // point, and the thing a "just one more row" pull request breaks first.
+      expect(d.path.length, `${d.key} has no path of its own`).toBeGreaterThan(0);
+    }
+    // AND NO TWO DESTINATIONS SHARE ONE. Two rows leading to one address are
+    // two names for one place, which is how a reader comes to believe the
+    // second of them is broken.
+    const addresses = new Set(DESTINATIONS.map((d) => d.path.join("/")));
+    expect(addresses.size).toBe(DESTINATIONS.length);
+  });
+
+  // EVERY DESTINATION BELONGS TO THE WORKSPACE IT CLAIMS, derived the same way
+  // the rail marks the current row. A destination whose path routes to a
+  // different workspace marks the wrong rail row the moment it is opened.
+  test("a destination's path resolves to the workspace it declares", () => {
+    for (const d of DESTINATIONS) {
+      expect(workspaceOf(d.path), `${d.key}`).toBe(d.workspace);
     }
   });
+
+  // ONE ROW PER WORKSPACE, and every workspace owns its own first segments.
+  // Two rail rows claiming one segment is a route whose workspace depends on
+  // which row was declared first.
+  test("no two workspaces own the same first segment", () => {
+    const owner = new Map<string, string>();
+    for (const row of RAIL) {
+      for (const segment of row.owns) {
+        expect(owner.has(segment), `${segment} is owned by two rail rows`).toBe(false);
+        owner.set(segment, row.key);
+      }
+    }
+  });
+
+  // A RESERVED SEGMENT CANNOT COLLIDE WITH A KEY THE ENGINE MINTS. Project
+  // and container keys are uppercase, item keys are `KEY-n`, everything else
+  // is a uuid — and every reserved segment is lowercase. Without this,
+  // `#/work/views` is a list of saved views until somebody creates a project
+  // called VIEWS, and then it is a project.
+  test("no reserved segment is the shape of a minted key", () => {
+    for (const segment of RESERVED_SEGMENTS) {
+      expect(/^[A-Z][A-Z0-9_]*$/.test(segment), `${segment} is a project-key shape`).toBe(false);
+      expect(/-\d+$/.test(segment), `${segment} is an item-key shape`).toBe(false);
+      expect(segment).toBe(segment.toLowerCase());
+    }
+  });
+});
+
+describe("the breadcrumb", () => {
+  // THE LAST CRUMB IS THE OBJECT and carries no link. A trail whose final
+  // segment links to the page you are already on teaches a reader that the
+  // control does nothing.
+  test("the last crumb is never a link", () => {
+    for (const path of [
+      ["inbox"],
+      ["work"],
+      ["work", "ENG"],
+      ["work", "ENG", "sprints", "3"],
+      ["work", "ENG-42"],
+      ["company", "people", "ada"],
+      ["company", "units", "platform"],
+      ["knowledge", "ENG", "Deploy runbook"],
+      ["activity", "turns", "t-1"],
+      ["admin", "config", "revisions", "r-1"],
+    ]) {
+      const crumbs = crumbsFor(path);
+      expect(crumbs.length, `#/${path.join("/")} has no crumbs`).toBeGreaterThan(0);
+      expect(crumbs[crumbs.length - 1]?.path, `#/${path.join("/")}`).toBeUndefined();
+    }
+  });
+
+  // AND EVERY OTHER CRUMB IS ONE, or the trail is a label rather than an
+  // address: a reader two levels into a project has to be able to step back
+  // out through the trail.
+  test("every crumb but the last carries a path", () => {
+    const crumbs = crumbsFor(["work", "ENG", "sprints", "3"]);
+    expect(crumbs.length).toBe(4);
+    for (const crumb of crumbs.slice(0, -1)) {
+      expect(crumb.path, `${crumb.label} is not a link`).toBeTruthy();
+    }
+  });
+
+  // A LABEL A SCREEN RESOLVED WINS over the raw segment, and the raw segment
+  // is what shows until it does — never a spinner in the chrome.
+  test("a screen's own labels replace the segments", () => {
+    const raw = crumbsFor(["work", "ENG"]);
+    expect(raw[raw.length - 1]?.label).toBe("ENG");
+    const named = crumbsFor(["work", "ENG"], { ENG: "Platform" });
+    expect(named[named.length - 1]?.label).toBe("Platform");
+  });
+
+  // THE TAB TITLE COMES FROM THE SAME TRAIL, so a reader with four tabs open
+  // can tell them apart. It said "Crewlet" on every screen.
+  test("the tab title is the last crumb", () => {
+    expect(titleOf(crumbsFor(["work", "ENG-42"], { "ENG-42": "Fix the applier" }))).toBe(
+      "Fix the applier",
+    );
+  });
+});
+
+// A WORKSPACE THAT OWNS TWO FIRST SEGMENTS still says which one you are on.
+//
+// Work owns `work` and `goals`. The trail read "Work" for both, so the goals
+// list and the company's board were indistinguishable in the page bar and in
+// the browser tab — which is exactly what a breadcrumb exists to prevent.
+test("a second owned segment names itself in the trail", () => {
+  const goals = crumbsFor(["goals"]);
+  expect(goals.map((c) => c.label)).toEqual(["Work", "Goals"]);
+  expect(goals[0]?.path).toEqual(["work"]);
+  expect(goals[1]?.path).toBeUndefined();
+  // And the workspace's OWN landing page is still a single crumb.
+  expect(crumbsFor(["work"]).map((c) => c.label)).toEqual(["Work"]);
 });

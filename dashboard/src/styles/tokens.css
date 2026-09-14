@@ -134,9 +134,14 @@
   --sidebar-w: 236px;
   --topbar-h: 52px;
   /* Prose and forms get a measure. Tables and charts deliberately do not:
-     they are the one content that genuinely wants the whole viewport. */
+     they are the one content that genuinely wants the whole viewport.
+
+     THERE IS NO --screen-max ANY MORE. It capped the page at 1560px, which
+     made sense when the frame was one 236px sidebar and everything else was
+     one column; with a rail and a workspace sidebar the page column is
+     already bounded, and capping it again wasted the width the second level
+     of navigation bought. */
   --measure: 76ch;
-  --screen-max: 1560px;
 
   /* ---- Motion -----------------------------------------------------------
      Short, and only ever on entrance or on a control's own state. Nothing in

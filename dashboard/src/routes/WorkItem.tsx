@@ -17,7 +17,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
@@ -44,6 +43,8 @@ import {
   fmtMinutes,
   typeName,
 } from "~/lib/work.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
   WorkComment,
   WorkFieldDef,
@@ -107,41 +108,30 @@ export function WorkItem({ id }: { id: string }) {
 
   return (
     <>
-      <ScreenHead
-        title={item?.key || id || "Item"}
-        sub={item?.title}
-        badges={
-          item ? (
-            <>
-              <StatusBadge status={item.status} defs={project.data?.statuses} />
-              {state.data?.blocked && (
-                <Badge tone="critical" outline>
-                  Blocked
-                </Badge>
-              )}
-              {item.type && <Badge outline>{typeName(item.type, project.data?.types)}</Badge>}
-              {item.archived && <Badge outline>Archived</Badge>}
-            </>
-          ) : undefined
-        }
-        actions={
-          item ? (
-            <a className="t-link" href={href(["work"], { project: item.project, item: item.key })}>
-              Open on the board →
-            </a>
-          ) : undefined
-        }
-      />
-
-      {item && (
-        <div className="work-crumb">
-          <a href={href(["work"])}>Workspace</a>
-          <Icon name="chevronRight" size="xs" />
-          <a href={href(["work"], { project: item.project })}>{item.project}</a>
-          <Icon name="chevronRight" size="xs" />
-          <span className="mono">{item.key}</span>
-        </div>
-      )}
+      <PageActions>
+        {item ? (
+          <>
+            <StatusBadge status={item.status} defs={project.data?.statuses} />
+            {state.data?.blocked && (
+              <Badge tone="critical" outline>
+                Blocked
+              </Badge>
+            )}
+            {item.type && <Badge outline>{typeName(item.type, project.data?.types)}</Badge>}
+            {item.archived && <Badge outline>Archived</Badge>}
+          </>
+        ) : undefined}
+        {item ? (
+          <a className="t-link" href={href(["work"], { project: item.project, item: item.key })}>
+            Open on the board →
+          </a>
+        ) : undefined}
+      </PageActions>
+      {/* THE TRAIL IS THE PAGE BAR'S. This screen drew its own — workspace,
+          project, key — above the title, so a reader had two breadcrumbs on
+          one page, disagreeing about where they were the moment either one
+          changed. `usePageLabels` below is what gives the real one this
+          item's project name and title. */}
 
       {state.loading && !state.data && <Skeleton rows={8} />}
 
@@ -176,19 +166,15 @@ export function WorkItem({ id }: { id: string }) {
  *
  * IT KEEPS THE READER WHERE THEY ARE, which is the whole reason it exists: a
  * board is scanned, and sending somebody to a page and back to read one
- * description is the navigation every tracker learned not to make. The way out
- * to the page is a control on its own head, so the fuller view is one click
- * rather than a thing you have to know about.
+ * description is the navigation every tracker learned not to make.
+ *
+ * THE CHROME IS THE FRAME'S — see `app/frame/DetailRail.tsx`. This renders the
+ * item's own content and nothing else: the panel, its resize grip, the way out
+ * to the page and the close control are the same on every kind of object, and
+ * a second copy of them here is how the tracker's peek came to be the only
+ * peek in the product.
  */
-export function ItemPanel({
-  itemKey,
-  chrome,
-  onClose,
-}: {
-  itemKey: string;
-  chrome: RowChrome;
-  onClose: () => void;
-}) {
+export function ItemPeek({ itemKey, chrome }: { itemKey: string; chrome: RowChrome }) {
   const now = useNow();
   const state = useQuery("work_item", { id: itemKey }, { enabled: itemKey !== "", pollMs: 15_000 });
   const item = state.data?.task;
@@ -207,31 +193,19 @@ export function ItemPanel({
   };
 
   return (
-    <aside className="work-peek" aria-label={`Item ${itemKey}`}>
-      <header className="work-peek-head">
+    <>
+      <div className="row gap-2">
         {item && <TypeIcon type={item.type} types={inner.types} />}
         <a className="mono t-link" href={href(["work", itemKey])}>
           {itemKey}
         </a>
-        <span className="spacer" />
-        {/* A REAL ANCHOR, so the page opens in a tab on a middle click and
-            through the router's own history rules on a plain one. */}
-        <a
-          className="btn ghost sm icon"
-          href={href(["work", itemKey])}
-          title="Open the full page"
-          aria-label="Open the full page"
-        >
-          <Icon name="arrowUpRight" size="xs" />
-        </a>
-        <Button size="sm" variant="ghost" icon="x" title="Close (Esc)" onClick={onClose} />
-      </header>
-      <div className="work-peek-body">
+      </div>
+      <div className="col gap-3">
         {state.loading && !state.data && <Skeleton rows={6} />}
         <QueryState error={state.error} loading={state.loading}>
           {state.data && item && (
             <>
-              <div className="work-peek-title">{item.title}</div>
+              <div className="peek-title">{item.title}</div>
               <div className="row wrap gap-2">
                 <StatusBadge status={item.status} defs={inner.statuses} />
                 {state.data.blocked && (
@@ -250,7 +224,7 @@ export function ItemPanel({
           )}
         </QueryState>
       </div>
-    </aside>
+    </>
   );
 }
 

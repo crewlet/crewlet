@@ -6,7 +6,6 @@
  */
 
 import { useMemo, useRef } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
@@ -49,6 +48,8 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
@@ -168,7 +169,6 @@ export function SeatScreen({ handle }: { handle: string }) {
   if (!seat) {
     return (
       <>
-        <ScreenHead title={handle} />
         <Empty
           icon="user"
           title={`No seat called “${handle}”`}
@@ -196,15 +196,8 @@ export function SeatScreen({ handle }: { handle: string }) {
 
   return (
     <>
-      <ScreenHead
-        title={
-          <span className="row" style={{ gap: "var(--space-3)" }}>
-            <Avatar name={seat.name} size="lg" human={human} />
-            {seat.name}
-          </span>
-        }
-        sub={seat.goal || statusLine(agent, { sandbox, seat })}
-        badges={
+      <PageActions>
+        {
           <>
             <Badge mono outline>
               @{seat.handle}
@@ -217,7 +210,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {seat.unit && <Badge outline>{seat.unit.name}</Badge>}
           </>
         }
-        actions={
+        {
           <Button
             icon="activity"
             size="sm"
@@ -226,7 +219,8 @@ export function SeatScreen({ handle }: { handle: string }) {
             Its events
           </Button>
         }
-      />
+      </PageActions>
+      <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
 
       {agent?.last_error && (
         <div className="banner critical">

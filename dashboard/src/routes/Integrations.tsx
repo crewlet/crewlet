@@ -23,7 +23,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
@@ -35,6 +34,8 @@ import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -1649,7 +1650,7 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
   return "";
 }
 
-export function Integrations() {
+export function Integrations({ kind }: { kind?: string }) {
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
   //
@@ -1725,15 +1726,17 @@ export function Integrations() {
 
   return (
     <>
-      <ScreenHead
-        title="Integrations"
-        sub="The tools the company works in. Each agent acts as itself on these, with its own credentials."
-        badges={
+      <PageActions>
+        {
           <Badge outline>
             {configured.length} of {CATALOG.length} configured
           </Badge>
         }
-      />
+      </PageActions>
+      <PageNote>
+        The tools the company works in. Each agent acts as itself on these, with its own
+        credentials.
+      </PageNote>
 
       {/* THE ADDRESS EVERY INBOUND INTEGRATION IS BUILT ON, rendered once. It
           is one setting, and a screen that asked for it per integration would

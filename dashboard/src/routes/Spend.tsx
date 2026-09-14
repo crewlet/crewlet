@@ -11,7 +11,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Meter, Panel, Segmented, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -22,6 +21,8 @@ import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 const WINDOWS = ["1", "7", "30"] as const;
 
@@ -81,11 +82,9 @@ export function Spend() {
 
   return (
     <>
-      <ScreenHead
-        title="Spend & budgets"
-        sub="What the company's model calls actually cost, and how much headroom the budget gate has left."
-        badges={tokens ? <Badge outline>{tokens.since_days}-day window</Badge> : undefined}
-        actions={
+      <PageActions>
+        {tokens ? <Badge outline>{tokens.since_days}-day window</Badge> : undefined}
+        {
           <Segmented
             ariaLabel="Window"
             value={days}
@@ -93,7 +92,11 @@ export function Spend() {
             options={WINDOWS.map((d) => ({ value: d, label: `${d}d` }))}
           />
         }
-      />
+      </PageActions>
+      <PageNote>
+        What the company's model calls actually cost, and how much headroom the budget gate has
+        left.
+      </PageNote>
 
       <Panel padding="none">
         <StatRow cols={4}>
@@ -299,85 +302,6 @@ export function Spend() {
             },
           ]}
         />
-      </Panel>
-
-      <Panel
-        title="Durable budget counters"
-        icon="database"
-        subtitle="the fleet's shared ledger, not this process's meter"
-        padding="none"
-      >
-        {budgets.loading && !budgets.data && <Skeleton rows={3} />}
-        {budgets.data && budgets.data.durable === false ? (
-          <div className="banner neutral" style={{ margin: "var(--space-3)" }}>
-            <Icon name="database" size="sm" />
-            <span>
-              The durable counter could not be READ — which is not the same as it being zero. It
-              lives in the fleet's coordination store; this node could not reach it.
-            </span>
-          </div>
-        ) : (
-          <QueryState error={budgets.error} loading={budgets.loading}>
-            <DataTable
-              rows={budgets.data?.seats ?? []}
-              rowKey={(s) => s.agent_id || s.role}
-              defaultSort={{ key: "used", dir: "desc" }}
-              empty={{ title: "No per-seat budgets are configured" }}
-              columns={[
-                {
-                  key: "seat",
-                  header: "Seat",
-                  sortValue: (s) => s.role,
-                  cell: (s) => <SeatChip name={s.role} handle={s.handle} />,
-                },
-                {
-                  key: "used",
-                  header: "Durable used",
-                  align: "right",
-                  sortValue: (s) => s.durable_used,
-                  cell: (s) => fmtExact(s.durable_used),
-                },
-                {
-                  key: "live",
-                  header: "This process",
-                  align: "right",
-                  sortValue: (s) => s.live_used,
-                  cell: (s) => fmtExact(s.live_used),
-                },
-                {
-                  key: "max",
-                  header: "Budget",
-                  align: "right",
-                  sortValue: (s) => s.max_tokens,
-                  cell: (s) =>
-                    s.max_tokens ? (
-                      fmtExact(s.max_tokens)
-                    ) : (
-                      <span className="faint">unlimited</span>
-                    ),
-                },
-                {
-                  key: "headroom",
-                  header: "Headroom",
-                  width: "160px",
-                  cell: (s) =>
-                    s.max_tokens ? (
-                      <Meter
-                        fullMeans="spent"
-                        used={s.durable_used}
-                        max={s.max_tokens}
-                        // The column heading names it for a sighted reader;
-                        // a screen reader lands on the meter alone.
-                        ariaLabel={`${s.role} token budget`}
-                      />
-                    ) : (
-                      <span className="faint">—</span>
-                    ),
-                },
-              ]}
-            />
-          </QueryState>
-        )}
       </Panel>
     </>
   );

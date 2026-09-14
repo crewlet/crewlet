@@ -1552,87 +1552,10 @@ details > summary.int-summary::-webkit-details-marker {
    PANEL, so a card reads as an object on a surface rather than as a box drawn
    on a box. */
 
-.work-shell {
-  display: grid;
-  grid-template-columns: 232px minmax(0, 1fr);
-  gap: var(--space-5);
-  align-items: start;
-  min-width: 0;
-}
-
 /* ---- The project rail --------------------------------------------------- */
 
-.work-rail {
-  position: sticky;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.work-rail-label {
-  padding: var(--space-3) var(--space-2) var(--space-1);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.work-rail-item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--row-h);
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--r-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  min-width: 0;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-.work-rail-item:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
 /* The active row is the accent, exactly as a nav row is: the accent says
    WHERE THE READER IS, and a rail is a second navigation. */
-.work-rail-item.active {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
-.work-rail-key {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: 0.02em;
-  padding: 1px var(--space-1);
-  border-radius: var(--r-xs);
-  background: var(--surface-inset);
-  color: var(--text-muted);
-  flex: none;
-}
-.work-rail-item.active .work-rail-key {
-  background: transparent;
-  color: inherit;
-}
-.work-rail-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.work-rail-count {
-  margin-left: auto;
-  font-size: var(--fs-3xs);
-  font-variant-numeric: tabular-nums;
-  color: var(--text-faint);
-  flex: none;
-}
-.work-rail-item.active .work-rail-count {
-  color: inherit;
-}
 
 /* ---- The main column and the project head ------------------------------- */
 
@@ -1643,19 +1566,8 @@ details > summary.int-summary::-webkit-details-marker {
   min-width: 0;
 }
 
-.work-crumb {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  min-width: 0;
-}
 /* The name is what a person calls the project; the key is how they address
    it. Both belong here and only one of them is an identifier. */
-.work-crumb-name {
-  color: var(--text-secondary);
-}
 
 /* The head's facts sit in a fixed order at a fixed size, so moving between
    two projects does not move the numbers — the same rule the phase header
@@ -2174,43 +2086,6 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* ---- The peek, and the item page ---------------------------------------- */
 
-.work-peek {
-  position: sticky;
-  top: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-2), var(--inset-hairline);
-  max-height: calc(100dvh - var(--topbar-h) - var(--space-8));
-  overflow: hidden;
-  min-width: 0;
-}
-.work-peek-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
-  min-width: 0;
-}
-.work-peek-body {
-  overflow-y: auto;
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-.work-peek-title {
-  font-size: var(--fs-md);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-  color: var(--heading);
-  line-height: var(--lh-snug);
-}
-
 .work-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -2385,18 +2260,6 @@ a.work-cal-chip:hover {
   /* The peek becomes a drawer over the body rather than a column beside it,
      on the shell's own veil — a panel squeezed to 200px is a panel nobody
      can read, and hiding it would lose the reader's selection. */
-  .work-peek {
-    position: fixed;
-    inset: var(--topbar-h) 0 0 auto;
-    width: min(460px, 100%);
-    max-height: none;
-    border-radius: 0;
-    border-right: none;
-    border-top: none;
-    border-bottom: none;
-    z-index: var(--z-drawer);
-    box-shadow: var(--shadow-3);
-  }
 }
 
 /* THE ITEM PAGE KEEPS ITS OWN THRESHOLD. It is a page rather than a pane
@@ -2412,32 +2275,8 @@ a.work-cal-chip:hover {
 }
 
 @media (max-width: 860px) {
-  .work-shell {
-    grid-template-columns: minmax(0, 1fr);
-  }
   /* The rail becomes a scrolling strip of chips above the head: a company
      with nine projects still needs to reach all nine. */
-  .work-rail {
-    position: static;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-1);
-    overflow-x: auto;
-    padding-bottom: var(--space-1);
-  }
-  .work-rail-label {
-    display: none;
-  }
-  .work-rail-item {
-    flex: none;
-    border: 1px solid var(--border);
-    border-radius: var(--r-full);
-    padding: 0 var(--space-3);
-    min-height: var(--control-h);
-  }
-  .work-rail-count {
-    margin-left: 0;
-  }
   /* FOUR COLUMNS ON A PHONE: type, key, title, status. The tracks are
      re-declared on the LIST, since that is where they live — a row is a
      subgrid of whatever the list has — and the three cells that are gone

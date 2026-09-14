@@ -22,8 +22,7 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
-import { href, useParam } from "~/app/router.tsx";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Empty, Panel, SearchInput, Segmented, Select, Skeleton } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
@@ -33,6 +32,9 @@ import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
   published: "positive",
@@ -40,12 +42,17 @@ const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" |
   trashed: "neutral",
 };
 
-export function Pages() {
+export function Pages({ container: fromPath }: { container?: string }) {
   const org = useOrg();
+  const nav = useNavigator();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
 
-  const [container, setContainer] = useParam("container", "");
+  // THE CONTAINER IS THE PATH (`#/knowledge/ENG`), because a container is an
+  // object — it has an owning unit, a page tree and a purpose — and a filter
+  // key made it unlinkable. Choosing one NAVIGATES rather than filtering.
+  const container = fromPath ?? "";
+  const setContainer = (key: string) => nav.to(key ? ["knowledge", key] : ["knowledge"]);
   const [title, setTitle] = useParam("title", "");
   // THREE STATES on the wire and three here: only the tool-skill pages
   // (auditing the catalogue), everything but them (an ordinary browse), and
@@ -74,10 +81,10 @@ export function Pages() {
 
   return (
     <>
-      <ScreenHead
-        title="Pages"
-        sub="The company's own knowledge base, browsed. To find pages about a subject rather than in a place, search from the Knowledge screen — it ranks."
-      />
+      <PageNote>
+        The company's own knowledge base, browsed. To find pages about a subject rather than in a
+        place, search from the Knowledge screen — it ranks.
+      </PageNote>
 
       <div className="toolbar">
         <div style={{ flex: 1, maxWidth: 360 }}>
@@ -248,49 +255,61 @@ export function Pages() {
 }
 
 /** One page: its body, where it sits, and everything that changed it. */
-export function PageView({ id }: { id: string }) {
+/**
+ * One page.
+ *
+ * ADDRESSED BY CONTAINER AND TITLE, which is what a person was given: the
+ * engine's own `Get` takes `CONTAINER/Title` and matches the title the way the
+ * fleet CLAIMED it — case-insensitively, with runs of whitespace collapsed —
+ * so `ENG/deploy runbook` reaches a page called "Deploy  Runbook". A uuid
+ * still resolves, because every internal link carries one.
+ */
+export function PageView({ container, title }: { container: string; title: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
-  const { data, loading, error } = useQuery("page", { id }, { enabled: id !== "", pollMs: 20_000 });
+  const id = `${container}/${title}`;
+  const { data, loading, error } = useQuery(
+    "page",
+    { id },
+    { enabled: id !== "/", pollMs: 20_000 },
+  );
+  usePageLabels(data?.page ? { [container]: container, [title]: data.page.title } : {});
 
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
   const page = data?.page;
 
   return (
     <>
-      <ScreenHead
-        title={page?.title || "Page"}
-        sub={
-          page ? (
-            <span className="row wrap" style={{ gap: "var(--space-1)" }}>
-              {/* THE BREADCRUMB IS THE ANCESTOR CHAIN, outermost first — a
+      <PageActions>
+        {page ? (
+          <>
+            <Badge tone={STATUS_TONE[page.status] ?? "neutral"} dot>
+              {page.status}
+            </Badge>
+            <Badge outline mono>
+              v{page.version}
+            </Badge>
+            {page.skill && <Badge tone="info">tool skill</Badge>}
+          </>
+        ) : undefined}
+      </PageActions>
+      <PageNote>
+        {page ? (
+          <span className="row wrap" style={{ gap: "var(--space-1)" }}>
+            {/* THE BREADCRUMB IS THE ANCESTOR CHAIN, outermost first — a
                   page's place is what makes it findable, and a title alone
                   says nothing about which team's tree it is in. */}
-              <a href={href(["pages"]) + `?container=${page.container}`}>{page.container}</a>
-              {(data.ancestors ?? []).map((a) => (
-                <span key={a.id}>
-                  {" / "}
-                  <a href={href(["pages", a.id])}>{a.title}</a>
-                </span>
-              ))}
-            </span>
-          ) : undefined
-        }
-        badges={
-          page ? (
-            <>
-              <Badge tone={STATUS_TONE[page.status] ?? "neutral"} dot>
-                {page.status}
-              </Badge>
-              <Badge outline mono>
-                v{page.version}
-              </Badge>
-              {page.skill && <Badge tone="info">tool skill</Badge>}
-            </>
-          ) : undefined
-        }
-      />
+            <a href={href(["pages"]) + `?container=${page.container}`}>{page.container}</a>
+            {(data.ancestors ?? []).map((a) => (
+              <span key={a.id}>
+                {" / "}
+                <a href={href(["pages", a.id])}>{a.title}</a>
+              </span>
+            ))}
+          </span>
+        ) : undefined}
+      </PageNote>
 
       {loading && <Skeleton rows={8} />}
 

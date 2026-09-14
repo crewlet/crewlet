@@ -7,7 +7,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
@@ -15,6 +14,8 @@ import { Badge, Chip, Empty, Panel, SearchInput, Stat, StatRow } from "~/ui/prim
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -22,7 +23,7 @@ function originOf(source: string): { kind: string; detail: string } {
   return { kind: source.slice(0, idx), detail: source.slice(idx + 1) };
 }
 
-export function Tools() {
+export function Tools({ server }: { server?: string }) {
   const tools = useTools();
   const [q, setQ] = useParam("q", "");
   const [origin, setOrigin] = useParam("origin", "");
@@ -50,11 +51,11 @@ export function Tools() {
 
   return (
     <>
-      <ScreenHead
-        title="Tools"
-        sub="What the models can actually call. A planner sees only the server names; the tool names below are discovered and activated during a turn."
-        badges={<Badge outline>{plural(tools.length, "tool")} registered</Badge>}
-      />
+      <PageActions>{<Badge outline>{plural(tools.length, "tool")} registered</Badge>}</PageActions>
+      <PageNote>
+        What the models can actually call. A planner sees only the server names; the tool names
+        below are discovered and activated during a turn.
+      </PageNote>
 
       <Panel padding="none">
         <StatRow cols={3}>

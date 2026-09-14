@@ -1,0 +1,1058 @@
+/* ===========================================================================
+   The frame: rail, workspace sidebar, page bar, state bar, detail rail, grid.
+
+   Everything here is chrome that every screen wears. A screen's own rules live
+   in screens.css; a reusable piece's rules live in components.css. The split
+   matters because the frame is the only thing on screen that must look
+   identical on all twenty screens — a copy of a rail rule inside a screen is
+   how one screen's chrome starts drifting from the rest.
+
+   THE ACCENT APPEARS TWICE IN THE WHOLE FRAME: the current rail row and the
+   current sidebar row. Colour carries STATE, never identity, and "where you
+   are" is the one piece of state the chrome itself holds.
+   ======================================================================== */
+
+:root {
+  /* 80px, not 68: the label is the point of this rail — a row a reader has to
+     learn by its icon is a row they hover — and the longest workspace name
+     ("Knowledge") needs 60px of it at --fs-3xs. At 68 it ellipsed to
+     "Knowle…", which is the label failing at the one job it has. */
+  --rail-w: 80px;
+  --rail-w-collapsed: 48px;
+  /* The page bar keeps the old topbar's height: the two are the same band,
+     and a reader moving between an old bookmark and a new one should not see
+     the content jump. */
+  --page-bar-h: var(--topbar-h);
+  /* Below this the detail rail becomes a drawer. Measured with the sidebar
+     OPEN: 68 rail + 236 sidebar + 420 peek leaves 456px of list, which is
+     under the width a work row needs for a key, a title and an assignee.
+     With the sidebar collapsed the same layout works at 980, which is why the
+     drawer threshold is not simply "small screen" — it is this sum. */
+  --peek-drawer-max: 1180px;
+}
+
+/* ---- The application grid ------------------------------------------------
+   Three columns and one scroll container. ONE, because the router restores a
+   scroll position per history entry and a page with three independent
+   scrollers has three positions and no way to name them. The sidebar and the
+   peek scroll internally; the page is the one the router owns. */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--rail-w) var(--sidebar-w) minmax(0, 1fr);
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.app[data-rail-collapsed="true"] {
+  grid-template-columns: var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr);
+}
+
+/* A workspace with no tree of its own — the Inbox and My work are two-pane
+   screens whose scope lives in the page. */
+.app[data-no-sidebar="true"] {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+}
+
+.app[data-no-sidebar="true"][data-rail-collapsed="true"] {
+  grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
+}
+
+/* ---- The global rail ---------------------------------------------------- */
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+}
+
+.rail-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--page-bar-h);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.rail-brand img {
+  width: 24px;
+  height: 24px;
+}
+
+.rail-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2) var(--space-1);
+  overflow-y: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.rail-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--space-2) 2px;
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  text-decoration: none;
+  position: relative;
+}
+
+.rail-row:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.rail-row.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* The current row also carries a bar, so "where you are" survives a viewer
+   who cannot separate the accent from the muted text. */
+.rail-row.active::before {
+  content: "";
+  position: absolute;
+  left: -var(--space-1);
+  inset-block: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.rail-glyph {
+  position: relative;
+  display: flex;
+}
+
+.rail-label {
+  font-size: var(--fs-3xs);
+  line-height: 1.1;
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-badge {
+  position: absolute;
+  top: -5px;
+  right: -9px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: var(--fw-semibold);
+  line-height: 15px;
+  text-align: center;
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.rail-badge.attention {
+  background: var(--caution);
+  border-color: var(--caution);
+  color: var(--caution-ink);
+}
+
+.rail-lock {
+  position: absolute;
+  bottom: -4px;
+  right: -6px;
+  color: var(--text-faint);
+}
+
+.rail-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-1);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.rail-collapse {
+  all: unset;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.rail-collapse:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- The workspace sidebar ---------------------------------------------- */
+
+.workspace-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  height: var(--page-bar-h);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.side-title {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+
+.side-filter {
+  padding: var(--space-2) var(--space-2) 0;
+  flex: 0 0 auto;
+}
+
+.side-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-1) var(--space-4);
+}
+
+.side-section + .side-section {
+  margin-top: var(--space-3);
+}
+
+.side-section-label {
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  padding: var(--space-1) var(--space-2);
+}
+
+.side-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--row-h-sm);
+  padding-left: calc(var(--depth, 0) * var(--space-3));
+}
+
+.side-twist {
+  all: unset;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.side-twist:hover {
+  color: var(--text);
+}
+
+.side-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--fs-xs);
+}
+
+.side-link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.side-row.current > .side-link {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+
+.side-sub {
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+}
+
+.side-count {
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.side-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-faint);
+}
+
+.side-dot.positive {
+  background: var(--positive);
+}
+.side-dot.caution {
+  background: var(--caution);
+}
+.side-dot.critical {
+  background: var(--critical);
+}
+.side-dot.info {
+  background: var(--info);
+}
+
+.side-empty {
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-2xs);
+  color: var(--text-faint);
+}
+
+/* ---- The page column ---------------------------------------------------- */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.page-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--page-bar-h);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  flex: 0 0 auto;
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs-sm);
+}
+
+.crumb-part {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.crumb-sep {
+  color: var(--text-faint);
+  padding: 0 2px;
+}
+
+.crumb-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.crumb-link:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.crumb-here {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-actions {
+  flex: 0 0 auto;
+}
+
+/* ---- The state bar ------------------------------------------------------ */
+
+.state-bar {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+
+.state-facts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+  min-height: 24px;
+}
+
+/* ---- The object header -------------------------------------------------- */
+
+.object-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4) 0 var(--space-3);
+}
+
+.object-head.peek {
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+.object-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+.object-id {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.object-title {
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  margin: 0;
+  min-width: 0;
+}
+
+.object-head.peek .object-title {
+  font-size: var(--fs-lg);
+}
+
+.fact-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding-top: var(--space-1);
+}
+
+.fact {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+}
+
+.fact-label {
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+}
+
+.fact-value {
+  font-size: var(--fs-xs);
+  color: var(--text);
+}
+
+.fact-setby {
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+}
+
+/* ---- Tabs --------------------------------------------------------------- */
+
+.tab-strip {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+
+.tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.tab-count {
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- The detail rail ---------------------------------------------------- */
+
+.peek-veil {
+  display: none;
+}
+
+.peek-rail {
+  position: relative;
+  width: var(--peek-w, 420px);
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-1);
+  border-left: 1px solid var(--border);
+}
+
+.peek-grip {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.peek-grip:hover {
+  background: var(--accent-soft);
+}
+
+.peek-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--page-bar-h);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.peek-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-6);
+}
+
+@media (max-width: 1180px) {
+  .peek-veil {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
+    z-index: calc(var(--z-drawer) - 1);
+  }
+
+  .peek-rail {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: var(--z-drawer);
+    width: min(var(--peek-w, 420px), 92vw);
+    box-shadow: var(--shadow-2);
+  }
+
+  .peek-grip {
+    display: none;
+  }
+}
+
+/* ---- The grid ----------------------------------------------------------- */
+
+.grid-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--surface-1);
+}
+
+.grid-head {
+  display: grid;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunken);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.grid-th {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-3xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.grid-th.plain {
+  cursor: default;
+}
+
+.grid-th:not(.plain):hover {
+  color: var(--text);
+}
+
+.grid-th.sorted {
+  color: var(--text);
+}
+
+.grid-th.right {
+  justify-content: flex-end;
+}
+
+.grid-th:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.grid-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.grid-row {
+  display: grid;
+  align-items: center;
+  min-height: var(--row-h);
+  border-bottom: 1px solid var(--border-subtle);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.grid-row:last-child {
+  border-bottom: none;
+}
+
+.grid-row:hover {
+  background: var(--surface-hover);
+}
+
+.grid-row.selected {
+  background: var(--accent-soft);
+}
+
+.grid-row.cursor {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A FAILED ROW IS MARKED ON ITS EDGE, not tinted: a tinted row competes with
+   the status column that already says so, and two signals for one fact is how
+   a reader learns to trust neither. */
+.grid-row.failed {
+  box-shadow: inset 2px 0 0 var(--critical);
+}
+
+.grid-cell {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-xs);
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.grid-cell.right {
+  justify-content: flex-end;
+}
+
+.grid-band + .grid-band {
+  border-top: 1px solid var(--border);
+}
+
+.grid-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-sunken);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+  position: sticky;
+  top: 0;
+}
+
+.grid-band-count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-weight: var(--fw-normal);
+  font-variant-numeric: tabular-nums;
+}
+
+.grid-band-foot {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-3xs);
+  color: var(--text-faint);
+  background: var(--bg-sunken);
+}
+
+.grid-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+  font-size: var(--fs-2xs);
+}
+
+.grid-cols-reset {
+  all: unset;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-3xs);
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+
+/* ---- Cells -------------------------------------------------------------- */
+
+.cell-dash {
+  color: var(--text-faint);
+}
+
+.cell-date {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.cell-seat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cell-seat:hover {
+  text-decoration: underline;
+}
+
+.seat-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.seat-mark.human {
+  border-style: dashed;
+}
+
+.cell-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cell-glyph {
+  font-size: var(--fs-2xs);
+  line-height: 1;
+}
+
+.cell-status.positive .cell-glyph {
+  color: var(--positive);
+}
+.cell-status.caution .cell-glyph {
+  color: var(--caution);
+}
+.cell-status.critical .cell-glyph {
+  color: var(--critical);
+}
+.cell-status.info .cell-glyph {
+  color: var(--info);
+}
+.cell-status.neutral .cell-glyph {
+  color: var(--text-faint);
+}
+
+.cell-meter {
+  display: inline-block;
+  width: 64px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  overflow: hidden;
+}
+
+.cell-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.cell-meter-fill.positive {
+  background: var(--positive);
+}
+.cell-meter-fill.caution {
+  background: var(--caution);
+}
+.cell-meter-fill.critical {
+  background: var(--critical);
+}
+
+/* ---- Narrow ------------------------------------------------------------- */
+
+@media (max-width: 960px) {
+  .app,
+  .app[data-rail-collapsed="true"],
+  .app[data-no-sidebar="true"] {
+    grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
+  }
+
+  .rail-label {
+    display: none;
+  }
+
+  .workspace-side {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: var(--rail-w-collapsed);
+    width: var(--sidebar-w);
+    z-index: var(--z-drawer);
+    transform: translateX(-110%);
+    transition: transform var(--dur) var(--ease);
+    box-shadow: var(--shadow-2);
+  }
+
+  .workspace-side[data-open="true"] {
+    transform: none;
+  }
+}
+
+/* ---- The page's own one-line explanation --------------------------------- */
+
+.page-note {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  max-width: var(--measure);
+}
+
+/* ---- The viewer chip ----------------------------------------------------- */
+
+.viewer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px var(--space-2) 2px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--fs-2xs);
+  max-width: 180px;
+}
+
+.viewer-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- The rail's engine pill ---------------------------------------------- */
+
+.rail-engine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: var(--fs-3xs);
+  min-width: 0;
+}
+
+.rail-engine:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ---- Facets --------------------------------------------------------------
+   The values actually present on a loaded page, as a row of narrowing chips.
+   COUNTS ARE OVER WHAT IS LOADED and the row says so beside them: the engine
+   counts nothing server-side here, and a facet claiming a total would be
+   inventing a number. */
+
+.facet-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.facet {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.facet:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.facet:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.facet .t-num {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- The search button in the page bar ----------------------------------- */
+
+.omni {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 160px;
+  height: var(--control-h-sm);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text-muted);
+  font-size: var(--fs-2xs);
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.omni:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.omni:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.omni-label {
+  flex: 1;
+}
+
+.omni kbd {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text-faint);
+}
+
+/* Below this the page bar has no room for a labelled search button. */
+@media (max-width: 860px) {
+  .omni {
+    min-width: 0;
+  }
+
+  .omni .omni-label,
+  .omni kbd {
+    display: none;
+  }
+}
+
+/* The peek's own title: one step under the page's, because the rail is a
+   condensed view of the object rather than a second page of it. */
+.peek-title {
+  font-size: var(--fs-md);
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-snug);
+}
+
+/* A mono key mark, wherever a project or item key stands beside prose. */
+.key-mark {
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xs);
+  padding: 1px 4px;
+  border-radius: var(--r-xs);
+  background: var(--surface-inset);
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}

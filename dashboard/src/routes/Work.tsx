@@ -36,8 +36,8 @@
  */
 
 import { useEffect, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
+import { DetailRail, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
   BoardCard,
@@ -48,7 +48,7 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { ItemPanel } from "./WorkItem.tsx";
+import { ItemPeek } from "./WorkItem.tsx";
 import {
   Badge,
   Banner,
@@ -102,6 +102,8 @@ import {
   type Shape,
   type TrackerFilters,
 } from "~/lib/work.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
   WorkActivityRecord,
   WorkGroup,
@@ -118,7 +120,7 @@ const VIEW_ICON = {
   calendar: "calendar",
 } as const;
 
-export function Work() {
+export function Work({ project = "" }: { project?: string }) {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   // ONE CLOCK for the screen, ticking on its own: a relative time computed
@@ -126,10 +128,14 @@ export function Work() {
   // "2 minutes ago" stays that for an hour on a screen nobody touches.
   const now = useNow();
 
-  // THE FOUR SECTIONS — a place the reader called, so each pushes history.
-  const [project, setProject] = useParam("project", "", "section");
+  // THE SECTIONS — a place the reader called, so each pushes history.
+  //
+  // THE PROJECT IS NOT ONE OF THEM ANY MORE: it is a PATH now (`#/work/ENG`),
+  // because a project is an object with a page rather than a filter on the
+  // company's list. That is what lets it have sprints, a catalogue and an
+  // activity feed of its own without any of them being a query key on a
+  // screen called "Work".
   const [viewKey, setViewKey] = useParam("view", "", "section");
-  const [item, setItem] = useParam("item", "", "section");
   const [month, setMonth] = useParam("month", "", "section");
 
   // AND THE FILTERS, which replace: four ticked chips are ONE screen.
@@ -146,6 +152,12 @@ export function Work() {
   const [overdue, setOverdue] = useParam("overdue", "");
 
   const container = project ? `project:${project}` : "workspace";
+
+  // THE PEEK IS THE FRAME'S. It was `item=` on this screen alone, which is why
+  // a board could peek a task and nothing else in the product could peek
+  // anything — see `app/frame/DetailRail.tsx`.
+  const peek = usePeek();
+  const { open: openPeek, move: movePeek } = usePeekControls();
 
   // THE PROJECT LIST IS THE COMPANY'S, never the page's — a rail built from
   // the rows could only ever offer the projects already on screen, so a board
@@ -256,18 +268,6 @@ export function Work() {
     statuses: detail?.statuses,
   };
 
-  // ESCAPE CLOSES THE PEEK, because it is the gesture every panel in this
-  // product answers to and a reader who opened one with a click should not
-  // have to find the ✕ to leave it.
-  useEffect(() => {
-    if (!item) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setItem("");
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [item, setItem]);
-
   const applyView = (v: WorkView) => setViewKey(v.key);
 
   const clearFilters = () => {
@@ -292,299 +292,305 @@ export function Work() {
 
   return (
     <>
-      <ScreenHead
-        title="Tracker"
-        sub="The company's own work — every project, board and item. Read-only here: work is filed and moved by the seats themselves, so every change is attributed to somebody."
-        actions={
+      <PageActions>
+        {
           // REAL ANCHORS rather than buttons that navigate: these leave the
           // tracker, so they are middle-clickable like every other way out of
           // a screen, and they go through the router's own history rules
           // instead of around them.
           <>
-            <a className="t-link" href={href(["work", "me"])}>
+            <a className="t-link" href={href(["me"])}>
               My work →
             </a>
-            <a className="t-link" href={href(["sprints"], project ? { project } : undefined)}>
-              Sprints →
-            </a>
+            {project && (
+              <a className="t-link" href={href(["work", project, "sprints"])}>
+                Sprints →
+              </a>
+            )}
             <a className="t-link" href={href(["goals"])}>
               Goals →
             </a>
           </>
         }
-      />
+      </PageActions>
+      <PageNote>
+        The company's own work — every project, board and item. Read-only here: work is filed and
+        moved by the seats themselves, so every change is attributed to somebody.
+      </PageNote>
 
-      <div className="work-shell">
-        <ProjectRail
-          projects={projects.data?.projects ?? []}
-          chosen={project}
-          onChoose={(key) => {
-            setProject(key);
-            // A PROJECT'S SPRINT FILTER IS ITS OWN, and carrying one across
-            // would ask the next project for a sprint number it may not have.
-            setSprint("");
-            setGroup("");
-          }}
-        />
+      <div className="work-main">
+        {project ? (
+          <ProjectHead detail={detail} chrome={chrome} />
+        ) : (
+          <WorkspaceHead projects={projects.data?.projects ?? []} />
+        )}
 
-        <div className="work-main">
-          {project ? (
-            <ProjectHead detail={detail} chrome={chrome} />
-          ) : (
-            <WorkspaceHead projects={projects.data?.projects ?? []} onChoose={setProject} />
-          )}
+        {views.length > 0 && (
+          <Tabs
+            ariaLabel="Views"
+            value={chosenView}
+            onChange={(key) => applyView(views.find((v) => v.key === key) ?? views[0]!)}
+            options={views.map((v) => ({
+              value: v.key,
+              label: `${v.pinned ? "★ " : ""}${v.name}`,
+              icon: VIEW_ICON[v.type] ?? "menu",
+            }))}
+          />
+        )}
 
-          {views.length > 0 && (
-            <Tabs
-              ariaLabel="Views"
-              value={chosenView}
-              onChange={(key) => applyView(views.find((v) => v.key === key) ?? views[0]!)}
-              options={views.map((v) => ({
-                value: v.key,
-                label: `${v.pinned ? "★ " : ""}${v.name}`,
-                icon: VIEW_ICON[v.type] ?? "menu",
-              }))}
+        <div className="work-filters">
+          <div className="work-filters-search">
+            <SearchInput
+              value={q}
+              onChange={setQ}
+              ariaLabel="Find an item by key or title"
+              placeholder="Key or title"
+            />
+          </div>
+          <Select
+            value={status}
+            onChange={setStatus}
+            ariaLabel="Status"
+            anyLabel="Any status"
+            options={STATUSES.map((s) => ({
+              value: s.value,
+              label: statusLabel(s.value, detail?.statuses),
+            }))}
+          />
+          {(catalogue.data?.types ?? []).length > 0 && (
+            <Select
+              value={type}
+              onChange={setType}
+              ariaLabel="Type"
+              anyLabel="Any type"
+              options={(catalogue.data?.types ?? [])
+                .filter((t) => !t.archived)
+                .map((t) => ({ value: t.slug, label: t.name }))}
             />
           )}
-
-          <div className="work-filters">
-            <div className="work-filters-search">
-              <SearchInput
-                value={q}
-                onChange={setQ}
-                ariaLabel="Find an item by key or title"
-                placeholder="Key or title"
-              />
-            </div>
+          <Select
+            value={priority}
+            onChange={setPriority}
+            ariaLabel="Priority"
+            anyLabel="Any priority"
+            options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+          />
+          <Select
+            value={assignee}
+            onChange={setAssignee}
+            ariaLabel="Assignee"
+            anyLabel="Anybody"
+            options={[
+              // UNASSIGNED IS A VALUE, not a missing filter — it is the one
+              // question a lead actually opens a board to ask.
+              { value: "none", label: "Unassigned" },
+              ...index.seats.map((s) => ({ value: s.handle, label: s.name })),
+            ]}
+          />
+          {project && detail?.sprints && (
             <Select
-              value={status}
-              onChange={setStatus}
-              ariaLabel="Status"
-              anyLabel="Any status"
-              options={STATUSES.map((s) => ({
-                value: s.value,
-                label: statusLabel(s.value, detail?.statuses),
-              }))}
-            />
-            {(catalogue.data?.types ?? []).length > 0 && (
-              <Select
-                value={type}
-                onChange={setType}
-                ariaLabel="Type"
-                anyLabel="Any type"
-                options={(catalogue.data?.types ?? [])
-                  .filter((t) => !t.archived)
-                  .map((t) => ({ value: t.slug, label: t.name }))}
-              />
-            )}
-            <Select
-              value={priority}
-              onChange={setPriority}
-              ariaLabel="Priority"
-              anyLabel="Any priority"
-              options={PRIORITIES.map((p) => ({ value: p, label: p }))}
-            />
-            <Select
-              value={assignee}
-              onChange={setAssignee}
-              ariaLabel="Assignee"
-              anyLabel="Anybody"
+              value={sprint}
+              onChange={setSprint}
+              ariaLabel="Sprint"
+              anyLabel="Any sprint"
               options={[
-                // UNASSIGNED IS A VALUE, not a missing filter — it is the one
-                // question a lead actually opens a board to ask.
-                { value: "none", label: "Unassigned" },
-                ...index.seats.map((s) => ({ value: s.handle, label: s.name })),
+                { value: "active", label: "Active sprint" },
+                { value: "next", label: "Next sprint" },
+                { value: "none", label: "Backlog" },
+                ...(detail.recent_sprints ?? []).map((s) => ({
+                  value: String(s.number),
+                  label: `${s.number} · ${s.name}`,
+                })),
               ]}
             />
-            {project && detail?.sprints && (
-              <Select
-                value={sprint}
-                onChange={setSprint}
-                ariaLabel="Sprint"
-                anyLabel="Any sprint"
-                options={[
-                  { value: "active", label: "Active sprint" },
-                  { value: "next", label: "Next sprint" },
-                  { value: "none", label: "Backlog" },
-                  ...(detail.recent_sprints ?? []).map((s) => ({
-                    value: String(s.number),
-                    label: `${s.number} · ${s.name}`,
-                  })),
-                ]}
-              />
-            )}
-            {shape !== "calendar" && (
-              <Select
-                value={groupBy}
-                onChange={(value) => {
-                  setGroupBy(value);
-                  // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the
-                  // axis changes it narrows the board to a key the new axis
-                  // has never heard of, which answers nothing.
-                  setGroup("");
-                }}
-                ariaLabel="Group by"
-                anyLabel={shape === "board" ? "By status" : "No grouping"}
-                options={GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
-                  value: a.value,
-                  label: a.label,
-                }))}
-              />
-            )}
-            {shape === "list" && (
-              <Select
-                value={sort}
-                onChange={setSort}
-                ariaLabel="Sort"
-                anyLabel="Default order"
-                options={SORTS}
-              />
-            )}
-            {/* THREE SEGMENTS, not a checkbox: "open", "closed" and
+          )}
+          {shape !== "calendar" && (
+            <Select
+              value={groupBy}
+              onChange={(value) => {
+                setGroupBy(value);
+                // A COLUMN FILTER BELONGS TO ITS AXIS. Left behind when the
+                // axis changes it narrows the board to a key the new axis
+                // has never heard of, which answers nothing.
+                setGroup("");
+              }}
+              ariaLabel="Group by"
+              anyLabel={shape === "board" ? "By status" : "No grouping"}
+              options={GROUP_AXES.filter((a) => !a.projectOnly || project).map((a) => ({
+                value: a.value,
+                label: a.label,
+              }))}
+            />
+          )}
+          {shape === "list" && (
+            <Select
+              value={sort}
+              onChange={setSort}
+              ariaLabel="Sort"
+              anyLabel="Default order"
+              options={SORTS}
+            />
+          )}
+          {/* THREE SEGMENTS, not a checkbox: "open", "closed" and
                 "everything" are three real questions, and a two-state control
                 would make the third unreachable — which is how a board that
                 can never show a closed item ships. */}
-            <Segmented
-              value={scope}
-              onChange={setScope}
-              ariaLabel="Open or closed"
-              options={[
-                { value: "open", label: "Open" },
-                { value: "closed", label: "Closed" },
-                { value: "", label: "All" },
-              ]}
-            />
-            <Chip
-              on={filters.blocked}
-              onClick={() => setBlocked(filters.blocked ? "" : "true")}
-              title="Only work that cannot move"
-            >
-              Blocked
-            </Chip>
-            <Chip
-              on={filters.overdue}
-              onClick={() => setOverdue(filters.overdue ? "" : "true")}
-              title="Only open work past its due date"
-            >
-              Overdue
-            </Chip>
-            {anyFilter(filters) && (
-              <Button size="sm" variant="ghost" icon="x" onClick={clearFilters}>
-                Clear
-              </Button>
+          <Segmented
+            value={scope}
+            onChange={setScope}
+            ariaLabel="Open or closed"
+            options={[
+              { value: "open", label: "Open" },
+              { value: "closed", label: "Closed" },
+              { value: "", label: "All" },
+            ]}
+          />
+          <Chip
+            on={filters.blocked}
+            onClick={() => setBlocked(filters.blocked ? "" : "true")}
+            title="Only work that cannot move"
+          >
+            Blocked
+          </Chip>
+          <Chip
+            on={filters.overdue}
+            onClick={() => setOverdue(filters.overdue ? "" : "true")}
+            title="Only open work past its due date"
+          >
+            Overdue
+          </Chip>
+          {anyFilter(filters) && (
+            <Button size="sm" variant="ghost" icon="x" onClick={clearFilters}>
+              Clear
+            </Button>
+          )}
+          <span className="work-summary">
+            <Coverage answer={data} />
+            {!loading && !error && (
+              <span>
+                {plural(shown.length, "item")}{" "}
+                {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
+              </span>
             )}
-            <span className="work-summary">
-              <Coverage answer={data} />
-              {!loading && !error && (
-                <span>
-                  {plural(shown.length, "item")}{" "}
-                  {totalHint(data?.total_hint ?? 0, shown.length, data?.total_capped)}
-                </span>
-              )}
-            </span>
-          </div>
-
-          {group && groups.length > 0 && (
-            <Banner tone="info">
-              Showing one column of this board.
-              <Button size="sm" variant="ghost" onClick={() => setGroup("")}>
-                Show every column
-              </Button>
-            </Banner>
-          )}
-          {data?.groups_overlap && (
-            <Banner tone="info">
-              One item can be on several of these columns, so the counts add up to more than the
-              total.
-            </Banner>
-          )}
-          {data?.groups_dropped ? (
-            <Banner tone="caution">
-              {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit
-              and are not shown. Narrow the board to bring them into range.
-            </Banner>
-          ) : null}
-
-          <div className="work-body" data-peek={item ? "true" : undefined}>
-            <div className="col gap-4" style={{ minWidth: 0 }}>
-              {loading && !data && <Skeleton rows={6} />}
-
-              <QueryState
-                error={error}
-                loading={loading}
-                empty={
-                  shown.length || groups.length
-                    ? undefined
-                    : {
-                        title: "Nothing matches",
-                        hint: "No item on this node's copy of the tracker matches these filters. Widen them, or check that work is being filed at all.",
-                      }
-                }
-              >
-                {shape === "board" && (
-                  <Board
-                    now={now}
-                    groups={groups}
-                    axis={String(params.group_by ?? "status")}
-                    chrome={chrome}
-                    detail={detail}
-                    workspace={!project}
-                    selected={item}
-                    hrefOf={itemHref}
-                    onOpen={(row) => setItem(row.key)}
-                    onOverflow={(axis, key) => {
-                      const patch = filterPatchForGroup(axis, key);
-                      setViewKey(patch.view ?? "list");
-                      setGroupBy(patch.group_by ?? "");
-                      setGroup(patch.group ?? "");
-                    }}
-                  />
-                )}
-                {shape === "list" && (
-                  <List
-                    rows={rows}
-                    groups={groups}
-                    axis={groupBy}
-                    chrome={chrome}
-                    detail={detail}
-                    now={now}
-                    selected={item}
-                    hrefOf={itemHref}
-                    onOpen={(row) => setItem(row.key)}
-                    onOverflow={(axis, key) => {
-                      setGroupBy(axis);
-                      setGroup(key);
-                    }}
-                  />
-                )}
-                {shape === "calendar" && (
-                  <CalendarView
-                    weeks={weeks}
-                    rows={rows}
-                    month={thisMonth}
-                    chrome={chrome}
-                    hrefOf={itemHref}
-                    onOpen={(row) => setItem(row.key)}
-                    onMonth={setMonth}
-                    onToday={() => setMonth("")}
-                  />
-                )}
-              </QueryState>
-
-              <ActivityFeed records={feed.data?.records ?? []} now={now} />
-            </div>
-
-            {item && <ItemPanel itemKey={item} chrome={chrome} onClose={() => setItem("")} />}
-          </div>
-
-          {!loading && !error && (projects.data?.projects ?? []).length === 0 && (
-            <Empty
-              icon="inbox"
-              title="No work has been filed yet"
-              hint="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key."
-            />
-          )}
+          </span>
         </div>
+
+        {group && groups.length > 0 && (
+          <Banner tone="info">
+            Showing one column of this board.
+            <Button size="sm" variant="ghost" onClick={() => setGroup("")}>
+              Show every column
+            </Button>
+          </Banner>
+        )}
+        {data?.groups_overlap && (
+          <Banner tone="info">
+            One item can be on several of these columns, so the counts add up to more than the
+            total.
+          </Banner>
+        )}
+        {data?.groups_dropped ? (
+          <Banner tone="caution">
+            {data.groups_dropped} more column{data.groups_dropped === 1 ? "" : "s"} did not fit and
+            are not shown. Narrow the board to bring them into range.
+          </Banner>
+        ) : null}
+
+        <div className="work-body">
+          <div className="col gap-4" style={{ minWidth: 0 }}>
+            {loading && !data && <Skeleton rows={6} />}
+
+            <QueryState
+              error={error}
+              loading={loading}
+              empty={
+                shown.length || groups.length
+                  ? undefined
+                  : {
+                      title: "Nothing matches",
+                      hint: "No item on this node's copy of the tracker matches these filters. Widen them, or check that work is being filed at all.",
+                    }
+              }
+            >
+              {shape === "board" && (
+                <Board
+                  now={now}
+                  groups={groups}
+                  axis={String(params.group_by ?? "status")}
+                  chrome={chrome}
+                  detail={detail}
+                  workspace={!project}
+                  selected={peek?.kind === "item" ? peek.id : ""}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  onOverflow={(axis, key) => {
+                    const patch = filterPatchForGroup(axis, key);
+                    setViewKey(patch.view ?? "list");
+                    setGroupBy(patch.group_by ?? "");
+                    setGroup(patch.group ?? "");
+                  }}
+                />
+              )}
+              {shape === "list" && (
+                <List
+                  rows={rows}
+                  groups={groups}
+                  axis={groupBy}
+                  chrome={chrome}
+                  detail={detail}
+                  now={now}
+                  selected={peek?.kind === "item" ? peek.id : ""}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  onOverflow={(axis, key) => {
+                    setGroupBy(axis);
+                    setGroup(key);
+                  }}
+                />
+              )}
+              {shape === "calendar" && (
+                <CalendarView
+                  weeks={weeks}
+                  rows={rows}
+                  month={thisMonth}
+                  chrome={chrome}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
+                  onMonth={setMonth}
+                  onToday={() => setMonth("")}
+                />
+              )}
+            </QueryState>
+
+            <ActivityFeed records={feed.data?.records ?? []} now={now} />
+          </div>
+        </div>
+
+        {/* THE PEEK, in the frame's own rail. `[` and `]` step through the
+              rows this list actually loaded, which is what makes a board
+              readable without leaving it — and the same rail, the same
+              keystrokes and the same way out on every kind of object. */}
+        {peek?.kind === "item" && (
+          <DetailRail
+            ref={peek}
+            onStep={(delta) => {
+              const keys = rows.map((r) => r.key);
+              const at = keys.indexOf(peek.id);
+              const next = keys[Math.max(0, Math.min(keys.length - 1, at + delta))];
+              if (next && next !== peek.id) movePeek({ kind: "item", id: next });
+            }}
+          >
+            <ItemPeek itemKey={peek.id} chrome={chrome} />
+          </DetailRail>
+        )}
+
+        {!loading && !error && (projects.data?.projects ?? []).length === 0 && (
+          <Empty
+            icon="inbox"
+            title="No work has been filed yet"
+            hint="Seats file work with create_work_item, and an inbound webhook or a schedule is usually what starts them. A project appears here the moment a unit in the company config declares its `project` key."
+          />
+        )}
       </div>
     </>
   );
@@ -593,58 +599,6 @@ export function Work() {
 // ---------------------------------------------------------------------------
 // The rail
 // ---------------------------------------------------------------------------
-
-/**
- * Every project, with how much open work each holds.
- *
- * THE COUNTS ARE THE MAINTAINED COLUMNS — three reads rather than an aggregate
- * over every task in the company — which is what makes a rail that redraws
- * every minute cheap enough to leave on screen.
- */
-export function ProjectRail({
-  projects,
-  chosen,
-  onChoose,
-}: {
-  projects: WorkProjectRow[];
-  chosen: string;
-  onChoose: (key: string) => void;
-}) {
-  const open = projects.reduce((n, p) => n + p.task_counts.open, 0);
-  return (
-    <nav className="work-rail" aria-label="Projects">
-      <a
-        className={`work-rail-item${chosen ? "" : " active"}`}
-        href={href(["work"])}
-        onClick={(e) => {
-          e.preventDefault();
-          onChoose("");
-        }}
-      >
-        <Icon name="layers" size="sm" />
-        <span className="work-rail-name">All work</span>
-        <span className="work-rail-count">{open}</span>
-      </a>
-      {projects.length > 0 && <div className="work-rail-label">Projects</div>}
-      {projects.map((p) => (
-        <a
-          key={p.key}
-          className={`work-rail-item${chosen === p.key ? " active" : ""}`}
-          href={href(["work"], { project: p.key })}
-          title={p.purpose || p.name}
-          onClick={(e) => {
-            e.preventDefault();
-            onChoose(p.key);
-          }}
-        >
-          <span className="work-rail-key">{p.key}</span>
-          <span className="work-rail-name">{p.name}</span>
-          <span className="work-rail-count">{p.task_counts.open}</span>
-        </a>
-      ))}
-    </nav>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // The two heads
@@ -658,13 +612,7 @@ export function ProjectRail({
  * meant anything — and the label already carries which project it is. The
  * chart is absent below two projects, because a one-bar chart is a number.
  */
-export function WorkspaceHead({
-  projects,
-  onChoose,
-}: {
-  projects: WorkProjectRow[];
-  onChoose: (key: string) => void;
-}) {
+export function WorkspaceHead({ projects }: { projects: WorkProjectRow[] }) {
   if (projects.length === 0) return null;
   const counts = projects.reduce(
     (acc, p) => ({
@@ -690,7 +638,7 @@ export function WorkspaceHead({
               .map((p) => ({
                 label: (
                   <span className="row gap-2">
-                    <span className="work-rail-key">{p.key}</span>
+                    <span className="key-mark">{p.key}</span>
                     <span className="truncate">{p.name}</span>
                   </span>
                 ),
@@ -698,7 +646,9 @@ export function WorkspaceHead({
                 display: p.task_counts.open,
                 sub: `${p.task_counts.done} done · ${p.task_counts.closed} closed`,
                 color: "var(--viz-1)",
-                onClick: () => onChoose(p.key),
+                // A REAL LINK: a project is a page now, so the bar opens in a
+                // tab like anything else on this screen.
+                href: href(["work", p.key]),
               }))}
             emptyLabel="No project holds any open work."
           />
@@ -732,13 +682,6 @@ export function ProjectHead({
 
   return (
     <>
-      <div className="work-crumb">
-        <a href={href(["work"])}>Workspace</a>
-        <Icon name="chevronRight" size="xs" />
-        <span className="mono">{detail.key}</span>
-        <span className="work-crumb-name truncate">{detail.name}</span>
-      </div>
-
       {/* A UNIT THE CHART NO LONGER HAS is a finding, not a blank: it is what
           leaves a project's work routed to nobody. */}
       {!detail.unit.resolved && (

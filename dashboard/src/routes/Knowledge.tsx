@@ -14,7 +14,6 @@
  */
 
 import { useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
@@ -24,6 +23,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useMemo } from "react";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 export function Knowledge() {
   const org = useOrg();
@@ -38,11 +39,11 @@ export function Knowledge() {
 
   return (
     <>
-      <ScreenHead
-        title="Knowledge"
-        sub="The company knowledge base, searched live the way an agent searches it — there is no local copy, so what you see here is what the backend holds right now."
-        badges={data?.backend ? <Badge outline>{data.backend}</Badge> : undefined}
-      />
+      <PageActions>{data?.backend ? <Badge outline>{data.backend}</Badge> : undefined}</PageActions>
+      <PageNote>
+        The company knowledge base, searched live the way an agent searches it — there is no local
+        copy, so what you see here is what the backend holds right now.
+      </PageNote>
 
       <form
         className="toolbar"

@@ -17,7 +17,6 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
@@ -27,8 +26,9 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
-export function Conversations() {
+export function Conversations({ channelId }: { channelId?: string }) {
   const org = useOrg();
   const now = useNow();
   const channels = useQuery("a2a_channels", undefined, { pollMs: 30_000 });
@@ -45,10 +45,10 @@ export function Conversations() {
 
   return (
     <>
-      <ScreenHead
-        title="Agent-to-agent"
-        sub="The private channels seats opened with each other. One ask, one answer, then closed — the channel is the authorization record, not the transport."
-      />
+      <PageNote>
+        The private channels seats opened with each other. One ask, one answer, then closed — the
+        channel is the authorization record, not the transport.
+      </PageNote>
 
       <Panel padding="none">
         <StatRow cols={3}>

@@ -9,7 +9,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
@@ -17,6 +16,8 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { PageActions } from "~/app/frame/PageActions.tsx";
+import { PageNote } from "~/app/frame/PageNote.tsx";
 
 interface Node {
   event: EventRecord;
@@ -84,21 +85,20 @@ export function TraceScreen({ traceId }: { traceId: string }) {
 
   return (
     <>
-      <ScreenHead
-        title="Trace"
-        sub={<code className="inline">{traceId}</code>}
-        badges={
+      <PageActions>
+        {
           <>
             <Badge outline>{events.length} events</Badge>
             {truncated && <Badge tone="caution">oldest {events.length} shown</Badge>}
           </>
         }
-        actions={
+        {
           <Button size="sm" icon="activity" onClick={() => nav.to(["activity"], { q: traceId })}>
             In the log
           </Button>
         }
-      />
+      </PageActions>
+      <PageNote>{<code className="inline">{traceId}</code>}</PageNote>
 
       {loading && <Skeleton rows={6} />}
       <QueryState
