@@ -1513,13 +1513,20 @@ func (w *Writer) drainRows() float64 {
 // it with [ErrNoSprint], so the work was filed somewhere no report could ever
 // show it, and the seat that filed it was told the write succeeded.
 //
-// ABSENT IS UNAVAILABLE, NOT A REFUSAL, which is the same answer
-// [Writer.refuseCreate] gives for a project this node does not hold. A sprint
-// is minted by a record like any other, so a seat that mints one and files
-// into it in the next breath can reach a node that has not applied the mint
-// yet — and refusing there would turn replication lag into a permanent-looking
-// error about a sprint that plainly exists. [statelog.ErrUnavailable] is what
-// tells the caller to come back rather than to change what they asked for.
+// A REFUSAL, NOT AN UNAVAILABLE, which is [declaredTags]'s answer for a tag
+// the project has not declared rather than [Writer.refuseCreate]'s for a
+// project this node does not hold — and the difference is which case
+// DOMINATES. A project reaches that check because a caller named one that
+// almost certainly exists, so absent there reads as lag. A sprint number is
+// typed by a model against a schema that merely describes it, so absent here
+// is overwhelmingly a number nobody minted, and `unavailable` would tell that
+// caller to retry a request that can never succeed — the one answer worse
+// than a refusal, because it never ends.
+//
+// The cost is the case the tag check already accepts: a sprint minted moments
+// ago on another node is refused here until this one applies the mint. The
+// message names the sprints the project does have, so a seat re-reads and
+// sees the new one rather than being told to change a request that was right.
 func mintedSprint(ctx context.Context, tx *sql.Tx, project string, number *int) error {
 	if number == nil || *number == 0 {
 		// NOT NAMED, or taken out of its sprint: neither says anything
@@ -1531,8 +1538,9 @@ func mintedSprint(ctx context.Context, tx *sql.Tx, project string, number *int) 
 	case err != nil:
 		return err
 	case !held:
-		return fmt.Errorf("tracker: sprint %d of %s is not on this node: %w",
-			*number, project, statelog.ErrUnavailable)
+		return fmt.Errorf("tracker: %s has no sprint %d — `sprint_report` "+
+			"lists the ones it has minted, and `write_project` mints the "+
+			"next", project, *number)
 	case sprint.Archived:
 		return fmt.Errorf("tracker: sprint %d of %s is archived, so no work "+
 			"is filed into it; `sprint_report` lists the ones that take work",
