@@ -86,7 +86,15 @@ export function Sprints() {
   const active = sprints.find((s) => s.state === "active");
   const burndown = useQuery(
     "work_burndown",
-    active ? { project: chosen, sprint: active.number } : undefined,
+    // BOTH HALVES FROM ONE ANSWER. A sprint is numbered PER PROJECT, so a
+    // number paired with a key from somewhere else names a sprint that need
+    // not exist: `chosen` changes the instant somebody picks a project and
+    // `active` is still the previous project's report until the new one
+    // lands, so every switch asked for the old number under the new key. The
+    // row carries its own project, which makes the pair consistent by
+    // construction — the panel shows the report it belongs to until the
+    // replacement arrives, exactly as the rest of this screen does.
+    active ? { project: active.project, sprint: active.number } : undefined,
     // FIVE MINUTES: a burndown moves by the day, and its own points are day
     // boundaries — a faster poll would redraw an identical series.
     { enabled: Boolean(active), pollMs: 300_000 },
