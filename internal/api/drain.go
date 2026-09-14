@@ -42,15 +42,21 @@ const DrainRetryAfter = 30 * time.Second
 //
 // The whole rule, in one function:
 //
-//   - The webhook edge is REFUSED, whatever the method. A delivery is new work
-//     by definition, and the edge's two GET routes are landings that act: the
-//     GitHub App return converts a creation code into a sealed credential and a
-//     config revision, and an install arrival asks the reconcile loop for a
-//     pass.
+//   - The webhook edge is REFUSED, whatever the method and whatever the route.
+//     A delivery is new work by definition, and one of the edge's two GET
+//     routes is a landing that acts: the GitHub App return converts a creation
+//     code into a sealed credential and a config revision, and an install
+//     arrival asks the reconcile loop for a pass. The Slack OAuth landing only
+//     renders a page, and it goes with the rest rather than being carved out,
+//     because a per-route list is what the default below exists to avoid.
 //   - The sandbox bridge and the telemetry edge are SERVED. They carry the tool
-//     calls and the spans of coding runs that started before the drain, which
-//     is the work the drain is waiting for, and refusing them would strand a
-//     run mid-flight on the node that is waiting for it to finish.
+//     calls and the spans of coding runs that started before the drain, and a
+//     detached run OUTLIVES the turn that started it: the turn suspended the
+//     moment the run detached, so the drain never waits on one (see
+//     docs/concepts/code-sandbox.md, where being detached is what keeps a
+//     coding job out of the drain). Refusing these therefore shortens no drain
+//     and does nothing but break a run mid-flight against the node still
+//     holding its bridge session and its receiver.
 //   - Every other read is SERVED: the probes, the dashboard, the REST reads and
 //     the live socket. A read starts nothing, and it is how an operator watches
 //     the drain.

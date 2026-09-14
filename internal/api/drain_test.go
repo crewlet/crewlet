@@ -63,10 +63,11 @@ func refusedForDraining(t *testing.T, rec *httptest.ResponseRecorder) bool {
 	return body["error"] == string(httpjson.CodeDraining)
 }
 
-// startsWork is every kind of request that would start work, one of each route
-// family: the webhook edge (a delivery, and both of its GET landings, which
-// act), the config and credential writes, the setup pass, the operator writes
-// and the operator MCP surface.
+// startsWork is every kind of request the gate refuses, one of each route
+// family: the webhook edge (a delivery, and both of its GET landings, one of
+// which acts and the other of which is refused with it), the config and
+// credential writes, the setup pass, the operator writes and the operator MCP
+// surface.
 var startsWork = []struct{ method, path string }{
 	{http.MethodPost, "/webhooks/github"},
 	{http.MethodPost, "/webhooks/slack/ceo"},
@@ -164,12 +165,13 @@ func TestADrainingNodeStillServesItsProbesAndItsReads(t *testing.T) {
 	}
 }
 
-func TestADrainKeepsTheEdgesOfTheRunsItIsWaitingFor(t *testing.T) {
+func TestADrainKeepsTheEdgesOfTheRunsItCannotWaitFor(t *testing.T) {
 	t.Parallel()
 	// The sandbox bridge and the telemetry edge carry the tool calls and
-	// the spans of coding runs that started before the drain. That is the
-	// work the drain is waiting FOR, and refusing it would strand a run on
-	// the node that is waiting for it to finish.
+	// the spans of coding runs that started before the drain. A detached
+	// run outlives the turn that started it, so the drain never waits on
+	// one: refusing these shortens no drain and only breaks a run against
+	// the node still holding its bridge session and its receiver.
 	a := drainingApp(t, true)
 	for _, req := range []struct{ method, path string }{
 		{http.MethodPost, "/mcp/run-token"},

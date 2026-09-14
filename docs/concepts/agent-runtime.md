@@ -231,7 +231,7 @@ exactly that reason.
 
 SIGINT / SIGTERM trigger a **drain with the probes up**, designed so a restart picks up cleanly without a half-finished turn: the node stops taking new work, lets the turns already running finish, hands its seats back, and only then closes its HTTP listener and its backends. The engine owns the process signals exclusively. Nothing else in the process may install a handler, the embedded API server included.
 
-**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes and `/operator/mcp`, and backups. Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of the coding runs the drain is waiting for. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
+**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes and `/operator/mcp`, and backups. Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of coding runs that started before the drain and would only be broken by a refusal. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
 
 ```mermaid
 flowchart TD
@@ -266,7 +266,14 @@ flowchart TD
    publishing, and "wait until nothing is running" never comes true.
 5. **Wait for in-flight handlers**, indefinitely: running turns finish their
    rounds until the count hits 0, with `drain_in_progress` logging the
-   in-flight count every 10 s.
+   in-flight count every 10 s. A turn parked on a
+   [detached coding run](code-sandbox.md) is not one of them. It suspended
+   when the run detached and its trigger is already recorded as worked, which
+   is exactly why coding work is detached: a drain that waited for a real
+   coding job would wait for its whole runtime. The run's record lives in the
+   fleet's coordination store rather than in this node, so whichever node
+   holds the seat next picks it up rather than it being lost with this
+   process.
 6. **Release the seats.** Each lease is given back with its mailbox intact,
    so a peer takes the seat over at once rather than after a TTL
    (`drain_complete`).
