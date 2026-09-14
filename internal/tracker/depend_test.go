@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tracker"
@@ -656,7 +657,13 @@ func TestABlockerTakesAnOrdinaryEditWhileSomebodyWaitsOnIt(t *testing.T) {
 
 	// NOT A STATUS PATCH — that one always worked, and asserting it would
 	// be asserting the half that was never broken.
+	//
+	// THE SPRINT IS MINTED FIRST, because a task may only be filed into one
+	// the project has: this case is about what a BLOCKER accepts, so it has
+	// to hand the writer an edit that is otherwise unimpeachable.
 	sprint := 3
+	seedSprintWindow(t, r, sprint, tracker.SprintFuture,
+		time.Now().UTC().Add(24*time.Hour), time.Now().UTC().Add(15*24*time.Hour), nil)
 	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", "blk", "ENG",
 		tracker.NoIfMatch, tracker.TaskPatch{
 			Title: ptr("the blocker, retitled"), Sprint: &sprint,

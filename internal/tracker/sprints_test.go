@@ -2,7 +2,9 @@ package tracker_test
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -175,5 +177,67 @@ func TestANamedSprintNeedsItsProject(t *testing.T) {
 		"container": "workspace", "sprint": "none",
 	}); err != nil {
 		t.Errorf("sprint=none was refused at company scope: %v", err)
+	}
+}
+
+// A TASK IS FILED INTO A SPRINT THE PROJECT MINTED, OR INTO NONE.
+//
+// The schedule tool's schema says `sprint` is a number `sprint_report` lists,
+// and nothing checked it: any positive integer was stored, and the task then
+// pointed at a membership that does not exist. `sprint_report` and the
+// burndown both refuse that sprint with [tracker.ErrNoSprint], so the work was
+// filed where no report can show it while the seat was told the write worked.
+//
+// A REFUSAL RATHER THAN AN UNAVAILABLE, which is the answer an undeclared TAG
+// gets: a sprint number comes from a model reading a schema that only
+// describes it, so absent is overwhelmingly a number nobody minted, and
+// "retry" would be advice that never comes good.
+func TestATaskCannotBeFiledIntoASprintNobodyMinted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// A CREATE naming a sprint the project has not minted.
+	unminted := newTask("ghost")
+	unminted.Key = "ENG-ghost"
+	unminted.Sprint = ptr(99)
+	_, err := r.writer.CreateTask(t.Context(), "op-ghost", unminted, nil)
+	if err == nil {
+		t.Fatal("a task was filed into sprint 99, which nobody minted — no " +
+			"report can show it and the caller was told it worked")
+	}
+	if !strings.Contains(err.Error(), "sprint 99") {
+		t.Errorf("the refusal does not name the sprint: %v", err)
+	}
+	// AND IT SAYS WHERE TO LOOK, which is the whole difference between a
+	// refusal somebody can act on and one they can only retry.
+	if !strings.Contains(err.Error(), "sprint_report") {
+		t.Errorf("the refusal names no way to find the real ones: %v", err)
+	}
+
+	// AN UPDATE takes the same gate.
+	inSprint(t, r, "real", nil)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-move", "real", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Sprint: ptr(99)},
+		tracker.ChangeSprint, nil); err == nil {
+		t.Error("a task was MOVED into sprint 99, which nobody minted")
+	}
+
+	// AND A MINTED ONE IS ACCEPTED, so the gate refuses the unminted rather
+	// than the sprint field.
+	seedSprintWindow(t, r, 1, tracker.SprintActive,
+		time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(13*24*time.Hour), nil)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-real", "real", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Sprint: ptr(1)},
+		tracker.ChangeSprint, nil); err != nil {
+		t.Errorf("a minted sprint was refused: %v", err)
+	}
+
+	// AND TAKING A TASK OUT names no sprint, so it passes whatever the
+	// project has minted.
+	r.drain()
+	if _, err := r.writer.UpdateTask(t.Context(), "op-out", "real", "ENG",
+		tracker.NoIfMatch, tracker.TaskPatch{Sprint: ptr(0)},
+		tracker.ChangeSprint, nil); err != nil {
+		t.Errorf("clearing a sprint was refused: %v", err)
 	}
 }
