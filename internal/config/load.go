@@ -211,6 +211,37 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 	return &cfg, nil
 }
 
+// ParseMember reads one member of a company document sent on its own (a
+// seat, a unit, a model provider, an MCP server) into out, by the rules the
+// whole document is read by: unknown keys refused, and every failure a
+// [Fault] with its path inside the member and its line in data.
+//
+// The per-entity write surface is what reads one. It used encoding/json's own
+// strict decoder, whose refusal names a key and no place (`json: unknown field
+// "gaol"`) and classifies as nothing, so the surface a person is most likely to
+// edit by hand was the one whose mistakes could not be put beside the field.
+// ONE READER for a member and for the document holding it, so the two cannot
+// disagree about what a seat may carry.
+//
+// The caller knows where the member sits in the document and places the
+// faults there; a path here starts at the member.
+func ParseMember(data []byte, out any) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return syntaxFault(err)
+	}
+	if empty(&doc) {
+		return fault(nil, ErrMissing, "the body is empty; send the whole entity, "+
+			"as reading it from the same route answers it")
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return fault(nil, ErrShape, "an entity is a mapping of its fields, as "+
+			"reading it from the same route answers it, not a list or a value")
+	}
+	return decodeDocument(&doc, out)
+}
+
 // DecodeCompany reads Tier B from its STORED form.
 //
 // The stored form is JSON produced by marshalling a parsed [Company], not a

@@ -183,3 +183,64 @@ func TestABootstrapParserFailureIsReportedWhereItWasWritten(t *testing.T) {
 		t.Errorf("faults = %+v, want %+v\nerror: %v", got, want, err)
 	}
 }
+
+// A MEMBER SENT ON ITS OWN IS READ AS THE DOCUMENT HOLDING IT IS.
+//
+// The per-entity write reads a seat, a unit, a provider or an MCP server by
+// itself. Read with encoding/json's strict decoder, a mistyped key was refused
+// with no place and no kind, so it could not be put beside the field the way
+// the same mistake in a whole document is. Each case here is a failure the
+// document reader places, placed the same way inside the member.
+func TestAMemberIsReadByTheDocumentsRules(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, body string
+		into       func() any
+		path       config.Path
+		kind       error
+		line       int
+	}{{
+		name: "a key the seat does not have", body: "name: CTO\ngaol: ship it\n",
+		into: func() any { return &config.Role{} },
+		path: config.Path{"gaol"}, kind: config.ErrUnknownField, line: 2,
+	}, {
+		name: "a key inside a nested block", body: `{"name": "Eng", "integrations": {"jira": {"projekt": "ENG"}}}`,
+		into: func() any { return &config.Unit{} },
+		path: config.Path{"integrations", "jira", "projekt"}, kind: config.ErrUnknownField, line: 1,
+	}, {
+		name: "a list where the member belongs", body: `["name", "CTO"]`,
+		into: func() any { return &config.Role{} },
+		kind: config.ErrShape,
+	}, {
+		name: "nothing at all", body: "",
+		into: func() any { return &config.MCPServer{} },
+		kind: config.ErrMissing,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := config.ParseMember([]byte(tc.body), tc.into())
+			if !errors.Is(err, tc.kind) {
+				t.Fatalf("ParseMember = %v, want %v", err, tc.kind)
+			}
+			var f *config.Fault
+			if !errors.As(err, &f) {
+				t.Fatalf("ParseMember = %v, want a fault", err)
+			}
+			if !reflect.DeepEqual(f.Path, tc.path) && (len(f.Path) != 0 || len(tc.path) != 0) {
+				t.Errorf("path = %v, want %v", f.Path, tc.path)
+			}
+			if f.Line != tc.line {
+				t.Errorf("line = %d, want %d", f.Line, tc.line)
+			}
+		})
+	}
+
+	// And a member that is right decodes, exactly as the document would.
+	var seat config.Role
+	if err := config.ParseMember([]byte(`{"name": "CTO", "handle": "cto", "llm": "zulu", "manages": ["SRE"]}`), &seat); err != nil {
+		t.Fatalf("ParseMember of a good seat = %v", err)
+	}
+	if seat.Name != "CTO" || seat.Handle != "cto" || len(seat.Manages) != 1 {
+		t.Errorf("decoded %+v", seat)
+	}
+}
