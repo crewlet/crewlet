@@ -470,6 +470,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 				if patch.Project != nil {
 					home = *patch.Project
 				}
+				//nolint:govet // shadow: scoped to this block; see .golangci.yml
 				if err := mintedSprint(ctx, tx, home, patch.Sprint); err != nil {
 					return statelog.Decision{}, err
 				}
