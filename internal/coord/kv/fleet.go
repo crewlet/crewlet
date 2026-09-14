@@ -718,6 +718,13 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 // RefusedAt is omitted when zero, so a record no refusal has touched encodes
 // exactly as it did before the field existed, and a build that predates it
 // reads a stamped record by ignoring the key.
+//
+// Such a build also DROPS the key when it writes the record, because it
+// re-encodes only the fields it knows: during a rolling upgrade, a charge an
+// older node makes clears the stamp whether or not the scope had room. That is
+// the harmless direction, and the only one available without a second key: the
+// stamp is what a dashboard shows, never what the gate decides with, and the
+// next refusal by an upgraded node writes it again.
 type budgetRecord struct {
 	Used      int       `json:"used"`
 	At        time.Time `json:"at"`
