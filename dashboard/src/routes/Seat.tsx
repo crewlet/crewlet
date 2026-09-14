@@ -29,7 +29,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
+import { awaitingPerson, indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
 import {
   fmtCount,
   fmtDateTime,
@@ -178,6 +178,11 @@ export function SeatScreen({ handle }: { handle: string }) {
   const manager = index.managerOf.get(seat.name);
   const reports = index.reportsOf.get(seat.name) ?? [];
   const human = seat.kind === "human";
+
+  // A HUMAN SEAT HAS NO RUNTIME TABS (see the strip below), so a URL naming
+  // one — a bookmark from before the seat's kind changed, or a link between
+  // two seats — must land somewhere real rather than on a blank page.
+  const shown: Tab = human && tab !== "overview" && tab !== "access" ? "overview" : (tab as Tab);
   const state = runState(agent, sandboxes);
   const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
 
@@ -236,7 +241,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           <span>This seat is AFK: {afkReason(agent?.afk_reason)}.</span>
         </div>
       )}
-      {sandbox?.status === "awaiting_input" && (
+      {sandbox && awaitingPerson(sandbox.status) && (
         <div className="banner caution">
           <Icon name="help" size="sm" />
           <span>
@@ -250,17 +255,34 @@ export function SeatScreen({ handle }: { handle: string }) {
 
       <Tabs<Tab>
         ariaLabel="Seat sections"
-        value={tab as Tab}
+        value={shown}
         onChange={setTab}
-        options={[
-          { value: "overview", label: "Overview", icon: "user" },
-          { value: "model", label: "Model activity", icon: "brain" },
-          { value: "memory", label: "Memory", icon: "database" },
-          { value: "cost", label: "Cost", icon: "coin" },
-          { value: "access", label: "Access", icon: "key" },
-        ]}
+        // THE KIND DECIDES THE SET. Model activity, Memory and Cost are
+        // properties of a RUNTIME, and a human seat has none: it is
+        // addressable and never spawned. All five were rendered
+        // unconditionally, so a human teammate's Cost tab read "TOKENS · 7D —
+        // 0 · INPUT / OUTPUT — 0 / 0 · CONFIGURED BUDGET — unlimited", which
+        // is three measurements of a thing that cannot be measured, and their
+        // Memory tab offered a diary nothing will ever write.
+        //
+        // Not disabled — absent. A tab that cannot have content is not an
+        // empty state, it is a claim that the reader is missing something.
+        options={
+          human
+            ? [
+                { value: "overview" as const, label: "Overview", icon: "user" as const },
+                { value: "access" as const, label: "Access", icon: "key" as const },
+              ]
+            : [
+                { value: "overview" as const, label: "Overview", icon: "user" as const },
+                { value: "model" as const, label: "Model activity", icon: "brain" as const },
+                { value: "memory" as const, label: "Memory", icon: "database" as const },
+                { value: "cost" as const, label: "Cost", icon: "coin" as const },
+                { value: "access" as const, label: "Access", icon: "key" as const },
+              ]
+        }
       >
-        {tab === "overview" && human && person.data?.held && (
+        {shown === "overview" && human && person.data?.held && (
           <Panel
             title="Their day"
             icon="check"
@@ -310,7 +332,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </Panel>
         )}
 
-        {tab === "overview" && (
+        {shown === "overview" && (
           <>
             <Panel padding="none">
               <StatRow cols={4}>
@@ -517,7 +539,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "model" && (
+        {shown === "model" && (
           <>
             {history.loading && !turns.length && <Skeleton rows={4} height={44} />}
             {/* The QUERY'S OWN STATE, BESIDE THE TURNS RATHER THAN IN PLACE OF
@@ -585,7 +607,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "memory" && (
+        {shown === "memory" && (
           <>
             {memory.loading && <Skeleton rows={5} />}
             <QueryState error={memory.error} loading={memory.loading}>
@@ -767,7 +789,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "cost" && (
+        {shown === "cost" && (
           <>
             <Panel padding="none">
               <StatRow cols={3}>
@@ -906,7 +928,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {tab === "access" && (
+        {shown === "access" && (
           <div className="col gap-4">
             <Panel title="Identity on other surfaces" icon="link">
               {Object.keys(seat.contact).length ? (

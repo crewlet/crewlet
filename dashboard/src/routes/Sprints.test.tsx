@@ -10,7 +10,7 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { Burndown, SprintPanel } from "./Sprints.tsx";
+import { Burndown, SprintPanel, Velocity } from "./Sprints.tsx";
 import { describeChange } from "~/lib/work.ts";
 import { ProjectHead } from "./Work.tsx";
 import type { WorkBurndown, WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
@@ -383,4 +383,63 @@ test("a refused series keeps its panel and says why", () => {
 test("a refused poll says so even when a series was drawn before", () => {
   render(<Burndown data={burndown()} error="query_failed" sprint={sprint()} />);
   expect(document.querySelector(".banner")).toBeTruthy();
+});
+
+// ---------------------------------------------------------------------------
+// Delivery by sprint
+// ---------------------------------------------------------------------------
+
+// A SPRINT THAT HAS NOT STARTED HAS NO DELIVERY. The cadence duty mints future
+// sprints ahead of time, and every row was drawn — so a project with three
+// planned sprints ahead of it drew three bars reading "0 of 0 points" in a
+// chart whose whole subject is a trend, and three-fifths of that trend was
+// a measurement of sprints that had not happened.
+test("delivery by sprint draws only sprints that have run", () => {
+  const { container } = render(
+    <Velocity
+      measure="points"
+      sprints={[
+        sprint({
+          number: 1,
+          name: "One",
+          state: "closed",
+          figures: { ...sprint().figures, done: 12 },
+        }),
+        sprint({
+          number: 2,
+          name: "Two",
+          state: "active",
+          figures: { ...sprint().figures, done: 8 },
+        }),
+        sprint({
+          number: 3,
+          name: "Three",
+          state: "future",
+          figures: { ...sprint().figures, committed: 0, added: 0, done: 0 },
+        }),
+      ]}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text).toContain("1 · One");
+  expect(text).toContain("2 · Two");
+  expect(text).not.toContain("3 · Three");
+});
+
+// AND THE CHART DOES NOT DRAW ITSELF FOR ONE MEASUREMENT. A trend needs two
+// points; with one closed sprint and four planned ones the old filter-free
+// version had five bars and this has none.
+test("delivery by sprint needs two sprints that have run", () => {
+  const { container } = render(
+    <Velocity
+      measure="points"
+      sprints={[
+        sprint({ number: 1, state: "closed" }),
+        sprint({ number: 2, state: "future" }),
+        sprint({ number: 3, state: "future" }),
+      ]}
+    />,
+  );
+  // Nothing is drawn at all: one measurement is not a trend.
+  expect(container.textContent).toBe("");
 });

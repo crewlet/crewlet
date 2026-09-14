@@ -161,9 +161,29 @@ export function Knowledge() {
             <div className="list">
               {(data?.hits ?? []).map((hit) => (
                 <div key={hit.id} className="hit">
-                  <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
-                    {hit.title} <Icon name="external" size="xs" style={{ display: "inline" }} />
-                  </a>
+                  {/* A HIT THAT LINKS SOMEWHERE.
+                      `internal/pages/search.go` builds a native hit with an
+                      empty `URL` — deliberately, because the seam must not
+                      know this dashboard's routes — and this rendered it
+                      anyway, so every result on the engine's own backend was
+                      an `href=""` that resolves to the dashboard root. A
+                      vendor backend (Confluence) does send one, and that one
+                      is external.
+
+                      So the destination is chosen HERE, where the routes are
+                      known: the page's own route for a native hit, the
+                      vendor's link for a vendor one. */}
+                  {hit.url ? (
+                    <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
+                      {hit.title} <Icon name="external" size="xs" style={{ display: "inline" }} />
+                    </a>
+                  ) : hit.id ? (
+                    <a className="hit-title" href={href(["pages", hit.id])}>
+                      {hit.title}
+                    </a>
+                  ) : (
+                    <span className="hit-title">{hit.title}</span>
+                  )}
                   <div className="row gap-1">
                     {hit.container && <Badge outline>{hit.container}</Badge>}
                     {hit.updated_at && (
@@ -186,32 +206,45 @@ export function Knowledge() {
         title="What each seat has learned for itself"
         hint="private to the seat — its diary, its past turns, the skills it drafted"
       >
-        <div className="grid grid-auto">
-          {index.seats
-            .filter((s) => s.kind === "agent")
-            .slice(0, 12)
-            .map((seat) => (
-              <a
-                key={seat.handle}
-                className="seat-card"
-                href={href(["seats", seat.handle], { tab: "memory" })}
-              >
-                <div className="row">
-                  <span className="attention-icon" data-severity="info">
-                    <Icon name="database" size="sm" />
+        {/* A HEADING OVER NOTHING. A company with no agent seats — which the
+            quickstart's own example is — rendered this section's title and
+            hint above an empty grid, so the screen appeared to be broken
+            rather than to be describing a company that has none. */}
+        {index.seats.filter((s) => s.kind === "agent").length === 0 ? (
+          <Empty
+            inline
+            icon="brain"
+            title="No agent seats to have learned anything"
+            hint="Memory is per agent seat: a diary, past episodes, and the skills it drafted for itself. This company's seats are all human, so there is nothing private to show."
+          />
+        ) : (
+          <div className="grid grid-auto">
+            {index.seats
+              .filter((s) => s.kind === "agent")
+              .slice(0, 12)
+              .map((seat) => (
+                <a
+                  key={seat.handle}
+                  className="seat-card"
+                  href={href(["seats", seat.handle], { tab: "memory" })}
+                >
+                  <div className="row">
+                    <span className="attention-icon" data-severity="info">
+                      <Icon name="database" size="sm" />
+                    </span>
+                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                      <strong className="truncate t-cell">{seat.name}</strong>
+                      <span className="truncate t-caption mono">@{seat.handle}</span>
+                    </span>
+                    <Icon name="arrowRight" size="sm" />
+                  </div>
+                  <span className="t-caption truncate">
+                    {seat.goal || "memory, episodes and skills"}
                   </span>
-                  <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                    <strong className="truncate t-cell">{seat.name}</strong>
-                    <span className="truncate t-caption mono">@{seat.handle}</span>
-                  </span>
-                  <Icon name="arrowRight" size="sm" />
-                </div>
-                <span className="t-caption truncate">
-                  {seat.goal || "memory, episodes and skills"}
-                </span>
-              </a>
-            ))}
-        </div>
+                </a>
+              ))}
+          </div>
+        )}
       </Section>
     </>
   );

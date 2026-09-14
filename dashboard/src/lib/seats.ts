@@ -237,6 +237,25 @@ export type RunState =
  * live sandbox set is folded in here, at read time, so it is right on the
  * first snapshot and on every push after it.
  */
+/**
+ * Whether a detached coding run is waiting on a person.
+ *
+ * THE ENGINE'S OWN TWO WORDS. Six call sites compared against
+ * `awaiting_input`, which `sandbox.PendingRun` cannot write — its statuses are
+ * `launching`, `running`, `awaiting_clarification`, `resumed`, `done`,
+ * `failed` and `reseed` (`internal/sandbox/pending.go`) — so every one of them
+ * was permanently false and the state this product most needs to surface
+ * reached no screen through any of them. `reseed` counts because
+ * `sandbox.Awaiting` counts it: the box was reaped past its pause TTL, so the
+ * work is gone and only the question survives.
+ *
+ * One predicate rather than six comparisons, because six copies of a
+ * vocabulary is how five of them come to be wrong at once.
+ */
+export function awaitingPerson(status: string | undefined): boolean {
+  return status === "awaiting_clarification" || status === "reseed";
+}
+
 export function runState(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): RunState {
   if (!agent) return "offline";
   const role = agent.role;
@@ -261,7 +280,7 @@ export type SeatTone = "working" | "needs" | "broken" | "quiet";
 export function seatTone(agent: AgentRow | null | undefined, sandboxes: SandboxEntry[]): SeatTone {
   if (!agent) return "quiet";
   const sandbox = sandboxes.find((s) => s.role === agent.role);
-  if (sandbox && sandbox.status === "awaiting_input") return "needs";
+  if (awaitingPerson(sandbox?.status)) return "needs";
   if (agent.last_error) return "broken";
   const state = runState(agent, sandboxes);
   if (state === "afk") return "broken";
@@ -321,7 +340,7 @@ export function statusLine(
     return seat.availability || "human teammate — not run by the engine";
   }
   if (sandbox) {
-    return sandbox.status === "awaiting_input"
+    return awaitingPerson(sandbox.status)
       ? "waiting on an answer to keep coding"
       : `writing code in a sandbox (${sandbox.coding_agent || "coding agent"})`;
   }

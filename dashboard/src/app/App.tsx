@@ -12,7 +12,7 @@ import { Shell } from "./Shell.tsx";
 import { ToastProvider } from "~/ui/Toast.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
-import { Goals } from "~/routes/Goals.tsx";
+import { Goal, Goals } from "~/routes/Goals.tsx";
 import { People } from "~/routes/People.tsx";
 import { SeatScreen } from "~/routes/Seat.tsx";
 import { OrgScreen } from "~/routes/Org.tsx";
@@ -72,8 +72,12 @@ function Screen() {
       // screen has had since it was designed.
       if (id === "me") return <MyWork />;
       return id ? <WorkItem key={id} id={id} /> : <Work />;
+    // A GOAL HAS AN ID AND THE ROUTE DISCARDED IT. `work_goals` takes `id=`
+    // and answers one goal; this case ignored `route.path[1]` entirely, so
+    // every `#/goals/{id}` link — from a target, from a check-in, from a
+    // colleague's paste — fell through to the list.
     case "goals":
-      return <Goals />;
+      return id ? <Goal id={id} /> : <Goals />;
     // ITS OWN SCREEN rather than a tab of the board, for the reason the view
     // strip is its own question: a sprint report is about the CONTAINER over
     // time and the board is about the rows in it now.
