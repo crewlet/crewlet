@@ -1,0 +1,626 @@
+/**
+ * The org builder's outline: the structure of the draft as rows and columns,
+ * the view the lens opens on at narrow widths and the one a keyboard or a
+ * screen reader user works fastest in.
+ *
+ * A TREEGRID, NOT A TREE. Every row says its level, position and expansion
+ * like a treeitem, and its cells are navigable like a grid's: Name, Kind or
+ * type, Handle, Lead or reports to, Problems, and the row's actions. A row
+ * holds focus by default and its keys act on the node (Enter edits, Delete or
+ * Backspace deletes, the ContextMenu key or Shift+F10 opens its actions);
+ * Right opens a closed row or steps into its cells, Left steps back out,
+ * closes the row or climbs to its parent, Up and Down keep the column. A cell
+ * holding a control (a unit's lead choice, the actions menu, an add button)
+ * focuses the control itself, so what the cell does is one Enter away.
+ *
+ * AN INLINE ADD ROW closes every unit's rows and the company's: Add agent
+ * seat, Add human seat, Add unit, each asking the Builder's Add dialog for
+ * that kind under that parent. It is a row of the grid like any other, so it
+ * counts in its siblings' position and set size, and it is absent while the
+ * draft is read-only.
+ *
+ * ALT WITH UP OR DOWN MOVES A ROW among its siblings of the same kind (a seat
+ * among its unit's seats, a unit among its parent's units). A reorder can
+ * change who a seat reports to, because the engine's primary manager is the
+ * first seat that lists it; that is the engine's to derive, so when the check
+ * of the reordered draft answers, the reporting lines it reports are compared
+ * with the ones before the reorder (`model/changes.ts`) and any change is
+ * announced. A root seat drawn in a unit by its unit reference lives in the
+ * company's list, not the unit's, so it is not reordered here and the
+ * operator is told how to place it.
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
+import type { Derived } from "~/protocol/index.ts";
+import { Icon } from "~/ui/Icon.tsx";
+import { Menu } from "~/ui/Menu.tsx";
+import { Avatar, Button } from "~/ui/primitives.tsx";
+import {
+  isExpandable,
+  level,
+  nextVisible,
+  posInSet,
+  previousVisible,
+  setSize,
+} from "~/ui/treeModel.ts";
+import type { TreeInput } from "~/ui/treeModel.ts";
+import { useBuilder, useBuilderView, type AddKind, type BuilderApi } from "./BuilderContext.tsx";
+import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
+import { deriveChanges } from "./model/changes.ts";
+import { locate, type Draft } from "./model/draft.ts";
+import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import { leadLabel, leadMenu, nodeKeyAction, nodeMenu, type OpenScreen } from "./nodeActions.tsx";
+import {
+  LiveState,
+  ProblemCount,
+  SeatMarks,
+  UnitMarks,
+  handleLabel,
+  seatKindLabel,
+} from "./nodeMarks.tsx";
+import { treeStep, useOpenScreen, useStructure, useTreeState } from "./useCharts.ts";
+
+/** The columns, in order. Their positions are the cells' `aria-colindex`. */
+const COLUMNS = ["Name", "Kind or type", "Handle", "Lead or reports to", "Problems", "Actions"];
+
+/** The add row's buttons, in order: one cell each. */
+const ADD_BUTTONS: readonly { kind: AddKind; label: string }[] = [
+  { kind: "agent", label: "Add agent seat" },
+  { kind: "human", label: "Add human seat" },
+  { kind: "unit", label: "Add unit" },
+];
+
+const ADD_ROW = "add:";
+const addRowId = (parent: NodeKey) => `${ADD_ROW}${parent}`;
+/** The parent an add row adds to, or `null` for a node's row. */
+const addParentOf = (id: string): NodeKey | null =>
+  id.startsWith(ADD_ROW) ? id.slice(ADD_ROW.length) : null;
+
+/** The structure's forest with an add row closing the company's children and each unit's. */
+function withAddRows(structure: Structure): TreeInput[] {
+  const walk = (input: TreeInput): TreeInput => {
+    const children = (input.children ?? []).map(walk);
+    const view = structure.nodes.get(input.id);
+    if (view?.type === "company" || view?.type === "unit") {
+      // An empty label: type-ahead finds rows by the name a person reads,
+      // and an add row names nothing.
+      children.push({ id: addRowId(input.id), label: "" });
+    }
+    return { ...input, children };
+  };
+  return structure.tree.map(walk);
+}
+
+/** A reorder whose effect on the reporting lines is waiting for the check of its draft. */
+interface PendingReorder {
+  /** The generation the reorder was recorded on. */
+  readonly from: number;
+  /** The generation it produced, once it was recorded. */
+  produced?: number;
+  readonly target: NodeKey;
+  readonly before: { readonly draft: Draft; readonly derived: Derived };
+}
+
+export function OutlineView() {
+  const api = useBuilder();
+  const open = useOpenScreen();
+  const structure = useStructure(api.state);
+  const forest = useMemo(
+    () => (api.readOnly ? structure.tree : withAddRows(structure)),
+    [structure, api.readOnly],
+  );
+  const tree = useTreeState(forest, api.selection.key);
+  const { model, expanded, rows, active, setActive, toggle } = tree;
+
+  /** The column of the active row that holds focus; `null` when the row itself does. */
+  const [column, setColumn] = useState<number | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+
+  // ---- focus -----------------------------------------------------------------
+  const rowEls = useRef(new Map<string, HTMLElement>());
+  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const rowRef = (id: string) => {
+    let callback = refs.current.get(id);
+    if (!callback) {
+      callback = (el) => {
+        if (el) rowEls.current.set(id, el);
+        else rowEls.current.delete(id);
+      };
+      refs.current.set(id, callback);
+    }
+    return callback;
+  };
+
+  const pending = useRef<{ id: string; column: number | null } | null>(null);
+  const focusAt = useCallback(
+    (id: string, col: number | null) => {
+      if (addParentOf(id) === null) api.selection.select(id);
+      setActive(id);
+      setColumn(col);
+      pending.current = { id, column: col };
+    },
+    [api.selection, setActive],
+  );
+  // Focus moves once the row it names is rendered: a row inside a unit just
+  // opened, or a node an operation just added, exists only after this render.
+  useLayoutEffect(() => {
+    const want = pending.current;
+    if (!want) return;
+    const row = rowEls.current.get(want.id);
+    if (!row) return;
+    pending.current = null;
+    if (want.column === null) {
+      row.focus();
+      return;
+    }
+    const cell = row.querySelector<HTMLElement>(`[aria-colindex="${want.column}"]`);
+    const widget = cell?.querySelector<HTMLElement>("[data-cell-widget] button");
+    (widget ?? cell ?? row).focus();
+  });
+
+  const focusRef = useRef<(key: NodeKey) => void>(() => {});
+  focusRef.current = (key: NodeKey) => {
+    if (!model.parent.has(key)) return;
+    tree.open(key);
+    focusAt(key, null);
+  };
+  const { expandAll, collapseAll } = tree;
+  const handle = useMemo(
+    () => ({ focusNode: (key: NodeKey) => focusRef.current(key), expandAll, collapseAll }),
+    [expandAll, collapseAll],
+  );
+  useBuilderView(handle);
+
+  // ---- reorder, and what it did to the reporting lines ------------------------
+  const reordering = useRef<PendingReorder | null>(null);
+  const { state, announce } = api;
+  useEffect(() => {
+    const p = reordering.current;
+    if (!p) return;
+    if (p.produced === undefined) {
+      const last = state.last;
+      if (
+        state.generation === p.from + 1 &&
+        last?.kind === "applied" &&
+        last.op.type === "reorder" &&
+        last.op.target === p.target
+      ) {
+        p.produced = state.generation;
+      } else {
+        // Refused, or something else moved the draft first.
+        reordering.current = null;
+        return;
+      }
+    }
+    if (state.generation !== p.produced) {
+      // Another change landed before the check answered. Generations only
+      // move forward, so no check of the reordered draft alone will ever
+      // answer now (the next one describes both changes, and the review
+      // lists them): the record is released rather than kept waiting.
+      reordering.current = null;
+      return;
+    }
+    if (state.check.generation !== p.produced) return;
+    reordering.current = null;
+    if (!state.check.derived) return;
+    const changes = deriveChanges({
+      base: p.before,
+      next: { draft: state.draft, derived: state.check.derived },
+      ops: [],
+      reports: [],
+    });
+    const lines = changes.reportsTo.map(
+      (r) =>
+        `${r.ref.name} now reports to ${r.after?.name ?? "no one"} instead of ${r.before?.name ?? "no one"}.`,
+    );
+    if (lines.length > 0) announce(`The new order changes a primary manager. ${lines.join(" ")}`);
+  }, [state, announce]);
+
+  const reorder = (id: NodeKey, direction: -1 | 1) => {
+    const view = structure.nodes.get(id);
+    if (!view || view.type === "company" || api.readOnly) return;
+    if (view.type === "seat" && view.placedByRef) {
+      announce(
+        `${view.name} is placed in this unit by its unit reference. Move it into the unit to reorder it.`,
+      );
+      return;
+    }
+    const found = locate(state.draft, id);
+    if (!found) return;
+    const to = found.index + direction;
+    if (to < 0 || to >= found.siblings.length) {
+      const kind = found.kind === "seat" ? "seat" : "unit";
+      const where = found.parent === COMPANY_KEY ? "the company" : nameOf(structure, found.parent);
+      announce(
+        `${view.name} is already the ${direction < 0 ? "first" : "last"} ${kind} in ${where}.`,
+      );
+      return;
+    }
+    const after =
+      direction < 0 ? (to === 0 ? null : found.siblings[to - 1]!.key) : found.siblings[to]!.key;
+    const current = state.check.generation === state.generation ? state.check.derived : null;
+    reordering.current = current
+      ? { from: state.generation, target: id, before: { draft: state.draft, derived: current } }
+      : null;
+    api.dispatch({
+      type: "record",
+      intent: { type: "reorder", target: id, to: { parent: found.parent, after } },
+    });
+    focusAt(id, null);
+  };
+
+  // ---- keys ------------------------------------------------------------------
+  // CAPTURED, so a navigation key reaches the grid before the control that
+  // holds focus in a cell: ArrowDown on a menu button would otherwise open
+  // the menu instead of moving to the next row. An open menu keeps its keys.
+  function onKeyDownCapture(e: KeyboardEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement;
+    if (target.closest("[role='menu']")) return;
+    const row = target.closest<HTMLElement>("[data-row-id]");
+    if (!row) return;
+    const id = row.getAttribute("data-row-id")!;
+    const onRow = target === row;
+    const cellIndex = target.closest("[role='gridcell']")?.getAttribute("aria-colindex");
+    const col = onRow || !cellIndex ? null : Number(cellIndex);
+    const adding = addParentOf(id) !== null;
+    const cells = adding ? ADD_BUTTONS.length : COLUMNS.length;
+    const handled = () => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+      if (onRow && !adding) {
+        handled();
+        reorder(id, e.key === "ArrowUp" ? -1 : 1);
+      }
+      return;
+    }
+
+    if (onRow && !adding) {
+      const action = nodeKeyAction(e);
+      const view = structure.nodes.get(id);
+      if (action === "menu") {
+        handled();
+        setMenuFor(id);
+        return;
+      }
+      if (action === "edit") {
+        handled();
+        api.openEditor(id);
+        return;
+      }
+      if (action === "delete") {
+        if (view?.type !== "company" && !api.readOnly) {
+          handled();
+          api.openDelete(id);
+        }
+        return;
+      }
+    }
+
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const sameColumn = (next: string | null) => {
+      if (next === null) return;
+      const width = addParentOf(next) !== null ? ADD_BUTTONS.length : COLUMNS.length;
+      focusAt(next, col === null ? null : Math.min(col, width));
+    };
+
+    if (col !== null) {
+      switch (e.key) {
+        case "ArrowRight":
+          handled();
+          if (col < cells) focusAt(id, col + 1);
+          return;
+        case "ArrowLeft":
+          handled();
+          focusAt(id, col > 1 ? col - 1 : null);
+          return;
+        case "Home":
+          handled();
+          focusAt(id, 1);
+          return;
+        case "End":
+          handled();
+          focusAt(id, cells);
+          return;
+        case "ArrowDown":
+          handled();
+          sameColumn(nextVisible(model, expanded, id));
+          return;
+        case "ArrowUp":
+          handled();
+          sameColumn(previousVisible(model, expanded, id));
+          return;
+        default:
+          // Enter and Space belong to the control in the cell.
+          return;
+      }
+    }
+
+    // A row: Right opens a closed row, and steps into an open or leaf row's cells.
+    if (e.key === "ArrowRight" && !(isExpandable(model, id) && !expanded.has(id))) {
+      handled();
+      focusAt(id, 1);
+      return;
+    }
+    if (adding && e.key === "Enter") {
+      handled();
+      focusAt(id, 1);
+      return;
+    }
+    const step = treeStep(tree, id, e);
+    if (step === undefined) return;
+    handled();
+    if (step === null) return;
+    if ("toggle" in step) toggle(step.toggle);
+    else focusAt(step.focus, null);
+  }
+
+  // ---- rows ------------------------------------------------------------------
+  const rowProps = (id: string, extra: { selected?: boolean; label?: string }) => ({
+    role: "row",
+    "data-row-id": id,
+    ref: rowRef(id),
+    tabIndex: id === active && column === null ? 0 : -1,
+    "aria-level": level(model, id),
+    "aria-setsize": setSize(model, id),
+    "aria-posinset": posInSet(model, id),
+    "aria-expanded": isExpandable(model, id) ? expanded.has(id) : undefined,
+    "aria-selected": extra.selected,
+    "aria-label": extra.label,
+    style: { "--depth": level(model, id) - 1 } as CSSProperties,
+    onClick: (event: MouseEvent<HTMLElement>) => {
+      // A press on a control in the row is the control's; a press on the row
+      // itself selects it and gives it focus.
+      if ((event.target as HTMLElement).closest("button, [role='menu']")) return;
+      focusAt(id, null);
+    },
+  });
+  /** Whether the active cell of `id` is column `col`: its control is then the tab stop. */
+  const stop = (id: string, col: number) => id === active && column === col;
+
+  return (
+    <div className="boutline-wrap">
+      <div
+        role="treegrid"
+        aria-label="Organization outline"
+        aria-colcount={COLUMNS.length}
+        aria-readonly={api.readOnly || undefined}
+        className="boutline"
+        onKeyDownCapture={onKeyDownCapture}
+      >
+        <div role="rowgroup" className="boutline-head">
+          <div role="row" className="boutline-row">
+            {COLUMNS.map((title, i) => (
+              <div role="columnheader" aria-colindex={i + 1} key={title}>
+                {i === COLUMNS.length - 1 ? <span className="sr-only">{title}</span> : title}
+              </div>
+            ))}
+          </div>
+        </div>
+        <div role="rowgroup">
+          {rows.map((id) => {
+            const parent = addParentOf(id);
+            if (parent !== null) {
+              const where = parent === COMPANY_KEY ? "the company" : nameOf(structure, parent);
+              return (
+                <div
+                  key={id}
+                  className="boutline-row add"
+                  {...rowProps(id, { label: `Add to ${where}` })}
+                >
+                  {ADD_BUTTONS.map((b, i) => (
+                    <div
+                      role="gridcell"
+                      aria-colindex={i + 1}
+                      key={b.kind}
+                      className="boutline-add-cell"
+                    >
+                      <span data-cell-widget="">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          icon={b.kind === "unit" ? "folderPlus" : "userPlus"}
+                          tabIndex={stop(id, i + 1) ? 0 : -1}
+                          onClick={() =>
+                            api.openAdd(parent === COMPANY_KEY ? null : parent, b.kind)
+                          }
+                        >
+                          {b.label}
+                        </Button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            }
+            const view = structure.nodes.get(id);
+            if (!view) return null;
+            return (
+              <div
+                key={id}
+                className="boutline-row"
+                {...rowProps(id, { selected: api.selection.key === id })}
+              >
+                <NameCell
+                  api={api}
+                  view={view}
+                  expanded={expanded.has(id)}
+                  expandable={isExpandable(model, id)}
+                  tabStop={stop(id, 1)}
+                  onToggle={() => toggle(id)}
+                />
+                <Cell col={2} tabStop={stop(id, 2)}>
+                  {view.type === "seat" ? (
+                    <>
+                      <span className="truncate">{seatKindLabel(view)}</span>
+                      <LiveState api={api} view={view} />
+                    </>
+                  ) : view.type === "unit" ? (
+                    <span className="truncate">{view.unitType || "Unit"}</span>
+                  ) : (
+                    "Company"
+                  )}
+                </Cell>
+                <Cell col={3} tabStop={stop(id, 3)}>
+                  {view.type === "seat" && (
+                    <span className="mono truncate">{handleLabel(view.handle)}</span>
+                  )}
+                </Cell>
+                <Cell col={4} tabStop={stop(id, 4) && !leadWidget(api, view)}>
+                  <LeadOrManager
+                    api={api}
+                    structure={structure}
+                    view={view}
+                    tabStop={stop(id, 4)}
+                  />
+                </Cell>
+                <Cell col={5} tabStop={stop(id, 5)}>
+                  <ProblemCount api={api} nodeKey={id} />
+                </Cell>
+                <Cell col={6} tabStop={false} className="boutline-actions">
+                  <span data-cell-widget="">
+                    <Menu
+                      label={`Actions for ${view.name || "the company"}`}
+                      items={nodeMenu(api, view, open)}
+                      align="end"
+                      triggerTabIndex={stop(id, 6) ? 0 : -1}
+                      open={menuFor === id}
+                      onOpenChange={(opened) => {
+                        if (opened) setActive(id);
+                        setMenuFor((was) => (opened ? id : was === id ? null : was));
+                      }}
+                    />
+                  </span>
+                </Cell>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function nameOf(structure: Structure, key: NodeKey): string {
+  return structure.nodes.get(key)?.name ?? "";
+}
+
+/**
+ * A cell. It is the tab stop while it is the active cell and holds no
+ * control; a cell with a control hands the stop to the control instead.
+ */
+function Cell({
+  col,
+  tabStop,
+  className,
+  children,
+}: {
+  col: number;
+  tabStop: boolean;
+  className?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div role="gridcell" aria-colindex={col} tabIndex={tabStop ? 0 : -1} className={className}>
+      {children}
+    </div>
+  );
+}
+
+function NameCell({
+  api,
+  view,
+  expanded,
+  expandable,
+  tabStop,
+  onToggle,
+}: {
+  api: BuilderApi;
+  view: NodeView;
+  expanded: boolean;
+  expandable: boolean;
+  tabStop: boolean;
+  onToggle: () => void;
+}) {
+  const name = view.name || (view.type === "company" ? "Unnamed company" : "");
+  return (
+    <div role="gridcell" aria-colindex={1} tabIndex={tabStop ? 0 : -1} className="boutline-name">
+      <span className="boutline-toggle" aria-hidden="true">
+        {expandable && (
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={expanded ? "chevronDown" : "chevronRight"}
+            title={expanded ? `Collapse ${name}` : `Expand ${name}`}
+            tabIndex={-1}
+            onClick={onToggle}
+          />
+        )}
+      </span>
+      {view.type === "seat" ? (
+        <Avatar name={view.name} size="sm" human={view.kind === "human"} />
+      ) : (
+        <Icon name={view.type === "company" ? "flag" : "folder"} size="sm" />
+      )}
+      <span className="truncate">{name}</span>
+      {view.type === "seat" && <SeatMarks api={api} view={view as SeatView} />}
+      {view.type === "unit" && <UnitMarks api={api} nodeKey={view.key} />}
+    </div>
+  );
+}
+
+/** Whether the lead column of a row holds a control: a unit's lead choice, while the draft can change. */
+function leadWidget(api: BuilderApi, view: NodeView): boolean {
+  return view.type === "unit" && !api.readOnly;
+}
+
+/** A unit's lead, chosen in place; a seat's primary manager as the engine derived it. */
+function LeadOrManager({
+  api,
+  structure,
+  view,
+  tabStop,
+}: {
+  api: BuilderApi;
+  structure: Structure;
+  view: NodeView;
+  tabStop: boolean;
+}) {
+  if (view.type === "company") return null;
+  if (view.type === "seat") {
+    const text =
+      view.manager === undefined
+        ? "Checking the reporting line"
+        : view.manager === null
+          ? "No manager"
+          : view.manager;
+    return <span className="truncate">{text}</span>;
+  }
+  const unit = view as UnitView;
+  if (!leadWidget(api, unit)) return <span className="truncate">{leadLabel(unit)}</span>;
+  return (
+    <span data-cell-widget="">
+      <Menu
+        label={`Lead of ${unit.name}`}
+        icon="crown"
+        items={leadMenu(api, structure, unit)}
+        triggerTabIndex={tabStop ? 0 : -1}
+      >
+        {leadLabel(unit)}
+      </Menu>
+    </span>
+  );
+}

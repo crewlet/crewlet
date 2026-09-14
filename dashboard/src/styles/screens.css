@@ -784,6 +784,73 @@
   white-space: nowrap;
 }
 
+/* ---- Org builder: outline -----------------------------------------------
+   The builder's treegrid (`routes/org/builder/OutlineView.tsx`). Each row is
+   a grid on one column template, so the cells of every row line up without
+   a table (a table row cannot be a focusable treegrid row with a level). The
+   grid is at least three chart cards wide and scrolls sideways in its own
+   box below that, so a phone-width screen keeps every column readable and
+   the page never scrolls sideways. */
+
+.boutline-wrap {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+.boutline {
+  min-width: calc(3 * var(--org-card-w));
+  font-size: var(--fs-xs);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.boutline-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 3fr) minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 2fr) minmax(0, 1fr)
+    var(--control-h);
+  align-items: center;
+  min-height: var(--row-h);
+  border-top: 1px solid var(--border-subtle);
+}
+.boutline-head .boutline-row {
+  border-top: 0;
+  font-size: var(--fs-3xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-muted);
+}
+.boutline-row > [role="columnheader"],
+.boutline-row > [role="gridcell"] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 var(--space-2);
+}
+/* The indent is the row's level, set on the row as `--depth`. */
+.boutline-name,
+.boutline-row.add > [role="gridcell"]:first-child {
+  padding-inline-start: calc(var(--space-5) * var(--depth, 0));
+}
+.boutline-row.add > [role="gridcell"]:first-child {
+  margin-inline-start: var(--control-h-sm);
+}
+.boutline-toggle {
+  display: inline-flex;
+  flex: none;
+  width: var(--control-h-sm);
+}
+.boutline-actions {
+  justify-content: flex-end;
+}
+.boutline-row:focus-visible,
+.boutline-row > [role="gridcell"]:focus-visible {
+  outline-offset: -2px;
+}
+/* The selection is where the reader is, so it takes the accent. */
+.boutline-row[aria-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 /* ---- Feed --------------------------------------------------------------- */
 
 /* A feed row's columns are FIXED, so a run of rows scans as columns rather

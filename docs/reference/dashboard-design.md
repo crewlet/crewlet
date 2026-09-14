@@ -1137,6 +1137,19 @@ to.
   `StateBadge` as every other screen, in a slot that neither shrinks nor wraps
   while the seat's name truncates beside it, and live state is no input to
   the layout, so a push changes a word and never a measured height.
+- **The outline is a treegrid of rows.** The same structure as rows with
+  navigable cells: Name, Kind or type, Handle, Lead or reports to, Problems
+  and the row's actions. A row's keys are a card's keys; Right opens a row or
+  steps into its cells, Left steps back out, Up and Down keep the column, and
+  a cell holding a control (the lead choice, the actions menu, an add button)
+  focuses the control, which becomes the grid's one tab stop. Navigation keys
+  are the grid's before they are the control's, so ArrowDown on a menu button
+  moves to the next row rather than opening the menu. An inline add row
+  closes each unit's rows and the company's while the draft can change.
+  Alt+Up and Alt+Down move a row among its siblings of the same kind, and
+  because the engine's primary manager is the first seat that lists a seat,
+  the reporting lines the next check reports are compared with the ones
+  before and a changed primary manager is announced.
 
 ---
 
