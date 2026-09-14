@@ -178,6 +178,31 @@ describe("routing", () => {
     }
   });
 
+  // THE BUILDER LENS MOUNTS THROUGH THE SHELL. It is the one lens that reads
+  // over REST and checks with a dry run on arrival, so a broken import, a
+  // hook-order violation or a context it cannot find shows up here first.
+  test("the org builder lens opens on the configuration it reads", async () => {
+    const config = { name: "Acme", roles: [{ name: "CEO" }] };
+    const spy = stubFetch((path) =>
+      path === "/config"
+        ? new Response(JSON.stringify(config), {
+            status: 200,
+            headers: { "Content-Type": "application/json", ETag: '"r1"' },
+          })
+        : answer(200, {}),
+    );
+    location.hash = "#/org?lens=builder";
+    mount();
+    expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
+    // And its first check went out as a dry run, never as a write.
+    const calls = () => spy.mock.calls as unknown as [string, RequestInit | undefined][];
+    await vi.waitFor(() => {
+      expect(calls().some(([input]) => String(input).includes("dry_run=true"))).toBe(true);
+    });
+    const writes = calls().filter(([, init]) => init?.method === "PATCH" || init?.method === "PUT");
+    expect(writes.every(([input]) => String(input).includes("dry_run=true"))).toBe(true);
+  });
+
   test("an unknown screen says so instead of rendering nothing", () => {
     location.hash = "#/nonsense";
     mount();

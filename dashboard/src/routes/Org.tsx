@@ -12,12 +12,17 @@
  * - Directory (`routes/org/Directory.tsx`): every seat as a sortable row.
  * - Charter (`routes/org/Charter.tsx`): mission, vision, policies and unit
  *   goals.
+ * - Builder (`routes/org/builder/Builder.tsx`): editing the organization, and
+ *   creating the company where none exists. Operator-gated: it reads and
+ *   writes the guarded configuration, and says what it needs when refused.
  *
- * ONE INDEX FOR ALL THREE, built from the anonymous org projection: who the
- * seats are as the document writes them, and the hierarchy the engine derived
- * for them. No lens computes a reporting line, a lead or a placement of its
- * own. A lens this build does not know shows the chart rather than an empty
- * page under a header.
+ * ONE INDEX FOR THE THREE READ LENSES, built from the anonymous org
+ * projection: who the seats are as the document writes them, and the
+ * hierarchy the engine derived for them. No lens computes a reporting line, a
+ * lead or a placement of its own. The Builder edits the configuration
+ * document instead, and asks the engine for the hierarchy of its draft. A
+ * lens this build does not know shows the chart rather than an empty page
+ * under a header.
  */
 
 import { useId, useMemo } from "react";
@@ -29,10 +34,12 @@ import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { Charter } from "./org/Charter.tsx";
 import { Chart } from "./org/Chart.tsx";
 import { Directory } from "./org/Directory.tsx";
+import { Builder } from "./org/builder/Builder.tsx";
+import { builderSurfaces } from "./org/builder/surfaces.ts";
 
-type Lens = "chart" | "directory" | "charter";
+type Lens = "chart" | "directory" | "charter" | "builder";
 
-const LENSES: readonly Lens[] = ["chart", "directory", "charter"];
+const LENSES: readonly Lens[] = ["chart", "directory", "charter", "builder"];
 
 export function OrgScreen() {
   const org = useOrg();
@@ -57,6 +64,7 @@ export function OrgScreen() {
               { value: "chart", label: "Chart", icon: "sitemap" },
               { value: "directory", label: "Directory", icon: "users" },
               { value: "charter", label: "Charter", icon: "flag" },
+              { value: "builder", label: "Builder", icon: "pencil" },
             ]}
           />
         }
@@ -65,6 +73,7 @@ export function OrgScreen() {
         {lens === "chart" && <Chart index={index} />}
         {lens === "directory" && <Directory index={index} />}
         {lens === "charter" && <Charter org={org ?? {}} index={index} />}
+        {lens === "builder" && <Builder surfaces={builderSurfaces} />}
       </TabPanel>
     </>
   );

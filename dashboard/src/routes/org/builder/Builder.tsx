@@ -1,0 +1,1159 @@
+/**
+ * The Builder lens of the Org chart screen (`#/org?lens=builder`): editing the
+ * organization, and creating the company where none exists.
+ *
+ * THE POSTURE IS WHAT THE ENGINE ANSWERS, never what the browser holds. A
+ * stored token proves nothing (an engine with `api.auth.disabled` needs none,
+ * and a rotated one is refused), so `GET /config` is read on mount and again
+ * whenever the operator token changes, and its answer decides:
+ *
+ * | `GET /config` answers                            | The lens shows |
+ * |---|---|
+ * | 200                                              | edit mode |
+ * | 404 `no_active_revision`, no company in the org  | create mode |
+ * | 404 `no_active_revision`, a company in the org   | this node has not caught up (never create mode) |
+ * | 401 or 403                                       | a request for a token, worded by whether one is stored |
+ * | a plain 404, or a body that is not JSON          | this process does not serve the configuration |
+ * | nothing (status 0)                               | the engine could not be reached |
+ *
+ * A first dry run answering 503 `no_control_plane` makes the lens read-only:
+ * the process can read the configuration and cannot write it. A token change
+ * mid-edit re-reads without discarding the draft: the draft and its log stay
+ * on screen, the check runs again under the new token, and a refusal pauses
+ * editing rather than throwing the work away.
+ *
+ * WHAT THIS COMPONENT OWNS is everything with a lifetime: the reducer, the
+ * dry-run check (`useCheck.ts`), the live region, the shortcuts, the
+ * selection in the URL, the fullscreen container and which dialog is open.
+ * The views and dialogs it hosts are handed in as [BuilderSurfaces] and reach
+ * all of it through `BuilderContext`, so none of them starts a request.
+ *
+ * THE LAYOUT FILLS THE SCREEN in the canvas view: the lens is a flex column
+ * whose canvas takes the height left under the toolbar, so `.screen` has
+ * nothing to scroll and a wheel over the page never lands in a canvas that is
+ * half off screen. Fullscreen takes the whole builder container (toolbar,
+ * view, dialogs, its own toast outlet and live region), because a fullscreen
+ * element renders only its own subtree, and an editor opened in fullscreen
+ * from a canvas alone would open invisibly behind it.
+ */
+
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ComponentType,
+  type RefObject,
+} from "react";
+import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { plural } from "~/lib/format.ts";
+import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
+import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
+import { Icon, type IconName } from "~/ui/Icon.tsx";
+import { Kbd } from "~/ui/Kbd.tsx";
+import { Menu, type MenuEntry } from "~/ui/Menu.tsx";
+import { Dialog } from "~/ui/Dialog.tsx";
+import { isComposing } from "~/ui/keys.ts";
+import {
+  Badge,
+  Banner,
+  Button,
+  Empty,
+  Segmented,
+  Skeleton,
+  TabPanel,
+  cx,
+  type Tone,
+} from "~/ui/primitives.tsx";
+import { ToastProvider } from "~/ui/Toast.tsx";
+import { isModalOpen } from "~/ui/useModal.ts";
+import {
+  BuilderContext,
+  type AddKind,
+  type BuilderApi,
+  type BuilderViewHandle,
+} from "./BuilderContext.tsx";
+import { handlesByKey } from "./model/document.ts";
+import { allUnits, locate } from "./model/draft.ts";
+import { handleOfKey, seatKey, type NodeKey } from "./model/keys.ts";
+import type { PlacedProblem } from "./model/problems.ts";
+import {
+  builderReducer,
+  hasChanges,
+  INITIAL_BUILDER,
+  isBaseKeyed,
+  type BuilderAction,
+  type BuilderState,
+} from "./model/reducer.ts";
+import type { CheckStatus } from "./model/scheduler.ts";
+import { isRecord } from "./model/json.ts";
+import {
+  revisionOfEtag,
+  type Clock,
+  type ConfigTransport,
+  type HttpAnswer,
+} from "./model/transport.ts";
+import { browserClock, restTransport } from "./runtime.ts";
+import { useCheck } from "./useCheck.ts";
+
+// ---------------------------------------------------------------------------
+// Surfaces
+// ---------------------------------------------------------------------------
+
+/** What a dialog about one node is given. */
+export interface NodeDialogProps {
+  nodeKey: NodeKey;
+  onClose: () => void;
+}
+
+/** What the Add dialog is given. */
+export interface AddDialogProps {
+  /** A unit's key, or `null` for the company root. */
+  parent: NodeKey | null;
+  kind?: AddKind;
+  onClose: () => void;
+}
+
+/**
+ * The views and dialogs the Builder hosts. They read and act through
+ * `BuilderContext`; the Builder decides which is mounted.
+ *
+ * A surface this build does not carry is `null`, and the Builder says so where
+ * it would have drawn it rather than drawing nothing.
+ */
+export interface BuilderSurfaces {
+  canvas: ComponentType | null;
+  outline: ComponentType | null;
+  editor: ComponentType<NodeDialogProps> | null;
+  add: ComponentType<AddDialogProps> | null;
+  move: ComponentType<NodeDialogProps> | null;
+  remove: ComponentType<NodeDialogProps> | null;
+  changeKind: ComponentType<NodeDialogProps> | null;
+}
+
+type OpenDialog =
+  | { readonly type: "editor" | "move" | "remove" | "changeKind"; readonly key: NodeKey }
+  | { readonly type: "add"; readonly parent: NodeKey | null; readonly kind?: AddKind }
+  | { readonly type: "discard" };
+
+// ---------------------------------------------------------------------------
+// Posture
+// ---------------------------------------------------------------------------
+
+export type Posture =
+  | { readonly kind: "loading" }
+  | {
+      readonly kind: "edit";
+      readonly document: Record<string, unknown>;
+      readonly revision: string;
+    }
+  | { readonly kind: "create" }
+  | { readonly kind: "behind" }
+  | { readonly kind: "guarded"; readonly tokenStored: boolean }
+  | { readonly kind: "unserved" }
+  | { readonly kind: "unreachable"; readonly detail: string }
+  | { readonly kind: "failed"; readonly detail: string };
+
+/** What the org snapshot says about whether a company exists. */
+export interface OrgKnowledge {
+  /** False until the socket has delivered (or been refused) the org snapshot. */
+  readonly known: boolean;
+  /** The company name the snapshot carries; "" for none. */
+  readonly name: string;
+}
+
+const text = (value: unknown): string => (typeof value === "string" ? value : "");
+
+/** Decides the lens posture from `GET /config`'s answer and the org snapshot. */
+export function postureOf(answer: HttpAnswer, org: OrgKnowledge, tokenStored: boolean): Posture {
+  const body = isRecord(answer.body) ? answer.body : {};
+  const code = text(body.error);
+  if (answer.status === 200) {
+    const revision = revisionOfEtag(answer.etag);
+    if (!isRecord(answer.body) || revision === null) {
+      return {
+        kind: "failed",
+        detail:
+          "The engine answered without naming its active revision, so a save could not be conditional on it.",
+      };
+    }
+    return { kind: "edit", document: answer.body, revision };
+  }
+  if (answer.status === 401 || answer.status === 403) return { kind: "guarded", tokenStored };
+  if (code === "unreadable_body") return { kind: "unserved" };
+  if (answer.status === 404) {
+    if (code !== "no_active_revision") return { kind: "unserved" };
+    // A NODE THAT HAS NOT CAUGHT UP IS NEVER OFFERED CREATE MODE. Its store
+    // holds no revision while the fleet runs a company, and a create from
+    // here would be refused at best. Until the snapshot has arrived, the
+    // answer is not known either way.
+    if (!org.known) return { kind: "loading" };
+    return org.name ? { kind: "behind" } : { kind: "create" };
+  }
+  if (answer.status === 0) {
+    return { kind: "unreachable", detail: text(body.detail) };
+  }
+  return {
+    kind: "failed",
+    detail: text(body.detail) || code || `The engine answered with status ${answer.status}.`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Presentation of the check
+// ---------------------------------------------------------------------------
+
+interface StatusLook {
+  readonly label: string;
+  readonly tone: Tone;
+  readonly icon: IconName;
+}
+
+function statusLook(status: CheckStatus, problems: number): StatusLook {
+  switch (status) {
+    case "checking":
+      return { label: "Checking", tone: "neutral", icon: "refresh" };
+    case "clean":
+      return { label: "No problems", tone: "positive", icon: "check" };
+    case "problems":
+      return { label: plural(problems, "problem"), tone: "critical", icon: "alert" };
+    case "unreachable":
+      return { label: "Could not reach the engine to check", tone: "caution", icon: "plug" };
+    case "readonly":
+      return { label: "Read-only here", tone: "neutral", icon: "eye" };
+    case "conflict":
+      return { label: "The configuration changed", tone: "caution", icon: "alert" };
+    case "guarded":
+      return { label: "The engine refused the token", tone: "critical", icon: "key" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Selection in the URL
+// ---------------------------------------------------------------------------
+
+/** The URL filters that name a node: a unit by name, a seat by handle. */
+interface SelectionParams {
+  readonly unit: string;
+  readonly seat: string;
+}
+
+/** The engine's handle for every seat of the draft, from a check of this very draft. */
+function currentHandles(state: BuilderState): ReadonlyMap<NodeKey, string> {
+  if (state.check.generation !== state.generation || !state.check.sent) return new Map();
+  return handlesByKey(state.check.sent, state.check.derived);
+}
+
+/** The filters that name `key`, or `null` when the node has no name the URL can carry yet. */
+function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
+  const found = locate(state.draft, key);
+  if (!found) return null;
+  if (found.kind === "unit") {
+    const name = found.node.data.name;
+    return name ? { unit: name, seat: "" } : null;
+  }
+  const handle = handleOfKey(key) ?? currentHandles(state).get(key);
+  return handle ? { unit: "", seat: handle } : null;
+}
+
+/** The node the filters name, or `null`. */
+function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | null {
+  if (params.seat) {
+    const direct = seatKey(params.seat);
+    if (locate(state.draft, direct)) return direct;
+    for (const [key, handle] of currentHandles(state)) if (handle === params.seat) return key;
+    return null;
+  }
+  if (params.unit) {
+    for (const { unit } of allUnits(state.draft)) {
+      if (unit.data.name === params.unit) return unit.key;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The live region
+// ---------------------------------------------------------------------------
+
+/**
+ * How long the region stays empty before a sentence is written into it. A
+ * screen reader announces a CHANGE of a polite region's text, so the same
+ * sentence twice in a row (two undos of the same kind) would be announced
+ * once unless the region is emptied first; a few frames apart is enough for
+ * every screen reader to observe the empty state.
+ */
+const ANNOUNCE_DELAY_MS = 50;
+
+function useLiveRegion(): { text: string; announce: (message: string) => void } {
+  const [text, setText] = useState("");
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const announce = useCallback((message: string) => {
+    clearTimeout(timer.current);
+    setText("");
+    timer.current = setTimeout(() => setText(message), ANNOUNCE_DELAY_MS);
+  }, []);
+  return { text, announce };
+}
+
+// ---------------------------------------------------------------------------
+// The lens
+// ---------------------------------------------------------------------------
+
+/**
+ * Below this width the drawer takes the whole window (`components.css`), and
+ * a canvas has no room beside it, so a lens opened with no `view` starts on
+ * the outline.
+ */
+const NARROW_QUERY = "(max-width: 860px)";
+
+/** Undo and redo, as the keyboard handler below accepts them. */
+const UNDO_KEYS = ["Mod", "z"] as const;
+const REDO_KEYS = ["Mod", "Shift", "z"] as const;
+
+function prefersOutline(): boolean {
+  try {
+    return globalThis.matchMedia?.(NARROW_QUERY).matches ?? false;
+  } catch {
+    return false;
+  }
+}
+
+export function Builder({
+  surfaces,
+  transport = restTransport,
+  clock = browserClock,
+}: {
+  surfaces: BuilderSurfaces;
+  /** Injected by a suite; the browser bindings otherwise. */
+  transport?: ConfigTransport;
+  clock?: Clock;
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  return (
+    <div ref={container} className="org-builder">
+      <ToastProvider>
+        <Lens surfaces={surfaces} transport={transport} clock={clock} container={container} />
+      </ToastProvider>
+    </div>
+  );
+}
+
+function Lens({
+  surfaces,
+  transport,
+  clock,
+  container,
+}: {
+  surfaces: BuilderSurfaces;
+  transport: ConfigTransport;
+  clock: Clock;
+  container: RefObject<HTMLDivElement | null>;
+}) {
+  const nav = useNavigator();
+  const org = useOrg();
+  const { connected, authRejected } = useConnection();
+  const agents = useAgents();
+  const sandboxes = useSandboxes();
+  const [narrowDefault] = useState(prefersOutline);
+  const [viewParam, setView] = useParam("view", narrowDefault ? "outline" : "canvas", "section");
+  const view = viewParam === "outline" ? "outline" : "canvas";
+  const [chartParam, setChart] = useParam("chart", "structure", "section");
+  const chart = chartParam === "reporting" ? "reporting" : "structure";
+  const [unitParam] = useParam("unit", "", "filter");
+  const [seatParam] = useParam("seat", "", "filter");
+  const viewPanel = useId();
+  const chartPanel = useId();
+
+  const [state, dispatchRaw] = useReducer(builderReducer, INITIAL_BUILDER);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const [loaded, setLoaded] = useState(false);
+  const live = useLiveRegion();
+  const { announce } = live;
+
+  // ---- Reading the configuration -----------------------------------------
+
+  const [read, setRead] = useState<{ answer: HttpAnswer; seq: number } | null>(null);
+  const reading = useRef<{ seq: number; controller: AbortController } | null>(null);
+  const readSeq = useRef(0);
+  // A save loads the stored revision even though it names the base the draft
+  // already stands on: the engine's document, not the one that was sent.
+  const forceLoad = useRef(false);
+
+  const load = useCallback(
+    (force = false) => {
+      reading.current?.controller.abort();
+      const seq = ++readSeq.current;
+      const controller = new AbortController();
+      reading.current = { seq, controller };
+      if (force) forceLoad.current = true;
+      transport.current(controller.signal).then(
+        (answer) => {
+          if (reading.current?.seq !== seq) return;
+          reading.current = null;
+          setRead({ answer, seq });
+        },
+        () => {
+          // Aborted by a newer read or by the unmount, which own the answer.
+        },
+      );
+    },
+    [transport],
+  );
+
+  useEffect(() => {
+    load();
+    return () => reading.current?.controller.abort();
+  }, [load]);
+
+  const orgName = org?.name ?? "";
+  // The store starts with an empty projection, so an empty one proves nothing
+  // until the socket has connected (and delivered its snapshot) or been
+  // refused; a projection that names a company is known however it arrived.
+  const orgKnown = connected || authRejected || orgName !== "";
+  const posture = useMemo(
+    (): Posture =>
+      read
+        ? postureOf(read.answer, { known: orgKnown, name: orgName }, apiToken() !== "")
+        : { kind: "loading" },
+    [read, orgKnown, orgName],
+  );
+
+  const check = useCheck({ state, stateRef, dispatch: dispatchRaw, loaded, transport, clock });
+
+  // Adopt what a read found: the company to edit, or nothing to create from.
+  const adopted = useRef<{ seq: number; kind: Posture["kind"] } | null>(null);
+  useEffect(() => {
+    if (!read) return;
+    if (adopted.current?.seq === read.seq && adopted.current.kind === posture.kind) return;
+    adopted.current = { seq: read.seq, kind: posture.kind };
+    const current = stateRef.current;
+    const hasWork = current.log.ops.length > 0 || current.log.undone.length > 0;
+    const force = forceLoad.current;
+    forceLoad.current = false;
+    if (posture.kind === "edit") {
+      // A draft with work on it stays on its base: the check reports the newer
+      // revision as a conflict, and the operator decides what happens to the
+      // work. Without work there is nothing to lose by standing on the new one.
+      const stale = current.mode !== "edit" || current.base.revision !== posture.revision;
+      if (!loaded || force || (stale && !hasWork)) {
+        dispatchRaw({
+          type: "load",
+          mode: "edit",
+          document: posture.document,
+          revision: posture.revision,
+        });
+        setLoaded(true);
+      }
+    } else if (posture.kind === "create") {
+      if (!loaded || force || (current.mode !== "create" && !hasWork)) {
+        dispatchRaw({ type: "load", mode: "create", document: null, revision: null });
+        setLoaded(true);
+      }
+    }
+  }, [read, posture, loaded]);
+
+  // A NEW TOKEN IS A NEW READER. The draft stays on screen; storage forgets
+  // it (the tab may have changed hands), and both the configuration and the
+  // check are asked again under the new credential.
+  const { reset, requestReset } = check;
+  useEffect(
+    () =>
+      onTokenChanged(() => {
+        requestReset();
+        dispatchRaw({ type: "tokenChanged" });
+        load();
+      }),
+    [requestReset, load],
+  );
+
+  // An org push follows every apply, so the configuration may have moved
+  // under the draft: check again rather than wait for the next edit.
+  const lastOrg = useRef(org);
+  useEffect(() => {
+    if (lastOrg.current === org) return;
+    lastOrg.current = org;
+    if (loaded && stateRef.current.mode === "edit") reset();
+  }, [org, loaded, reset]);
+
+  // ---- Editing ------------------------------------------------------------
+
+  const status = check.machine.status;
+  const problemsCurrent = state.check.generation === state.generation;
+  const readOnlyReason = useMemo((): string | null => {
+    if (posture.kind === "guarded") return "the engine refused this browser's token";
+    if (status === "guarded") return "the engine refused this browser's token";
+    if (status === "readonly") return "this process cannot write the configuration";
+    if (status === "conflict") return "the configuration changed since this draft was started";
+    if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
+    return null;
+  }, [posture.kind, status, loaded, state]);
+  const readOnly = !loaded || readOnlyReason !== null;
+
+  const dispatch = useCallback(
+    (action: BuilderAction) => {
+      const mutates =
+        action.type === "record" ||
+        action.type === "undo" ||
+        action.type === "redo" ||
+        action.type === "discard";
+      if (mutates && readOnlyReason !== null) {
+        announce(`Editing is paused because ${readOnlyReason}.`);
+        return;
+      }
+      dispatchRaw(action);
+    },
+    [readOnlyReason, announce],
+  );
+
+  // Say what the last operation did, and put focus where it leads.
+  const viewHandle = useRef<BuilderViewHandle | null>(null);
+  const focusNode = useCallback((key: NodeKey) => viewHandle.current?.focusNode(key), []);
+  useEffect(() => {
+    if (!state.last) return;
+    announce(state.last.description);
+    focusNode(state.last.focus);
+  }, [state.last, announce, focusNode]);
+
+  const [refusal, setRefusal] = useState<string | null>(null);
+  useEffect(() => {
+    if (!state.refusal) return;
+    setRefusal(state.refusal.message);
+    announce(state.refusal.message);
+  }, [state.refusal, announce]);
+  useEffect(() => {
+    if (state.last) setRefusal(null);
+  }, [state.last]);
+
+  // Undo and redo from the keyboard, anywhere in the builder that is not a
+  // text field (where the same keys undo typing) and never under a modal.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.defaultPrevented || isComposing(e) || isModalOpen()) return;
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.code !== "KeyZ" && e.key.toLowerCase() !== "z") return;
+      const root = container.current;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (!root || (target && target !== document.body && !root.contains(target))) return;
+      if (target && isTextEntry(target)) return;
+      e.preventDefault();
+      dispatch({ type: e.shiftKey ? "redo" : "undo" });
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [dispatch, container]);
+
+  // ---- Selection ------------------------------------------------------------
+
+  const [selected, setSelected] = useState<NodeKey | null>(null);
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+
+  // The URL names the selection: resolve it when it changes from outside.
+  useEffect(() => {
+    const params = { unit: unitParam, seat: seatParam };
+    if (!params.unit && !params.seat) {
+      setSelected(null);
+      return;
+    }
+    const key = keyOfParams(stateRef.current, params);
+    if (key) setSelected(key);
+  }, [unitParam, seatParam]);
+
+  // A rename moves the name the URL holds: follow it, replacing the entry.
+  useEffect(() => {
+    const key = selectedRef.current;
+    if (!key) return;
+    if (!locate(state.draft, key)) {
+      setSelected(null);
+      if (unitParam || seatParam) nav.filter({ unit: null, seat: null });
+      return;
+    }
+    const params = paramsOf(state, key);
+    if (params && (params.unit !== unitParam || params.seat !== seatParam)) {
+      nav.filter({ unit: params.unit || null, seat: params.seat || null });
+    }
+    // The URL is read, not followed: this effect answers changes of the draft
+    // and of the handles its check reported, never a change of the URL.
+  }, [state.draft, state.check]);
+
+  const select = useCallback(
+    (key: NodeKey | null) => {
+      setSelected(key);
+      const params = key ? paramsOf(stateRef.current, key) : null;
+      nav.filter({ unit: params?.unit || null, seat: params?.seat || null });
+    },
+    [nav],
+  );
+
+  // ---- Dialogs ----------------------------------------------------------------
+
+  const [dialog, setDialog] = useState<OpenDialog | null>(null);
+  const closeDialog = useCallback(() => setDialog(null), []);
+  const openIfWritable = useCallback(
+    (next: OpenDialog) => {
+      if (readOnlyReason !== null) {
+        announce(`Editing is paused because ${readOnlyReason}.`);
+        return;
+      }
+      setDialog(next);
+    },
+    [readOnlyReason, announce],
+  );
+
+  const exitFullscreen = useFullscreenExit();
+  const askForToken = useCallback(() => {
+    // The token dialog belongs to the shell, outside the fullscreen element.
+    exitFullscreen();
+    requestToken();
+  }, [exitFullscreen]);
+
+  // ---- The context --------------------------------------------------------------
+
+  const api = useMemo((): BuilderApi => {
+    const byNode = problemsCurrent ? state.check.problems.byNode : new Map();
+    const sources = (key: NodeKey, severity: PlacedProblem["severity"]) =>
+      ((byNode.get(key) ?? []) as readonly PlacedProblem[])
+        .filter((p) => p.severity === severity)
+        .map((p) => p.source);
+    const derived = problemsCurrent ? state.check.derived : null;
+    return {
+      state,
+      dispatch,
+      derived: derived ? { seats: derived.seats ?? [], units: derived.units ?? [] } : null,
+      problemsFor: (key) => sources(key, "problem") as ConfigProblem[],
+      warningsFor: (key) => sources(key, "warning") as ConfigWarning[],
+      documentProblems: problemsCurrent
+        ? state.check.problems.document
+            .filter((p) => p.severity === "problem")
+            .map((p) => p.source as ConfigProblem)
+        : [],
+      selection: { key: selected, select },
+      openEditor: (key) => setDialog({ type: "editor", key }),
+      openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
+      openMove: (key) => openIfWritable({ type: "move", key }),
+      openDelete: (key) => openIfWritable({ type: "remove", key }),
+      openChangeKind: (key) => openIfWritable({ type: "changeKind", key }),
+      announce,
+      focusNode,
+      readOnly,
+      agents,
+      sandboxes,
+      registerView: (handle) => {
+        viewHandle.current = handle;
+        return () => {
+          if (viewHandle.current === handle) viewHandle.current = null;
+        };
+      },
+    };
+  }, [
+    state,
+    problemsCurrent,
+    dispatch,
+    selected,
+    select,
+    openIfWritable,
+    announce,
+    focusNode,
+    readOnly,
+    agents,
+    sandboxes,
+  ]);
+
+  // ---- Rendering --------------------------------------------------------------
+
+  if (!loaded) {
+    return <PostureScreen posture={posture} onRetry={() => load()} onSetToken={askForToken} />;
+  }
+
+  const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
+  const look = statusLook(status, problemCount);
+  const changed = hasChanges(state);
+  const canUndo = !readOnly && state.log.ops.length > 0;
+  const canRedo = !readOnly && state.log.undone.length > 0;
+  const viewSurface = view === "canvas" ? surfaces.canvas : surfaces.outline;
+  const fill = view === "canvas";
+  const providers = state.base.document?.providers;
+  const llm = isRecord(providers) ? providers.llm : undefined;
+  const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
+  const documentProblems = problemsCurrent ? state.check.problems.document : [];
+
+  const handlers = {
+    undo: () => dispatch({ type: "undo" }),
+    redo: () => dispatch({ type: "redo" }),
+    expandAll: () => viewHandle.current?.expandAll(),
+    collapseAll: () => viewHandle.current?.collapseAll(),
+    discard: () => setDialog({ type: "discard" }),
+  };
+  const more: MenuEntry[] = [
+    {
+      key: "undo",
+      label: "Undo",
+      icon: "undo",
+      onSelect: handlers.undo,
+      disabled: !canUndo,
+      hint: <Kbd keys={UNDO_KEYS} />,
+    },
+    {
+      key: "redo",
+      label: "Redo",
+      icon: "redo",
+      onSelect: handlers.redo,
+      disabled: !canRedo,
+      hint: <Kbd keys={REDO_KEYS} />,
+    },
+    { kind: "separator", key: "s1" },
+    { key: "expand", label: "Expand all", icon: "plus", onSelect: handlers.expandAll },
+    { key: "collapse", label: "Collapse all", icon: "minus", onSelect: handlers.collapseAll },
+    { kind: "separator", key: "s2" },
+    {
+      key: "discard",
+      label: "Discard changes",
+      icon: "trash",
+      onSelect: handlers.discard,
+      disabled: readOnly || !changed,
+      danger: true,
+    },
+  ];
+
+  return (
+    <BuilderContext.Provider value={api}>
+      <div className={cx("org-builder-body", fill && "fill")}>
+        <div className="org-builder-toolbar" role="toolbar" aria-label="Organization builder">
+          <Segmented
+            ariaLabel="Builder view"
+            semantics="tabs"
+            panelId={viewPanel}
+            value={view}
+            onChange={setView}
+            size="sm"
+            options={[
+              { value: "canvas", label: "Canvas", icon: "sitemap" },
+              { value: "outline", label: "Outline", icon: "list" },
+            ]}
+          />
+          {view === "canvas" && (
+            <Segmented
+              ariaLabel="Chart"
+              semantics="tabs"
+              panelId={chartPanel}
+              value={chart}
+              onChange={setChart}
+              size="sm"
+              options={[
+                { value: "structure", label: "Structure" },
+                { value: "reporting", label: "Reporting" },
+              ]}
+            />
+          )}
+          <span className="org-builder-wide row gap-1">
+            <Button
+              size="sm"
+              icon="undo"
+              title="Undo"
+              onClick={handlers.undo}
+              disabled={!canUndo}
+              aria-keyshortcuts="Control+Z Meta+Z"
+            />
+            <Button
+              size="sm"
+              icon="redo"
+              title="Redo"
+              onClick={handlers.redo}
+              disabled={!canRedo}
+              aria-keyshortcuts="Shift+Control+Z Shift+Meta+Z"
+            />
+            <Button size="sm" variant="ghost" onClick={handlers.expandAll}>
+              Expand all
+            </Button>
+            <Button size="sm" variant="ghost" onClick={handlers.collapseAll}>
+              Collapse all
+            </Button>
+          </span>
+          <span className="org-builder-narrow">
+            <Menu label="More builder actions" items={more} />
+          </span>
+          <span className="spacer" />
+          <FullscreenToggle container={container} />
+          <Badge tone={look.tone} icon={look.icon}>
+            {look.label}
+          </Badge>
+          <span className="org-builder-wide">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handlers.discard}
+              disabled={readOnly || !changed}
+            >
+              Discard changes
+            </Button>
+          </span>
+        </div>
+
+        {(posture.kind === "guarded" || status === "guarded") && (
+          <Banner
+            tone="critical"
+            icon="key"
+            action={
+              <Button size="sm" onClick={askForToken}>
+                Set token
+              </Button>
+            }
+          >
+            {apiToken()
+              ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
+              : "Editing the organization needs an operator token. Your draft is kept on this page."}
+          </Banner>
+        )}
+        {posture.kind === "unreachable" && (
+          <Banner tone="caution" icon="plug">
+            The engine could not be reached to read the configuration again. Your draft is kept on
+            this page.
+          </Banner>
+        )}
+        {(posture.kind === "failed" ||
+          posture.kind === "unserved" ||
+          posture.kind === "behind") && (
+          <Banner
+            tone="caution"
+            action={
+              <Button size="sm" onClick={() => load()}>
+                Retry
+              </Button>
+            }
+          >
+            The configuration could not be read again, so this draft stands on the revision it was
+            started from.
+          </Banner>
+        )}
+        {status === "readonly" && (
+          <Banner tone="neutral" icon="eye">
+            This process cannot write the configuration because it has no coordination store.
+          </Banner>
+        )}
+        {status === "conflict" && (
+          <Banner tone="caution" icon="alert">
+            The configuration changed since you started editing.{" "}
+            {state.base.revision && (
+              <a
+                className="t-link"
+                href={href(["config"], { lens: "diff", revision: state.base.revision })}
+              >
+                Show what changed
+              </a>
+            )}
+          </Banner>
+        )}
+        {loaded && !isBaseKeyed(state) && status === "unreachable" && (
+          <Banner tone="caution" icon="plug">
+            The engine could not be reached to describe this company. Editing starts once it
+            answers.
+          </Banner>
+        )}
+        {noProvider && (
+          <Banner tone="caution" icon="cpu">
+            No model provider is configured, so no agent seat can run. The dashboard does not write
+            providers: add one with <code className="inline">crewlet config import</code> or{" "}
+            <code className="inline">PATCH /config</code>.
+          </Banner>
+        )}
+        {refusal && (
+          <Banner
+            tone="caution"
+            action={
+              <Button size="sm" variant="ghost" onClick={() => setRefusal(null)}>
+                Dismiss
+              </Button>
+            }
+          >
+            {refusal}
+          </Banner>
+        )}
+        {documentProblems.length > 0 && <DocumentProblems problems={documentProblems} />}
+
+        <TabPanel id={viewPanel} value={view}>
+          {view === "canvas" ? (
+            <TabPanel id={chartPanel} value={chart}>
+              <Surface component={viewSurface} name="The canvas" />
+            </TabPanel>
+          ) : (
+            <Surface component={viewSurface} name="The outline" />
+          )}
+        </TabPanel>
+
+        {dialog && (
+          <DialogHost
+            dialog={dialog}
+            surfaces={surfaces}
+            onClose={closeDialog}
+            onDiscard={() => {
+              dispatch({ type: "discard" });
+              closeDialog();
+            }}
+          />
+        )}
+
+        <div className="sr-only org-builder-live" role="status" aria-live="polite">
+          {live.text}
+        </div>
+      </div>
+    </BuilderContext.Provider>
+  );
+}
+
+/** Whether keys pressed in an element edit text there. */
+function isTextEntry(el: HTMLElement): boolean {
+  if (el.isContentEditable) return true;
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true;
+  if (!(el instanceof HTMLInputElement)) return false;
+  return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(
+    el.type,
+  );
+}
+
+function Surface({
+  component: Component,
+  name,
+}: {
+  component: ComponentType | null;
+  name: string;
+}) {
+  if (!Component) {
+    return (
+      <Empty
+        icon="sitemap"
+        title={`${name} is not part of this build`}
+        hint="Open the Chart or Directory lens to read the organization."
+      />
+    );
+  }
+  return <Component />;
+}
+
+function DialogHost({
+  dialog,
+  surfaces,
+  onClose,
+  onDiscard,
+}: {
+  dialog: OpenDialog;
+  surfaces: BuilderSurfaces;
+  onClose: () => void;
+  onDiscard: () => void;
+}) {
+  switch (dialog.type) {
+    case "discard":
+      return (
+        <Dialog
+          title="Discard changes"
+          icon="trash"
+          onClose={onClose}
+          footer={
+            <>
+              <Button onClick={onClose}>Keep editing</Button>
+              <Button variant="danger" onClick={onDiscard}>
+                Discard changes
+              </Button>
+            </>
+          }
+        >
+          <p>Every change in this draft is discarded. The saved configuration is not touched.</p>
+        </Dialog>
+      );
+    case "add": {
+      const Add = surfaces.add;
+      return Add ? (
+        <Add parent={dialog.parent} kind={dialog.kind} onClose={onClose} />
+      ) : (
+        <MissingDialog onClose={onClose} />
+      );
+    }
+    default: {
+      const Node = {
+        editor: surfaces.editor,
+        move: surfaces.move,
+        remove: surfaces.remove,
+        changeKind: surfaces.changeKind,
+      }[dialog.type];
+      return Node ? (
+        <Node nodeKey={dialog.key} onClose={onClose} />
+      ) : (
+        <MissingDialog onClose={onClose} />
+      );
+    }
+  }
+}
+
+function MissingDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <Dialog
+      title="Not available"
+      onClose={onClose}
+      footer={<Button onClick={onClose}>Close</Button>}
+    >
+      <p>This action is not part of this build of the dashboard.</p>
+    </Dialog>
+  );
+}
+
+function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) {
+  return (
+    <div
+      className="banner critical org-builder-problems"
+      role="group"
+      aria-label="Problems with the whole configuration"
+    >
+      <Icon name="alert" size="sm" />
+      <ul className="col gap-1">
+        {problems.map((p, i) => (
+          <li key={i}>
+            <span>{p.message}</span>
+            {p.link === "integrations" && (
+              <>
+                {" "}
+                <a className="t-link" href={href(["integrations"])}>
+                  Open Integrations
+                </a>
+              </>
+            )}
+            {p.link === "schedules" && (
+              <>
+                {" "}
+                <a className="t-link" href={href(["schedules"])}>
+                  Open Schedules
+                </a>
+              </>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PostureScreen({
+  posture,
+  onRetry,
+  onSetToken,
+}: {
+  posture: Posture;
+  onRetry: () => void;
+  onSetToken: () => void;
+}) {
+  const retry = <Button onClick={onRetry}>Retry</Button>;
+  switch (posture.kind) {
+    case "loading":
+    case "edit":
+    case "create":
+      return <Skeleton rows={4} />;
+    case "behind":
+      return (
+        <Empty
+          icon="refresh"
+          title="This node has not caught up with the fleet's configuration yet."
+          hint="The fleet already runs a company. Try again once this node has applied its revision, or open the dashboard on another node."
+          action={retry}
+        />
+      );
+    case "guarded":
+      return (
+        <Empty
+          icon="key"
+          title={
+            posture.tokenStored
+              ? "The engine refused this browser's token."
+              : "Editing the organization needs an operator token."
+          }
+          hint="The configuration is guarded, reads included."
+          action={
+            <Button variant="primary" onClick={onSetToken}>
+              Set token
+            </Button>
+          }
+        />
+      );
+    case "unserved":
+      return (
+        <Empty
+          icon="server"
+          title="This process does not serve the configuration. Open the dashboard on a node running the engine."
+        />
+      );
+    case "unreachable":
+      return (
+        <Empty
+          icon="plug"
+          title="The engine could not be reached"
+          hint={posture.detail || "Nothing answered the request for the configuration."}
+          action={retry}
+        />
+      );
+    case "failed":
+      return (
+        <Empty
+          icon="alert"
+          title="The engine could not serve the configuration"
+          hint={posture.detail}
+          action={retry}
+        />
+      );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fullscreen
+// ---------------------------------------------------------------------------
+
+function fullscreenSupported(el: HTMLElement | null): boolean {
+  return (
+    !!el &&
+    typeof el.requestFullscreen === "function" &&
+    typeof document !== "undefined" &&
+    document.fullscreenEnabled === true
+  );
+}
+
+function useFullscreenExit(): () => void {
+  return useCallback(() => {
+    if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+      void document.exitFullscreen().catch(() => {});
+    }
+  }, []);
+}
+
+/**
+ * Fullscreen for the builder container, where the browser offers it. The
+ * control is not drawn where the API is missing (iPhone Safari), rather than
+ * drawn and failing.
+ */
+function FullscreenToggle({ container }: { container: RefObject<HTMLDivElement | null> }) {
+  const [supported, setSupported] = useState(false);
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    setSupported(fullscreenSupported(container.current));
+    const onChange = () => setActive(document.fullscreenElement === container.current);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, [container]);
+  if (!supported) return null;
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      icon={active ? "minimize" : "maximize"}
+      title={active ? "Leave fullscreen" : "Fullscreen"}
+      onClick={() => {
+        const el = container.current;
+        if (!el) return;
+        if (active) void document.exitFullscreen().catch(() => {});
+        else void el.requestFullscreen().catch(() => {});
+      }}
+    />
+  );
+}

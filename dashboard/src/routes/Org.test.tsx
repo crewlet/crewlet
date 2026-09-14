@@ -171,7 +171,7 @@ describe("the chart", () => {
   });
 
   test("a lens this build does not know shows the chart rather than a blank", () => {
-    const { view } = mount("#/org?lens=builder", projection);
+    const { view } = mount("#/org?lens=blueprint", projection);
     expect(view.container.querySelector("#org-unit-u0")).not.toBeNull();
   });
 });

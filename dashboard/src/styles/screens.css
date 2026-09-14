@@ -531,6 +531,76 @@
   box-shadow: inset 0 0 0 1px var(--accent);
 }
 
+/* ---- Org builder: the lens ------------------------------------------------ */
+
+/* THE CANVAS VIEW FILLS THE SCREEN, and `.screen` has nothing to scroll. The
+   screen's own column, the lens panel and the builder become flex columns
+   with a definite height, so the canvas takes what is left under the toolbar
+   instead of growing the page: a wheel turned over a page that scrolls would
+   otherwise land in a canvas half off screen. Matched on the builder's own
+   class rather than set by the shell, which knows nothing about lenses. */
+.screen-inner:has(.org-builder-body.fill) {
+  height: 100%;
+  padding-bottom: var(--space-5);
+}
+.screen-inner:has(.org-builder-body.fill) > .tab-panel,
+.org-builder:has(> .org-builder-body.fill) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.org-builder-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.org-builder-body.fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.org-builder-body.fill .tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* Fullscreen takes the whole container, which paints its own ground: the
+   page's background is not behind a fullscreen element. */
+.org-builder:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-4);
+  background: var(--bg);
+  overflow: auto;
+}
+.org-builder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+/* Undo, Redo, Discard, Expand all and Collapse all move into the More menu
+   at the drawer breakpoint; the check status and Review and save stay. */
+.org-builder-narrow {
+  display: none;
+}
+@media (max-width: 860px) {
+  .org-builder-wide {
+    display: none;
+  }
+  .org-builder-narrow {
+    display: inline-flex;
+  }
+}
+.org-builder-problems ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 /* ---- Feed --------------------------------------------------------------- */
 
 /* A feed row's columns are FIXED, so a run of rows scans as columns rather

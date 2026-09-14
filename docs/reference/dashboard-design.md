@@ -168,7 +168,7 @@ meets their company first and the engine last.
 |---|---|---|---|
 | — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
 | **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
-| | Org chart | `#/org?lens=chart\|directory\|charter&unit=&seat=` | the hierarchy, the directory, and the company's own mission, vision and policies, from the `org` projection and the hierarchy the engine derived. `unit` and `seat` select, and a link carrying one reveals it on arrival |
+| | Org chart | `#/org?lens=chart\|directory\|charter\|builder&unit=&seat=&view=&chart=` | the hierarchy, the directory, and the company's own mission, vision and policies, from the `org` projection and the hierarchy the engine derived. `unit` and `seat` select, and a link carrying one reveals it on arrival. The **builder** lens *(operator-gated)* edits the organization over `/config` and creates the company where none is active; `view=canvas\|outline` and `chart=structure\|reporting` are its sections, and `unit` and `seat` its selection |
 | | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access. Identity and reporting lines from the `org` projection; email, model, token budget, schedules, contact identities, integrations and tool credential names from the `config` query *(operator-gated)* |
 | **Work** | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
 | | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
@@ -985,6 +985,44 @@ rendered idle from the first phase to the last.
   (`ui/tidytree.ts`), because density and the reader's font size change every
   card's height. Nothing is shown before the first measurement, and a relayout
   keeps the node the operator acted on where it was on screen.
+
+### The org builder lens
+
+`routes/org/builder/Builder.tsx` is the one component with a lifetime in the
+builder: the reducer over the pure model in `routes/org/builder/model/`, the
+dry-run check, the live region, the shortcuts, the selection and the dialog
+that is open. Its views and dialogs are handed in (`BuilderSurfaces`, bound
+in `routes/org/builder/surfaces.ts`) and reach all of it through
+`BuilderContext`, so no view or dialog starts a request or touches storage.
+
+- **The posture is what the engine answers.** `GET /config` is read on mount
+  and on every token change, and its answer decides edit mode, create mode,
+  a node that has not caught up, a request for a token, a process that does
+  not serve the configuration, or an unreachable engine
+  ([the guide](../guides/org-builder.md#opening-the-builder) has the table).
+  A stored token is never the test: an engine with auth disabled needs none.
+  A token change mid-edit keeps the draft and checks it again.
+- **Every draft is a dry run of the write a save would send.** The same
+  `PATCH` with `If-Match` (or `PUT` with `If-None-Match: *` in create mode),
+  plus `dry_run=true` and without the audit summary. A draft that changes
+  moves its generation, and an answer for an older generation is dropped.
+- **The canvas view fills the screen.** With `view=canvas` the lens is a flex
+  column of definite height (`.screen-inner:has(.org-builder-body.fill)`), so
+  the canvas takes what is left under the toolbar and `.screen` has nothing to
+  scroll.
+- **Fullscreen takes the builder container**, never the canvas: the toolbar,
+  the view, the dialog host, a toast outlet of its own and the live region all
+  render inside it, because a fullscreen element renders only its subtree.
+  The control is not drawn where the Fullscreen API is missing. The shell's
+  token dialog is outside it, so asking for a token leaves fullscreen first.
+- **One polite live region** says what each operation, undo and redo did, and
+  focus moves to the node it touched through the mounted view's registered
+  handle (`useBuilderView`).
+- **Undo and redo are Ctrl or Command with Z**, and Shift with it, anywhere in
+  the builder except a text field, and never under a modal.
+- **A read-only lens records nothing.** The guarded and read-only postures, a
+  conflict and a base the engine has not keyed yet all refuse operations at
+  the one door every view goes through, and say why in the live region.
 
 ---
 
