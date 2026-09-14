@@ -73,17 +73,14 @@ type cooldowns struct {
 // company document, so "zulu" names the same (model, endpoint, key bag) triple
 // everywhere. See credential.fleetKey for why a bare key hint would be wrong.
 //
-// A node with no coordination store shares nothing and says so once. That is
-// the single-node case, where there is no peer to tell.
+// Every node shares, a single node included: its fleet store rides its own
+// embedded broker, and [New] refuses backends without one. A ledger that
+// cannot be reached costs a peer one wasted call and never this node its own
+// bench, because the pool benches locally before it publishes.
 func (e *Engine) shareCooldowns(c *Company) {
 	if c == nil || c.Models == nil {
 		return
 	}
-	// A NIL LEDGER IS A VALID ONE and it means detach, which is why this
-	// is passed through rather than branched around: an epoch rebuilt on a
-	// node that has lost its coordination store must stop publishing
-	// through the handle the previous one held, and a pool nothing ever
-	// shared behaves exactly as it did before any of this existed.
 	fleet := e.backends.Fleet
 	shared := 0
 	for key, provider := range c.Models.All() {
@@ -99,13 +96,6 @@ func (e *Engine) shareCooldowns(c *Company) {
 		pooled.Pool().Share(key, fleet)
 		shared++
 	}
-	if fleet == nil {
-		log.Debug("credential_cooldowns_local",
-			"reason", "this node has no coordination store",
-			"detail", "cooldowns stay this process's own, which is correct "+
-				"for a single node and invisible on a fleet")
-		return
-	}
 	log.Info("credential_cooldowns_shared", "pools", shared)
 }
 
@@ -116,9 +106,6 @@ func (e *Engine) shareCooldowns(c *Company) {
 // still finishing, and a turn that starts during the drain deserves the same
 // view of the fleet's cooldowns as one that started a minute earlier.
 func (e *Engine) startCooldownRefresh(ctx context.Context) {
-	if e.backends.Fleet == nil {
-		return
-	}
 	loopCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	e.cooldowns = &cooldowns{
 		stop: make(chan struct{}), done: make(chan struct{}), cancel: cancel,

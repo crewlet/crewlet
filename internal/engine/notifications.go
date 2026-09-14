@@ -451,12 +451,11 @@ func (e *Engine) WebhookSecrets() webhooks.Secrets {
 // The companion to [Engine.RoutedSources], and the other half of "is this
 // integration really working". Routed answers whether a verified delivery
 // would reach a seat; this answers whether one would be verified at all.
-// Both are facts only a co-located engine holds, because both depend on what
-// this process resolved rather than on what the document says.
+// Both are facts only the engine holds, because both depend on what this
+// process resolved rather than on what the document says.
 //
-// Nil when there is no company yet — "cannot say", which is not the same
-// claim as an empty slice, and a standalone API answers it for every
-// integration.
+// Nil when there is no company yet: "cannot say", which is not the same claim
+// as an empty slice.
 func (e *Engine) VerifiableSources() []string {
 	if e.Company() == nil {
 		return nil

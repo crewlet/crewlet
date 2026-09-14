@@ -131,13 +131,10 @@ type native struct {
 // re-run on an apply. It returns without waiting for hydration: the reconcile
 // is O(keys) and a node that blocked here would not serve its dashboard,
 // answer a probe or run a duty until it finished.
+//
+// The store and the fleet are not nil-checked: [New] refuses a Backends
+// without either, so every engine that reaches this holds both.
 func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Company) error {
-	if e.backends == nil || e.backends.Store == nil || e.backends.Fleet == nil {
-		// A process with no store or no coordination runs no native
-		// backend. That is the standalone API's shape, and it is not an
-		// error: it serves what it can see.
-		return nil
-	}
 	runTracker := c.Config.TrackerBackendFor() == config.TrackerNative
 	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeNative
 	if !runTracker && !wiki {
