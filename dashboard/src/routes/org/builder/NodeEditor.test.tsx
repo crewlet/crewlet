@@ -21,7 +21,14 @@ import { fixtureCompany } from "./model/testkit.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { NodeEditor } from "./NodeEditor.tsx";
 import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
-import { checkWithProblems, keyedState, problemAt, recheck } from "./testState.ts";
+import {
+  checkWithProblems,
+  checkWithWarnings,
+  keyedState,
+  problemAt,
+  recheck,
+  warningAt,
+} from "./testState.ts";
 
 afterEach(cleanup);
 
@@ -547,6 +554,22 @@ describe("problems", () => {
     expect(within(alert).getByRole("link", { name: "Open Schedules" }).getAttribute("href")).toBe(
       "#/schedules",
     );
+  });
+
+  // The engine takes a draft with warnings; a field's error slot says it is
+  // refused (critical, invalid, an alert). So a warning names its path at the
+  // top, in the caution tone, and a refusal beside it stays a refusal.
+  test("a warning is a caution at the top, never a field's error", () => {
+    const warned = checkWithWarnings(keyedState(fixtureCompany()), [
+      warningAt(["units", 0, "children", 0, "lead"], "units[0].children[0].lead: names no seat"),
+    ]);
+    edit(warned, "unit:Platform");
+    const lead = field("Lead");
+    expect(lead.getAttribute("aria-invalid")).toBeNull();
+    expect(lead.closest(".field")?.querySelector(".field-error")).toBeNull();
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+    const caution = screen.getByText(/names no seat/).closest(".banner") as HTMLElement;
+    expect(caution.classList.contains("caution")).toBe(true);
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {

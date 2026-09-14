@@ -34,6 +34,8 @@
  * THE ENGINE'S PROBLEMS SIT BESIDE THE FIELDS THEY NAME, placed through the
  * same path index the check's answer was placed with; whatever names no
  * drawn field is listed at the top, so nothing the engine said is dropped.
+ * A warning, which the engine accepts, is listed at the top as a caution
+ * rather than drawn as a field's error (see `placeOnFields`).
  */
 
 import { useState, type ReactNode } from "react";

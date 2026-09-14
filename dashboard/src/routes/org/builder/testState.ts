@@ -7,7 +7,7 @@
  * a manager: see `model/testkit.ts`.
  */
 
-import type { CompanyDocument, ConfigProblem } from "~/protocol/index.ts";
+import type { CompanyDocument, ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { pathOfSegments, toDocument } from "./model/document.ts";
 import { builderReducer, INITIAL_BUILDER, type BuilderState } from "./model/reducer.ts";
 import { fixtureDerived, type DerivedOverrides } from "./model/testkit.ts";
@@ -63,6 +63,39 @@ export function checkWithProblems(
       },
     },
   });
+}
+
+/** The state after a clean check of the current draft that answered with these warnings. */
+export function checkWithWarnings(
+  state: BuilderState,
+  warnings: ConfigWarning[],
+  overrides: DerivedOverrides = {},
+): BuilderState {
+  const sent = toDocument(state.draft);
+  return builderReducer(state, {
+    type: "checked",
+    settled: {
+      generation: state.generation,
+      sent,
+      baseRevision: state.base.revision,
+      outcome: { status: "clean", warnings, derived: fixtureDerived(sent.document, overrides) },
+    },
+  });
+}
+
+/** A dangling reference warning at a path, as the engine locates one. */
+export function warningAt(segments: (string | number)[], message: string): ConfigWarning {
+  return {
+    kind: "dangling_reference",
+    ref: "lead",
+    path: pathOfSegments(segments),
+    segments,
+    seat: "",
+    unit: "",
+    from: "",
+    to: "",
+    message,
+  };
 }
 
 /** A problem at a path, as the engine locates one. */

@@ -284,6 +284,12 @@ const startsWith = (field: readonly Segment[], path: readonly Segment[]) =>
  * with one of them is that field's; the rest belong at the top of the form,
  * so nothing the engine said about the node is dropped because no field
  * matches it.
+ *
+ * A WARNING IS NEVER A FIELD'S ERROR. The engine takes a draft that carries
+ * warnings, and a field's error slot says the opposite: it is drawn in the
+ * critical tone, marks the control invalid and is announced as an alert. So
+ * a warning (a lead naming no seat, say) is listed at the top in its own
+ * tone, with the path it names, rather than beside the field as a refusal.
  */
 export function placeOnFields(
   placed: readonly PlacedProblem[],
@@ -297,14 +303,15 @@ export function placeOnFields(
   // `integrations.github.tier` lands beside the tier rather than on a whole
   // GitHub section that also happens to be a field.
   const owner = (p: PlacedProblem): string | undefined => {
+    if (p.severity !== "problem" || p.field.length === 0) return undefined;
     const matches = fields.filter((path) => startsWith(p.field, path));
     matches.sort((a, b) => b.length - a.length);
     return matches[0] === undefined ? undefined : id(matches[0]);
   };
-  const rest = placed.filter((p) => p.field.length === 0 || owner(p) === undefined);
+  const rest = placed.filter((p) => owner(p) === undefined);
   return {
     errorFor: (path) => {
-      const mine = placed.filter((p) => p.field.length > 0 && owner(p) === id(path));
+      const mine = placed.filter((p) => owner(p) === id(path));
       return mine.length > 0 ? mine.map((p) => p.message).join("\n") : undefined;
     },
     rest,
@@ -324,7 +331,9 @@ const PROBLEM_LINKS: Readonly<Record<ProblemLink, string>> = {
  * sits beside that field, so what reaches the top is usually about something
  * the builder does not author at all: a schedule on a seat that may not have
  * one, a company integration block. The problem's own link is then the only
- * thing on screen that says where it is fixed.
+ * thing on screen that says where it is fixed. A check answers with
+ * refusals or with warnings, never both, so the banner takes the tone of
+ * what it holds.
  */
 export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] }) {
   if (problems.length === 0) return null;

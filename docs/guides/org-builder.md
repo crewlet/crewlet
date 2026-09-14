@@ -144,7 +144,9 @@ a click outside it) asks before discarding them.
 
 If the engine refused something about the node at the last check, the problem
 is shown beside the field it names. Problems that name no field in the editor
-are listed at its top.
+are listed at its top. A warning (a lead that names no seat, for example)
+does not stop a save, so it is listed at the top as a caution with the path
+it names, never shown as a field's error.
 
 ### The charter
 
