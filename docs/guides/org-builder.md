@@ -157,6 +157,10 @@ Everything else in the company document (providers, integrations, workers,
 MCP servers, sandbox and scheduling settings) is edited in the configuration
 document, not in the builder.
 
+A company has no lead. The reporting chart's roots are the seats no one
+manages, so the seat at the top of a company is the one nothing else manages,
+not a field somebody sets.
+
 ### A unit
 
 | You can change | Notes |
@@ -206,6 +210,11 @@ each depend on a company-level block the builder does not edit.
 
 A seat's kind is changed with **Change to a human seat** or **Change to an
 agent seat**, which is its own step because it removes fields.
+
+A seat has no skills to edit. A skill is a knowledge base page the engine
+admits and injects per phase, and the learning subsystem drafts new ones from
+what turns did, so skills are managed in the knowledge base rather than on the
+seat. See [Tool Skills](../concepts/tool-skills.md).
 
 ### Seat integrations
 
