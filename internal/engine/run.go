@@ -113,8 +113,7 @@ type Engine struct {
 	// fact from use: a borrowed Backends is still the one this engine
 	// requeues and pauses through, so holding "the ones I use" and "do I
 	// close them" in one nilable field made the park path reach for a nil
-	// queue on exactly the topology — merged API and engine — that shares
-	// one broker.
+	// queue on exactly the engines that were lent their backends.
 	ownsBackends bool
 
 	// dispatch turns one inbox partition into one turn. Held so a test can
@@ -447,10 +446,17 @@ type Options struct {
 	// the environment; see [mcpbridge.Build].
 	Bridge *mcpbridge.Bridge
 
-	// Backends may be supplied by a caller that already opened them — the
-	// API process and the engine share one broker when they run merged.
-	// Nil opens them from the bootstrap config, and the engine then owns
-	// their lifetime.
+	// Backends may be supplied by a caller that already opened them and
+	// keeps their lifetime. Nil opens them from the bootstrap config, and
+	// the engine then owns their lifetime.
+	//
+	// `crewlet run` always leaves this nil: the engine opens its own, and
+	// the API the same process serves reads them back through
+	// [Engine.Backends]. The callers that supply a set are the ones that
+	// need the estate before or after the engine that runs on it: a peer's
+	// record written before this node exists, or a failed boot whose
+	// leftovers are inspected. A supplied set must be complete; see
+	// [Backends.Complete].
 	Backends *Backends
 
 	// Dispatch overrides the default dispatcher.
@@ -551,11 +557,15 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	incarnation := config.NewIncarnation(nodeID)
 
 	// Only what this engine OPENED does it close. A caller that supplied
-	// backends keeps their lifetime — the merged API process outlives the
-	// engine's own shutdown and still needs its broker.
+	// backends keeps their lifetime, and must supply all four: see
+	// [Backends.Complete] for why a partial set is refused rather than run.
 	backends := opts.Backends
 	ownsBackends := false
-	if backends == nil {
+	if backends != nil {
+		if err = backends.Complete(); err != nil {
+			return nil, err
+		}
+	} else {
 		// ASSIGNED, not declared through a temporary: `opened, err :=`
 		// shadows the err the node-id read above already declared, which is
 		// the one shape govet cannot tell from the bug that check is on for.
@@ -600,9 +610,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// because nothing else holds a reference to it. Closing the store and
 	// the broker underneath them is exactly the mid-batch write
 	// [Engine.Stop] orders itself to avoid; and where the CALLER supplied
-	// the backends — the merged API process, an embedded engine, every
-	// test — nothing was closed at all and the loops simply ran on, in a
-	// process whose boot had failed.
+	// the backends, nothing was closed at all and the loops simply ran on,
+	// in a process whose boot had failed.
 	//
 	// Deferred rather than written at each return, for the reason
 	// [Engine.startNative]'s own guard is: the list of things to unwind
@@ -997,13 +1006,13 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	// own history, read only by the node running that seat, so they stay
 	// on the node's local database where a long thread costs nothing to
 	// replicate.
-	if backends.Fleet != nil && d.Completions == nil {
+	//
+	// Neither is nil-checked: [New] refuses a Backends without a store or a
+	// fleet, so both are always here by the time this runs.
+	if d.Completions == nil {
 		d.Completions = ledgerstore.NewFleetCompletions(backends.Fleet)
 	}
-	// Nil-checked rather than assumed: a caller-supplied Backends may
-	// carry no store, and the dispatcher already documents nil as the
-	// single-node case where the seat lease is the whole mutual exclusion.
-	if backends.Store != nil && d.Conversations == nil {
+	if d.Conversations == nil {
 		d.Conversations = ledgerstore.NewConversations(backends.Store)
 	}
 	return d
@@ -1285,9 +1294,9 @@ func (e *Engine) Node() *node.Node { return e.node }
 
 // Backends exposes the infrastructure this engine runs on.
 //
-// For the MERGED topology, where one process is both engine and API: the two
-// halves share one broker and one store, and the half that did not open them
-// needs a handle. A second set would be worse than inconvenient — two
+// For the API `crewlet run` serves beside the engine, in the same process: the
+// two share one broker and one store, and the API did not open them, so it
+// needs a handle. A second set would be worse than inconvenient: two
 // connections to one broker fail independently, and the store is exclusive to
 // one process, so a second open is contention with itself.
 func (e *Engine) Backends() *Backends { return e.backends }
@@ -1636,18 +1645,19 @@ func (e *Engine) notifyApplied(ctx context.Context) {
 	}
 }
 
-// OtelReceiver is this node's sandbox telemetry receiver, or nil.
+// OtelReceiver is this node's sandbox telemetry receiver, or nil when
+// CREWLET_SANDBOX_OTEL_RECEIVER_URL is unset.
 //
-// Handed to the API so a merged process mounts the route the engine mints
-// against, and so a SPLIT one is visibly missing it rather than answering 401
-// with a key nobody shares.
+// Handed to the API this process serves, so the route verifies with the
+// receiver the engine mints against rather than with a second one built from a
+// key nobody shares.
 func (e *Engine) OtelReceiver() *sandbox.OtelReceiver { return e.sandboxOtel }
 
 // Bridge is this node's MCP tool bridge, or nil.
 //
-// Exposed for the same reason the receiver is: the API process serves the
-// route, and on a merged deployment it is handed this engine's own — one
-// object, so a session opened by a run is the session the route resolves.
+// Exposed for the same reason the receiver is: the API this process serves
+// mounts the route, and it is handed this engine's own: one object, so a
+// session opened by a run is the session the route resolves.
 func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 
 // keyMaterial is the Tier A keyring, as the OTLP token key is derived from.

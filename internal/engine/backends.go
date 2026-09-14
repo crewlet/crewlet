@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -69,6 +70,37 @@ type Backends struct {
 	conn *nats.Conn
 }
 
+// Complete reports which of the four a Backends lacks, or nil when it holds
+// them all.
+//
+// [OpenBackends] never builds a partial set, so this is for the caller that
+// supplies its own to [New]. A partial set used to be RUN rather than refused:
+// the engine skipped whatever needed the missing piece, so an engine lent a
+// queue and no store served a company with no native tracker, no conversation
+// ledger and no record of its turns, and said nothing. Every node `crewlet run`
+// builds holds all four, and so must every engine.
+func (b *Backends) Complete() error {
+	var missing []string
+	if b.Queue == nil {
+		missing = append(missing, "Queue")
+	}
+	if b.Coord == nil {
+		missing = append(missing, "Coord")
+	}
+	if b.Fleet == nil {
+		missing = append(missing, "Fleet")
+	}
+	if b.Store == nil {
+		missing = append(missing, "Store")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("engine: the supplied Backends has no %s; open them with "+
+		"OpenBackends, which builds the stream, coordination and the store together",
+		strings.Join(missing, ", "))
+}
+
 // Conn exposes the broker connection this node's coordination store rides.
 //
 // For the ONE subsystem that has to talk to the broker outside the queue
@@ -77,9 +109,11 @@ type Backends struct {
 // default topology the broker is embedded here and binds no socket — so a
 // backup that could not reach this connection could not exist.
 //
-// Nil when this process has no broker. The caller takes no ownership: closing
-// it is [Backends.Close]'s job, and closing it from underneath an embedded
-// server would take the stream down with the leases.
+// Nil when this node DIALLED an external broker: the queue owns that
+// connection, and the streams belong to a cluster with its own backup tooling.
+// The caller takes no ownership: closing it is [Backends.Close]'s job, and
+// closing it from underneath an embedded server would take the stream down with
+// the leases.
 func (b *Backends) Conn() *nats.Conn { return b.conn }
 
 // Close releases both slots, in the reverse order of acquisition.
