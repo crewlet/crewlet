@@ -285,13 +285,15 @@ hand this node's seats to a peer, and that is the intended behaviour rather
 than something a reconnect policy should paper over.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the five engine streams
+uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_DLQ`), a stream per extra subject namespace a
-company publishes under, one durable consumer per seat mailbox — an ordinary
-API call, measured at 1.7 ms — and the fourteen `crewlet_*` KV buckets:
-two in the lease store, holding the leases and the fencing epochs, and twelve
-in the fleet store holding the shared records. A credential
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
+`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+publishes under, one durable consumer per seat mailbox — an ordinary API
+call, measured at 1.7 ms — and the fifteen `crewlet_*` KV buckets:
+two in the lease store, holding the leases and the fencing epochs, and
+thirteen in the fleet store holding the shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
