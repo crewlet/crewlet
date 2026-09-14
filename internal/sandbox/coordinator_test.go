@@ -315,6 +315,7 @@ func TestConcurrentCompletionsResumeOnlyOnce(t *testing.T) {
 func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
+	rig.coordinator.markBusy("swe")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
 	rig.resumer.err = errors.New("the node lost the seat mid-resume")
 
@@ -324,6 +325,11 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning {
 		t.Fatalf("status = %q, want it reverted to %q so the retry can re-claim", got.Status, StatusRunning)
+	}
+	// Running again, the run holds its seat again: the resume freed it,
+	// and a turn slipped in now would run beside a job still owed a tail.
+	if !rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat took new turns while its run waited for the retry")
 	}
 
 	rig.resumer.mu.Lock()
@@ -1200,6 +1206,40 @@ func (r *coordRig) deliverControl(t *testing.T) {
 		if err := r.coordinator.OnEvent(t.Context(), ev); err != nil {
 			t.Fatalf("OnEvent: %v", err)
 		}
+	}
+}
+
+// A FAILED ANSWER DOES NOT PARK THE SEAT. The claim goes back to waiting on a
+// person, which does not hold the seat, and marking it busy regardless parked
+// every later delivery until something recounted the seat. Nothing did: the
+// answer's retry resumes and settles the run, and neither step takes back a
+// mark the failure left, so the seat stayed parked after its run was done.
+func TestAFailedAnswerLeavesTheSeatFree(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.park("t1")
+	rig.resumer.failWith(errors.New("the model provider did not answer"))
+
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	if err == nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = %v, %v, want the answer handled and sent back", handled, err)
+	}
+	if got := rig.get("t1"); got.Status != StatusAwaiting {
+		t.Fatalf("status = %q, want the run waiting on its answer again", got.Status)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("a seat whose run went back to waiting on a person was parked")
+	}
+
+	rig.resumer.failWith(nil)
+	if _, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil); err != nil {
+		t.Fatalf("the answer's retry: %v", err)
+	}
+	if got := rig.get("t1"); got.Status != StatusDone {
+		t.Fatalf("status = %q, want the answered run settled", got.Status)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked after its only run settled")
 	}
 }
 
