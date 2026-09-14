@@ -217,6 +217,46 @@ func TestBudgetsShowListsWhatEachScopeSpent(t *testing.T) {
 	}
 }
 
+// A REFUSING SCOPE SAYS SO. A refused charge increments nothing, so a seat
+// charged in rounds stalls short of its cap and its row reads as headroom: 99
+// of 100 looks healthy on a table with no other column. The refusal stamp is
+// the gate's own record of saying no, and the table prints it.
+func TestBudgetsShowNamesAScopeThatIsRefusing(t *testing.T) {
+	node := newFakeNode(t)
+	node.budgets = []byte(`{"durable":true,
+	  "org":{"max_tokens":10000,"durable_used":1200,"durable_updated_at":"2026-08-01T00:00:00Z",
+	         "refused_at":""},
+	  "seats":[{"handle":"swe","agent_id":"a1","max_tokens":500,"durable_used":497,
+	            "durable_updated_at":"2026-08-01T00:00:00Z","refused_at":"2026-08-01T00:05:00Z"},
+	           {"handle":"ops","agent_id":"a2","max_tokens":500,"durable_used":20,
+	            "durable_updated_at":"2026-08-01T00:00:00Z","refused_at":""}]}`)
+	cfg := bootstrapForNode(t, node)
+
+	out, _, err := cli(t, "budgets", "show", "-config", cfg)
+	if err != nil {
+		t.Fatalf("budgets show: %v", err)
+	}
+	if !strings.Contains(out, "REFUSING SINCE") {
+		t.Fatalf("the table has no refusal column: %q", out)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "swe":
+			if fields[len(fields)-1] != "2026-08-01T00:05:00Z" {
+				t.Errorf("the refusing seat's row = %q, want its refusal stamp last", line)
+			}
+		case "ops", "org":
+			if fields[len(fields)-1] != "-" {
+				t.Errorf("a scope that is not refusing reads %q, want a dash last", line)
+			}
+		}
+	}
+}
+
 // A RESET NAMES WHAT IT CLEARED. A count alone leaves an operator unable to
 // tell "reset the seat I meant" from "reset a scope that was already empty".
 func TestBudgetsResetNamesTheScopesItCleared(t *testing.T) {

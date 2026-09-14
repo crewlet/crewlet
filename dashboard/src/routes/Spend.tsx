@@ -5,7 +5,9 @@
  *
  *  - the **spend rollup** is a WINDOW (24 hours by default, up to 30 days) over
  *    what was actually billed;
- *  - a **meter** is PROCESS-LIFETIME — it resets when the engine restarts.
+ *  - a **meter** is the fleet's shared counter as the budget gate enforces it:
+ *    every node's spend since the last deliberate reset, against the cap in the
+ *    company revision. It is the one figure a cap can be divided into.
  *
  * They are never comparable, and every number here says which it is.
  */
@@ -140,7 +142,7 @@ export function Spend() {
         <Panel
           title="Company budget meter"
           icon="target"
-          subtitle="process-lifetime — not the window above"
+          subtitle="spend since the last reset, not the window above"
           actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
         >
           <Meter
@@ -303,7 +305,7 @@ export function Spend() {
       <Panel
         title="Durable budget counters"
         icon="database"
-        subtitle="the fleet's shared ledger, not this process's meter"
+        subtitle="per seat, from the same shared ledger the meter above reads"
         padding="none"
       >
         {budgets.loading && !budgets.data && <Skeleton rows={3} />}
@@ -337,13 +339,6 @@ export function Spend() {
                   cell: (s) => fmtExact(s.durable_used),
                 },
                 {
-                  key: "live",
-                  header: "This process",
-                  align: "right",
-                  sortValue: (s) => s.live_used,
-                  cell: (s) => fmtExact(s.live_used),
-                },
-                {
                   key: "max",
                   header: "Budget",
                   align: "right",
@@ -361,12 +356,17 @@ export function Spend() {
                   width: "160px",
                   cell: (s) =>
                     s.max_tokens ? (
+                      // A refusing seat says so in words as well as in tone:
+                      // a refused charge increments nothing, so its bar stops
+                      // short of full and would otherwise read as headroom.
                       <Meter
                         used={s.durable_used}
                         max={s.max_tokens}
                         // The column heading names it for a sighted reader;
                         // a screen reader lands on the meter alone.
                         ariaLabel={`${s.role} token budget`}
+                        label={s.refused_at ? "Refusing charges" : undefined}
+                        tone={s.refused_at ? "critical" : undefined}
                       />
                     ) : (
                       <span className="faint">—</span>

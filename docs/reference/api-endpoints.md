@@ -1031,7 +1031,10 @@ does not hold carries no state at all and the dashboard reads that as
 `offline` — which is right for a seat nothing has claimed, and is this node
 declining to claim knowledge of a seat a peer may be running. [Fleet](#fleet-sandbox-runs--schedules)
 answers "who holds what" from the lease table, which is the one place that
-knows.
+knows. The live overlay merged on top replaces that state only once an event
+says what the seat is doing (a spawn, a phase, a turn ending): a token meter
+report names every capped seat whether or not anything runs it, so it carries
+no state at all.
 
 The three config-derived sections are **re-sent on every config apply**, as
 `seats`, `org` and `tools` pushes. Nothing else would correct them: a
@@ -1110,13 +1113,35 @@ completed record when the phase finishes. Progress envelopes carry
 `turn_id` / `phase` / `iteration` for this correlation; they are
 stream-only and never persisted to the event store.
 
-The **spend rollup** is maintained by the projection too, over the same
-window per-agent totals hydrate over, using the same
-`aggregate_phase_events` the REST endpoint calls. It ships in the
-snapshot and is re-pushed (coalesced to at most one frame per second)
-whenever a phase completes, so the Tokens view and the overview widget
-stay live without a fetch and without a second implementation of the
-aggregation in the browser.
+The **spend rollup** is maintained by the projection too. It HOLDS the
+per-phase records for its own 24-hour window (the newest 8 000 of them, so a
+company past that many phases in a day sees a rollup covering slightly less
+than a day rather than a wrong total) and folds them with
+`internal/tokens`, which is the same aggregation the event store's wider
+windows are folded with, so changing the window on screen cannot change
+what a phase is counted as. It ships in the snapshot and is re-pushed on
+the shared 5-second tick after any phase completed, so the Spend screen
+and the overview widget stay live without a fetch and without a second
+implementation of the aggregation in the browser. What a seat has spent
+is that rollup's per-agent row: the projection keeps no second total of
+its own.
+
+**The projection is seeded from the event store when the process starts**,
+after the broadcast subscription is attached and before the HTTP listener
+binds. Two bounded reads, each bound the projection's own: the newest 400
+persisted events for the feed, and the newest 8 000 phase records inside the
+24-hour spend window. Without it every one of these surfaces started at this
+process's boot, so a restart, a deploy or a node joining a fleet showed an
+operator a company that had apparently done nothing beside a store that
+said otherwise. An event that arrives both ways is recognised by its id and
+listed and counted once, in either order: the stream can deliver it before
+the read, and the read can find a row the publishing node wrote inline before
+the stream delivered it. History is ordered behind the live rows it predates.
+On a fleet the seed is what
+**this node** published (the event store is per node), while everything
+after the boot is the whole company's. A read that fails is logged as
+`live_projection_not_seeded` and costs the history, never the start-up:
+`GET /events` and the `tokens` query still read the store directly.
 
 ### `GET /stream/snapshot`
 
@@ -1131,7 +1156,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
 ```json
 {
   "health":    { /* the health envelope — see below */ },
-  "agents":    [ { /* /agents row: live state + tokens + live_call (the
+  "agents":    [ { /* /agents row: live state + budget meter + live_call (the
                       in-flight LLM call, or null between turns) +
                       last_error (the phase failure that stopped this
                       seat, or null) */ }, ... ],
@@ -1156,47 +1181,55 @@ its own `failed` field (a phase or turn that died) and for an event type that
 failures without re-deriving them from a type list of its own.
 
 The flag survives a restart: the event-store writer stamps a `failed` tag on
-those events, and the projection reads it back when it hydrates its feed from
-history.  `list_events` deliberately never selects the payload column, so
-without the tag every historical failure would read back as a success.
+those events, and the projection reads it back when it seeds its feed from the
+store at startup. The store's listing (`EventLog.List`) deliberately never
+selects the payload column, so without the tag every historical failure would
+read back as a success.
 
 ### The health envelope
 
-One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
+One builder (`api.Health`, assembled by `App.health`) answers `GET /health`,
 the snapshot's `health` section, and the 5-second push, so those three
 surfaces cannot disagree about whether the engine is healthy — and a
-reconnect restores every field without a second round trip.
+reconnect restores every field without a second round trip. The push carries
+the three fields a live dot needs (`status`, `in_flight`, `shutting_down`);
+the route and the snapshot carry all of them.
 
 ```json
 {
   "status": "ok",
+  "node": "node-1",
   "configured": true,
   "engine": true,
   "version": "0.4.0",
-  "started_at": "2026-04-01T12:00:00+00:00",
+  "started_at": "2026-04-01T12:00:00Z",
   "queue": "jetstream-embedded",
-  "event_store": "durable",
-  "feed_hydrated": true,
   "clients": 3,
   "in_flight": 2,
-  "engine_started_at": "2026-04-01T11:58:03+00:00",
-  "shutting_down": false
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 12,
+  "engine_started_at": "2026-04-01T11:58:03Z",
+  "seats": ["ceo", "eng"]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
+| `status` | `ok`, `unconfigured`, `shutting_down`, or the node's own diverged posture. Precedence is `shutting_down > unconfigured > posture > ok`: a draining engine is draining first, whatever else is true of it. |
+| `node` | Which process answered. It is what turns "the config apply failed" into "the config apply failed on node-2" once a load balancer sits in front of more than one. |
 | `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `engine` | Whether this process has an engine to ask. `false` where there is none, and `in_flight` / `shutting_down` / `posture` / `applied_epoch` / `engine_started_at` / `seats` are then absent. The flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
 | `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
-| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
 | `clients` | Dashboards currently connected to this API process. |
-| `in_flight` | Handler invocations mid-flight (embedded API only). |
+| `in_flight` | Turns this node is running. |
 | `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `posture` | What this node is doing about the company revision the fleet has activated: `serve`, `wait`, `shed`, `stuck` or `isolated`. See [the control plane](../concepts/control-plane.md). |
+| `applied_epoch` | The activation epoch this node has applied, which is what a `wait` or a `shed` is measured against. |
+| `seats` | The seat handles this node currently holds. |
+| `stall_lag_seconds` | How far behind this node's watched duty is, present **only** when it is behind at all: the number climbs towards the seat lease TTL, at which the watchdog ends the process. A field that was always present and usually zero would train a reader to skip the one line that must be read when it appears. |
 
 Per-socket facts — how many envelopes *this* connection dropped, how deep
 its queue is — are deliberately **not** here. The tick encodes one JSON
@@ -1243,34 +1276,43 @@ set of ten values, and which event type lands under which is in
 
 ### The live token meter
 
-`budget` carries the engine's in-memory token counters — the only figures
-that can honestly be divided into a configured cap, because both cover the
-same span: **the engine's run**. The dashboard's other two token figures
-are a 24-hour spend rollup and a 7-day per-agent total; dividing either
-into a cap produces a percentage wrong by however long the engine has been
-up.
+`budget` carries the fleet's **shared token counter** as the budget gate
+enforces it: every node's spend since the last deliberate reset
+(`POST /budgets/reset`), beside the cap in the active revision. It is the only
+figure that can honestly be divided into a configured cap, because both cover
+the same span. The dashboard's other token figures are spend rollups over a
+window of time; dividing one of those into a cap produces a percentage that is
+wrong by however much was spent outside the window.
 
-- `meter_id` identifies the reporting run. `used` is comparable only
-  within one `meter_id`; a new one means the engine restarted and every
-  prior figure is dead, so a consumer must **replace** what it holds
-  rather than merge or take a maximum.
+Every node publishes a `budget_reported` snapshot of the counter every
+**15 seconds** (`engine.BudgetReportInterval`), and the projection folds each
+one in as it arrives. A company with no cap anywhere publishes none.
+
+- `meter_id` identifies the node incarnation whose report is held. Every node
+  reads the same counter, so reports under different ids describe the same
+  figures read at different moments. A report is a complete snapshot, so a
+  consumer **replaces** what it holds rather than merging or taking a
+  maximum: a reset has to be able to lower the figure.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
-  **best-effort**: the standalone API reads an ephemeral broadcast
-  subscription that takes no acks, starts at the stream's tail on every
-  (re)connect, and lets a slow consumer miss frames rather than hold
-  them. So a report at or below the held `seq` is dropped rather than
-  merged, and a gap is closed by the next report rather than replayed.
-- `refused_at` — when the cap last turned a charge away. That, and not
-  `used >= max`, is what "exhausted" means: a refused charge increments
-  nothing, so the counter stops short of the cap by the size of the round
-  that would not fit.
-- `{}` means no engine is reporting one (the standalone API has no meter
-  of its own). Per-agent, `budget: null` means the same, or that the seat
-  has no per-agent cap at all — the engine seeds one only for a non-zero
-  `token_budget`.
+  **best-effort**: an ephemeral broadcast subscription that takes no acks,
+  starts at the stream's tail on every (re)connect, and lets a slow consumer
+  miss frames rather than hold them. So a report at or below the held `seq`
+  from the same meter is dropped, a report from another meter that was read
+  **earlier** than the held one is dropped, and a gap is closed by the next
+  report rather than replayed.
+- `refused_at` is when the cap last turned a charge away, in UTC, and empty
+  while the scope is not refusing. That, and not `used >= max`, is what
+  "exhausted" means: a refused charge increments nothing, so the counter stops
+  short of the cap by the size of the round that would not fit. The stamp is
+  kept in the shared counter beside the spend, so every node reports the same
+  one, and it clears on the scope's next admitted charge (or a reset).
+- `{}` means no report has arrived yet. Per-agent, `budget: null` means the
+  same, or that the seat has no per-agent cap at all: the engine meters a seat
+  only for a non-zero `token_budget`.
 
-It is deliberately never persisted: replaying a live meter from history
-would show a dead process's counters as the current ones.
+It is deliberately never persisted: a report is a reading of a counter that
+moves every round, so a copy replayed from history would show figures the
+counter has since left behind as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
@@ -1316,8 +1358,8 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
-| `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
+| `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
@@ -1980,58 +2022,57 @@ a store that is configured and unreadable answers `503`.
 
 ### `GET /budgets`
 
-Backs the dashboard's **Spend & budgets** screen. Three numbers describe a token
-budget and they cover three different spans, which is why any surface
-mixing them can only be wrong:
+Backs the dashboard's **Spend & budgets** screen. A token budget is described by
+two numbers that share a span, and one stamp:
 
 - the **cap** is configuration, from the active company revision;
 - **durable usage** is the fleet's shared counter, in the
   [coordination store](../concepts/coordination.md), written by every node
-  running the company and surviving restarts. It is what the engine
-  actually enforces against;
-- the **live meter** is per engine *run*. It is pushed to the dashboard as
-  `budget_reported` and resets when the process does.
+  running the company and surviving restarts, until an operator resets it. It
+  is what the engine actually enforces against, and it is the same counter the
+  [live token meter](#the-live-token-meter) pushes;
+- **`refused_at`** is when that scope last turned a charge away, kept in the
+  same counter and cleared by the scope's next admitted charge.
 
-Only the meter and the cap share a span, which is why a seat card can draw
-a bar and this screen mostly cannot. What it could never show before is the
-more useful picture — "this seat has burned 94% of its cap across two
-restarts" — because the durable half was reachable only from
-`crewlet budgets show`, which is itself a client of this route.
+What a seat *spent over a window* is not here: that is the per-agent row of the
+[spend breakdown](#get-tokensbreakdown), a different span that must not be
+divided into a cap. The cap and the durable counter are the pair that can be,
+which is how this screen can say "this seat has burned 94% of its cap across two
+restarts". That was reachable only from `crewlet budgets show` before, which is
+itself a client of this route.
 
 ```json
 {
   "durable": true,
   "org": {
     "max_tokens": 5000000, "durable_used": 1284410,
-    "durable_updated_at": "2026-06-08T07:30:02+00:00",
-    "live_used": 91200, "live_max": 5000000, "refused_at": ""
+    "durable_updated_at": "2026-06-08T07:30:02Z",
+    "refused_at": ""
   },
   "seats": [
     {
       "agent_id": "<uuid>", "role": "Engineer", "handle": "eng",
       "max_tokens": 100000, "durable_used": 99120,
-      "durable_updated_at": "2026-06-08T07:29:51+00:00",
-      "live_used": 41000, "live_max": 100000,
-      "refused_at": "2026-06-08T07:29:51+00:00"
+      "durable_updated_at": "2026-06-08T07:29:51Z",
+      "refused_at": "2026-06-08T07:29:51Z"
     }
   ]
 }
 ```
 
-Two fields carry the honesty. `durable` is `false` when the shared counter
-could not be read — a counter that cannot be read is not a counter that
-reads zero, and without the flag a database blip renders every seat at the
-bottom of its cap, which is the most reassuring possible picture drawn at
-the moment nothing is known. `live_used` / `live_max` are `null`, never
-`0`, on a node with no engine in the process: zero would let a client draw
-an empty bar and call it "nothing spent this run", a claim about a run
-that is not happening.
+`durable` carries the honesty. It is `false` when the shared counter could not
+be read: a counter that cannot be read is not a counter that reads zero, and
+without the flag a coordination blip renders every seat at the bottom of its
+cap, which is the most reassuring possible picture drawn at the moment nothing
+is known.
 
-Exhaustion is `refused_at`, the moment a charge was turned away — never
-`used >= max`. `TokenBudget` refuses a charge that would exceed the cap
-and increments nothing, so a seat charged in 3k-token rounds against a
-100k cap stalls near 99k and never compares equal to its own maximum. A
-ratio test shows a permanently blocked seat at 99% and calls it healthy.
+Exhaustion is `refused_at`, the moment a charge was turned away, never
+`durable_used >= max_tokens`. The gate refuses a charge that would exceed the
+cap and increments nothing, so a seat charged in 3k-token rounds against a 100k
+cap stalls near 99k and never compares equal to its own maximum. A ratio test
+shows a permanently blocked seat at 99% and calls it healthy. A scope known
+only for a refusal (refused on its very first charge) is listed with no spend
+and an empty `durable_updated_at`.
 
 ### `POST /budgets/reset`
 
@@ -2402,14 +2443,12 @@ Notes:
 - All lists are sorted by `total_tokens` descending; `by_turn` is
   sorted by `ended_at` descending and capped at `recent_turns`.
 - `aggregated_through` is the latest event timestamp this rollup
-  aggregated (empty when no events matched). It is a **live-folding
-  watermark**: this endpoint is a one-shot snapshot, so the dashboard
-  treats the response as a baseline and folds subsequent
-  `agent_phase_completed` events streamed over `/ws/stream` onto it,
-  skipping any event at or before the watermark (already counted) to
-  avoid double-counting. This is why the **Token Spend** widget keeps
-  climbing in lock-step with the per-agent rows instead of freezing at
-  the value of the initial fetch.
+  aggregated, and empty when no events matched. It is the rollup's own
+  freshness: the dashboard renders it as "counted through", so a reader
+  looking at a total knows how recent the last thing in it is. It is not a
+  baseline a client folds onto: the whole rollup is re-folded and pushed
+  by the server, which is what keeps one aggregation rather than a second
+  one in the browser.
 - Returns the same skeleton with zero totals (and an empty
   `aggregated_through`) when the event store is unavailable rather than
   erroring.

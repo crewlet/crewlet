@@ -144,6 +144,43 @@ func (h *fleetHarness) used(scope string) int {
 	return got
 }
 
+// usage is one scope's row of the listing, and whether it is listed at all.
+func (h *fleetHarness) usage(scope string) (coord.Usage, bool) {
+	h.t.Helper()
+	rows, err := h.f.Usage(h.ctx)
+	if err != nil {
+		h.t.Fatalf("Usage: %v", err)
+	}
+	for _, row := range rows {
+		if row.Scope == scope {
+			return row, true
+		}
+	}
+	return coord.Usage{}, false
+}
+
+// refusedAt is a scope's refusal stamp, failing when it is absent or when it
+// does not fall inside the window the caller observed around the refusal.
+//
+// A WINDOW rather than an instant, because Charge takes no clock: the backend
+// stamps the wall clock, and the property worth pinning is that the stamp is
+// the time of THIS refusal rather than zero, a placeholder, or a stale one.
+func (h *fleetHarness) refusedAt(scope string, from, to time.Time) time.Time {
+	h.t.Helper()
+	row, listed := h.usage(scope)
+	if !listed {
+		h.t.Fatalf("%s is not listed at all, so its refusal was not recorded", scope)
+	}
+	if row.RefusedAt.IsZero() {
+		h.t.Fatalf("%s carries no refusal stamp: %+v", scope, row)
+	}
+	if row.RefusedAt.Before(from.Add(-time.Second)) || row.RefusedAt.After(to.Add(time.Second)) {
+		h.t.Fatalf("%s refusal stamp %v is outside the refusal's own window [%v, %v]",
+			scope, row.RefusedAt, from, to)
+	}
+	return row.RefusedAt
+}
+
 // ---- the valve ---------------------------------------------------------- //
 
 var valveCases = []fleetCase{{
@@ -906,6 +943,45 @@ var budgetCases = []fleetCase{{
 		}
 	},
 }, {
+	name: "an exhausted company is reported before a charge the seat cap can never hold",
+	fn: func(h *fleetHarness) {
+		// The same ordering rule, reached through the other door. A charge
+		// larger than the seat's WHOLE cap is screened before anything is
+		// written, and a screen that tested each scope's cap alone named
+		// the seat while the company was out of room too: the org holds 90
+		// of 100 and 50 more fits neither. An operator sent to raise the
+		// seat's ceiling would raise it and still be refused.
+		if got := h.charge(testSeat, 90, 100, 0); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		got := h.charge(testSeat, 50, 100, 40)
+		if got.OK {
+			h.t.Fatal("a charge past both caps was accepted")
+		}
+		if got.RefusedScope != "org" || got.RefusedUsed != 90 || got.RefusedLimit != 100 {
+			h.t.Fatalf("refusal = %+v, want the org scope at 90 of 100", got)
+		}
+		if h.used(coord.OrgScope) != 90 || h.used(testSeat) != 90 {
+			h.t.Fatal("a refused charge still moved a counter")
+		}
+	},
+}, {
+	name: "a charge the seat cap can never hold names the seat while the company has room",
+	fn: func(h *fleetHarness) {
+		// The counterpart, so the case above cannot be passed by naming
+		// the org for every oversized charge.
+		got := h.charge(testSeat, 50, 100, 40)
+		if got.OK {
+			h.t.Fatal("a charge larger than the seat's whole cap was accepted")
+		}
+		if got.RefusedScope != "agent" || got.RefusedLimit != 40 {
+			h.t.Fatalf("refusal = %+v, want the agent scope and its limit", got)
+		}
+		if h.used(coord.OrgScope) != 0 || h.used(testSeat) != 0 {
+			h.t.Fatal("a refused charge still moved a counter")
+		}
+	},
+}, {
 	name: "a charge larger than the whole cap is refused before anything is written",
 	fn: func(h *fleetHarness) {
 		// The first-ever charge, against an empty counter. A backend
@@ -1048,6 +1124,121 @@ var budgetCases = []fleetCase{{
 		}
 	},
 }, {
+	name: "a refusal is recorded on the scope that refused and on no other",
+	fn: func(h *fleetHarness) {
+		// "Exhausted" is a refusal, never used >= max: a refused charge
+		// increments nothing, so a counter stalls short of its cap by the
+		// size of the round that did not fit. The stamp is the only honest
+		// record of the gate saying no, and it belongs to the scope that
+		// said it.
+		if got := h.charge(testSeat, 90, 100, 0); !got.OK {
+			h.t.Fatalf("the first charge was refused: %+v", got)
+		}
+		from := time.Now()
+		if got := h.charge(testSeat, 50, 100, 0); got.RefusedScope != "org" {
+			h.t.Fatalf("refusal = %+v, want the org scope", got)
+		}
+		h.refusedAt(coord.OrgScope, from, time.Now())
+		if row, _ := h.usage(testSeat); !row.RefusedAt.IsZero() {
+			h.t.Fatalf("the seat carries a refusal the company made: %+v", row)
+		}
+		if row, _ := h.usage(coord.OrgScope); row.Used != 90 {
+			h.t.Fatalf("org used = %d after a refusal, want the 90 it held", row.Used)
+		}
+
+		other := "agent:44444444-4444-4444-4444-444444444444"
+		from = time.Now()
+		if got := h.charge(other, 5, 100, 4); got.RefusedScope != "agent" {
+			h.t.Fatalf("refusal = %+v, want the agent scope", got)
+		}
+		h.refusedAt(other, from, time.Now())
+		if row, _ := h.usage(other); row.Used != 0 || !row.UpdatedAt.IsZero() {
+			// Listed, because a seat refused on its first charge has
+			// refused one; but it has been charged nothing and never.
+			h.t.Fatalf("a scope known only for its refusal reads %+v, want no spend and no charge time", row)
+		}
+	},
+}, {
+	name: "an admitted charge clears the refusals of both scopes it charged",
+	fn: func(h *fleetHarness) {
+		// A cap raised, a counter reset or a smaller round that fits: the
+		// scope has room again, and a dashboard still saying "refusing
+		// charges" would send an operator to fix what is already fixed.
+		h.charge(testSeat, 95, 100, 0)
+		h.charge(testSeat, 50, 100, 0) // org refuses
+		h.charge(testSeat, 5, 0, 4)    // seat refuses
+		if row, _ := h.usage(coord.OrgScope); row.RefusedAt.IsZero() {
+			h.t.Fatal("setup: the org refusal was not recorded")
+		}
+		if row, _ := h.usage(testSeat); row.RefusedAt.IsZero() {
+			h.t.Fatal("setup: the seat refusal was not recorded")
+		}
+		if got := h.charge(testSeat, 5, 100, 200); !got.OK {
+			h.t.Fatalf("a charge that fits both caps was refused: %+v", got)
+		}
+		for _, scope := range []string{coord.OrgScope, testSeat} {
+			if row, _ := h.usage(scope); !row.RefusedAt.IsZero() {
+				h.t.Fatalf("%s still reads as refusing after an admitted charge: %+v", scope, row)
+			}
+		}
+	},
+}, {
+	name: "a charge refused overall clears no refusal",
+	fn: func(h *fleetHarness) {
+		// The org would have had room for this charge and the SEAT refused
+		// it. A backend that writes the org before testing the seat must
+		// not let that write erase the company's own earlier refusal,
+		// or whether the stamp survives depends on the order a
+		// backend tests its scopes in.
+		h.charge(testSeat, 90, 100, 0)
+		from := time.Now()
+		h.charge(testSeat, 50, 100, 0) // org refuses
+		stamped := h.refusedAt(coord.OrgScope, from, time.Now())
+
+		got := h.charge(testSeat, 5, 100, 92) // org has room, the seat does not
+		if got.RefusedScope != "agent" {
+			h.t.Fatalf("refusal = %+v, want the agent scope", got)
+		}
+		row, _ := h.usage(coord.OrgScope)
+		if !row.RefusedAt.Equal(stamped) {
+			h.t.Fatalf("org refusal stamp = %v, want the %v it held: a charge refused "+
+				"overall cleared it", row.RefusedAt, stamped)
+		}
+		if row.Used != 90 {
+			h.t.Fatalf("org used = %d, want 90: the refused charge was not unwound", row.Used)
+		}
+	},
+}, {
+	name: "a charge screened against a whole cap still records its refusal",
+	fn: func(h *fleetHarness) {
+		// The screen refuses before any counter is written. It is still
+		// the gate saying no, and a backend that stamped only on the
+		// compare-and-swap path would leave the largest refusals of all
+		// invisible.
+		from := time.Now()
+		if got := h.charge(testSeat, 1_000_000, 10, 0); got.RefusedScope != "org" {
+			h.t.Fatalf("refusal = %+v, want the org scope", got)
+		}
+		h.refusedAt(coord.OrgScope, from, time.Now())
+		if h.used(coord.OrgScope) != 0 {
+			h.t.Fatal("recording a refusal moved the counter")
+		}
+	},
+}, {
+	name: "a reset clears a refusal with the spend",
+	fn: func(h *fleetHarness) {
+		h.charge(testSeat, 20, 10, 0)
+		if row, _ := h.usage(coord.OrgScope); row.RefusedAt.IsZero() {
+			h.t.Fatal("setup: the org refusal was not recorded")
+		}
+		if _, err := h.f.Reset(h.ctx, coord.OrgScope); err != nil {
+			h.t.Fatalf("Reset: %v", err)
+		}
+		if row, listed := h.usage(coord.OrgScope); listed {
+			h.t.Fatalf("the reset scope is still listed: %+v", row)
+		}
+	},
+}, {
 	name: "concurrent charges add up",
 	fn: func(h *fleetHarness) {
 		// The property a compare-and-swap buys and a read-modify-write
@@ -1064,6 +1255,69 @@ var budgetCases = []fleetCase{{
 		if got := h.used(coord.OrgScope); got != callers*10 {
 			h.t.Fatalf("org spend = %d after %d concurrent charges of 10, want %d",
 				got, callers, callers*10)
+		}
+	},
+}, {
+	name: "a post-charge records spend that overran both caps",
+	fn: func(h *fleetHarness) {
+		// The spend already happened (a detached coding run, collected
+		// long after it started), so nothing can refuse it. Through the
+		// gate it was recorded NOT AT ALL whenever it did not fit, which
+		// is exactly when a cap binds, and the next round was admitted
+		// against room the run had already used.
+		if got := h.charge(testSeat, 90, 100, 100); !got.OK {
+			h.t.Fatalf("setup charge refused: %+v", got)
+		}
+		got, err := h.f.PostCharge(h.ctx, testSeat, 50)
+		if err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		if !got.OK || got.OrgUsed != 140 || got.AgentUsed != 140 {
+			h.t.Fatalf("post-charge = %+v, want OK at 140 on both counters", got)
+		}
+		if h.used(coord.OrgScope) != 140 || h.used(testSeat) != 140 {
+			h.t.Fatal("the post-charge did not reach both counters")
+		}
+		if next := h.charge(testSeat, 1, 100, 100); next.OK || next.RefusedScope != "org" {
+			h.t.Fatalf("next charge = %+v, want the org to refuse against the recorded run", next)
+		}
+	},
+}, {
+	name: "a post-charge leaves every refusal stamp as it was",
+	fn: func(h *fleetHarness) {
+		// It is not a decision about room, so it neither says the gate
+		// turned a charge away nor that it had room for one: a refusing
+		// company stays refusing, and a seat that never refused is not
+		// stamped because a run took it past its cap.
+		h.charge(testSeat, 90, 100, 0)
+		from := time.Now()
+		h.charge(testSeat, 50, 100, 0) // org refuses
+		stamped := h.refusedAt(coord.OrgScope, from, time.Now())
+
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 30); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		if row, _ := h.usage(coord.OrgScope); !row.RefusedAt.Equal(stamped) || row.Used != 120 {
+			h.t.Fatalf("org = %+v, want 120 used and the refusal stamped at %v kept", row, stamped)
+		}
+		if row, _ := h.usage(testSeat); !row.RefusedAt.IsZero() {
+			h.t.Fatalf("the seat reads as refusing after a post-charge: %+v", row)
+		}
+	},
+}, {
+	name: "a post-charge of nothing records nothing, and one needs a seat",
+	fn: func(h *fleetHarness) {
+		if got, err := h.f.PostCharge(h.ctx, testSeat, 0); err != nil || !got.OK {
+			h.t.Fatalf("PostCharge(0) = (%+v, %v), want OK", got, err)
+		}
+		if _, listed := h.usage(coord.OrgScope); listed {
+			h.t.Fatal("a post-charge of zero created a counter")
+		}
+		if _, err := h.f.PostCharge(h.ctx, "", 5); err == nil {
+			h.t.Fatal("a post-charge with no seat scope was accepted")
+		}
+		if _, listed := h.usage(coord.OrgScope); listed {
+			h.t.Fatal("a post-charge with no seat scope still charged the org")
 		}
 	},
 }}

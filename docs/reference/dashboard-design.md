@@ -941,6 +941,16 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
 
 Every empty state names what would fill it.
 
+**And a restart is not an empty company.** The pushed surfaces come from the
+engine's live projection, which is seeded from the node's own event store when
+the process starts: the newest events for the activity feed, and the 24-hour
+spend window the Overview and Spend screens are folded from. Until that read
+existed, every one of these screens started blank after a restart, a deploy or
+a node joining a fleet, which is the one empty state a reader has no way to
+question. What the seed cannot cover is a fleet peer's history, because the
+event store is per node; that is what the `events` and `tokens` queries are
+for, and what the window badge on Spend names.
+
 ---
 
 ## How it is built

@@ -203,6 +203,7 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 			MaxTokens        int    `json:"max_tokens"`
 			DurableUsed      int    `json:"durable_used"`
 			DurableUpdatedAt string `json:"durable_updated_at"`
+			RefusedAt        string `json:"refused_at"`
 		} `json:"org"`
 		Seats []struct {
 			Handle           string `json:"handle"`
@@ -210,6 +211,7 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 			MaxTokens        int    `json:"max_tokens"`
 			DurableUsed      int    `json:"durable_used"`
 			DurableUpdatedAt string `json:"durable_updated_at"`
+			RefusedAt        string `json:"refused_at"`
 		} `json:"seats"`
 	}
 	if err := client.get(context.Background(), "/query/budgets", &answer); err != nil {
@@ -222,9 +224,15 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 		return errors.New("the node could not read the counter; " +
 			"its `durable` flag is false, so nothing here can be stated")
 	}
-	fmt.Fprintf(stdout, "%-32s %12s %12s  %s\n", "SCOPE", "USED", "CAP", "LAST CHARGED")
-	fmt.Fprintf(stdout, "%-32s %12d %12s  %s\n", "org", answer.Org.DurableUsed,
-		capOrDash(answer.Org.MaxTokens), dashIfEmpty(answer.Org.DurableUpdatedAt))
+	// REFUSING SINCE is the column that says a scope is out, and USED
+	// against CAP is not: a refused charge increments nothing, so a seat
+	// charged in rounds stalls short of its cap and its row would otherwise
+	// read as headroom.
+	const row = "%-32s %12s %12s  %-30s  %s\n"
+	fmt.Fprintf(stdout, row, "SCOPE", "USED", "CAP", "LAST CHARGED", "REFUSING SINCE")
+	fmt.Fprintf(stdout, row, "org", strconv.Itoa(answer.Org.DurableUsed),
+		capOrDash(answer.Org.MaxTokens), dashIfEmpty(answer.Org.DurableUpdatedAt),
+		dashIfEmpty(answer.Org.RefusedAt))
 	for _, seat := range answer.Seats {
 		if seat.DurableUsed == 0 && seat.MaxTokens == 0 {
 			// A seat that has spent nothing under no cap has nothing
@@ -232,9 +240,9 @@ func budgetsShow(args []string, stdout, stderr io.Writer) error {
 			// seat in a large company buries the ones that matter.
 			continue
 		}
-		fmt.Fprintf(stdout, "%-32s %12d %12s  %s\n",
-			seat.Handle, seat.DurableUsed, capOrDash(seat.MaxTokens),
-			dashIfEmpty(seat.DurableUpdatedAt))
+		fmt.Fprintf(stdout, row,
+			seat.Handle, strconv.Itoa(seat.DurableUsed), capOrDash(seat.MaxTokens),
+			dashIfEmpty(seat.DurableUpdatedAt), dashIfEmpty(seat.RefusedAt))
 	}
 	return nil
 }

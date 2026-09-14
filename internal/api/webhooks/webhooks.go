@@ -490,7 +490,7 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 		// provider actually sent.
 		if err := r.events.Append(ctx, store.EventRecord{
 			ID: id, Type: d.label, Source: d.source, Time: at,
-			Category: "webhook", Summary: d.summary, Actor: d.source,
+			Category: events.WebhookCategory, Summary: d.summary, Actor: d.source,
 			TraceID: trace.TraceID, SpanID: trace.SpanID,
 			Payload: json.RawMessage(d.raw),
 		}); err != nil {
@@ -506,8 +506,8 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 	r.stream.Ingest(livestate.Envelope{
 		ID: id, Type: d.label, Timestamp: at.Format(time.RFC3339Nano),
 		Source: d.source, Actor: d.source, Summary: d.summary,
-		Category: "webhook", TraceID: trace.TraceID, SpanID: trace.SpanID,
-		Topic:   "crewlet.webhooks." + d.source,
+		Category: events.WebhookCategory, TraceID: trace.TraceID, SpanID: trace.SpanID,
+		Topic:   livestate.WebhookTopic(d.source),
 		Payload: d.body,
 	})
 }

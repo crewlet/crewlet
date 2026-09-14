@@ -144,10 +144,12 @@ type Rollup struct {
 
 	// AggregatedThrough is the latest timestamp this rollup counted.
 	//
-	// A HIGH-WATER MARK, and it is load-bearing: the dashboard folds live
-	// phase completions onto this baseline, and uses the watermark to skip
-	// the ones it already counted. Without it an event that is both in the
-	// baseline and redelivered on the live stream is counted twice.
+	// THE ROLLUP'S OWN FRESHNESS, rendered as "counted through": a total
+	// with no instant beside it cannot be told from a stale one. It is not
+	// a baseline anything folds onto. The client used to do that, with this
+	// as the watermark it skipped already-counted events by; the server
+	// holds the records and re-folds the whole window now, which is what
+	// leaves exactly one implementation of the aggregation.
 	AggregatedThrough string `json:"aggregated_through"`
 }
 

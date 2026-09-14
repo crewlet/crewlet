@@ -9,53 +9,32 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 )
 
-// --- token accounting --------------------------------------------------- //
+// --- what a seat has spent ---------------------------------------------- //
 
-func TestTurnTokensAccumulate(t *testing.T) {
+func TestATurnCompletionCarriesNoSecondSpendTotal(t *testing.T) {
 	t.Parallel()
+	// What a seat SPENT is the spend rollup's per-agent row, folded from
+	// the phase records by internal/tokens. The overlay used to keep its
+	// own sum of turn totals as well: a second aggregation of the same
+	// spend, over whatever turns this process happened to have seen, that
+	// no store read could ever reproduce. The turn still moves the seat.
 	s := livestate.New()
-	for i, tokens := range []int{10, 5} {
-		s.Apply(env("agent_turn_completed", map[string]any{
-			"role": "Lead", "input_tokens": tokens, "output_tokens": tokens,
-			"total_tokens": tokens * 2,
-		}, id(string(rune('a'+i)))))
-	}
-	got := overlayOf(t, s, "Lead")
-	if got.InputTokens != 15 || got.OutputTokens != 15 || got.TotalTokens != 30 {
-		t.Errorf("tokens = %d/%d/%d, want 15/15/30",
-			got.InputTokens, got.OutputTokens, got.TotalTokens)
-	}
-}
+	s.Apply(env("agent_phase_started", map[string]any{"role": "Lead", "turn_id": "tn-1", "phase": "execute"}))
+	change := s.Apply(env("agent_turn_completed", map[string]any{
+		"role": "Lead", "turn_id": "tn-1", "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+	}, id("turn"), at("2026-06-14T12:00:05Z")))
 
-func TestARedeliveredTurnIsCountedOnce(t *testing.T) {
-	t.Parallel()
-	// The dedupe exists so a hydrated turn is not counted a second time
-	// when the same turn also arrives on the live stream.
-	s := livestate.New()
-	turn := env("agent_turn_completed", map[string]any{
-		"role": "Lead", "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
-	})
-	s.Apply(turn)
-	s.Apply(turn)
-
-	if got := overlayOf(t, s, "Lead").TotalTokens; got != 12 {
-		t.Errorf("total tokens = %d, want 12: a redelivery was counted twice", got)
+	if _, moved := change.Agents["Lead"]; !moved {
+		t.Error("a turn ending did not move its seat")
 	}
-}
-
-func TestTurnsWithNoEventIDAreEachCounted(t *testing.T) {
-	t.Parallel()
-	// The counterfactual: the dedupe is keyed on the event id, so an
-	// envelope carrying none cannot be deduped — and must not be silently
-	// collapsed with an unrelated one.
-	s := livestate.New()
-	for range 2 {
-		s.Apply(env("agent_turn_completed", map[string]any{
-			"role": "Lead", "total_tokens": 5,
-		}, id("")))
+	rows := s.MergeAgents([]map[string]any{{"role": "Lead"}})
+	for _, key := range []string{"input_tokens", "output_tokens", "total_tokens"} {
+		if v, present := rows[0][key]; present {
+			t.Errorf("the merged seat row carries %s = %v, a total no rollup agrees with", key, v)
+		}
 	}
-	if got := overlayOf(t, s, "Lead").TotalTokens; got != 10 {
-		t.Errorf("total tokens = %d, want 10", got)
+	if got := s.SpendRecords(); len(got) != 0 {
+		t.Errorf("a turn completion became %d spend records; spend is folded from phases", len(got))
 	}
 }
 
@@ -394,9 +373,10 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 	// only int would report every token count as zero on exactly the path
 	// production uses, and never in a test that built its payload by hand.
 	raw := []byte(`{
-		"id": "e1", "type": "agent_turn_completed", "timestamp": "2026-06-14T12:00:00Z",
+		"id": "e1", "type": "agent_phase_completed", "timestamp": "2026-06-14T12:00:00Z",
 		"category": "system",
-		"payload": {"role": "Lead", "input_tokens": 12, "output_tokens": 3, "total_tokens": 15}
+		"payload": {"role": "Lead", "turn_id": "tn-1", "phase": "execute",
+			"input_tokens": 12, "output_tokens": 3, "total_tokens": 15}
 	}`)
 	var e livestate.Envelope
 	if err := json.Unmarshal(raw, &e); err != nil {
@@ -405,9 +385,9 @@ func TestNumbersSurviveTheWireTheyActuallyArriveOn(t *testing.T) {
 	s := livestate.New()
 	s.Apply(&e)
 
-	got := overlayOf(t, s, "Lead")
-	if got.InputTokens != 12 || got.TotalTokens != 15 {
-		t.Errorf("tokens = %d/%d, want 12/15 off the wire", got.InputTokens, got.TotalTokens)
+	records := s.SpendRecords()
+	if len(records) != 1 || records[0].InputTokens != 12 || records[0].TotalTokens != 15 {
+		t.Errorf("records = %+v, want one at 12/15 off the wire", records)
 	}
 }
 
@@ -417,11 +397,11 @@ func TestAMistypedNumberReadsAsZeroRatherThanPanicking(t *testing.T) {
 	// where a count belongs is bad data, not a reason to take the
 	// projection down.
 	s := livestate.New()
-	s.Apply(env("agent_turn_completed", map[string]any{
-		"role": "Lead", "total_tokens": "lots",
+	s.Apply(env("agent_phase_completed", map[string]any{
+		"role": "Lead", "turn_id": "tn-1", "phase": "execute", "total_tokens": "lots",
 	}))
-	if got := overlayOf(t, s, "Lead").TotalTokens; got != 0 {
-		t.Errorf("total tokens = %d, want 0", got)
+	if got := s.SpendRecords(); len(got) != 1 || got[0].TotalTokens != 0 {
+		t.Errorf("records = %+v, want one at 0 tokens", got)
 	}
 }
 
@@ -449,7 +429,7 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	}
 }
 
-// THE LIVE ROW AND THE HYDRATED ROW AGREE ABOUT THE SAME EVENT.
+// THE PUSHED FRAME AND THE FEED ROW AGREE ABOUT THE SAME EVENT.
 //
 // `failed` is derived once, in Apply, and stamped onto the envelope the client
 // is handed as well as onto the feed row the snapshot carries. It used to be

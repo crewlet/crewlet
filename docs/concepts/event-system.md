@@ -261,8 +261,8 @@ PromptSize                 # one phase's final prompt, measured. A separate row
 
 **Three types are published and deliberately never stored**, each for a stated
 reason — `AgentTurnProgress` (a live-only per-round signal whose durable record
-is `AgentPhaseCompleted`), `BudgetReported` (a snapshot of in-memory meters
-that mean nothing outside the run that produced them) and `RawWebhook` (the
+is `AgentPhaseCompleted`), `BudgetReported` (a snapshot of the shared token counter
+that the next report supersedes) and `RawWebhook` (the
 delivery is already a row). The first two still drive the live projection. See
 the exclusions table in the Deployment page above.
 

@@ -3,9 +3,13 @@
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
 // reads — and maintains, per agent role: the seat's live state, its current
-// task, phase and iteration, cumulative token totals, and the IN-FLIGHT LLM
-// call. It solves two problems, and both are worth stating because they are why
-// this exists at all rather than the dashboard querying the store.
+// task, phase and iteration, its live token meter, and the IN-FLIGHT LLM call.
+// What a seat has SPENT is not held per seat: it is the per-agent row of the
+// spend rollup, folded from the same records by internal/tokens, so a seat
+// card and the Spend screen cannot disagree about one seat.
+//
+// It solves two problems, and both are worth stating because they are why this
+// exists at all rather than the dashboard querying the store.
 //
 // REFRESH SURVIVAL. agent_turn_progress events are stream-only — the event
 // store drops them — so the durable record of a turn appears only once its
@@ -48,16 +52,16 @@ const (
 	// EventFeedLimit is how many persisted-category events the projection
 	// retains for the activity feed — and the number a snapshot ships.
 	//
-	// ONE number: the ring, the hydration read and the snapshot all derive
-	// from it. They used to be three (400 retained, 150 sent, 250 kept
+	// ONE number: the ring, the startup seed's read and the snapshot all
+	// derive from it. They used to be three (400 retained, 150 sent, 250 kept
 	// client-side), so a tab streamed its feed up to 250 rows and then a
 	// refresh visibly snapped it back to 150, while 250 of the server's
 	// rows could never be delivered at all.
 	EventFeedLimit = 400
 
-	// dedupeLimit caps the id sets that stop a hydrated turn being counted
-	// again when the same turn also arrives on the live stream. The window
-	// they need to cover is the hydration overlap plus any redelivery —
+	// dedupeLimit caps the id sets that stop a seeded phase being counted
+	// again when the same phase also arrives on the live stream. The window
+	// they need to cover is the seeding overlap plus any redelivery:
 	// minutes, not the process lifetime.
 	dedupeLimit = 8000
 
@@ -68,12 +72,16 @@ const (
 	// holds. Any wider window the Tokens view offers is a store query.
 	LiveSpendWindow = 24 * time.Hour
 
-	// spendRecordLimit is a memory and latency backstop on retained
+	// SpendRecordLimit is a memory and latency backstop on retained
 	// per-phase records. The real bound is the window above; this only
 	// binds for an org emitting more than this in a day. Truncation drops
 	// the OLDEST records, so an org past the cap sees a rollup covering
 	// slightly less than a day rather than a wrong total.
-	spendRecordLimit = 8000
+	//
+	// Exported because the startup seed reads no more than this from the
+	// store: a record past the cap would be dropped on arrival, so reading
+	// it costs the seed's time budget and buys nothing.
+	SpendRecordLimit = 8000
 
 	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
 	// without a completion.
@@ -148,10 +156,6 @@ type agentLive struct {
 	currentPhase     string
 	currentIteration int
 
-	inputTokens  int
-	outputTokens int
-	totalTokens  int
-
 	afkReason string
 	lastError *ErrorInfo
 	liveCall  *LiveCall
@@ -168,9 +172,6 @@ func (a *agentLive) overlay() Overlay {
 		RuntimeID:        a.runtimeID,
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
-		InputTokens:      a.inputTokens,
-		OutputTokens:     a.outputTokens,
-		TotalTokens:      a.totalTokens,
 		LiveCall:         a.liveCall.clone(),
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
@@ -200,9 +201,14 @@ type LiveState struct {
 	feed      []FeedRow
 	feedLimit int
 
-	// countedTurns and countedPhases are the id sets that stop a hydrated
-	// turn being counted twice against a streamed one.
-	countedTurns  *boundedSet[struct{}]
+	// feedIDs indexes the ids the ring holds, so an event is listed ONCE
+	// however it arrived: off the stream, out of the store at startup, or
+	// both, in either order. Exact rather than bounded like the sets below,
+	// because it tracks the ring and shrinks with it: see trimFeed.
+	feedIDs map[string]struct{}
+
+	// countedPhases is the id set that stops a seeded phase being counted
+	// twice against a streamed one.
 	countedPhases *boundedSet[struct{}]
 
 	// finishedCalls maps a phase invocation to the instant its completion
@@ -229,6 +235,9 @@ type LiveState struct {
 	spend []spendEntry
 
 	budget OrgBudget
+	// budgetAt is when the held report was read, the guard against a
+	// delayed report from another node. Internal, never re-emitted.
+	budgetAt stamp
 
 	// now is injectable so a test can pin the clock the sandbox sweep
 	// reads. Nil takes the wall clock.
@@ -241,7 +250,7 @@ func New(opts ...Option) *LiveState {
 		agents:        map[string]*agentLive{},
 		sandboxes:     map[string]*SandboxEntry{},
 		feedLimit:     EventFeedLimit,
-		countedTurns:  newBoundedSet[struct{}](dedupeLimit),
+		feedIDs:       map[string]struct{}{},
 		countedPhases: newBoundedSet[struct{}](dedupeLimit),
 		finishedCalls: newBoundedSet[stamp](dedupeLimit),
 	}
@@ -451,12 +460,11 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	// takes one: a value copy would be stamped and thrown away.
 	env.Failed = types.Failed(env.Type, flag(payload, "failed"), false)
 
-	// The live token meters. Stream-only for the same reason the in-flight
-	// call is, and one stronger: these figures describe ONE engine run, so
-	// a persisted copy replayed from history would show a dead process's
-	// counters as the current ones.
+	// The live token meters. Stream-only: a report is a snapshot of a counter
+	// that moves every round, so a copy replayed from history would show
+	// figures the counter left behind long ago as the current ones.
 	if env.Type == "budget_reported" {
-		return s.applyBudget(payload)
+		return s.applyBudget(*env, payload)
 	}
 
 	// The in-flight call is stream-only: update it, but never let it into
@@ -468,10 +476,15 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		return change
 	}
 
-	// Everything else carrying a category is a persisted event — mirror it
-	// into the activity buffer.
+	// Everything else carrying a category is a persisted event, mirrored into
+	// the activity buffer once by id.
+	//
+	// The push is owed whether or not the row was new. A row the startup seed
+	// already listed came out of the store without its payload, and the
+	// envelope is the only frame that carries it: a client keeps a completed
+	// phase's payload beside its feed, and dedupes the feed row itself by id.
 	if env.Category != "" {
-		s.recordEvent(env, payload)
+		s.recordEvent(env)
 		change.Events = true
 	}
 
@@ -496,10 +509,6 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		agent.runtimeID = id
 	}
 
-	if env.Type == "agent_turn_completed" {
-		s.addTurnTokens(agent, *env, payload)
-		change.agentMoved(role)
-	}
 	if s.applyState(agent, *env, payload) {
 		change.agentMoved(role)
 	}
@@ -530,8 +539,9 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// A spawn is a NEW instance of the seat, so whatever stopped the
 		// last one is not this one's state. Without this the sticky-AFK
 		// hold outlives an engine restart and a healthy seat renders as
-		// broken until it happens to do some work.
-		if agent.state == "offline" || agent.state == "terminated" || agent.state == "afk" {
+		// broken until it happens to do some work. A seat the projection
+		// knew nothing about is idle from here too.
+		if agent.state == "" || agent.state == "terminated" || agent.state == "afk" {
 			agent.state = "idle"
 			agent.afkReason = ""
 			agent.lastError = nil
@@ -648,16 +658,31 @@ func endTurn(agent *agentLive, turnID string) {
 	agent.liveCall = nil
 }
 
+// ensureAgent returns the live entry for a role, creating one that claims NO
+// state.
+//
+// UNKNOWN, not offline, is what a new entry knows. Several things create one
+// without saying anything about whether the seat is running: a meter report
+// names every capped seat, and a spend record names the seat it billed. The
+// overlay used to start at "offline", and a merged overlay OVERWRITES the
+// roster's own state, so the first meter report after a boot turned every
+// capped seat this node was serving from idle to offline on every open
+// dashboard, and it stayed that way until the seat next took a turn.
 func (s *LiveState) ensureAgent(role string) *agentLive {
 	agent := s.agents[role]
 	if agent == nil {
-		agent = &agentLive{role: role, state: "offline"}
+		agent = &agentLive{role: role}
 		s.agents[role] = agent
 	}
 	return agent
 }
 
-func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
+// recordEvent lists one persisted event in the feed, unless the feed already
+// lists it.
+func (s *LiveState) recordEvent(env *Envelope) {
+	if !s.admitFeedID(env.ID) {
+		return
+	}
 	row := FeedRow{
 		ID: env.ID, Type: env.Type, Timestamp: env.Timestamp,
 		Source: env.Source, Actor: env.Actor, Summary: env.Summary,
@@ -665,29 +690,49 @@ func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
 		ParentSpanID: env.ParentSpanID, Topic: env.Topic,
 		// Read off the envelope Apply just stamped, rather than derived a
 		// second time: one derivation is what keeps the live row and the
-		// hydrated one agreeing about the same event.
+		// seeded one agreeing about the same event.
 		Failed: env.Failed,
 	}
 	s.feed = append(s.feed, row)
-	if len(s.feed) > s.feedLimit {
-		// Re-sliced forward, which is enough for the same reason it is in
-		// boundedSet: the remaining capacity shrinks with every drop, so
-		// the next append past it reallocates and releases the evicted
-		// rows with the old array.
-		s.feed = s.feed[len(s.feed)-s.feedLimit:]
-	}
+	s.trimFeed()
 }
 
-func (s *LiveState) addTurnTokens(agent *agentLive, env Envelope, payload map[string]any) {
-	if env.ID != "" {
-		if s.countedTurns.has(env.ID) {
-			return
-		}
-		s.countedTurns.put(env.ID, struct{}{})
+// admitFeedID records that the feed lists an id, reporting false when it
+// already did.
+//
+// An EMPTY id is always admitted. Every stored row has one and so does every
+// envelope the engine builds, so a blank is a producer's bug; it is still
+// listed, rather than collapsed with some unrelated row that also lacked one.
+func (s *LiveState) admitFeedID(id string) bool {
+	if id == "" {
+		return true
 	}
-	agent.inputTokens += num(payload, "input_tokens")
-	agent.outputTokens += num(payload, "output_tokens")
-	agent.totalTokens += num(payload, "total_tokens")
+	if _, listed := s.feedIDs[id]; listed {
+		return false
+	}
+	s.feedIDs[id] = struct{}{}
+	return true
+}
+
+// trimFeed drops the oldest rows past the ring's limit, and their ids with
+// them.
+//
+// The ids go too because the index is the ring's own, not a history of every
+// id ever seen: kept, it would grow for the life of a process the ring exists
+// to keep bounded.
+func (s *LiveState) trimFeed() {
+	over := len(s.feed) - s.feedLimit
+	if over <= 0 {
+		return
+	}
+	for _, row := range s.feed[:over] {
+		delete(s.feedIDs, row.ID)
+	}
+	// Re-sliced forward, which is enough for the same reason it is in
+	// boundedSet: the remaining capacity shrinks with every drop, so the
+	// next append past it reallocates and releases the evicted rows with
+	// the old array.
+	s.feed = s.feed[over:]
 }
 
 // callKey is the identity of one phase invocation, shared by both its events.

@@ -185,6 +185,28 @@ func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	}
 }
 
+func TestAnUnconfiguredNodeSaysSoOverItsPosture(t *testing.T) {
+	t.Parallel()
+	// The declared precedence puts unconfigured above a posture, and a node
+	// whose FIRST apply failed is both: it has no revision, so it discards
+	// every inbound webhook, and it reports a diverged posture about the
+	// epoch it could not reach. The status names the first; the posture
+	// still travels in its own field.
+	for _, posture := range []string{"shed", "stuck", "isolated"} {
+		a := newApp(t, api.Options{Runtime: &fakeRuntime{
+			state: api.RuntimeState{Posture: posture},
+		}})
+		_, body := get(t, a, "/health")
+		if body["status"] != api.StatusUnconfigured {
+			t.Errorf("posture %q on an unconfigured node: status = %v, want unconfigured",
+				posture, body["status"])
+		}
+		if body["posture"] != posture {
+			t.Errorf("posture field = %v, want %q kept beside the status", body["posture"], posture)
+		}
+	}
+}
+
 // --- readiness ----------------------------------------------------------- //
 
 func TestReadinessNeedsAConfiguredNode(t *testing.T) {

@@ -25,6 +25,10 @@ func (c counters) Charge(context.Context, string, int, int, int) (coord.Spend, e
 	return coord.Spend{}, errors.New("not used by these cases")
 }
 
+func (c counters) PostCharge(context.Context, string, int) (coord.Spend, error) {
+	return coord.Spend{}, errors.New("not used by these cases")
+}
+
 func (c counters) Usage(context.Context) ([]coord.Usage, error) { return nil, nil }
 func (c counters) Reset(context.Context, string) (int, error)   { return 0, nil }
 

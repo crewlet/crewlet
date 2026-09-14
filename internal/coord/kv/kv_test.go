@@ -613,3 +613,124 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		t.Fatalf("PreferredResources(seat) = %v, %v; want the three seat hints", hints, err)
 	}
 }
+
+// AN ADMITTED CHARGE CLEARS ONLY THE REFUSAL IT SAW.
+//
+// The contract suite cannot reach this interleaving: a charge is admitted
+// while the scope carries a refusal, another caller is refused and stamps a
+// newer one, and only then does the first caller clear. Its stamp is stale by
+// then, and the newer refusal is still true, so a clear that ignored which
+// stamp it saw would hide a scope that is refusing right now.
+func TestAnAdmittedChargeLeavesANewerRefusalStanding(t *testing.T) {
+	store := openFleet(t, embeddedNATS(t))
+	ctx := t.Context()
+	stamp := func() time.Time {
+		t.Helper()
+		rows, err := store.Usage(ctx)
+		if err != nil {
+			t.Fatalf("Usage: %v", err)
+		}
+		for _, row := range rows {
+			if row.Scope == coord.OrgScope {
+				return row.RefusedAt
+			}
+		}
+		t.Fatal("the org scope is not listed")
+		return time.Time{}
+	}
+
+	if err := store.stampRefusal(ctx, coord.OrgScope); err != nil {
+		t.Fatalf("stampRefusal: %v", err)
+	}
+	seen := stamp()
+	// A distinct instant, so the two stamps cannot compare equal by
+	// landing in the same clock tick.
+	time.Sleep(2 * time.Millisecond)
+	if err := store.stampRefusal(ctx, coord.OrgScope); err != nil {
+		t.Fatalf("stampRefusal: %v", err)
+	}
+	newer := stamp()
+	if !newer.After(seen) {
+		t.Fatalf("setup: the second stamp %v is not after the first %v", newer, seen)
+	}
+
+	store.clearRefusal(ctx, coord.OrgScope, seen)
+	if got := stamp(); !got.Equal(newer) {
+		t.Fatalf("refusal stamp = %v, want the newer %v: a stale clear erased a "+
+			"refusal that is still true", got, newer)
+	}
+
+	store.clearRefusal(ctx, coord.OrgScope, newer)
+	if got := stamp(); !got.IsZero() {
+		t.Fatalf("refusal stamp = %v, want it cleared by a caller that saw it", got)
+	}
+}
+
+// openFleet opens a fleet store on its own buckets, for a test that needs to
+// reach inside one rather than run the contract suite over it.
+func openFleet(t *testing.T, nc *nats.Conn) *FleetStore {
+	t.Helper()
+	store, err := OpenFleet(context.Background(), nc, FleetConfig{
+		RateWindow: time.Minute, ClaimTTL: time.Minute,
+		LedgerRetention: time.Minute, FireRetention: time.Minute,
+		CooldownMax: time.Minute, StatusFreshness: time.Minute,
+		BucketPrefix: fmt.Sprintf("f%d", bucketSeq.Add(1)),
+	})
+	if err != nil {
+		t.Fatalf("OpenFleet: %v", err)
+	}
+	return store
+}
+
+// A CHARGE WHOSE CALLER HANGS UP STILL UNWINDS THE COMPANY'S HALF.
+//
+// The org is written before the seat, and a seat write that fails is undone by
+// taking the org's tokens back off. The failure being undone is often the
+// caller's own cancellation, and an unwind that inherited that dead context
+// failed with it: the company was billed for a round that never ran, and kept
+// refusing early until an operator reset the counter.
+func TestACancelledChargeStillUnwindsTheOrg(t *testing.T) {
+	store := openFleet(t, embeddedNATS(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	store.budgets = hangUpAfterWriting{
+		KeyValue: store.budgets, key: encodeKey(coord.OrgScope), hangUp: cancel,
+	}
+
+	if got, err := store.Charge(ctx, "agent:x", 10, 100, 100); err == nil {
+		t.Fatalf("Charge = %+v, want the seat's write to fail on the cancelled context", got)
+	}
+	used, err := store.Used(t.Context(), coord.OrgScope)
+	if err != nil {
+		t.Fatalf("Used: %v", err)
+	}
+	if used != 0 {
+		t.Errorf("org used = %d after a charge that failed, want 0: the unwind "+
+			"ran on the cancelled context and left the company billed", used)
+	}
+}
+
+// hangUpAfterWriting is the budgets bucket with one fault injected: the moment
+// one key is written, the caller's context is cancelled, the way a caller
+// hanging up between the org's write and the seat's makes the second fail.
+type hangUpAfterWriting struct {
+	jetstream.KeyValue
+	key    string
+	hangUp context.CancelFunc
+}
+
+func (k hangUpAfterWriting) Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error) {
+	rev, err := k.KeyValue.Create(ctx, key, value, opts...)
+	if err == nil && key == k.key {
+		k.hangUp()
+	}
+	return rev, err
+}
+
+func (k hangUpAfterWriting) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	rev, err := k.KeyValue.Update(ctx, key, value, revision)
+	if err == nil && key == k.key {
+		k.hangUp()
+	}
+	return rev, err
+}

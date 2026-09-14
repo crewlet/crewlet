@@ -129,7 +129,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       severity: "caution",
       icon: "coin",
       title: "The company token budget is nearly spent",
-      detail: `${Math.round((org.used / org.max) * 100)}% of the process-lifetime meter is used.`,
+      detail: `${Math.round((org.used / org.max) * 100)}% of the company's token budget is spent. Raise token_budget or reset the counter.`,
       path: ["spend"],
     });
   }

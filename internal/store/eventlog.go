@@ -811,6 +811,17 @@ type PhaseTokenQuery struct {
 
 	// AgentRole restricts the rollup to one seat. Empty is the whole org.
 	AgentRole string
+
+	// Limit keeps only the newest Limit records of the window. Zero or less
+	// is the WHOLE window, and that is what a rollup must ask for: see the
+	// note below on why the rollup has no row cap, since a total folded from
+	// a truncated window is an undercount that reads as an underspend.
+	//
+	// It exists for a caller that RETAINS only a bounded tail anyway, which
+	// is the live projection's startup seed: without it a day busier than
+	// the projection's record cap was read in full, into memory, inside the
+	// seed's time budget, only to be cut down to that cap on arrival.
+	Limit int
 }
 
 const (
@@ -988,9 +999,14 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
 	}
-	// Newest first, which is the order the breakdown renders in. No LIMIT:
-	// see the note where the cap used to be.
+	// Newest first, which is the order the breakdown renders in, and the
+	// order a Limit keeps the head of. No LIMIT unless the caller asked for
+	// a tail: see the note where the rollup's cap used to be.
 	sql += " ORDER BY event_time DESC, event_id DESC"
+	if q.Limit > 0 {
+		sql += " LIMIT ?"
+		args = append(args, q.Limit)
+	}
 
 	rows, err := l.db.sql.QueryContext(ctx, sql, args...)
 	if err != nil {

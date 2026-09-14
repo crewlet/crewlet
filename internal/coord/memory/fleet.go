@@ -343,10 +343,15 @@ func (f *Fleet) Charge(_ context.Context, agentScope string, tokens, orgLimit, a
 		name, key string
 		limit     int
 	}{{"org", coord.OrgScope, orgLimit}, {"agent", agentScope, agentLimit}} {
-		used := f.budgets[scope.key].Used
-		if scope.limit > 0 && used+tokens > scope.limit {
+		row := f.budgets[scope.key]
+		if scope.limit > 0 && row.Used+tokens > scope.limit {
+			// The refusal is recorded on the scope that made it, and on
+			// no other: see coord.Usage.RefusedAt.
+			row.Scope = scope.key
+			row.RefusedAt = time.Now().UTC()
+			f.budgets[scope.key] = row
 			return coord.Spend{
-				RefusedScope: scope.name, RefusedUsed: used, RefusedLimit: scope.limit,
+				RefusedScope: scope.name, RefusedUsed: row.Used, RefusedLimit: scope.limit,
 			}, nil
 		}
 	}
@@ -355,8 +360,35 @@ func (f *Fleet) Charge(_ context.Context, agentScope string, tokens, orgLimit, a
 	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
 }
 
-// charge applies one scope's delta under the held lock.
+// PostCharge adds spend that already happened to both counters, refusing
+// nothing and leaving both refusal stamps as they were. See
+// [coord.Budgets.PostCharge].
+func (f *Fleet) PostCharge(_ context.Context, agentScope string, tokens int) (coord.Spend, error) {
+	if tokens <= 0 {
+		return coord.Spend{OK: true}, nil
+	}
+	if agentScope == "" {
+		return coord.Spend{}, errors.New("coord/memory: a charge needs a seat scope")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	orgUsed := f.add(coord.OrgScope, tokens)
+	agentUsed := f.add(agentScope, tokens)
+	return coord.Spend{OK: true, OrgUsed: orgUsed, AgentUsed: agentUsed}, nil
+}
+
+// charge applies one ADMITTED charge to a scope under the held lock, which is
+// also what clears the scope's refusal: it has just had room for a charge.
 func (f *Fleet) charge(scope string, delta int) int {
+	used := f.add(scope, delta)
+	row := f.budgets[scope]
+	row.RefusedAt = time.Time{}
+	f.budgets[scope] = row
+	return used
+}
+
+// add moves one scope's counter under the held lock, and nothing else about it.
+func (f *Fleet) add(scope string, delta int) int {
 	row := f.budgets[scope]
 	row.Scope = scope
 	row.Used = max(row.Used+delta, 0)
