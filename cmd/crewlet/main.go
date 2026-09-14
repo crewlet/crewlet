@@ -1233,13 +1233,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // supervisor rather than by a constant here.
 const apiShutdownGrace = 5 * time.Second
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
-// companySecrets reads the verification material out of the engine's CURRENT
-// epoch, on every request.
-//
-// Not captured once: a config reload replaces the epoch, and a receiver holding
-// the old one would keep rejecting deliveries signed with a rotated secret —
-// a failure that looks exactly like an attack and resolves only on restart.
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1248,8 +1241,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret, a
+// failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, log *slog.Logger,
