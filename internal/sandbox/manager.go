@@ -354,8 +354,11 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	return box, runner, nil
 }
 
-// discardGrace bounds the teardown of a box that failed to provision. Short:
-// the box is already unusable, and the caller is holding a turn open.
+// discardGrace bounds a cleanup that has to outlive the context that asked for
+// it: the teardown of a box that failed to provision, of a launch that could
+// not finish or of a run that is over, and the hand-back of a claim whose
+// resume broke. Short: whatever it cleans up is already unusable, and the
+// caller is holding a turn or a delivery open while it runs.
 const discardGrace = 30 * time.Second
 
 func (m *Manager) discard(ctx context.Context, box Sandbox) {

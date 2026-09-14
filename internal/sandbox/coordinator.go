@@ -644,7 +644,16 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 // left as it stands, and what holds the seat is then the store's answer rather
 // than this claim's. counted is whether the busy count still includes this
 // run, which it does until the resume frees the seat.
+//
+// A CONTEXT OF ITS OWN, like [Coordinator.teardown], because this is a
+// rollback and the failure it undoes is often the cancellation itself: a drain
+// cancels the delivery's context, the resume breaks on it, and a release that
+// inherited it wrote nothing. The run then stayed resumed, and the seat's next
+// owner, the node the drain was handing it to, reaped it as abandoned instead
+// of resuming it.
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discardGrace)
+	defer cancel()
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
 		Launch: run.LaunchID, To: to, Charged: run.Charged, Fence: fenceOf(run),
