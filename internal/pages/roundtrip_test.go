@@ -202,6 +202,9 @@ func (r *roundTrip) drain() {
 		}); err != nil {
 			r.t.Fatalf("apply record %d: %v", seq, err)
 		}
+		// THE POST-COMMIT HALF, which the framework runs after every
+		// committed batch and never inside the transaction.
+		r.applier.Committed(r.t.Context())
 		r.consumed = seq
 		r.waiter.reach(record.Position)
 	}
