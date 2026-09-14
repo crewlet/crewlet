@@ -73,6 +73,13 @@ export function MyWork() {
   // real thing to do, and the header says whose day it is either way.
   const viewer = useViewer();
   const whose = handle || viewer.handle;
+  // WHOSE DAY DECIDES THE PRONOUN. This screen is read two ways — a person
+  // reading their own day, and an operator reading a report's — and one
+  // wording cannot serve both: "nothing has reached them" on your own inbox
+  // reads as a screen describing somebody else, which is exactly the
+  // confusion the `viewer` question exists to end.
+  const ownDay = whose !== "" && whose === viewer.handle;
+  const they = ownDay ? "you" : "them";
   // NOT UNTIL SOMEBODY IS CHOSEN — the same guard the board and the sprint
   // report take. `whose` is empty until the chart has loaded, and the engine
   // refuses this question without a handle.
@@ -205,8 +212,8 @@ export function MyWork() {
                     notices.length
                       ? undefined
                       : {
-                          title: "Nothing has reached them",
-                          hint: "A notice is written when a change names somebody — as an assignee, a mention, a question, a watcher. This person's record has none.",
+                          title: `Nothing has reached ${they}`,
+                          hint: `A notice is written when a change names somebody — as an assignee, a mention, a question, a watcher. ${ownDay ? "Your" : "This person's"} record has none.`,
                         }
                   }
                 >
@@ -252,8 +259,8 @@ export function MyWork() {
                   </div>
                 </QueryState>
                 <footer className="panel-foot">
-                  Read and snoozed marks are written by this person's own assistant, through
-                  mark_inbox — the dashboard shows what it recorded.
+                  Read and snoozed marks are written by {ownDay ? "your" : "this person's"} own
+                  assistant, through mark_inbox — the dashboard shows what it recorded.
                 </footer>
               </Panel>
 
