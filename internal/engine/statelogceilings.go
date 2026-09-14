@@ -150,9 +150,10 @@ func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) (
 // [StreamBudgetShare] of what the broker can grant the state logs, read from
 // the broker ([jetstream.Queue.StreamBudget]) and counting the ceilings the
 // logs' existing streams already hold as the logs' own. That second clause is
-// what makes the answer stable: a restart sizes the logs exactly as the boot
-// that created them did, rather than dividing whatever their own reservations
-// left, and a log an upgrade adds is sized beside the ones already there.
+// what makes the pool stable: a restart divides the pool the boot that created
+// the logs divided, rather than whatever their own reservations left, and a log
+// an upgrade adds is sized beside the ones already there. What each log ASKS
+// still follows the volume's free space, which the logs' own records spend.
 //
 // UNSTATED IS NOT UNBOUNDED. An external broker whose account states no limit
 // still refuses a reservation its servers cannot back, and a client cannot
