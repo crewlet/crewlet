@@ -107,28 +107,15 @@ const label = (el: HTMLElement) => el.querySelector(".menu-item-label")!.textCon
 const nameOf = (el: HTMLElement) => el.querySelector(".bchart-name")!.textContent;
 
 describe("which chart", () => {
-  /** The lens mounts the view as a surface with no props, so the URL decides. */
-  const mountBare = () => {
-    const spies = builderSpies();
-    const probe = harnessProbe();
-    render(
-      <BuilderHarness initial={checkedEdit(fixtureCompany())} spies={spies} probe={probe}>
-        <CanvasView />
-      </BuilderHarness>,
-    );
-    LayoutObserver.settle();
-  };
-
-  test("with no chart given, the view draws the one the URL names", () => {
+  test("the chart the lens hands in is the one drawn, whatever the URL says", () => {
+    // The Builder owns the `chart` param; a second reading here could disagree.
     location.hash = "#/org?lens=builder&view=canvas&chart=reporting";
-    mountBare();
-    expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
-  });
-
-  test("with no chart in the URL either, it draws the structure", () => {
-    location.hash = "#/org?lens=builder&view=canvas";
-    mountBare();
+    mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
+    cleanup();
+    location.hash = "#/org?lens=builder&view=canvas&chart=structure";
+    mount(undefined, { chart: "reporting" });
+    expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
 });
 
