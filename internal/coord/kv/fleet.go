@@ -78,6 +78,19 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		jsprovision.Budget(jsprovision.Clustered(cfg.Replicas)))
 	defer cancel()
 
+	// A BREADCRUMB, because without one this is the silent step. A boot
+	// opens fifteen of these in a row and logs nothing between them, so a
+	// node that hung here emitted nothing at all until its budget expired —
+	// and the log could not say which bucket it was on.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
+			"replicas", cfg.Replicas, "waited", after,
+			"detail", "this bucket is still being created; on a fleet that is "+
+				"a metadata group that has not settled, and the next line from "+
+				"this node says whether it got past it")
+	})
+	defer stop()
+
 	for {
 		bucket, err := createOrObserveBucket(ctx, js, cfg)
 		if err == nil || !jsprovision.Unplaceable(err) {

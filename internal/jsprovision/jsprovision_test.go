@@ -1,7 +1,9 @@
 package jsprovision
 
 import (
+	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -172,5 +174,90 @@ func TestAReadBackIsFarShorterThanACreate(t *testing.T) {
 	if PlacementRetry*10 > ReadBack {
 		t.Errorf("a %v read-back holds fewer than ten %v polls",
 			ReadBack, PlacementRetry)
+	}
+}
+
+// A STALLED CREATE SAYS SO, because the failure this closes was a member that
+// emitted nothing at all for 28 seconds and then died: the log could not name
+// the object it was on, how many it had already done, or whether it was moving.
+func TestSlowWorkIsReportedOnceAndFastWorkIsSilent(t *testing.T) {
+	t.Parallel()
+
+	// THE FIRING HALF, at a threshold short enough to assert. It is the
+	// half that only runs when something is wrong, so it is the half that
+	// would otherwise be a claim.
+	fired := make(chan time.Duration, 1)
+	stopSlow := whenSlowAfter(t.Context(), time.Millisecond,
+		func(after time.Duration) { fired <- after })
+	select {
+	case got := <-fired:
+		if got != time.Millisecond {
+			t.Errorf("reported a wait of %v, want the threshold it crossed", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("work that outlived its threshold produced no line at all, " +
+			"which is the silence this exists to remove")
+	}
+	stopSlow()
+
+	// AND THE FAST HALF IS SILENT, which is what runs on every healthy
+	// create on every boot.
+	var reports atomic.Int32
+	stop := WhenSlow(t.Context(), func(time.Duration) { reports.Add(1) })
+	stop()
+	if got := reports.Load(); got != 0 {
+		t.Errorf("work that finished at once produced %d line(s); every healthy "+
+			"create on every boot goes through here", got)
+	}
+
+	// AND STOP IS A BARRIER. A report arriving after the call it described
+	// has returned is a line attributed to the wrong object — and in a test
+	// sink, one arriving after the case that owned it ended.
+	//
+	// ASSERTED BY THE RACE DETECTOR rather than by a poll, because that is
+	// what the guarantee actually is: `written` is a PLAIN int, the
+	// watcher writes it and this goroutine reads it after stop returns. If
+	// stop does not wait for the watcher those two are unordered, and -race
+	// says so. A threshold of zero makes the watcher fire at once, so the
+	// two really do run together.
+	started, proceed := make(chan struct{}), make(chan struct{})
+	written := 0
+	stop = whenSlowAfter(t.Context(), 0, func(time.Duration) {
+		close(started)
+		<-proceed
+		written++
+	})
+	<-started // the watcher is inside report, so stop really has to wait
+	close(proceed)
+	stop()
+	if written != 1 {
+		t.Errorf("one slow call produced %d lines, want exactly one", written)
+	}
+}
+
+// A CANCELLED CALLER IS NOT REPORTED ON either: the work stopped because
+// somebody asked it to, which is not the silence this exists to describe.
+func TestCancelledWorkIsNotReportedAsSlow(t *testing.T) {
+	t.Parallel()
+	var reports atomic.Int32
+	ctx, cancel := context.WithCancel(t.Context())
+	stop := WhenSlow(ctx, func(time.Duration) { reports.Add(1) })
+	cancel()
+	stop()
+	if got := reports.Load(); got != 0 {
+		t.Errorf("a cancelled wait produced %d line(s)", got)
+	}
+}
+
+// THE THRESHOLD SITS INSIDE THE BUDGET IT DESCRIBES, or the line it exists to
+// emit arrives after the failure it was meant to explain.
+func TestTheSlowThresholdFitsInsideEveryBudget(t *testing.T) {
+	t.Parallel()
+	for _, clustered := range []bool{false, true} {
+		if SlowAfter >= Budget(clustered) {
+			t.Errorf("clustered=%v: a create is called slow at %v and gives up "+
+				"at %v, so the breadcrumb never lands before the error does",
+				clustered, SlowAfter, Budget(clustered))
+		}
 	}
 }

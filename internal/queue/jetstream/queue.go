@@ -459,6 +459,19 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	//
 	// So the writer is removed rather than guarded, and what remains is a
 	// comparison. See observeStream for what each class of difference does.
+	// A BREADCRUMB, for [jsprovision.WhenSlow]'s reason: this step is
+	// otherwise silent until its budget expires, and the one progress line
+	// below it covers only the placement-retry path — not the case that
+	// actually hangs, where the API request itself never returns.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_stream_slow", "stream", spec.name,
+			"replicas", config.Replicas, "waited", after,
+			"detail", "this stream is still being provisioned; on a fleet that "+
+				"is a metadata group that has not settled, and the next line "+
+				"from this node says whether it got past it")
+	})
+	defer stop()
+
 	if err := q.createOrObserveStream(ctx, spec, config); err != nil {
 		return err
 	}
@@ -849,7 +862,18 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 			"given no durable name — an ephemeral consumer is this caller's "+
 			"alone and races nobody, so it does not belong here", stream)
 	}
+	// THE SAME BREADCRUMB the stream and bucket creates carry, and this
+	// call needs it for the same reason: a durable consumer is a replicated
+	// object too, and `open consumer …: context deadline exceeded` on a
+	// silent member is one of the shapes a clustered boot failed in.
+	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
+			"consumer", cfg.Durable, "waited", after,
+			"detail", "this durable consumer is still being created; on a fleet "+
+				"that is a metadata group that has not settled")
+	})
 	cons, createErr := q.js.CreateConsumer(ctx, stream, cfg)
+	stop()
 	if createErr == nil {
 		return cons, nil
 	}

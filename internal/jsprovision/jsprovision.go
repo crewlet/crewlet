@@ -52,6 +52,7 @@
 package jsprovision
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -128,6 +129,71 @@ func SequenceBudget(clustered bool) time.Duration {
 // and a disagreement about where the boundary sits would give one subsystem
 // the solo budget and the other the clustered one on the same node.
 func Clustered(replicas int) bool { return replicas > 1 }
+
+// SlowAfter is how long one create may take before it is worth a line in the
+// log.
+//
+// TEN SECONDS, which is the only interesting band: below it every healthy
+// create on every topology finishes (a solo one in milliseconds, a clustered
+// one in a round trip or two), and above it nothing else on this path says
+// anything at all until the budget expires. A threshold much lower would put a
+// line under ordinary load; much higher and the window it exists to describe
+// is mostly over.
+const SlowAfter = 10 * time.Second
+
+// WhenSlow calls report once if the work outlives [SlowAfter], and returns the
+// function that ends the watch.
+//
+// # Why a provisioning call needs this at all
+//
+// Because a stalled one is COMPLETELY SILENT, and that is what made a failed
+// boot undiagnosable. A node opens fifteen buckets and several streams in a
+// row; if one of them hangs, nothing is logged between the line before it and
+// the failure a budget later — so the log cannot say which object it was on,
+// how many it had already done, or whether it was moving slowly or not moving
+// at all. In one CI run a member emitted nothing whatsoever for 28 seconds and
+// then failed, and the only way to learn which bucket it died on was the error
+// text at the end.
+//
+// One line PER OBJECT is deliberately all this gives. It is enough to answer
+// both questions a person actually has: which object, and — by whether more
+// lines follow — wedged or merely slow. A repeating tick would answer the same
+// question eleven times per hung create.
+//
+// The returned stop WAITS for the watcher, so report never fires after it has
+// returned: a caller that logs into a test's sink must not have a line arrive
+// after the case it belonged to finished.
+func WhenSlow(ctx context.Context, report func(after time.Duration)) (stop func()) {
+	return whenSlowAfter(ctx, SlowAfter, report)
+}
+
+// whenSlowAfter is the mechanism, with the threshold as an argument.
+//
+// SEPARATED so the firing half can be exercised in milliseconds. The
+// alternative is a unit test that really waits [SlowAfter], and a ten-second
+// case is one somebody eventually deletes — which would leave the half that
+// only runs when something is wrong as the half nothing covers.
+func whenSlowAfter(ctx context.Context, after time.Duration,
+	report func(after time.Duration)) (stop func()) {
+
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		timer := time.NewTimer(after)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		case <-timer.C:
+			report(after)
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
+}
 
 // ReadBack bounds the one read that asks whether a peer won a create race, and
 // the one that asks whether a create this node made is visible yet.

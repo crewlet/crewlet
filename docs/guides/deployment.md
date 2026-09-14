@@ -337,6 +337,15 @@ different stream or bucket every time. A node that exhausts the budget fails
 to start rather than running against a group it cannot reach, and the error
 names the object it was creating.
 
+**A create that is taking a while says so while it is happening.** Provisioning
+was otherwise silent — a node opens fifteen buckets and several streams in a
+row and logged nothing between them, so one that hung emitted nothing at all
+until its budget expired and the log could not say which object it was on. Any
+create still running after 10 seconds now writes one `WARN` naming it
+(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`).
+One line per object, deliberately: whether more lines follow is what tells a
+slow bring-up from a wedged one.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
