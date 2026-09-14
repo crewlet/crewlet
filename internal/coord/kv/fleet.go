@@ -689,6 +689,12 @@ func (f *FleetStore) Since(ctx context.Context, now time.Time) (map[string]time.
 	out := map[string]time.Time{}
 	err := f.each(ctx, f.cooldowns, func(kve jetstream.KeyValueEntry) error {
 		until, err := time.Parse(time.RFC3339Nano, string(kve.Value()))
+		//nolint:nilerr // An unreadable cooldown row is SKIPPED, not raised:
+		// this listing answers "which credentials are benched", and one
+		// undecodable row must not bench the whole pool by failing the read.
+		// The conservative direction here is to treat the row as absent —
+		// a key that is not benched is simply tried, and a real failure
+		// benches it again.
 		if err != nil || !until.After(now) {
 			return nil
 		}
@@ -1159,6 +1165,11 @@ func (f *FleetStore) Fleet(ctx context.Context) ([]coord.NodeApply, error) {
 	var out []coord.NodeApply
 	err := f.each(ctx, f.status, func(kve jetstream.KeyValueEntry) error {
 		var record applyRecord
+		//nolint:nilerr // An undecodable status row is SKIPPED rather than
+		// raised, because this read is what reports the fleet's apply
+		// progress: failing it over one row would blank the whole view,
+		// where dropping the row shows every node that IS readable and
+		// leaves the bad one looking as it does — unreported.
 		if err := json.Unmarshal(kve.Value(), &record); err != nil {
 			return nil
 		}

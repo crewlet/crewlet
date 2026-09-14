@@ -67,6 +67,24 @@ also sizes the 1024 against the class rather than against every key in the
 bucket, so one class is never pushed onto the slower transport by what its
 neighbours have grown to.
 
+That is why a **resource name is segmented**. A lease is named
+`seat:{handle}`, `node:{id}` or `worker:{duty}`, and the part before the colon
+is the **class**; the key it becomes carries that class as a subject token of
+its own, so `seat` is a wildcard and the seats are addressable without the
+nodes. The two reads that pay for it run on a ticker: the membership read asks
+for the presence leases instead of every lease in the fleet, and the sweep's
+placement hints come from the `epochs` bucket — the one with no expiry at all,
+holding a record for every resource the deployment has ever leased, which used
+to be read whole every five seconds to find one node's seats.
+
+There is deliberately **no all-classes listing**. A class is one segment of a
+name, so the empty one addresses nothing, and a read of it would answer with
+an empty result rather than an error — which reads to a caller exactly like a
+class with no members. Asking for a class that cannot address a key is
+refused instead. For the same reason a resource may not have an empty segment:
+`seat:` builds a key nothing can decode, so the lease would be written and
+then returned by no listing at all, which every node reads as a free seat.
+
 ---
 
 ## What the fleet shares

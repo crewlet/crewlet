@@ -141,25 +141,48 @@ var readCases = []testCase{
 
 		// And the prefix read still finds them, so whatever encoding a
 		// backend applies has not moved them out of their own namespace.
-		live := h.listLive(coord.SeatPrefix)
+		live := h.listLive(coord.ClassSeat)
 		if len(live) != len(accepted) {
 			h.t.Fatalf("ListLive(%q) returned %d of %d accepted names: %v",
-				coord.SeatPrefix, len(live), len(accepted), resources(live))
+				coord.ClassSeat, len(live), len(accepted), resources(live))
 		}
 	}},
 
-	{"list_live_filters_by_prefix", func(h *harness) {
+	{"list_live_answers_one_class", func(h *harness) {
 		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
 		h.claim(coord.NodeResource("node-a"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Ungated: true,
 		})
 
-		h.requireResources("live seats", h.listLive(coord.SeatPrefix), "seat:ceo")
-		h.requireResources("live workers", h.listLive(coord.WorkerPrefix), "worker:scheduler")
-		h.requireResources("live nodes", h.listLive(coord.NodePrefix), "node:node-a")
-		h.requireResources("every live lease", h.listLive(""),
-			"seat:ceo", "worker:scheduler", "node:node-a")
+		// Each class sees its own and NOTHING else. On the native backend
+		// the broker is what narrows this — a class is the leading subject
+		// token of a resource's key — and on the twin it is a prefix test,
+		// so the two agree only if both select exactly one class.
+		h.requireResources("live seats", h.listLive(coord.ClassSeat), "seat:ceo")
+		h.requireResources("live workers", h.listLive(coord.ClassWorker), "worker:scheduler")
+		h.requireResources("live nodes", h.listLive(coord.ClassNode), "node:node-a")
+	}},
+
+	{"a_class_that_cannot_address_a_key_is_refused", func(h *harness) {
+		h.claim(coord.SeatResource("ceo"), coord.AcquireOptions{Owner: "node-a", TTL: LongTTL})
+
+		// REFUSED, NEVER ANSWERED EMPTY. A class is one segment of a
+		// resource name, so one that is empty or carries the separator
+		// builds a filter matching no key at all — and "no leases" is
+		// indistinguishable from "that class has no members" at every
+		// caller. There is deliberately no all-classes listing: the empty
+		// class used to mean one, which is why this case replaced it.
+		for _, class := range []coord.Class{"", "seat:", "se.at"} {
+			if leases, err := h.b.ListLive(h.ctx, class); err == nil {
+				h.t.Fatalf("ListLive(%q) answered %v; a class that cannot address "+
+					"a key must be refused, because an empty answer reads as an "+
+					"empty class", class, resources(leases))
+			}
+			if hints, err := h.b.PreferredResources(h.ctx, class, "node-a"); err == nil {
+				h.t.Fatalf("PreferredResources(%q) answered %v, want a refusal", class, hints)
+			}
+		}
 	}},
 
 	{"presence_leases_are_the_membership_read", func(h *harness) {
@@ -179,7 +202,7 @@ var readCases = []testCase{
 			Owner: "c:1", TTL: ShortTTL, Ungated: true,
 		})
 		h.lapse()
-		h.requireResources("membership", h.listLive(coord.NodePrefix), "node:a", "node:b")
+		h.requireResources("membership", h.listLive(coord.ClassNode), "node:a", "node:b")
 	}},
 
 	// --- the stickiness hint -------------------------------------------
@@ -194,8 +217,8 @@ var readCases = []testCase{
 		if read := h.mustHold("seat:ceo", "node-a:1"); read.Preferred != "node-a" {
 			h.t.Fatalf("Get returned preferred %q", read.Preferred)
 		}
-		h.requireSet("hints for node-a", h.preferred(coord.SeatPrefix, "node-a"), "seat:ceo")
-		h.requireSet("hints for node-b", h.preferred(coord.SeatPrefix, "node-b"))
+		h.requireSet("hints for node-a", h.preferred(coord.ClassSeat, "node-a"), "seat:ceo")
+		h.requireSet("hints for node-b", h.preferred(coord.ClassSeat, "node-b"))
 	}},
 
 	{"the_preferred_hint_orders_and_never_gates", func(h *harness) {
@@ -231,8 +254,8 @@ var readCases = []testCase{
 		if taken.Preferred != "node-b" {
 			h.t.Fatalf("hint is %q after a claim that named node-b", taken.Preferred)
 		}
-		h.requireSet("hints for node-a", h.preferred(coord.SeatPrefix, "node-a"))
-		h.requireSet("hints for node-b", h.preferred(coord.SeatPrefix, "node-b"), "seat:ceo")
+		h.requireSet("hints for node-a", h.preferred(coord.ClassSeat, "node-a"))
+		h.requireSet("hints for node-b", h.preferred(coord.ClassSeat, "node-b"), "seat:ceo")
 	}},
 
 	{"preferred_resources_include_lapsed_and_released_ones", func(h *harness) {
@@ -258,8 +281,8 @@ var readCases = []testCase{
 		})
 		h.lapse()
 
-		h.requireResources("live seats", h.listLive(coord.SeatPrefix), "seat:pm")
-		h.requireSet("hints for node-a", h.preferred(coord.SeatPrefix, "node-a"),
+		h.requireResources("live seats", h.listLive(coord.ClassSeat), "seat:pm")
+		h.requireSet("hints for node-a", h.preferred(coord.ClassSeat, "node-a"),
 			"seat:ceo", "seat:cto")
 	}},
 
@@ -270,8 +293,8 @@ var readCases = []testCase{
 		h.claim(coord.WorkerResource("scheduler"), coord.AcquireOptions{
 			Owner: "node-a:1", TTL: LongTTL, Preferred: "node-a",
 		})
-		h.requireSet("seat hints", h.preferred(coord.SeatPrefix, "node-a"), "seat:ceo")
-		h.requireSet("worker hints", h.preferred(coord.WorkerPrefix, "node-a"), "worker:scheduler")
+		h.requireSet("seat hints", h.preferred(coord.ClassSeat, "node-a"), "seat:ceo")
+		h.requireSet("worker hints", h.preferred(coord.ClassWorker, "node-a"), "worker:scheduler")
 	}},
 
 	// --- meta: what the holder IS --------------------------------------
@@ -340,7 +363,7 @@ var readCases = []testCase{
 		h.requireSameValues("meta returned by the claim", payload, lease.Meta)
 		h.requireSameValues("meta read back", payload, h.mustHold(coord.NodeResource("n1"), "n1:a").Meta)
 
-		live := h.listLive(coord.NodePrefix)
+		live := h.listLive(coord.ClassNode)
 		if len(live) != 1 {
 			h.t.Fatalf("ListLive returned %d leases, want 1", len(live))
 		}
@@ -362,7 +385,7 @@ var readCases = []testCase{
 		if !reflect.DeepEqual(read.Meta, payload) {
 			h.t.Fatalf("Get returned meta %v, want %v", read.Meta, payload)
 		}
-		live := h.listLive(coord.NodePrefix)
+		live := h.listLive(coord.ClassNode)
 		if len(live) != 1 || !reflect.DeepEqual(live[0].Meta, payload) {
 			h.t.Fatalf("ListLive returned %v, want one lease carrying %v", live, payload)
 		}

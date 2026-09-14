@@ -246,8 +246,8 @@ func directWalk(ctx context.Context, nc *nats.Conn, kv jetstream.KeyValue, keys,
 		if err != nil {
 			return false, fmt.Errorf("coord/kv: encode a batched read of %s: %w", bucket, err)
 		}
-		if err := nc.PublishRequest(subject, inbox, request); err != nil {
-			return false, unavailable("read "+what, err)
+		if sent := nc.PublishRequest(subject, inbox, request); sent != nil {
+			return false, unavailable("read "+what, sent)
 		}
 
 		batch, err := readBatch(ctx, replies, prefix, bucket, what, visited, visit)
@@ -330,6 +330,7 @@ func readBatch(ctx context.Context, replies *nats.Subscription, prefix, bucket, 
 		case "":
 			// A record. Only a status reply carries that header, so an
 			// empty one here is the bucket's own data.
+			//nolint:govet // shadow: scoped to this block; see .golangci.yml
 			entry, ok, err := decodeDirect(msg, prefix, bucket, what)
 			if err != nil {
 				return out, err

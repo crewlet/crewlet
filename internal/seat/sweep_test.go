@@ -57,7 +57,7 @@ func TestPresenceOmitsStatusWhenTheNodeHasNone(t *testing.T) {
 // presenceOf reads a node's presence lease.
 func presenceOf(t *testing.T, f *fleet, node string) coord.Lease {
 	t.Helper()
-	leases, err := f.store.ListLive(f.ctx, coord.NodePrefix)
+	leases, err := f.store.ListLive(f.ctx, coord.ClassNode)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -225,9 +225,9 @@ type countingHints struct {
 	reads int
 }
 
-func (c *countingHints) PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error) {
+func (c *countingHints) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
 	c.reads++
-	return c.Backend.PreferredResources(ctx, prefix, nodeID)
+	return c.Backend.PreferredResources(ctx, class, nodeID)
 }
 
 // THE HINT READ IS PAID FOR AN ORDERING, so a pass with no ordering to make

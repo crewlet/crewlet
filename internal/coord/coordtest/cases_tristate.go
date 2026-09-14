@@ -114,11 +114,11 @@ var tristateCases = []testCase{
 		if leases, err := f.ListOwned(ctx, "node-a"); err == nil {
 			h.t.Fatalf("ListOwned answered %v with no error from an unreachable store", leases)
 		}
-		if leases, err := f.ListLive(ctx, coord.NodePrefix); err == nil {
+		if leases, err := f.ListLive(ctx, coord.ClassNode); err == nil {
 			h.t.Fatalf("ListLive answered %v with no error — a capacity split would divide "+
 				"the seats by a fleet it could not see", leases)
 		}
-		if hints, err := f.PreferredResources(ctx, coord.SeatPrefix, "node-a"); err == nil {
+		if hints, err := f.PreferredResources(ctx, coord.ClassSeat, "node-a"); err == nil {
 			h.t.Fatalf("PreferredResources answered %v with no error", hints)
 		}
 	}},
@@ -154,6 +154,16 @@ var tristateCases = []testCase{
 			opts     coord.AcquireOptions
 		}{
 			{"blank resource", "", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL}},
+			// An EMPTY SEGMENT is the refusal that is not about hygiene.
+			// A resource's segments are its key's segments, so a name with
+			// an empty one builds a key nothing can decode: the lease is
+			// written, and then returned by no listing at all — which
+			// every node reads as a seat that is free. Refused, so the
+			// caller sees the value it lost instead of a seat handed out
+			// twice.
+			{"empty class", ":ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL}},
+			{"empty name", "seat:", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL}},
+			{"empty middle segment", "seat::ceo", coord.AcquireOptions{Owner: "node-a", TTL: LongTTL}},
 			{"blank owner", "seat:ceo", coord.AcquireOptions{Owner: "", TTL: LongTTL}},
 			{"zero TTL", "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: 0}},
 			{"negative TTL", "seat:ceo", coord.AcquireOptions{Owner: "node-a", TTL: -time.Second}},

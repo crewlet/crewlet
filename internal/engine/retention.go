@@ -328,7 +328,7 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	// counts at position zero and blocks, which is correct: trimming past
 	// a node that is joining is deleting what it is about to replay.
 	if r.leases != nil {
-		leases, err := r.leases.ListLive(ctx, coord.NodePrefix)
+		leases, err := r.leases.ListLive(ctx, coord.ClassNode)
 		if err != nil {
 			return in, fmt.Errorf("list the live nodes: %w", err)
 		}

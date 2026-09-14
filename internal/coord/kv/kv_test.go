@@ -103,17 +103,17 @@ func TestKeyMappingRoundTrips(t *testing.T) {
 		"plain",
 		"=",
 		".",
-		":",
+		"rollover:a project:7",
 	}
 	seen := map[string]string{}
 	for _, r := range resources {
-		key := encodeKey(r)
+		key := encodeResource(r)
 		if !validKeyForNATS(key) {
-			t.Fatalf("encodeKey(%q) = %q, which NATS KV will not accept", r, key)
+			t.Fatalf("encodeResource(%q) = %q, which NATS KV will not accept", r, key)
 		}
-		back, ok := decodeKey(key)
+		back, ok := decodeResource(key)
 		if !ok {
-			t.Fatalf("decodeKey(%q) (from %q) reported an unreadable key", key, r)
+			t.Fatalf("decodeResource(%q) (from %q) reported an unreadable key", key, r)
 		}
 		if back != r {
 			t.Fatalf("round trip: %q -> %q -> %q", r, key, back)
@@ -192,15 +192,15 @@ func TestAwkwardResourceNamesSurviveTheStore(t *testing.T) {
 	if len(owned) != 2 {
 		t.Fatalf("ListOwned = %v, want both seats", owned)
 	}
-	live, err := s.ListLive(ctx, coord.SeatPrefix)
+	live, err := s.ListLive(ctx, coord.ClassSeat)
 	if err != nil {
 		t.Fatalf("ListLive: %v", err)
 	}
 	if len(live) != 2 {
 		t.Fatalf("ListLive(%q) = %v, want both seats — the prefix is matched on the "+
-			"RESOURCE, not on the escaped key", coord.SeatPrefix, live)
+			"RESOURCE, not on the escaped key", coord.ClassSeat, live)
 	}
-	hints, err := s.PreferredResources(ctx, coord.SeatPrefix, "node-a")
+	hints, err := s.PreferredResources(ctx, coord.ClassSeat, "node-a")
 	if err != nil {
 		t.Fatalf("PreferredResources: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	if got, err := s.Get(ctx, "seat:ceo"); err != nil || got != nil {
 		t.Fatalf("an unrenewed lease is still readable: (%v, %v)", got, err)
 	}
-	if raw, err := s.leases.Get(ctx, encodeKey("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
+	if raw, err := s.leases.Get(ctx, encodeResource("seat:ceo")); !errors.Is(err, jetstream.ErrKeyNotFound) {
 		t.Fatalf("the lease KEY survived its bucket TTL: (%v, %v)", raw, err)
 	}
 
@@ -327,7 +327,7 @@ func TestServerSideExpiryHandsTheSeatOver(t *testing.T) {
 	if taken.Preferred != "node-a" {
 		t.Fatalf("placement hint is %q after the lease key expired, want node-a", taken.Preferred)
 	}
-	hints, err := s.PreferredResources(ctx, coord.SeatPrefix, "node-a")
+	hints, err := s.PreferredResources(ctx, coord.ClassSeat, "node-a")
 	if err != nil {
 		t.Fatalf("PreferredResources: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestReleaseExpiresInPlaceAndKeepsTheKey(t *testing.T) {
 	}
 	// A delete would take the record away; a tombstone leaves it, which is
 	// what keeps the resource's history readable while it is unheld.
-	kve, err := s.leases.Get(ctx, encodeKey("seat:ceo"))
+	kve, err := s.leases.Get(ctx, encodeResource("seat:ceo"))
 	if err != nil {
 		t.Fatalf("the released key was deleted, not expired in place: %v", err)
 	}
@@ -469,5 +469,147 @@ func TestAnUndecodableSecretIsRaisedNotSkipped(t *testing.T) {
 	// rather than the bucket's.
 	if _, found, err := store.Secret(ctx, "GOOD"); err != nil || !found {
 		t.Fatalf("GOOD: found=%v err=%v", found, err)
+	}
+}
+
+// THE CLASS IS A SUBJECT TOKEN, which is the whole reason a resource key is
+// segmented rather than one escaped blob.
+//
+// Before it was, `seat:alice` became the single token `seat=3Aalice`; a subject
+// wildcard matches whole tokens, so there was no filter that selected the
+// seats and every class listing read the entire bucket and discarded the rest.
+// This asserts the property directly, on the KEY, because it is what the
+// broker matches on and a listing that happened to be correct while the key
+// was one token would prove nothing about the filter.
+func TestAResourceClassIsItsOwnSubjectToken(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		resource string
+		want     string
+	}{
+		{"seat:alice", "seat.alice"},
+		{"node:node-0", "node.node-0"},
+		{"worker:scheduler", "worker.scheduler"},
+		// A name carrying the separator is MORE segments, never a class
+		// with a colon in it — the class is the leading one either way.
+		{"rollover:proj:7", "rollover.proj.7"},
+		// And a name carrying a dot keeps it escaped, because an
+		// unescaped one would add a token the grammar never wrote.
+		{"seat:alice.smith", "seat.alice=2Esmith"},
+	}
+	for _, c := range cases {
+		if got := encodeResource(c.resource); got != c.want {
+			t.Errorf("encodeResource(%q) = %q, want %q", c.resource, got, c.want)
+		}
+	}
+
+	// And the filter a class builds selects its own keys and no others —
+	// including the adversarial pair, where one class name is a string
+	// prefix of another. A subject wildcard matches per TOKEN, so `node.>`
+	// does not take `node-pool.x`; a string prefix would.
+	seat := coord.DocumentFilter(string(coord.ClassSeat))
+	for _, c := range []struct {
+		resource string
+		want     bool
+	}{
+		{"seat:alice", true},
+		{"seat:alice.smith", true},
+		{"node:node-0", false},
+		{"worker:seat", false},
+		{"seatbelt:x", false},
+	} {
+		if got := subjectMatches(seat, encodeResource(c.resource)); got != c.want {
+			t.Errorf("filter %q vs %q (key %q) = %v, want %v",
+				seat, c.resource, encodeResource(c.resource), got, c.want)
+		}
+	}
+}
+
+// subjectMatches is NATS subject matching over the two wildcards, written out
+// here because the assertion above is about what the BROKER will do and a test
+// that asked the client's own helper would be asserting nothing the server
+// promises.
+func subjectMatches(filter, subject string) bool {
+	f, s := strings.Split(filter, "."), strings.Split(subject, ".")
+	for i, tok := range f {
+		if tok == ">" {
+			return i <= len(s)
+		}
+		if i >= len(s) {
+			return false
+		}
+		if tok != "*" && tok != s[i] {
+			return false
+		}
+	}
+	return len(f) == len(s)
+}
+
+// THE BROKER NARROWS THE CLASS READS, and this measures it rather than
+// trusting the filter.
+//
+// The two reads it covers are the ones paid on a ticker: the membership read
+// the sweep takes every five seconds, and the placement hints it takes beside
+// them — that one over the epochs bucket, which has NO TTL and therefore holds
+// a record for every resource the deployment has ever leased. Both used to
+// read their whole bucket and discard what they did not want.
+//
+// The count is taken from INSIDE the walk, because the rows it yields were
+// always correct: a filter that did not narrow would return the same leases
+// and simply move everything else over the wire to get there.
+func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
+	nc := embeddedNATS(t)
+	s := openStore(t, nc, time.Minute)
+	ctx := context.Background()
+
+	for _, r := range []string{"seat:ceo", "seat:eng", "seat:ops", "worker:scheduler"} {
+		if _, err := s.TryAcquire(ctx, r, coord.AcquireOptions{
+			Owner: "node-a", TTL: time.Minute, Preferred: "node-a",
+		}); err != nil {
+			t.Fatalf("claim %s: %v", r, err)
+		}
+	}
+	if _, err := s.TryAcquire(ctx, coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute, Ungated: true,
+	}); err != nil {
+		t.Fatalf("claim presence: %v", err)
+	}
+
+	count := func(kv jetstream.KeyValue, class coord.Class) int {
+		t.Helper()
+		n := 0
+		if err := s.eachUnder(ctx, kv, class, "the "+string(class)+" records",
+			func(jetstream.KeyValueEntry) error { n++; return nil }); err != nil {
+			t.Fatalf("walk %s: %v", class, err)
+		}
+		return n
+	}
+
+	// Five resources across three classes sit in each bucket.
+	for _, c := range []struct {
+		class coord.Class
+		want  int
+	}{{coord.ClassSeat, 3}, {coord.ClassWorker, 1}, {coord.ClassNode, 1}} {
+		if got := count(s.leases, c.class); got != c.want {
+			t.Errorf("the %s lease walk was handed %d records for the %d it wanted; "+
+				"the broker is not filtering and the membership read is moving "+
+				"every seat in the fleet", c.class, got, c.want)
+		}
+		if got := count(s.epochs, c.class); got != c.want {
+			t.Errorf("the %s epoch walk was handed %d records for the %d it wanted; "+
+				"that bucket has no TTL, so an unnarrowed read here grows with "+
+				"the deployment's whole history", c.class, got, c.want)
+		}
+	}
+
+	// And the answers are still right, which is the half a narrowing bug
+	// would not disturb.
+	live, err := s.ListLive(ctx, coord.ClassNode)
+	if err != nil || len(live) != 1 {
+		t.Fatalf("ListLive(node) = %v, %v; want the one presence lease", live, err)
+	}
+	hints, err := s.PreferredResources(ctx, coord.ClassSeat, "node-a")
+	if err != nil || len(hints) != 3 {
+		t.Fatalf("PreferredResources(seat) = %v, %v; want the three seat hints", hints, err)
 	}
 }

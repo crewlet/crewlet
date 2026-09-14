@@ -4,14 +4,18 @@
 //
 // This is the primitive every multi-node duty is built on. A node claims a
 // resource, renews it on a heartbeat, and loses it by crashing or releasing.
-// Three prefixes name three kinds:
+// A resource name is SEGMENTED, and its leading segment is its [Class] — the
+// kind of thing the lease is for. That is not decoration: the key a resource
+// becomes carries its class as a subject token of its own, so a whole class
+// is a wildcard the broker can match and a listing asks for one kind rather
+// than reading every lease in the fleet. Three classes name three kinds:
 //
 //   - seat:{handle} — one agent seat this node runs.
 //   - worker:{duty} — a fleet singleton: the maintenance sweep, the
 //     scheduler tick, the lifecycle pass.
 //   - node:{id} — the node's own PRESENCE, which is the kind that is easy to
 //     forget and the one the placement math counts. Membership is not work:
-//     a node holds it to say it is alive, `ListLive("node:")` is the fleet
+//     a node holds it to say it is alive, ListLive(ClassNode) is the fleet
 //     roster, and the fair-share target every node computes for itself is
 //     ceil(seats / that count). A node that stops renewing its presence is
 //     not merely idle — it raises everyone else's share.
@@ -112,6 +116,7 @@ package coord
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -327,14 +332,14 @@ type Backend interface {
 	// ListOwned returns the live leases this owner holds.
 	ListOwned(ctx context.Context, owner string) ([]Lease, error)
 
-	// ListLive returns live leases whose resource has this prefix. The
-	// membership read — ListLive("node:") — is built on this.
-	ListLive(ctx context.Context, prefix string) ([]Lease, error)
+	// ListLive returns the live leases of one resource class. The
+	// membership read — ListLive(ClassNode) — is built on this.
+	ListLive(ctx context.Context, class Class) ([]Lease, error)
 
-	// PreferredResources returns resources under prefix whose stickiness
+	// PreferredResources returns resources of this class whose stickiness
 	// hint names this node, INCLUDING lapsed ones: the hint's whole
 	// purpose is to bring a restarted node's own seats back to it.
-	PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error)
+	PreferredResources(ctx context.Context, class Class, nodeID string) (map[string]struct{}, error)
 
 	// FleetProtocolFloor returns the lowest protocol among live leases,
 	// and whether there were any. The observability half of the gate: it
@@ -345,17 +350,122 @@ type Backend interface {
 
 // --- resource naming ------------------------------------------------------
 
+// ResourceSeparator joins the segments of a resource name.
+//
+// A COLON, and the choice is load-bearing rather than cosmetic: a key in the
+// lease and epoch buckets is built from a resource by [DocumentKey], one
+// segment per part, so the leading segment — the CLASS — becomes a subject
+// token of its own and a whole class is a wildcard the broker can match.
+// Every listing that wants one kind of thing is that filter; before the
+// resource was segmented there was no token boundary to filter on and each of
+// those reads walked the bucket and discarded the rest.
+const ResourceSeparator = ":"
+
+// Class is the leading segment of a resource name — what kind of thing the
+// lease is for.
+//
+// A named type rather than a bare string because it is the one part of a
+// resource the store treats structurally, and a class that is not a single
+// subject token silently selects NOTHING: the filter built from it matches no
+// key, and a listing that returns nothing is indistinguishable from a class
+// with no members at every caller. [Class.Valid] is what refuses one.
+//
+// Classes are deliberately NOT enumerated here. This package owns the three
+// the fleet itself leases; the tracker's claims are leases in the same bucket
+// under classes of their own, and an enumeration here would either be wrong
+// or drag every caller's vocabulary into this package.
+type Class string
+
+// The classes the fleet leases directly.
 const (
-	seatPrefix   = "seat:"
-	workerPrefix = "worker:"
-	nodePrefix   = "node:"
+	ClassSeat   Class = "seat"
+	ClassWorker Class = "worker"
+	ClassNode   Class = "node"
 )
 
+// Valid reports whether this class can address a key.
+//
+// SHAPE, not membership — see the type doc for why there is no enumeration.
+// A class must be non-empty and must survive the key grammar's escaping
+// UNCHANGED, because a class that escapes is a class whose filter no longer
+// spells the same token as its own keys: the filter is built from the class
+// as written and the keys are built from it escaped, so the two stop matching
+// and the listing goes quietly empty.
+//
+// That one test is also what refuses a class carrying the separator, which is
+// why there is no second check for it: the separator is not in the literal
+// set, so it always escapes, and a class containing one can never equal its
+// own encoding.
+func (c Class) Valid() bool {
+	return c != "" && DocumentKey(string(c)) == string(c)
+}
+
+// Resource names the lease for one member of this class.
+//
+// Variadic because a claim is sometimes addressed by more than one part — a
+// sprint rollover names a project AND a number — and every part is a segment,
+// so such a claim is still filterable by its class and by its project.
+func (c Class) Resource(parts ...string) string {
+	return string(c) + ResourceSeparator + strings.Join(parts, ResourceSeparator)
+}
+
+// Prefix is what every resource in this class starts with.
+func (c Class) Prefix() string { return string(c) + ResourceSeparator }
+
+// Holds reports whether a resource belongs to this class.
+func (c Class) Holds(resource string) bool {
+	return strings.HasPrefix(resource, c.Prefix())
+}
+
+// Name recovers everything after the class, reporting false for a resource of
+// another class.
+//
+// The whole remainder, unsplit: a caller that wants one part of a multi-part
+// name knows how many there are, and a helper that guessed would turn a
+// handle containing a colon into a name nobody wrote.
+func (c Class) Name(resource string) (string, bool) {
+	if !c.Holds(resource) {
+		return "", false
+	}
+	return strings.TrimPrefix(resource, c.Prefix()), true
+}
+
+// CheckResource refuses a resource name that cannot address a key.
+//
+// EVERY SEGMENT NAMES SOMETHING — a class, a handle, a node id, a project —
+// so an empty one is a caller that lost a value on the way here, and the key
+// it would build is one [DocumentSegments] refuses. That refusal is why this
+// exists at the surface rather than at the encoder: a lease written under a
+// key nothing can decode is a lease no listing ever returns, so the seat it
+// covers looks free to every node while the record sits in the bucket. A
+// refusal names the value to fix; the silent version hands out one seat twice.
+func CheckResource(resource string) error {
+	if resource == "" {
+		return fmt.Errorf("coord: a resource name is required")
+	}
+	for i, seg := range ResourceSegments(resource) {
+		if seg == "" {
+			return fmt.Errorf("coord: resource %q has an empty segment at position %d: "+
+				"every %q-separated part names something, so an empty one is a "+
+				"value lost on the way here", resource, i, ResourceSeparator)
+		}
+	}
+	return nil
+}
+
+// ResourceSegments splits a resource into the segments a key is built from.
+//
+// The inverse of [Class.Resource]: the leading segment is the class and the
+// rest is its name, however many parts that took.
+func ResourceSegments(resource string) []string {
+	return strings.Split(resource, ResourceSeparator)
+}
+
 // SeatResource names the lease for an agent seat.
-func SeatResource(handle string) string { return seatPrefix + handle }
+func SeatResource(handle string) string { return ClassSeat.Resource(handle) }
 
 // WorkerResource names the lease for a per-company singleton duty.
-func WorkerResource(duty string) string { return workerPrefix + duty }
+func WorkerResource(duty string) string { return ClassWorker.Resource(duty) }
 
 // NodeResource names a node's own presence lease.
 //
@@ -365,33 +475,16 @@ func WorkerResource(duty string) string { return workerPrefix + duty }
 // SEAT ownership cannot work: a fleet where nobody has claimed anything yet
 // reads as zero nodes, and every node then believes it should take every
 // seat.
-func NodeResource(nodeID string) string { return nodePrefix + nodeID }
-
-// SeatPrefix, WorkerPrefix and NodePrefix are the ListLive arguments.
-const (
-	SeatPrefix   = seatPrefix
-	WorkerPrefix = workerPrefix
-	NodePrefix   = nodePrefix
-)
+func NodeResource(nodeID string) string { return ClassNode.Resource(nodeID) }
 
 // IsSeatResource reports whether a resource names a seat.
-func IsSeatResource(resource string) bool { return strings.HasPrefix(resource, seatPrefix) }
+func IsSeatResource(resource string) bool { return ClassSeat.Holds(resource) }
 
 // IsNodeResource reports whether a resource names a node's presence.
-func IsNodeResource(resource string) bool { return strings.HasPrefix(resource, nodePrefix) }
+func IsNodeResource(resource string) bool { return ClassNode.Holds(resource) }
 
 // SeatHandle recovers the handle from a seat resource name.
-func SeatHandle(resource string) (string, bool) {
-	if !IsSeatResource(resource) {
-		return "", false
-	}
-	return strings.TrimPrefix(resource, seatPrefix), true
-}
+func SeatHandle(resource string) (string, bool) { return ClassSeat.Name(resource) }
 
 // NodeID recovers the node id from a presence resource name.
-func NodeID(resource string) (string, bool) {
-	if !IsNodeResource(resource) {
-		return "", false
-	}
-	return strings.TrimPrefix(resource, nodePrefix), true
-}
+func NodeID(resource string) (string, bool) { return ClassNode.Name(resource) }

@@ -53,7 +53,7 @@ func (r *retention) Report(ctx context.Context) statelog.Report {
 		in.Register, in.RegisterReadable = positions, true
 	}
 	if r.leases != nil {
-		if leases, err := r.leases.ListLive(ctx, coord.NodePrefix); err == nil {
+		if leases, err := r.leases.ListLive(ctx, coord.ClassNode); err == nil {
 			for _, lease := range leases {
 				if id, ok := coord.NodeID(lease.Resource); ok {
 					in.Live = append(in.Live, statelog.Presence{NodeID: id})

@@ -139,7 +139,6 @@ var log = logging.Get("coord.kv")
 // third answer — "no answer" — which a caller retries loudly instead of acting
 // on a lie about a peer that does not exist.
 var (
-	errNoResource = errors.New("coord/kv: resource is required")
 	errNoOwner    = errors.New("coord/kv: owner is required")
 	errBadTTL     = errors.New("coord/kv: ttl must be positive")
 	errTTLTooLong = errors.New("coord/kv: ttl exceeds the bucket's configured TTL")
@@ -321,6 +320,31 @@ func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 	return eachEntry(ctx, s.js.Conn(), kv, visit)
 }
 
+// checkClass refuses a class that cannot address a key.
+//
+// REFUSED RATHER THAN ANSWERED, because the failure is silent otherwise: a
+// class that is not a single subject token builds a filter matching NOTHING,
+// and a listing that returns nothing is indistinguishable from a class with
+// no members at every caller. No sentinel, because there is nothing a caller
+// can do at runtime — the classes are constants, so reaching this is a bug in
+// the code that built one.
+func checkClass(class coord.Class) error {
+	if class.Valid() {
+		return nil
+	}
+	return fmt.Errorf("coord/kv: %q is not a resource class: a class is the "+
+		"leading segment of a resource name, so it must be non-empty and "+
+		"contain no %q", string(class), coord.ResourceSeparator)
+}
+
+// eachUnder is [Store.each] over one resource class, narrowed at the broker —
+// see [eachEntryUnder]. `what` names the listing a failure could not finish.
+func (s *Store) eachUnder(ctx context.Context, kv jetstream.KeyValue, class coord.Class, what string,
+	visit func(jetstream.KeyValueEntry) error) error {
+
+	return eachEntryUnder(ctx, s.js.Conn(), kv, coord.DocumentFilter(string(class)), what, visit)
+}
+
 // --- the lease surface ----------------------------------------------------
 
 // TryAcquire claims resource for the owner, or reports that someone else holds
@@ -330,7 +354,7 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		return nil, err
 	}
 	protocol := opts.EffectiveProtocol()
-	key := encodeKey(resource)
+	key := encodeResource(resource)
 
 	for range casAttempts {
 		snap, err := s.readForClaim(ctx, resource, opts.Ungated)
@@ -548,7 +572,7 @@ func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, 
 	if err := s.validateTTL(resource, owner, ttl); err != nil {
 		return false, err
 	}
-	key := encodeKey(resource)
+	key := encodeResource(resource)
 
 	for range casAttempts {
 		e, err := s.readOne(ctx, resource)
@@ -602,7 +626,7 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 	if err := validate(resource, owner); err != nil {
 		return false, err
 	}
-	key := encodeKey(resource)
+	key := encodeResource(resource)
 
 	for range casAttempts {
 		e, err := s.readOne(ctx, resource)
@@ -654,8 +678,8 @@ func (s *Store) Release(ctx context.Context, resource, owner string, epoch int64
 // clock. So a lapsed or released record reads as nil, exactly as an unclaimed
 // one does.
 func (s *Store) Get(ctx context.Context, resource string) (*coord.Lease, error) {
-	if resource == "" {
-		return nil, errNoResource
+	if err := coord.CheckResource(resource); err != nil {
+		return nil, err
 	}
 	e, err := s.readOne(ctx, resource)
 	if err != nil || e == nil {
@@ -677,13 +701,34 @@ func (s *Store) ListOwned(ctx context.Context, owner string) ([]coord.Lease, err
 	return s.listLive(ctx, func(e entry) bool { return e.value.Owner == owner })
 }
 
-// ListLive returns live leases under prefix. ListLive(coord.NodePrefix) is the
-// membership read: counting live presence leases is how a node learns the
+// ListLive returns the live leases of one class. ListLive(coord.ClassNode) is
+// the membership read: counting live presence leases is how a node learns the
 // fleet size it divides the seats by.
-func (s *Store) ListLive(ctx context.Context, prefix string) ([]coord.Lease, error) {
-	return s.listLive(ctx, func(e entry) bool { return strings.HasPrefix(e.resource, prefix) })
+//
+// THE BROKER NARROWS THIS ONE. A class is the leading segment of a resource
+// and therefore a subject token of its key, so the scan asks for that class
+// and nothing else — where it used to read every lease in the fleet, seats
+// and duties included, to count the nodes.
+func (s *Store) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
+	all, err := s.scanLeasesIn(ctx, class)
+	if err != nil {
+		return nil, err
+	}
+	now, err := s.resolveNow(ctx, all)
+	if err != nil {
+		return nil, err
+	}
+	var out []coord.Lease
+	for _, e := range all {
+		if s.tenure(e, now) {
+			out = append(out, *e.lease())
+		}
+	}
+	return out, nil
 }
 
+// ListOwned's scan is deliberately NOT narrowed: an owner holds leases of
+// every class at once, and the owner is in the record rather than in the key.
 func (s *Store) listLive(ctx context.Context, keep func(entry) bool) ([]coord.Lease, error) {
 	all, err := s.scanLeases(ctx)
 	if err != nil {
@@ -702,7 +747,7 @@ func (s *Store) listLive(ctx context.Context, keep func(entry) bool) ([]coord.Le
 	return out, nil
 }
 
-// PreferredResources returns resources under prefix whose hint names nodeID,
+// PreferredResources returns resources of this class whose hint names nodeID,
 // LAPSED ones included — that is the hint's whole purpose. A live-only read
 // would answer nothing in exactly the case it exists for: a node coming back
 // from a restart looking for the seats whose MCP children and caches it had
@@ -714,14 +759,14 @@ func (s *Store) listLive(ctx context.Context, keep func(entry) bool) ([]coord.Le
 // record (its token was minted from one), and every path that changes a hint
 // writes that record BEFORE the lease record, so the epochs bucket is never
 // behind.
-func (s *Store) PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error) {
-	records, err := s.scanResources(ctx)
+func (s *Store) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
+	records, err := s.scanResourcesIn(ctx, class)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]struct{}{}
 	for _, r := range records {
-		if r.Preferred == nodeID && strings.HasPrefix(r.Resource, prefix) {
+		if r.Preferred == nodeID {
 			out[r.Resource] = struct{}{}
 		}
 	}
@@ -774,7 +819,7 @@ func (s *Store) FleetProtocolFloor(ctx context.Context) (int, bool, error) {
 // how a hint outlives the lease key it was set through — this record has no
 // TTL, and the lease bucket's does the reaping.
 func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int64, string, error) {
-	key := encodeKey(resource)
+	key := encodeResource(resource)
 
 	for range casAttempts {
 		kve, err := s.epochs.Get(ctx, key)
@@ -827,7 +872,7 @@ func (s *Store) bumpEpoch(ctx context.Context, resource, preferred string) (int6
 // pinHint records a placement hint without moving the counter — the case where
 // a live holder is re-placed mid-tenure.
 func (s *Store) pinHint(ctx context.Context, resource, preferred string) error {
-	key := encodeKey(resource)
+	key := encodeResource(resource)
 
 	for range casAttempts {
 		kve, err := s.epochs.Get(ctx, key)
@@ -920,7 +965,7 @@ func (s *Store) readForClaim(ctx context.Context, resource string, ungated bool)
 
 // readOne reads a single lease record. A missing key is (nil, nil).
 func (s *Store) readOne(ctx context.Context, resource string) (*entry, error) {
-	kve, err := s.leases.Get(ctx, encodeKey(resource))
+	kve, err := s.leases.Get(ctx, encodeResource(resource))
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
 		return nil, nil
 	}
@@ -944,8 +989,26 @@ func (s *Store) readOne(ctx context.Context, resource string) (*entry, error) {
 // listing that costs a round trip per seat would make every heartbeat's read
 // cost grow with the company.
 func (s *Store) scanLeases(ctx context.Context) ([]entry, error) {
+	return s.collectLeases(ctx, func(visit func(jetstream.KeyValueEntry) error) error {
+		return s.each(ctx, s.leases, visit)
+	})
+}
+
+// scanLeasesIn is [Store.scanLeases] over one class, narrowed at the broker.
+func (s *Store) scanLeasesIn(ctx context.Context, class coord.Class) ([]entry, error) {
+	if err := checkClass(class); err != nil {
+		return nil, err
+	}
+	return s.collectLeases(ctx, func(visit func(jetstream.KeyValueEntry) error) error {
+		return s.eachUnder(ctx, s.leases, class, "the live "+string(class)+" leases", visit)
+	})
+}
+
+func (s *Store) collectLeases(ctx context.Context,
+	walk func(func(jetstream.KeyValueEntry) error) error) ([]entry, error) {
+
 	byResource := map[string]entry{}
-	err := s.each(ctx, s.leases, func(kve jetstream.KeyValueEntry) error {
+	err := walk(func(kve jetstream.KeyValueEntry) error {
 		e, ok := decodeEntry(kve)
 		if !ok {
 			// A listing that invented a resource name would put a seat
@@ -976,16 +1039,37 @@ func (s *Store) scanLeases(ctx context.Context) ([]entry, error) {
 	return out, nil
 }
 
-// scanResources reads every persistent resource record.
-func (s *Store) scanResources(ctx context.Context) ([]resourceValue, error) {
+// scanResourcesIn is [Store.scanResources] over one class.
+//
+// This is the read the seat sweep takes on its ticker, and the epochs bucket
+// is the one with NO TTL — it holds a record for every resource the
+// deployment has ever leased — so reading the whole of it to find one class's
+// hints was the largest recurring read a node made.
+func (s *Store) scanResourcesIn(ctx context.Context, class coord.Class) ([]resourceValue, error) {
+	if err := checkClass(class); err != nil {
+		return nil, err
+	}
+	return s.collectResources(ctx, func(visit func(jetstream.KeyValueEntry) error) error {
+		return s.eachUnder(ctx, s.epochs, class, "the "+string(class)+" placement hints", visit)
+	})
+}
+
+func (s *Store) collectResources(ctx context.Context,
+	walk func(func(jetstream.KeyValueEntry) error) error) ([]resourceValue, error) {
+
 	byResource := map[string]resourceValue{}
-	err := s.each(ctx, s.epochs, func(kve jetstream.KeyValueEntry) error {
-		resource, ok := decodeKey(kve.Key())
+	err := walk(func(kve jetstream.KeyValueEntry) error {
+		resource, ok := decodeResource(kve.Key())
 		if !ok {
 			log.WarnContext(ctx, "coord_kv_undecodable_key", "bucket", s.epochs.Bucket(), "key", kve.Key())
 			return nil
 		}
 		var v resourceValue
+		//nolint:nilerr // An undecodable epoch record is SKIPPED — loudly,
+		// which is what the warning above is — rather than raised. These
+		// records carry the placement HINTS, and a hint is advisory: losing
+		// one costs a seat its stickiness, where failing the read would
+		// stop the sweep placing any seat at all.
 		if err := json.Unmarshal(kve.Value(), &v); err != nil {
 			log.WarnContext(ctx, "coord_kv_undecodable_record", "bucket", s.epochs.Bucket(), "key", kve.Key())
 			return nil
@@ -1006,7 +1090,7 @@ func (s *Store) scanResources(ctx context.Context) ([]resourceValue, error) {
 }
 
 func decodeEntry(kve jetstream.KeyValueEntry) (entry, bool) {
-	resource, ok := decodeKey(kve.Key())
+	resource, ok := decodeResource(kve.Key())
 	if !ok {
 		return entry{}, false
 	}
@@ -1117,11 +1201,16 @@ func (s *Store) blockedByOlder(entries []entry, now time.Time, protocol int) boo
 // --- errors ---------------------------------------------------------------
 
 // validate checks the identity every call carries.
+//
+// The resource goes through [coord.CheckResource] rather than an emptiness
+// test, because a name with an empty SEGMENT is the one that fails silently:
+// it builds a key nothing can decode, so the lease is written and then
+// returned by no listing at all — which reads to every node as a free seat.
 func validate(resource, owner string) error {
-	switch {
-	case resource == "":
-		return errNoResource
-	case owner == "":
+	if err := coord.CheckResource(resource); err != nil {
+		return err
+	}
+	if owner == "" {
 		return errNoOwner
 	}
 	return nil
