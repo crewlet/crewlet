@@ -438,6 +438,14 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	defer span.End()
 
 	company := in.Company
+	if company == nil {
+		// Not a second read of the epoch, which is the one thing this
+		// must not do (see [resumeInput.Company]). Handed back rather
+		// than settled: a caller that assembled a resume without its
+		// epoch is a defect here, and a peer can still resume the run.
+		return fmt.Errorf("%w: run %s was handed to resumeTurn without the "+
+			"company its seat was resolved in", sandbox.ErrResumeUnavailable, in.Run.TurnID)
+	}
 	resumedReply, err := resumeReply(in.Run)
 	if err != nil {
 		return err
