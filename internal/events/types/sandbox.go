@@ -55,11 +55,17 @@ func (e SandboxRunStarted) SummaryFor(actor string) string {
 // so the resume happens at most once even when this is delivered more than
 // once, which it will be: successive poll ticks can both fire before the first
 // claim lands, and queue delivery is at-least-once.
+//
+// LaunchID names WHICH job finished. The row is the turn's and a turn can run
+// more than one job, so a duplicate of this signal can arrive after the job it
+// was raised for has parked on a question or been replaced by the next one;
+// the claim takes the row only while it still holds this launch, running.
 type SandboxRunCompleted struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
 	RoleName    string `json:"role"`
 	TurnID      string `json:"turn_id"`
+	LaunchID    string `json:"launch_id,omitempty"`
 	SandboxID   string `json:"sandbox_id"`
 	CodingAgent string `json:"coding_agent"`
 }

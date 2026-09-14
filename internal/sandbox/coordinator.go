@@ -150,14 +150,14 @@ type CoordinatorOptions struct {
 //   - SUSPEND → BUSY. The suspending turn persists its conversation and the
 //     seat is marked busy, so no queued event slips a turn in beside a run
 //     that is still going.
-//   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, the result
-//     collected with the box paused for reuse, tokens post-accounted once per
-//     launch however often the tail is retried, and the suspended loop
-//     re-entered with the result spliced in. The seat stays
-//     busy through all of it and is freed only at the last moment before the
-//     resume, because freeing it earlier lets a queued event take the slot,
-//     the resume fail, and the redelivery find the claim already flipped —
-//     the suspended conversation permanently lost.
+//   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, and only
+//     for the job it reports, the result collected with the box paused for
+//     reuse, tokens post-accounted once per launch however often the tail is
+//     retried, and the suspended loop re-entered with the result spliced in.
+//     The seat stays busy through all of it and is freed only at the last
+//     moment before the resume, because freeing it earlier lets a queued
+//     event take the slot, the resume fail, and the redelivery find the claim
+//     already flipped, with the suspended conversation permanently lost.
 //   - RESTART RECOVERY. A node claiming a seat re-marks its running jobs busy
 //     and reaps any tail the previous owner abandoned mid-resume.
 type Coordinator struct {
@@ -317,15 +317,18 @@ func (c *Coordinator) syncBusy(ctx context.Context, handle string) {
 
 // OnCompleted claims the run, collects, accounts, then resumes the loop.
 func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunCompleted, trigger *events.Event) error {
-	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID)
+	run, won, err := c.pending.ClaimForResume(ctx, ev.TurnID, CompletionTail(ev.LaunchID))
 	if err != nil {
 		return fmt.Errorf("sandbox: claiming %s: %w", ev.TurnID, err)
 	}
 	if !won {
-		// Already claimed by a duplicate signal — successive poll ticks both
-		// firing before this claim landed, or an at-least-once redelivery —
-		// or terminal.
-		log.InfoContext(ctx, "sandbox_completion_already_claimed", "turn_id", ev.TurnID)
+		// Not this signal's to run. Already claimed by a duplicate of it
+		// (successive poll ticks both firing before the claim landed, an
+		// at-least-once redelivery, the retry a failed resume opened), or
+		// the row no longer holds its job running: parked on the question
+		// that job asked, replaced by the next run_sandbox call, or over.
+		log.InfoContext(ctx, "sandbox_completion_already_claimed",
+			"turn_id", ev.TurnID, "launch_id", ev.LaunchID)
 		return nil
 	}
 
@@ -345,9 +348,6 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 	c.charge(ctx, run, result)
 
 	if result.NeedsInput {
-		// A clarification wait FREES the seat: a person can take days, and
-		// the answer arrives on the seat's own inbox.
-		c.clearBusy(run.AgentHandle)
 		return c.park(ctx, run, result)
 	}
 
@@ -398,8 +398,8 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 //
 // THE RECORD IS WRITTEN BEFORE ANYTHING CAN REOPEN THE RUN. The claim is held
 // from the flip until the revert or the park, and only those let another
-// completion win it; a process that dies in between leaves the row resumed,
-// which no completion claims and the seat's next owner reaps. What the order
+// signal take the tail; a process that dies in between leaves the row resumed,
+// which no signal claims and the seat's next owner reaps. What the order
 // cannot cover is a store that refuses this write and accepts the revert right
 // after it: the retry then charges the run again. That over-states the
 // counter, which trips a cap early rather than late, and it is logged.
@@ -435,32 +435,31 @@ func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result)
 	}
 }
 
-// park records the question, settles the box per the pause policy, and
-// announces the clarification.
+// park announces the question, records it, and settles the box per the pause
+// policy.
+//
+// EVERY STEP THAT CAN FAIL RUNS UNDER THE CLAIM, and a failure hands the claim
+// back. A completion claims only its own job while that job is running, so
+// once the row says awaiting, no redelivery of the completion can reach the
+// question again. A question recorded but never announced would then wait for
+// an answer nobody was asked for, and a question that could not be recorded
+// left the row resumed, its paused box held until the seat changed hands. So
+// the announcement goes first and the record second, and either failing
+// reverts the claim for the completion's retry to ask again.
+//
+// The seat is freed only once the question is on the row. A clarification wait
+// FREES it, because a person can take days and the answer arrives on the
+// seat's own inbox; freed any earlier, a reply that arrived in between would
+// be taken as a new turn instead of being held until it has a run to answer.
 //
 // This is the wait PauseTTL exists for, and the only place the knob applies:
 // every other pause in the lifecycle is settled by the tail that made it, but
 // this one is open-ended. The box stays paused with its TTL now ticking for
-// the waiter's reaper — unless the deployment set a zero TTL, which means
+// the waiter's reaper, unless the deployment set a zero TTL, which means
 // "never hold a blocked box": tear it down now and park straight into reseed
 // for zero holding cost. The answer resumes the work either way; only the
 // starting point differs, a live checkout against the pushed branch.
 func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) error {
-	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
-		Question: result.Question, Audience: result.AskTo,
-		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
-	}); err != nil {
-		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
-	}
-	if run.PauseTTLSeconds == 0 {
-		c.teardown(ctx, run)
-		if err := c.pending.SetStatus(ctx, run.TurnID, StatusReseed, fenceOf(run)); err != nil {
-			log.WarnContext(ctx, "sandbox_reseed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
-		}
-	}
-	log.InfoContext(ctx, "sandbox_run_awaiting_clarification",
-		"turn_id", run.TurnID, "audience", result.AskTo)
-
 	announcement := types.SandboxClarificationRequested{
 		Agent: run.AgentID, AgentHandle: run.AgentHandle, RoleName: run.Role,
 		TurnID: run.TurnID, SandboxID: run.SandboxID,
@@ -471,7 +470,29 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	ev.Source = run.Role
-	return c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev)
+	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
+		c.unclaim(ctx, run)
+		return fmt.Errorf("sandbox: announcing the question %s asked: %w", run.TurnID, err)
+	}
+
+	if err := c.pending.MarkAwaiting(ctx, run.TurnID, Clarification{
+		Question: result.Question, Audience: result.AskTo,
+		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
+	}); err != nil {
+		c.unclaim(ctx, run)
+		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
+	}
+	c.clearBusy(run.AgentHandle)
+
+	if run.PauseTTLSeconds == 0 {
+		c.teardown(ctx, run)
+		if err := c.pending.SetStatus(ctx, run.TurnID, StatusReseed, fenceOf(run)); err != nil {
+			log.WarnContext(ctx, "sandbox_reseed_mark_failed", "turn_id", run.TurnID, "error", err.Error())
+		}
+	}
+	log.InfoContext(ctx, "sandbox_run_awaiting_clarification",
+		"turn_id", run.TurnID, "audience", result.AskTo)
+	return nil
 }
 
 // TryResumeFromAnswer resumes a parked run if this event answers its question.
@@ -495,7 +516,10 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 	if !found {
 		return false, nil
 	}
-	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID)
+	// THE JOB THAT ASKED, still waiting. The lookup is a snapshot, and a
+	// claim that took whatever the row held by now would hand this answer
+	// to the next job, which asked nothing.
+	claimed, won, err := c.pending.ClaimForResume(ctx, run.TurnID, AnswerTail(run.LaunchID))
 	if err != nil {
 		return false, err
 	}
@@ -585,17 +609,9 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
 		// completion redelivers, the claim refuses, and the suspended
 		// conversation is permanently lost with the row stranded in resumed.
-		// Reverted to the EXACT pre-claim status the claim snapshotted.
-		revert := run.ClaimedFrom
-		if revert == "" {
-			revert = StatusRunning
-		}
 		log.ErrorContext(ctx, "sandbox_resume_failed",
-			"turn_id", run.TurnID, "revert_to", revert, "error", err.Error())
-		if setErr := c.pending.SetStatus(ctx, run.TurnID, revert, fenceOf(run)); setErr != nil {
-			log.ErrorContext(ctx, "sandbox_resume_revert_failed",
-				"turn_id", run.TurnID, "error", setErr.Error())
-		}
+			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+		c.unclaim(ctx, run)
 		c.markBusy(run.AgentHandle)
 		return err
 	}
@@ -663,6 +679,31 @@ func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) err
 		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, req.Run.AgentHandle)
 	}
 	return c.resume.Resume(ctx, req)
+}
+
+// unclaim hands a claimed tail back, so the signal's retry can win the flip
+// again.
+//
+// To the EXACT status the claim took it from, which the claim snapshotted: a
+// run answered out of a clarification goes back to waiting for its answer,
+// and one collected from a running job goes back to running for its
+// completion. A tail left in resumed is refused by every retry and looked at
+// by nothing but the seat's next owner.
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun) {
+	if err := c.pending.SetStatus(ctx, run.TurnID, claimedFrom(run), fenceOf(run)); err != nil {
+		log.ErrorContext(ctx, "sandbox_claim_revert_failed",
+			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+	}
+}
+
+// claimedFrom is the status a claimed run held before its claim. A claim
+// always records it, and running is the only status a completion takes a tail
+// out of, so it is the one a row without the record goes back to.
+func claimedFrom(run PendingRun) string {
+	if run.ClaimedFrom == "" {
+		return StatusRunning
+	}
+	return run.ClaimedFrom
 }
 
 // settleFailed ends a run that failed: it reaps the box, finishes the run,
