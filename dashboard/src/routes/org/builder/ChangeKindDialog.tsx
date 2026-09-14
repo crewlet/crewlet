@@ -150,7 +150,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={blocked}>
-            {becoming === "human" ? "Change to a human seat" : "Change to an agent seat"}
+            {becoming === "human" ? "Change to human seat" : "Change to agent seat"}
           </Button>
         </>
       }

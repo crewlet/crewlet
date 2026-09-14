@@ -481,15 +481,14 @@ describe("seat fields", () => {
 
   test("changing the kind is its own step: the editor closes and opens it, unless the form has changes", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
-    fireEvent.click(screen.getByRole("button", { name: "Change to a human seat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change to human seat" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
     expect(view.spies.openChangeKind).toHaveBeenCalledWith("seat:dev");
     cleanup();
     edit(keyedState(fixtureCompany()), "seat:dev");
     type("Goal", "Ship");
     expect(
-      (screen.getByRole("button", { name: "Change to a human seat" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Change to human seat" }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 

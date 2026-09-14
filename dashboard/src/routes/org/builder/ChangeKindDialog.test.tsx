@@ -33,7 +33,7 @@ function open(state: BuilderState, key: string, options: HarnessOptions = {}) {
 }
 
 const confirm = (name: string) => screen.getByRole("button", { name }) as HTMLButtonElement;
-const toHuman = () => confirm("Change to a human seat");
+const toHuman = () => confirm("Change to human seat");
 
 function withFields(): CompanyDocument {
   const doc = fixtureCompany();
@@ -206,7 +206,7 @@ test("a human seat becomes an agent seat again, losing the fields an agent may n
   ).toBeDefined();
   expect(screen.getByText("contact")).toBeDefined();
   expect(screen.getByText("availability")).toBeDefined();
-  fireEvent.click(confirm("Change to an agent seat"));
+  fireEvent.click(confirm("Change to agent seat"));
   const seat = locate(view.state().draft, "seat:dev");
   expect(seat?.kind === "seat" && seat.node.data).toEqual({ name: "Dev" });
 });
@@ -215,7 +215,7 @@ test("a read-only builder changes nothing, and says why the button is unavailabl
   const doc = fixtureCompany();
   doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
   open(keyedState(doc), "seat:dev", { readOnly: true });
-  expect(confirm("Change to an agent seat").disabled).toBe(true);
+  expect(confirm("Change to agent seat").disabled).toBe(true);
   expect(
     screen.getByText(
       "The organization cannot be changed right now, so this change cannot be applied.",

@@ -1019,7 +1019,7 @@ function KindFact({
             api.openChangeKind(seatKey);
           }}
         >
-          {human ? "Change to an agent seat" : "Change to a human seat"}
+          {human ? "Change to agent seat" : "Change to human seat"}
         </Button>
       </div>
     </ReadOnlyFact>
