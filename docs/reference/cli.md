@@ -12,7 +12,7 @@ subcommand below is served by it.
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
 | `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
-| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node — the counter is the fleet's, not this file's |
+| `crewlet budgets show [config]` | Print token usage per scope (`org`, `agent:<id>`), read from a running node, because the counter is the fleet's and not this file's. `REFUSING SINCE` names a scope whose cap is turning charges away |
 | `crewlet budgets reset [config]` | Zero token usage on a running node — durable across restarts, so resetting is deliberate. `-scope` limits it to one scope, and the report names what it cleared |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. See [Backups & Restore](../guides/backup.md) |
 | `crewlet retention status [config]` | What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
@@ -537,6 +537,13 @@ log that echoes the command.
 The **caps** are not stored here — they come from the active company config
 (`token_budget` on the org, `role.token_budget` on a seat), so every process
 derives the same numbers without coordinating. Only the usage is shared.
+
+`show` prints a `REFUSING SINCE` column: when that scope's cap last turned a
+charge away, or `-` while it is not refusing. Read it rather than `USED`
+against `CAP`, because a refused charge increments nothing: a seat charged in
+3 000-token rounds against a 100 000 cap stops near 99 000 and its row would
+otherwise read as headroom. The next charge the scope admits clears it, and so
+does a reset.
 
 `show` refuses rather than printing zeros when the node reports it could not
 read the counter (`durable: false` on the query surface). A counter nobody
