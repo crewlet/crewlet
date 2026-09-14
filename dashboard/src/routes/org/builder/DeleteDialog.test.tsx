@@ -94,6 +94,26 @@ describe("outside the chart", () => {
     ).toBe("dev");
   });
 
+  // The engine validates `route_to` only while Datadog is enabled, and reads
+  // it trimmed: a switched-off block wakes nobody and requires nothing, and a
+  // value written with a space still names its seat.
+  test("the fallback is the engine's: only while Datadog is on, and read trimmed", () => {
+    const off = fixtureCompany();
+    off.integrations = { ...off.integrations, datadog: { enabled: false, route_to: "sre" } };
+    const view = open(keyedState(off), "seat:sre");
+    expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
+    expect(deleteButton().disabled).toBe(false);
+    fireEvent.click(deleteButton());
+    expect(view.state().log.ops[0]).toMatchObject({ type: "remove", target: "seat:sre" });
+    cleanup();
+
+    const spaced = fixtureCompany();
+    spaced.integrations = { ...spaced.integrations, datadog: { enabled: true, route_to: " sre " } };
+    open(keyedState(spaced), "seat:sre");
+    expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
+    expect(deleteButton().disabled).toBe(true);
+  });
+
   // The replacements follow the removal. Choosing a seat placed in the unit by
   // its reference and then deleting the placed seats too would otherwise write
   // a fallback naming a seat this removal deletes, which the engine refuses.
@@ -117,7 +137,7 @@ describe("outside the chart", () => {
   test("with no agent seat left to take the fallback, the dialog says so instead of offering an empty choice", () => {
     const doc: CompanyDocument = {
       name: "X",
-      integrations: { datadog: { route_to: "only" } },
+      integrations: { datadog: { enabled: true, route_to: "only" } },
       roles: [{ name: "Only" }, { name: "Pat", kind: "human", contact: { github_login: "pat" } }],
     };
     open(keyedState(doc), "seat:only");

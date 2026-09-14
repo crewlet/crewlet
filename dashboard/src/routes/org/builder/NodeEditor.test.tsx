@@ -302,10 +302,11 @@ describe("seat fields", () => {
     expect(field("Handle")).toBeDefined();
   });
 
-  // The engine derived the handle from the name the checked draft holds, and
-  // only a check of the draft as it stands says anything about it: an access
-  // level offered on an older check's handle is one the reducer refuses.
-  test("a new seat's derived handle is the current check's, for the name that check saw", () => {
+  // The engine derives an undeclared handle from the seat's own name, so a
+  // check vouches for it exactly while the seat keeps the name that check saw,
+  // whatever else changed since; the reducer reads the same rule, so an access
+  // level offered here is one it records.
+  test("a new seat's derived handle is the one a check reported for the name it has now", () => {
     const added = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
       intent: {
@@ -334,6 +335,8 @@ describe("seat fields", () => {
     ).toBeDefined();
     cleanup();
 
+    // Another node edited since: the check is of an older draft, and still
+    // saw this seat's name.
     const later = builderReducer(checked, {
       type: "record",
       intent: {
@@ -343,6 +346,15 @@ describe("seat fields", () => {
       },
     });
     edit(later, "new:qa");
+    expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
+    cleanup();
+
+    // Renamed in the draft: no check has seen the name it derives from now.
+    const renamed = builderReducer(later, {
+      type: "record",
+      intent: { type: "renameSeat", target: "new:qa", name: "Quality" },
+    });
+    edit(renamed, "new:qa");
     expect((field("Access level") as HTMLSelectElement).disabled).toBe(true);
     expect(
       screen.getByText(
@@ -635,6 +647,17 @@ describe("integrations", () => {
         /chosen from Integrations, or here when the fallback seat is deleted or changed to a human seat/,
       ),
     ).toBeDefined();
+    cleanup();
+
+    // Switched off, Datadog wakes nobody whatever its route_to names, which
+    // is how the engine and the chart read it.
+    const off = connected();
+    off.integrations = { ...off.integrations, datadog: { enabled: false, route_to: "sre" } };
+    edit(keyedState(off), "seat:sre");
+    expect(
+      screen.getByText("Datadog is switched off, so no alert wakes a fallback seat."),
+    ).toBeDefined();
+    expect(screen.queryByText("This seat is the Datadog fallback.")).toBeNull();
   });
 
   test("no credential reaches the page: not a mask, not a reference, not the literal half of a partial one", () => {

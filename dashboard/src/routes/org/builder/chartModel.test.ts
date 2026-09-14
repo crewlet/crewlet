@@ -24,6 +24,8 @@ import { answered, checkedEdit, PLACED, record, run } from "./stateTestkit.ts";
 import {
   chartInputs,
   CYCLE_GROUP,
+  datadogFallback,
+  keyOfHandle,
   reporting,
   structure,
   type SeatView,
@@ -208,8 +210,7 @@ describe("structure", () => {
     const inputs = (draft: Draft) => ({
       draft,
       baseDraft: checkedDraft,
-      sent,
-      derived,
+      checked: { sent, derived },
       current: false,
     });
     const rewrite = (data: Partial<Record<string, string>>) => ({
@@ -422,5 +423,37 @@ describe("reporting", () => {
     expect(chart.tree.map((t) => t.id)).toEqual([seatKey("chief"), CYCLE_GROUP]);
     expect(chart.tree[1]!.children!.map((c) => c.id)).toEqual([seatKey("a")]);
     expect(chart.items.get(seatKey("b"))).toMatchObject({ cycleSize: 2, root: false });
+  });
+});
+
+describe("what every surface reads about a node", () => {
+  // The chart's badge, the Delete and Change kind dialogs and the editor all
+  // ask this one question, so none of them can call a seat the fallback while
+  // the engine routes nothing to it.
+  test("the Datadog fallback is the engine's: only while Datadog is on, and trimmed", () => {
+    expect(datadogFallback({ integrations: { datadog: { enabled: true, route_to: "sre" } } })).toBe(
+      "sre",
+    );
+    expect(
+      datadogFallback({ integrations: { datadog: { enabled: true, route_to: " sre " } } }),
+    ).toBe("sre");
+    expect(
+      datadogFallback({ integrations: { datadog: { enabled: false, route_to: "sre" } } }),
+    ).toBeUndefined();
+    expect(datadogFallback({ integrations: { datadog: { route_to: "sre" } } })).toBeUndefined();
+    expect(
+      datadogFallback({ integrations: { datadog: { enabled: true, route_to: "  " } } }),
+    ).toBeUndefined();
+    expect(datadogFallback({})).toBeUndefined();
+  });
+
+  test("a reported handle is read as the seat of the draft the check gave it", () => {
+    const state = checkedEdit(fixtureCompany());
+    expect(keyOfHandle(state, "sre")).toBe(seatKey("sre"));
+    expect(keyOfHandle(state, "nobody")).toBeUndefined();
+    // A seat removed since the check is no node of the draft.
+    const removed = record(state, { type: "remove", target: seatKey("dev") });
+    expect(keyOfHandle(removed, "dev")).toBeUndefined();
+    expect(keyOfHandle(run(INITIAL_BUILDER), "sre")).toBeUndefined();
   });
 });

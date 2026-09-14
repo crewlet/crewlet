@@ -26,7 +26,13 @@
 
 import type { ConfigProblem, ConfigWarning, Derived } from "~/protocol/index.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
-import { CHARTER_FIELDS, pathOfSegments, type IndexedDocument, type Segment } from "./document.ts";
+import {
+  CHARTER_FIELDS,
+  pathOfSegments,
+  placeDerivation,
+  type IndexedDocument,
+  type Segment,
+} from "./document.ts";
 
 /** Where a problem sends the operator when the builder cannot fix it. */
 export type ProblemLink = "integrations" | "schedules";
@@ -75,16 +81,15 @@ export interface Findings {
 export function placeProblems(sent: IndexedDocument, findings: Findings): ProblemIndex {
   const byNode = new Map<NodeKey, PlacedProblem[]>();
   const document: PlacedProblem[] = [];
-  const seatPaths = new Map<string, Segment[]>();
-  for (const seat of findings.derived?.seats ?? []) {
-    const key = seat.path ? sent.index.byPath.get(seat.path) : undefined;
-    const segments = key === undefined ? undefined : sent.index.segmentsOf.get(key);
-    if (seat.handle && segments) seatPaths.set(seat.handle, [...segments]);
-  }
+  const { keyOfHandle } = placeDerivation(sent.index, findings.derived ?? null);
+  const seatPath = (handle: string): readonly Segment[] => {
+    const key = keyOfHandle.get(handle);
+    return (key === undefined ? undefined : sent.index.segmentsOf.get(key)) ?? [];
+  };
 
   const place = (severity: PlacedProblem["severity"], source: ConfigProblem | ConfigWarning) => {
     let segments: readonly Segment[] = source.segments ?? [];
-    if (segments.length === 0 && source.seat) segments = seatPaths.get(source.seat) ?? [];
+    if (segments.length === 0 && source.seat) segments = seatPath(source.seat);
     const { node, field } = locate(sent, segments);
     const placed: PlacedProblem = {
       severity,

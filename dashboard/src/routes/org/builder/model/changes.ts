@@ -32,8 +32,9 @@ import {
   CHARTER_FIELDS,
   DATADOG_ROUTE_TO,
   GITLAB_ACCESS_LEVELS,
-  toDocument,
   type PathIndex,
+  placeDerivation,
+  toDocument,
 } from "./document.ts";
 import { getPath, isRecord, jsonEqual } from "./json.ts";
 import {
@@ -202,19 +203,7 @@ function indexSide(side: Side): Indexed {
   const { document, index } = toDocument(side.draft);
   const empty = side.draft.roles.length === 0 && side.draft.units.length === 0;
   const known = side.derived !== null || empty;
-  const seatByKey = new Map<NodeKey, DerivedSeat>();
-  const unitByKey = new Map<NodeKey, DerivedUnit>();
-  const keyOfHandle = new Map<string, NodeKey>();
-  for (const seat of side.derived?.seats ?? []) {
-    const key = seat.path === undefined ? undefined : index.byPath.get(seat.path);
-    if (key === undefined || key === COMPANY_KEY) continue;
-    seatByKey.set(key, seat);
-    if (seat.handle && !keyOfHandle.has(seat.handle)) keyOfHandle.set(seat.handle, key);
-  }
-  for (const unit of side.derived?.units ?? []) {
-    const key = unit.path === undefined ? undefined : index.byPath.get(unit.path);
-    if (key !== undefined && key !== COMPANY_KEY) unitByKey.set(key, unit);
-  }
+  const { seatByKey, unitByKey, keyOfHandle } = placeDerivation(index, side.derived);
   const refs = new Map<NodeKey, EntityRef>([
     [COMPANY_KEY, { key: COMPANY_KEY, kind: "company", name: companyName(document) }],
   ]);

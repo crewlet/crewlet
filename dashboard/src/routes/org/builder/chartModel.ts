@@ -2,11 +2,13 @@
  * What the builder's canvas and outline draw, as data: the structure chart and
  * the reporting chart of the draft.
  *
- * ONE READING FOR BOTH VIEWS. The canvas draws cards and the outline draws
- * rows, but "which unit is this seat drawn in", "who leads this unit" and "who
- * does this seat report to" must have one answer, or the two views of one
- * draft disagree. So both read this module, and it is pure: no React, no DOM,
- * tested in a node environment.
+ * ONE READING FOR BOTH VIEWS, AND FOR WHAT THEY OPEN. The canvas draws cards
+ * and the outline draws rows, but "which unit is this seat drawn in", "who
+ * leads this unit" and "who does this seat report to" must have one answer,
+ * or the two views of one draft disagree. So both read this module, and so do
+ * the editor and the dialogs for the three facts a card also shows: a seat's
+ * handle, the seat a reported handle names, and the Datadog fallback. It is
+ * pure: no React, no DOM, tested in a node environment.
  *
  * THE DOCUMENT GIVES THE SHAPE, THE ENGINE GIVES THE MEANING. Units, their
  * seats and their children are drawn as the draft holds them, because that is
@@ -34,16 +36,19 @@
  * answers, rather than shown stale.
  */
 
-import type { Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
+import type { CompanyDocument, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import type { TreeInput } from "~/ui/treeModel.ts";
-import type { BuilderState } from "./model/reducer.ts";
+import { checkedDocument, type BuilderState } from "./model/reducer.ts";
 import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
 import { allUnits, locate, type Draft, type DraftSeat } from "./model/draft.ts";
 import {
   DATADOG_ROUTE_TO,
-  handlesByKey,
+  knownHandles,
+  NO_DERIVATION,
+  nodeDataIn,
   pathOfSegments,
-  type IndexedDocument,
+  placeDerivation,
+  type CheckedDocument,
 } from "./model/document.ts";
 import { getPath, isRecord } from "./model/json.ts";
 import { kindOf, type SeatKind } from "./model/operations.ts";
@@ -54,10 +59,8 @@ export interface ChartInputs {
   readonly draft: Draft;
   /** The draft of the saved company: which seats exist and run today. */
   readonly baseDraft: Draft;
-  /** The document the last check was sent, with its path index. */
-  readonly sent: IndexedDocument | null;
-  /** The engine's derivation of `sent`, when that check answered with one. */
-  readonly derived: Derived | null;
+  /** The document the last check was sent and its derivation, when it answered with one. */
+  readonly checked: CheckedDocument | null;
   /** Whether that derivation describes the draft as it stands: no change since that check. */
   readonly current: boolean;
 }
@@ -70,14 +73,12 @@ export interface ChartInputs {
 export function chartInputs(
   state: Pick<BuilderState, "draft" | "baseDraft" | "check" | "generation">,
 ): ChartInputs {
-  const sent = state.check.derived ? state.check.sent : null;
-  const derived = state.check.sent ? state.check.derived : null;
+  const checked = checkedDocument(state.check);
   return {
     draft: state.draft,
     baseDraft: state.baseDraft,
-    sent,
-    derived,
-    current: derived !== null && state.check.generation === state.generation,
+    checked,
+    current: checked !== null && state.check.generation === state.generation,
   };
 }
 
@@ -163,98 +164,87 @@ export interface Structure {
   readonly tree: readonly TreeInput[];
 }
 
+// ---------------------------------------------------------------------------
+// What every surface reads about a node
+// ---------------------------------------------------------------------------
+
+/**
+ * The key of the seat of the draft the last check gave `handle`, for reading
+ * a handle the engine reported (a manager, a lead, an automatic report) as a
+ * node. `undefined` when that check named no such seat or the seat is gone.
+ * Whether the fact the handle came from still holds is the caller's to judge:
+ * a manager only from a check of the draft as it stands, a lead while the
+ * chain above it is as checked.
+ */
+export function keyOfHandle(
+  state: Pick<BuilderState, "draft" | "check">,
+  handle: string,
+): NodeKey | undefined {
+  const checked = checkedDocument(state.check);
+  if (!checked) return undefined;
+  const key = placeDerivation(checked.sent.index, checked.derived).keyOfHandle.get(handle);
+  return key !== undefined && locate(state.draft, key)?.kind === "seat" ? key : undefined;
+}
+
+/**
+ * The handle of the seat an alert that names nobody wakes, or `undefined`.
+ *
+ * ONLY WHILE DATADOG IS ENABLED: the engine builds no Datadog parser
+ * otherwise and refuses every alert at the route, and it validates
+ * `route_to` only for an enabled block, so a `route_to` left in a disabled
+ * block names a seat nothing will ever wake and nothing requires. The engine
+ * trims what it reads (`config.Company.Validate`), and so does this, or a
+ * value written with a space would name no seat here while it names one to
+ * the engine.
+ */
+export function datadogFallback(company: CompanyDocument): string | undefined {
+  const datadog = getPath(company, DATADOG_ROUTE_TO.slice(0, -1));
+  if (!isRecord(datadog) || datadog.enabled !== true) return undefined;
+  const handle = typeof datadog.route_to === "string" ? datadog.route_to.trim() : "";
+  return handle === "" ? undefined : handle;
+}
+
 /** The engine's facts about the last checked document, by node key. */
 interface Engine {
   readonly seatByKey: ReadonlyMap<NodeKey, DerivedSeat>;
   readonly unitByKey: ReadonlyMap<NodeKey, DerivedUnit>;
   readonly keyOfHandle: ReadonlyMap<string, NodeKey>;
+  /** The handle each seat of the draft runs under, where known (`document.knownHandles`). */
   readonly handles: ReadonlyMap<NodeKey, string>;
   /** The node's JSON in the document that was checked. */
   readonly sentData: (key: NodeKey) => Record<string, unknown> | undefined;
   /** The node it sat under in the document that was checked: a unit, the company, or unknown. */
   readonly sentParent: (key: NodeKey) => NodeKey | undefined;
-  readonly sent: IndexedDocument | null;
+  readonly checked: CheckedDocument | null;
 }
 
-function engineOf({ sent, derived }: ChartInputs): Engine {
-  const seatByKey = new Map<NodeKey, DerivedSeat>();
-  const unitByKey = new Map<NodeKey, DerivedUnit>();
-  const keyOfHandle = new Map<string, NodeKey>();
-  if (sent && derived) {
-    for (const seat of derived.seats ?? []) {
-      const key = seat.path === undefined ? undefined : sent.index.byPath.get(seat.path);
-      if (key === undefined || key === COMPANY_KEY) continue;
-      seatByKey.set(key, seat);
-      if (seat.handle && !keyOfHandle.has(seat.handle)) keyOfHandle.set(seat.handle, key);
-    }
-    for (const unit of derived.units ?? []) {
-      const key = unit.path === undefined ? undefined : sent.index.byPath.get(unit.path);
-      if (key !== undefined && key !== COMPANY_KEY) unitByKey.set(key, unit);
-    }
-  }
+function engineOf({ draft, checked }: ChartInputs): Engine {
+  const placed = checked ? placeDerivation(checked.sent.index, checked.derived) : NO_DERIVATION;
   return {
-    seatByKey,
-    unitByKey,
-    keyOfHandle,
-    handles: sent && derived ? handlesByKey(sent, derived) : new Map(),
-    sentData: (key) => {
-      const segments = sent?.index.segmentsOf.get(key);
-      if (!sent || !segments) return undefined;
-      let at: unknown = sent.document;
-      for (const segment of segments) {
-        if (typeof segment === "number") at = Array.isArray(at) ? at[segment] : undefined;
-        else at = isRecord(at) && Object.hasOwn(at, segment) ? at[segment] : undefined;
-      }
-      return isRecord(at) ? at : undefined;
-    },
+    ...placed,
+    handles: knownHandles(draft, checked),
+    sentData: (key) => (checked ? nodeDataIn(checked.sent, key) : undefined),
     sentParent: (key) => {
       // `units[i]` and `roles[i]` sit under the company; anything deeper sits
       // under the unit two segments up (`...children[i]`, `...roles[i]`).
-      const segments = sent?.index.segmentsOf.get(key);
-      if (!sent || !segments || segments.length < 2) return undefined;
+      const segments = checked?.sent.index.segmentsOf.get(key);
+      if (!checked || !segments || segments.length < 2) return undefined;
       if (segments.length === 2) return COMPANY_KEY;
-      return sent.index.byPath.get(pathOfSegments(segments.slice(0, -2)));
+      return checked.sent.index.byPath.get(pathOfSegments(segments.slice(0, -2)));
     },
-    sent,
+    checked,
   };
 }
 
 const text = (value: unknown): string =>
   typeof value === "string" && value.trim() !== "" ? value : "";
 
-/**
- * The handle a seat runs under, or `undefined` while no check has said.
- *
- * The one it declares, else the one its key carries (a seat of the saved
- * company, whose handle every rename pins), else the one the last check
- * derived. That last holds only while the seat still declares none and is
- * still called what the check saw: the engine derives an undeclared handle
- * from the name, so a seat this draft created and then renamed runs under a
- * handle no check has reported yet, and showing the old one would name a
- * seat that will never exist.
- */
-function handleOf(seat: DraftSeat, engine: Engine): string | undefined {
-  const declared = text(seat.data.handle);
-  if (declared !== "") return declared;
-  const carried = handleOfKey(seat.key);
-  if (carried !== undefined) return carried;
-  const checked = engine.sentData(seat.key);
-  if (!checked || text(checked.handle) !== "" || checked.name !== seat.data.name) return undefined;
-  return engine.handles.get(seat.key);
-}
-
 /** Builds the structure chart of a draft. */
 export function structure(inputs: ChartInputs): Structure {
   const { draft, baseDraft } = inputs;
   const engine = engineOf(inputs);
   const nodes = new Map<NodeKey, NodeView>();
-  // THE FALLBACK WAKES A SEAT ONLY WHILE DATADOG IS ENABLED: the engine builds
-  // no Datadog parser otherwise and refuses every alert at the route, so a
-  // `route_to` left in a disabled block names a seat nothing will ever wake.
-  // The engine trims what it reads, and so does the chart.
-  const datadog = getPath(draft.company, DATADOG_ROUTE_TO.slice(0, -1));
-  const routeTo =
-    isRecord(datadog) && datadog.enabled === true ? text(datadog.route_to).trim() : "";
+  const routeTo = datadogFallback(draft.company);
 
   const unitName = new Map<NodeKey, string>();
   for (const { unit } of allUnits(draft)) unitName.set(unit.key, unit.data.name);
@@ -276,7 +266,7 @@ export function structure(inputs: ChartInputs): Structure {
     let dangling: string | null = null;
     if (ref !== "" && derived) {
       if (derived.placed_by_ref && derived.unit_path) {
-        const target = engine.sent?.index.byPath.get(derived.unit_path);
+        const target = engine.checked?.sent.index.byPath.get(derived.unit_path);
         if (target !== undefined && unitName.get(target) === ref) unit = target;
       } else if (
         !derived.placed_by_ref &&
@@ -307,7 +297,7 @@ export function structure(inputs: ChartInputs): Structure {
 
   const seatView = (seat: DraftSeat, parent: NodeKey): SeatView => {
     const kind = kindOf(seat.data);
-    const handle = handleOf(seat, engine);
+    const handle = engine.handles.get(seat.key);
     const base = locate(baseDraft, seat.key);
     const savedSeat =
       base?.kind === "seat"
@@ -328,7 +318,7 @@ export function structure(inputs: ChartInputs): Structure {
       running,
       placedByRef: (placed?.unit ?? null) !== null,
       danglingUnitRef: placed?.dangling ?? null,
-      datadogFallback: routeTo !== "" && handle === routeTo,
+      datadogFallback: routeTo !== undefined && handle === routeTo,
       manager: managerName(seat.key),
       parent,
     };
@@ -482,12 +472,13 @@ export interface Reporting {
  * since the check is not shown stale on a line that has not changed.
  */
 export function reporting(inputs: ChartInputs): Reporting {
-  const { sent, derived, draft } = inputs;
+  const { checked, draft } = inputs;
   const engine = engineOf(inputs);
   const items = new Map<string, ReportingItem>();
-  if (!sent || !derived) {
+  if (!checked) {
     return { known: false, roots: [], cycles: [], tree: [], items };
   }
+  const { sent, derived } = checked;
   const forest = reportingForest(derived);
   const convert = (node: ReportingNode, root: boolean): ReportingItem => {
     const key = node.seat.path === undefined ? undefined : sent.index.byPath.get(node.seat.path);
@@ -498,7 +489,7 @@ export function reporting(inputs: ChartInputs): Reporting {
       key: current ? key! : null,
       name: current?.data.name ?? node.seat.name,
       kind: current ? kindOf(current.data) : node.seat.kind === "human" ? "human" : "agent",
-      handle: current ? handleOf(current, engine) : node.seat.handle,
+      handle: current ? engine.handles.get(current.key) : node.seat.handle,
       root,
       ...(node.cycle ? { cycleSize: node.cycle.length } : {}),
       reports: node.reports.map((r) => convert(r, false)),

@@ -138,13 +138,26 @@ test("the Datadog fallback cannot become a human seat without a replacement", ()
   ).toBe("dev");
 });
 
+// A switched-off Datadog wakes nobody and the engine requires no fallback of
+// it, so the seat its route_to names changes kind like any other.
+test("a seat named by a switched-off Datadog becomes human with no replacement", () => {
+  const off = fixtureCompany();
+  off.integrations = { ...off.integrations, datadog: { enabled: false, route_to: "sre" } };
+  const view = open(keyedState(off), "seat:sre");
+  expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
+  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "sre" } });
+  fireEvent.click(toHuman());
+  expect(view.state().log.ops[0]).toMatchObject({ type: "changeKind", target: "seat:sre" });
+});
+
 // The change stays unavailable until a fallback is chosen, so the company's
 // only agent seat would otherwise leave a button that never becomes available
 // beside a picker with nothing in it.
 test("the company's only agent seat is told why it cannot become human, not offered an empty choice", () => {
   const doc: CompanyDocument = {
     name: "X",
-    integrations: { datadog: { route_to: "only" } },
+    integrations: { datadog: { enabled: true, route_to: "only" } },
     roles: [{ name: "Only" }, { name: "Pat", kind: "human", contact: { github_login: "pat" } }],
   };
   open(keyedState(doc), "seat:only");

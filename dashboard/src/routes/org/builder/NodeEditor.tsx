@@ -78,23 +78,22 @@ import {
   UnitTypeField,
   placeOnFields,
 } from "./dialogParts.tsx";
-import type { Segment } from "./model/document.ts";
+import { declaredHandle, type Segment } from "./model/document.ts";
 import { allSeats, allUnits, locate, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
 import { kindOf, type EditPartIntent } from "./model/operations.ts";
 import type { PlacedProblem } from "./model/problems.ts";
-import { recordIntent } from "./model/reducer.ts";
+import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
+import { datadogFallback } from "./chartModel.ts";
 import {
   PHASE_MODEL_FIELDS,
   currentCheck,
-  datadogFallback,
   defaultGitLabAccessLevel,
   derivedSeatOf,
   derivedUnitOf,
   gitLabAccessLevel,
-  handleOf,
   hasGitLabProvisioning,
   isConnected,
   isWholeReference,
@@ -741,7 +740,7 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
   const company = state.draft.company;
   const minted = isMintedKey(key);
   const human = kindOf(data) === "human";
-  const handle = handleOf(state, key);
+  const handle = handlesOf(state).get(key);
   const { initial, form, set, dirty } = useForm<SeatForm>(() =>
     seatForm(data, gitLabAccessLevel(company, handle)),
   );
@@ -751,7 +750,9 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
     seatFieldPaths(company, data, { human, minted }),
   );
   const disabled = api.readOnly;
-  const derived = derivedSeatOf(state, key);
+  // The handle the engine derives from the name, which is the seat's handle
+  // while it declares none of its own.
+  const derivedHandle = declaredHandle(data) === undefined ? handle : undefined;
 
   const budgetError = human ? undefined : tokenBudgetError(form.tokenBudget);
   const blocked =
@@ -794,8 +795,8 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
               ? "The handle this seat's memory, mailbox and mentions attach to."
               : // The engine derived that handle from the name the draft
                 // holds, so a name typed here since is not what it names.
-                derived?.handle && !renames(initial.name, form.name)
-                ? `Empty uses the handle the engine derives from the name: ${derived.handle}.`
+                derivedHandle && !renames(initial.name, form.name)
+                ? `Empty uses the handle the engine derives from the name: ${derivedHandle}.`
                 : "Empty uses the handle the engine derives from the name, shown here after the next check."
           }
           error={errorFor(["handle"])}
@@ -1395,6 +1396,9 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
   if (toolCredentialNames(data).length > 0)
     facts.push(<ToolCredentialFact key="mcp" data={data} />);
   if (isConnected(company, "datadog")) {
+    // A block that is switched off wakes nobody, whatever its route_to says,
+    // which is how the engine reads it and how the chart draws it.
+    const on = getPath(company, ["integrations", "datadog", "enabled"]) === true;
     const fallback = handle !== undefined && datadogFallback(company) === handle;
     facts.push(
       <ReadOnlyFact
@@ -1403,7 +1407,11 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
         reason="An alert whose tags name no seat wakes the fallback seat. It is chosen from Integrations, or here when the fallback seat is deleted or changed to a human seat."
         link={{ to: ["integrations"], label: "Open Integrations" }}
       >
-        {fallback ? "This seat is the Datadog fallback." : "Not the Datadog fallback."}
+        {!on
+          ? "Datadog is switched off, so no alert wakes a fallback seat."
+          : fallback
+            ? "This seat is the Datadog fallback."
+            : "Not the Datadog fallback."}
       </ReadOnlyFact>,
     );
   }

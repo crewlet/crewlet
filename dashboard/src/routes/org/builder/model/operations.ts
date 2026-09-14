@@ -66,7 +66,12 @@ import {
   type Located,
   type Placement,
 } from "./draft.ts";
-import { CHARTER_FIELDS, DATADOG_ROUTE_TO, GITLAB_ACCESS_LEVELS } from "./document.ts";
+import {
+  CHARTER_FIELDS,
+  DATADOG_ROUTE_TO,
+  GITLAB_ACCESS_LEVELS,
+  declaredHandle,
+} from "./document.ts";
 
 // ---------------------------------------------------------------------------
 // Shapes
@@ -426,8 +431,9 @@ type SingleIntent =
 
 /**
  * What recording needs that the draft cannot say: the handle the engine
- * derived for a seat that declares none, from the last check of THIS draft.
- * Existing seats carry their handle in their key and need no lookup.
+ * derived for a seat that declares none, from a check that saw the seat under
+ * the name it has now (`document.knownHandles`). Existing seats carry their
+ * handle in their key and need no lookup.
  */
 export interface RecordContext {
   readonly handleOf?: (key: NodeKey) => string | undefined;
@@ -703,19 +709,6 @@ const refuse = (refusal: RecordRefusal, message: string): Recorded => ({
 });
 const recorded = (op: Operation): Recorded => ({ ok: true, op });
 
-/**
- * The handle a seat declares, or `undefined` when it declares none.
- *
- * ONE READING FOR RECORD, EVALUATE AND APPLY. Whether a rename pins the handle
- * is decided three times (when it is recorded, when its preconditions are
- * checked, when it is applied), and the three must agree on what "declares a
- * handle" means or an operation that just recorded fails to apply, which
- * throws inside the reducer.
- */
-function declaredHandle(data: ConfigRole): string | undefined {
-  return typeof data.handle === "string" && data.handle !== "" ? data.handle : undefined;
-}
-
 /** The kind a seat writes, or `undefined` when it writes none (read the same way everywhere). */
 function writtenKind(data: ConfigRole): string | undefined {
   return typeof data.kind === "string" ? data.kind : undefined;
@@ -744,10 +737,11 @@ function hasAccessLevels(draft: Draft): boolean {
  *
  * A LEVEL NOBODY CAN FIND IS A GRANT WAITING FOR A SEAT. Access levels are
  * keyed by handle, the client never derives one, and the handle of a seat this
- * draft created is only known from a check of the draft as it stands, which
- * any later edit makes stale until the next check answers. Removing or
- * renaming such a seat in that window would clear nothing, and the entry it
- * held would grant its level to the next seat the engine gives that handle.
+ * draft created is only known from a check that saw the seat under the name
+ * it has now (`document.knownHandles`), so a rename leaves it unknown until
+ * the next check answers. Removing or renaming such a seat in that window
+ * would clear nothing, and the entry it held would grant its level to the
+ * next seat the engine gives that handle.
  * So while the draft holds access levels, an operation that must clear one by
  * an unknown handle waits for the check instead of guessing; a draft with no
  * access levels has nothing to leave behind and is not held up.

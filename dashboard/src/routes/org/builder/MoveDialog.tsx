@@ -38,9 +38,9 @@ import {
 import { allSeats, allUnits, locate, siblingsAt, subtreeKeys } from "./model/draft.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
-import { recordIntent } from "./model/reducer.ts";
+import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { movePreview, type MovePreview } from "./movePreview.ts";
-import { handleOf, isWorking, unitsLedBy } from "./nodeFacts.ts";
+import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -107,8 +107,9 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
   const moving = isUnit
     ? [...allSeats(state.draft)].filter(({ parent }) => inside.has(parent)).map(({ seat }) => seat)
     : [found.node];
+  const handles = handlesOf(state);
   const working = moving
-    .filter((seat) => isWorking(handleOf(state, seat.key), api.agents, api.sandboxes))
+    .filter((seat) => isWorking(handles.get(seat.key), api.agents, api.sandboxes))
     .map((seat) => seat.data.name);
 
   function move() {

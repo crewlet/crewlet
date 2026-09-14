@@ -80,12 +80,12 @@ import {
   type BuilderViewHandle,
   type ChartKind,
 } from "./BuilderContext.tsx";
-import { handlesByKey } from "./model/document.ts";
 import { allUnits, locate, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, handleOfKey, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
   builderReducer,
+  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
   isBaseKeyed,
@@ -287,12 +287,6 @@ interface SelectionParams {
   readonly seat: string;
 }
 
-/** The engine's handle for every seat of the draft, from a check of this very draft. */
-function currentHandles(state: BuilderState): ReadonlyMap<NodeKey, string> {
-  if (state.check.generation !== state.generation || !state.check.sent) return new Map();
-  return handlesByKey(state.check.sent, state.check.derived);
-}
-
 /**
  * Whether a key still names something in the draft.
  *
@@ -315,7 +309,7 @@ function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
     const name = found.node.data.name;
     return name ? { unit: name, seat: "" } : null;
   }
-  const handle = handleOfKey(key) ?? currentHandles(state).get(key);
+  const handle = handlesOf(state).get(key);
   return handle ? { unit: "", seat: handle } : null;
 }
 
@@ -324,7 +318,7 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
   if (params.seat) {
     const direct = seatKey(params.seat);
     if (locate(state.draft, direct)) return direct;
-    for (const [key, handle] of currentHandles(state)) if (handle === params.seat) return key;
+    for (const [key, handle] of handlesOf(state)) if (handle === params.seat) return key;
     return null;
   }
   if (params.unit) {

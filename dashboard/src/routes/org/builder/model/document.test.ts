@@ -28,9 +28,11 @@ import { allSeats, allUnits, locate } from "./draft.ts";
 import {
   buildPatch,
   fromDocument,
-  handlesByKey,
+  knownHandles,
   maskedCredentialPaths,
+  NO_DERIVATION,
   pathOfSegments,
+  placeDerivation,
   suggestUniqueName,
   toDocument,
 } from "./document.ts";
@@ -215,14 +217,71 @@ describe("toDocument", () => {
   });
 });
 
-describe("handlesByKey", () => {
-  test("maps each derived seat to the node at its path in the sent document", () => {
+describe("placeDerivation", () => {
+  test("places each derived seat and unit on the node at its path in the sent document", () => {
     const doc = fixtureCompany();
     const sent = toDocument(fromDocument(doc, null));
-    const handles = handlesByKey(sent, fixtureDerived(doc));
-    expect(handles.get(seatPathKey("roles[0]")) ?? handles.get("seat:ceo")).toBe("ceo");
-    expect([...handles.values()]).toContain("account-executive");
-    expect(handlesByKey(sent, null).size).toBe(0);
+    const placed = placeDerivation(sent.index, fixtureDerived(doc));
+    expect(placed.seatByKey.get(seatPathKey("roles[0]"))?.handle).toBe("ceo");
+    expect(placed.keyOfHandle.get("ceo")).toBe(seatPathKey("roles[0]"));
+    expect(placed.unitByKey.get(unitKey("Sales"))?.name).toBe("Sales");
+    expect(placeDerivation(sent.index, null)).toEqual(NO_DERIVATION);
+  });
+
+  // A refused draft can give one handle to two seats; the reading of a
+  // reported handle as a node must not change with the order a map is built.
+  test("a handle two seats share names the first", () => {
+    const doc: CompanyDocument = { name: "X", roles: [{ name: "Dev" }, { name: "dev" }] };
+    const sent = toDocument(fromDocument(doc, null));
+    const placed = placeDerivation(sent.index, fixtureDerived(doc));
+    expect(placed.keyOfHandle.get("dev")).toBe(sent.index.byPath.get("roles[0]"));
+  });
+});
+
+describe("knownHandles", () => {
+  const checkedOf = (draft: ReturnType<typeof fromDocument>) => {
+    const sent = toDocument(draft);
+    return { sent, derived: fixtureDerived(sent.document) };
+  };
+
+  test("a declared handle, then the one a key carries, then the one a check derived", () => {
+    const doc = fixtureCompany();
+    const draft = fromDocument(doc, fixtureDerived(doc));
+    const withNew = {
+      ...draft,
+      roles: [
+        ...draft.roles,
+        { key: "new:a", data: { name: "Quality Lead" } },
+        { key: "new:b", data: { name: "Ops", handle: "ops-lead" } },
+      ],
+    };
+    const handles = knownHandles(withNew, null);
+    expect(handles.get(seatKey("ceo"))).toBe("ceo");
+    expect(handles.get("new:b")).toBe("ops-lead");
+    // No check has described the created seat, and the client never derives one.
+    expect(handles.has("new:a")).toBe(false);
+    expect(knownHandles(withNew, checkedOf(withNew)).get("new:a")).toBe("quality-lead");
+  });
+
+  // The engine derives an undeclared handle from the seat's own name and
+  // nothing else, so a check of an older draft still names it while the name
+  // holds, and names nothing once the seat is renamed or declares a handle.
+  test("a checked handle holds exactly while the seat keeps the name that check saw", () => {
+    const base = fromDocument({ name: "X", roles: [{ name: "CEO" }] }, null);
+    const draft = { ...base, roles: [{ key: "new:a", data: { name: "Quality Lead" } }] };
+    const checked = checkedOf(draft);
+    const edited = {
+      ...draft,
+      roles: [{ key: "new:a", data: { name: "Quality Lead", goal: "Test it" } }],
+    };
+    expect(knownHandles(edited, checked).get("new:a")).toBe("quality-lead");
+    const renamed = { ...draft, roles: [{ key: "new:a", data: { name: "QA Lead" } }] };
+    expect(knownHandles(renamed, checked).has("new:a")).toBe(false);
+    const declaredSince = {
+      ...draft,
+      roles: [{ key: "new:a", data: { name: "Quality Lead", handle: "qa" } }],
+    };
+    expect(knownHandles(declaredSince, checked).get("new:a")).toBe("qa");
   });
 });
 

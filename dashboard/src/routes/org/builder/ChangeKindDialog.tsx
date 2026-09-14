@@ -47,14 +47,9 @@ import {
 import { allSeats, locate } from "./model/draft.ts";
 import { isMintedKey, type NodeKey } from "./model/keys.ts";
 import { fieldName, isCredentialField, kindOf, type Intent } from "./model/operations.ts";
-import { recordIntent } from "./model/reducer.ts";
-import {
-  datadogFallback,
-  handleOf,
-  isWorking,
-  referenceNames,
-  vendorIdentities,
-} from "./nodeFacts.ts";
+import { handlesOf, recordIntent } from "./model/reducer.ts";
+import { datadogFallback } from "./chartModel.ts";
+import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
@@ -81,13 +76,14 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
   const seat = found.node;
   const name = seat.data.name;
   const becoming = kindOf(seat.data) === "human" ? "agent" : "human";
-  const handle = handleOf(state, nodeKey);
+  const handles = handlesOf(state);
+  const handle = handles.get(nodeKey);
   const isFallback =
     becoming === "human" && handle !== undefined && datadogFallback(state.draft.company) === handle;
   const replacements = [...allSeats(state.draft)]
     .map(({ seat: other }) => other)
     .filter((other) => other.key !== nodeKey && kindOf(other.data) === "agent")
-    .map((other) => ({ value: handleOf(state, other.key) ?? "", label: other.data.name }))
+    .map((other) => ({ value: handles.get(other.key) ?? "", label: other.data.name }))
     .filter((choice) => choice.value !== "");
 
   const intent: Intent = {

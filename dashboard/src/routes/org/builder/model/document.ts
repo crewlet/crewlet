@@ -25,11 +25,26 @@
  * that entry grants its level to the next seat that derives the same handle.
  */
 
-import type { CompanyDocument, ConfigRole, ConfigUnit, Derived } from "~/protocol/index.ts";
+import type {
+  CompanyDocument,
+  ConfigRole,
+  ConfigUnit,
+  Derived,
+  DerivedSeat,
+  DerivedUnit,
+} from "~/protocol/index.ts";
 import { REDACTED } from "~/lib/format.ts";
 import { cloneJson, getPath, isRecord, jsonEqual, setPath, type JsonRecord } from "./json.ts";
-import { COMPANY_KEY, seatKey, seatPathKey, unitKey, unitPathKey, type NodeKey } from "./keys.ts";
-import { allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./draft.ts";
+import {
+  COMPANY_KEY,
+  handleOfKey,
+  seatKey,
+  seatPathKey,
+  unitKey,
+  unitPathKey,
+  type NodeKey,
+} from "./keys.ts";
+import { allSeats, allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./draft.ts";
 
 /** One step of a document path: a key, or a list index. */
 export type Segment = string | number;
@@ -102,9 +117,7 @@ export function fromDocument(doc: CompanyDocument | null, derived: Derived | nul
   const unitNamesSeen = new Map<string, number>();
   walkDocument(source, {
     seat: (role, path) => {
-      const declared =
-        typeof role.handle === "string" && role.handle !== "" ? role.handle : undefined;
-      seatHandles.set(path, handleByPath.get(path) ?? declared);
+      seatHandles.set(path, handleByPath.get(path) ?? declaredHandle(role));
     },
     unit: (unit) => {
       if (typeof unit.name === "string" && unit.name !== "") {
@@ -205,21 +218,133 @@ export function toDocument(draft: Draft): IndexedDocument {
 }
 
 /**
- * The engine's handle for every seat of a checked document, by node key.
+ * A document a check was sent and the derivation the engine answered with.
  *
- * `derived` must be the derivation of `sent.document` itself: its paths are
- * paths in that document, and the index that turns them into keys was built
- * beside it. A seat the derivation carries no path for (an answer from an
- * engine that omits paths) is simply absent.
+ * THE TWO TRAVEL TOGETHER, because each is readable only through the other:
+ * a derivation names seats and units by their paths in the document it
+ * describes, and the draft may have moved a node since, so `units[1]` may be
+ * another unit now. Its paths become node keys through the path index built
+ * beside that very document, never the draft's.
  */
-export function handlesByKey(sent: IndexedDocument, derived: Derived | null): Map<NodeKey, string> {
-  const out = new Map<NodeKey, string>();
+export interface CheckedDocument {
+  readonly sent: IndexedDocument;
+  readonly derived: Derived;
+}
+
+/** A derivation placed on the nodes of the document it describes. */
+export interface PlacedDerivation {
+  readonly seatByKey: ReadonlyMap<NodeKey, DerivedSeat>;
+  readonly unitByKey: ReadonlyMap<NodeKey, DerivedUnit>;
+  /**
+   * The seat the derivation gives each handle. The first, where a draft the
+   * engine refused gives one handle to two seats.
+   */
+  readonly keyOfHandle: ReadonlyMap<string, NodeKey>;
+}
+
+/** A derivation that places nothing: what a draft no check has described reads. */
+export const NO_DERIVATION: PlacedDerivation = {
+  seatByKey: new Map(),
+  unitByKey: new Map(),
+  keyOfHandle: new Map(),
+};
+
+/**
+ * Places a derivation on the keys of the document it describes. ONE PLACING
+ * for every reader (the charts, the dialogs, the review's changes, the
+ * problems and the reducer's handles), so no two of them can map one path to
+ * two nodes. A seat or unit the derivation carries no path for (an answer
+ * from an engine that omits paths) is simply absent.
+ */
+export function placeDerivation(index: PathIndex, derived: Derived | null): PlacedDerivation {
+  const seatByKey = new Map<NodeKey, DerivedSeat>();
+  const unitByKey = new Map<NodeKey, DerivedUnit>();
+  const keyOfHandle = new Map<string, NodeKey>();
   for (const seat of derived?.seats ?? []) {
-    if (!seat.path || !seat.handle) continue;
-    const key = sent.index.byPath.get(seat.path);
-    if (key !== undefined && key !== COMPANY_KEY) out.set(key, seat.handle);
+    const key = seat.path ? index.byPath.get(seat.path) : undefined;
+    if (key === undefined || key === COMPANY_KEY) continue;
+    seatByKey.set(key, seat);
+    if (seat.handle && !keyOfHandle.has(seat.handle)) keyOfHandle.set(seat.handle, key);
+  }
+  for (const unit of derived?.units ?? []) {
+    const key = unit.path ? index.byPath.get(unit.path) : undefined;
+    if (key !== undefined && key !== COMPANY_KEY) unitByKey.set(key, unit);
+  }
+  return { seatByKey, unitByKey, keyOfHandle };
+}
+
+/** A node's JSON as it stood in an indexed document, or `undefined` when it held no such node. */
+export function nodeDataIn(
+  indexed: IndexedDocument,
+  key: NodeKey,
+): Record<string, unknown> | undefined {
+  const segments = indexed.index.segmentsOf.get(key);
+  if (!segments) return undefined;
+  let at: unknown = indexed.document;
+  for (const segment of segments) {
+    if (typeof segment === "number") at = Array.isArray(at) ? at[segment] : undefined;
+    else at = isRecord(at) && Object.hasOwn(at, segment) ? at[segment] : undefined;
+  }
+  return isRecord(at) ? at : undefined;
+}
+
+/**
+ * The handle a seat declares, or `undefined` when it declares none.
+ *
+ * ONE READING FOR RECORD, EVALUATE, APPLY AND DISPLAY. Whether a rename pins
+ * the handle is decided three times (when it is recorded, when its
+ * preconditions are checked, when it is applied), and the three must agree on
+ * what "declares a handle" means or an operation that just recorded fails to
+ * apply, which throws inside the reducer; a screen that read it another way
+ * would name a handle the operation does not write.
+ */
+export function declaredHandle(data: Readonly<Record<string, unknown>>): string | undefined {
+  return typeof data.handle === "string" && data.handle !== "" ? data.handle : undefined;
+}
+
+/**
+ * The handle each seat of `draft` runs under, where one is known.
+ *
+ * The one it declares; else the one its key carries (a seat of the saved
+ * company, whose handle every rename pins); else the one `checked` derived
+ * for it, while the seat still declares none and is still called what that
+ * check saw. The engine derives an undeclared handle from the seat's own name
+ * and from nothing else (`org.Role.Handle` over `org.Slugify`), so that
+ * derivation holds exactly as long as the name does: a seat this draft
+ * created and then renamed runs under a handle no check has reported yet,
+ * and naming the old one would name a seat that will never exist.
+ *
+ * WHICHEVER CHECK SAW THE NAME. A check of an older draft still vouches for
+ * every seat whose name has not changed since, so a handle stays known while
+ * the next check is out rather than blinking away on every edit. One rule for
+ * the reducer that records an operation by it, the charts that draw it and
+ * the dialogs that offer it, so none of them offers a handle another refuses.
+ */
+export function knownHandles(draft: Draft, checked: CheckedDocument | null): Map<NodeKey, string> {
+  const derived = checked ? placeDerivation(checked.sent.index, checked.derived).seatByKey : null;
+  const out = new Map<NodeKey, string>();
+  for (const { seat } of allSeats(draft)) {
+    const handle =
+      declaredHandle(seat.data) ??
+      handleOfKey(seat.key) ??
+      (checked && derived ? checkedHandle(seat, checked, derived) : undefined);
+    if (handle) out.set(seat.key, handle);
   }
   return out;
+}
+
+/** The handle `checked` derived for a seat that declared none, while its name is unchanged. */
+function checkedHandle(
+  seat: DraftSeat,
+  checked: CheckedDocument,
+  derived: ReadonlyMap<NodeKey, DerivedSeat>,
+): string | undefined {
+  const handle = derived.get(seat.key)?.handle;
+  const was = nodeDataIn(checked.sent, seat.key);
+  if (!handle || !was || declaredHandle(was) !== undefined || was.name !== seat.data.name) {
+    return undefined;
+  }
+  return handle;
 }
 
 /** A JSON merge patch (RFC 7396): `null` removes a key, an object merges, anything else replaces. */

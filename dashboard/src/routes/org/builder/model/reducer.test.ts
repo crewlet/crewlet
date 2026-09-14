@@ -24,6 +24,7 @@ import { templateIntent } from "./templates.ts";
 import {
   builderReducer,
   checkTrigger,
+  handlesOf,
   hasChanges,
   INITIAL_BUILDER,
   isBaseKeyed,
@@ -444,6 +445,56 @@ describe("an editor's edit", () => {
     const next = run(state, { type: "record", intent: edit });
     expect(answer.ok && answer.op).toEqual(next.log.ops[0]);
     expect(recordIntent(state, edit)).toEqual(answer);
+  });
+});
+
+describe("a created seat's handle", () => {
+  // THE REDUCER AND EVERY SCREEN READ ONE RULE (`document.knownHandles`). A
+  // screen offered a created seat's GitLab access level from a check that
+  // still saw its name while the reducer, reading only a check of the draft
+  // as it stands, refused the very operation the screen had offered.
+  test("is known to recording while the seat keeps the name a check saw, and not after a rename", () => {
+    const added = run(keyedEdit(), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Quality Lead" },
+      },
+    });
+    const rename = (state: BuilderState, name: string): Intent => ({
+      type: "renameSeat",
+      target: "new:qa",
+      name,
+    });
+    // The fixture holds GitLab access levels, so a rename must know the handle.
+    expect(recordIntent(added, rename(added, "QA"))).toMatchObject({
+      ok: false,
+      refusal: "unknown_handle",
+    });
+    const seen = run(
+      added,
+      checked(added, {
+        status: "clean",
+        warnings: [],
+        derived: fixtureDerived(toDocument(added.draft).document),
+      }),
+    );
+    // Another edit since: the check is of an older draft, and still saw the name.
+    const later = run(seen, {
+      type: "record",
+      intent: { type: "updateCompany", set: [{ path: ["mission"], value: "Make more." }] },
+    });
+    expect(handlesOf(later).get("new:qa")).toBe("quality-lead");
+    expect(recordIntent(later, rename(later, "QA")).ok).toBe(true);
+
+    const renamed = run(later, { type: "record", intent: rename(later, "QA") });
+    expect(handlesOf(renamed).has("new:qa")).toBe(false);
+    expect(recordIntent(renamed, rename(renamed, "QA Lead"))).toMatchObject({
+      ok: false,
+      refusal: "unknown_handle",
+    });
   });
 });
 

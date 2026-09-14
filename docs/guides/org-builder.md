@@ -195,7 +195,7 @@ as `${NAME}` first; a reference is a name, so it survives the rename.
 | You can change | Notes |
 |---|---|
 | Name | Seat names are unique. An existing seat keeps its handle through a rename, and with it its memory and mailbox, but an agent seat that is renamed onboards again: its onboarding progress is stamped with its own name and the names of the units above it. |
-| Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle after the next check. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
+| Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle once a check has seen the seat under the name it has now. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
 | Email, goal, backstory, responsibilities | |
 | Behavioral guidelines | Agent seats. |
 | Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
@@ -241,8 +241,9 @@ credential is ever shown.
   handle, lowercased.
 - **GitLab:** the access level (developer or maintainer) the seat's account
   joins with, when GitLab provisioning is set up. Access levels are kept by
-  handle, so a seat added in this draft can have one once the check reports
-  its handle.
+  handle, so a seat added in this draft can have one once a check has
+  reported its handle, and renaming it waits for the next check: the engine
+  derives the handle from the name.
 
 Not in the builder: per-seat allow or block lists for GitLab, Atlassian,
 Datadog or Mattermost (the engine provisions every agent seat), a per-seat
@@ -310,12 +311,14 @@ acknowledgement first.
 Some of what a seat has is not in the chart, and the dialog says so before the
 seat goes:
 
-- **The Datadog fallback.** An alert whose tags name no seat wakes the fallback
-  seat, and the engine refuses a Datadog block whose `route_to` names no agent
-  seat. Deleting the fallback seat therefore asks for the agent seat that takes
-  over, and writes it with the removal. When the removal would leave no agent
-  seat at all, the dialog says so instead: add an agent seat first, or
-  disconnect Datadog.
+- **The Datadog fallback.** While Datadog is enabled, an alert whose tags name
+  no seat wakes the fallback seat, and the engine refuses an enabled Datadog
+  block whose `route_to` names no agent seat. Deleting the fallback seat
+  therefore asks for the agent seat that takes over, and writes it with the
+  removal. When the removal would leave no agent seat at all, the dialog says
+  so instead: add an agent seat first, or disconnect Datadog. A Datadog block
+  that is switched off wakes nobody and requires no fallback, so its
+  `route_to` asks nothing of a removal.
 - **A GitLab access level.** The per-handle override is removed with the seat,
   because an entry left behind would grant its level to the next seat that
   derives the same handle.
@@ -348,7 +351,8 @@ seat's apps, bots and accounts, and the secret store entries the removed fields
 referenced, are listed as they are for a deleted seat.
 
 Becoming a human seat needs one contact identity, and cannot be done to the
-Datadog fallback without choosing the agent seat that takes over. Where the
+Datadog fallback (while Datadog is enabled) without choosing the agent seat
+that takes over. Where the
 seat is the company's only agent seat, the dialog says so and the change waits
 until another agent seat exists or Datadog is disconnected. The
 schedules the change would strand, and a turn the seat is running now, are

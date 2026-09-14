@@ -2,8 +2,8 @@
 /**
  * What the editor and the dialogs read about a node.
  *
- * What these protect: a handle comes from the engine or the document, never a
- * derivation of the name; the provider an unpinned seat runs on follows the
+ * What these protect: the engine's answers about a node are read only from a
+ * check of the draft as it stands; the provider an unpinned seat runs on follows the
  * engine's own fallback; a credential reaches a screen only as the name of a
  * sealed entry; and a seat counts as working while a turn or a coding run is
  * in flight.
@@ -12,15 +12,14 @@
 import { describe, expect, test } from "vitest";
 import type { AgentRow, CompanyDocument, SandboxEntry } from "~/protocol/index.ts";
 import { locate } from "./model/draft.ts";
-import { builderReducer } from "./model/reducer.ts";
+import { builderReducer, handlesOf } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import {
-  datadogFallback,
   derivedSeatOf,
   derivedUnitOf,
   gitLabAccessLevel,
-  handleOf,
   hasGitLabProvisioning,
+  homeUnitOf,
   isConnected,
   isWholeReference,
   isWorking,
@@ -36,10 +35,10 @@ import {
 } from "./nodeFacts.ts";
 import { keyedState, recheck } from "./testState.ts";
 
-describe("handles", () => {
-  test("a seat of the base carries its handle in its key, and a new seat has one only once a check reports it", () => {
+describe("the engine's answers about a node", () => {
+  test("a seat of the base, and a new seat once a check describes it, are read from that check", () => {
     const state = keyedState(fixtureCompany());
-    expect(handleOf(state, "seat:dev")).toBe("dev");
+    expect(derivedSeatOf(state, "seat:dev")?.handle).toBe("dev");
     const added = builderReducer(state, {
       type: "record",
       intent: {
@@ -49,16 +48,17 @@ describe("handles", () => {
         data: { name: "Quality Lead" },
       },
     });
-    expect(handleOf(added, "new:qa")).toBeUndefined();
+    expect(derivedSeatOf(added, "new:qa")).toBeUndefined();
     const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa-engine" } } });
-    expect(handleOf(checked, "new:qa")).toBe("qa-engine");
+    expect(derivedSeatOf(checked, "new:qa")?.handle).toBe("qa-engine");
     expect(nameOfHandle(checked, "qa-engine")).toBe("Quality Lead");
     expect(nameOfHandle(checked, "nobody")).toBe("nobody");
   });
 
   // A check of an older draft described a company the operator has since
-  // changed, and the reducer records nothing against its handles either, so
-  // a screen reading it would offer what the operation then refuses.
+  // changed, so a dialog reading its manager or lead would state an old
+  // answer as the consequence of the next change. A seat's handle is another
+  // matter (see `document.knownHandles`): it holds while the name does.
   test("a check of an older draft answers nothing about the draft as it stands", () => {
     const added = builderReducer(keyedState(fixtureCompany()), {
       type: "record",
@@ -79,26 +79,10 @@ describe("handles", () => {
         set: [{ path: ["purpose"], value: "Sell" }],
       },
     });
-    expect(handleOf(later, "new:qa")).toBeUndefined();
     expect(derivedSeatOf(later, "new:qa")).toBeUndefined();
     expect(derivedUnitOf(later, "unit:Sales")).toBeUndefined();
-    expect(nameOfHandle(later, "qa-engine")).toBe("qa-engine");
-    // A seat of the base carries its handle in its key, which no check dates.
-    expect(handleOf(later, "seat:dev")).toBe("dev");
-  });
-
-  test("a declared handle is the seat's own even before a check", () => {
-    const state = keyedState(fixtureCompany());
-    const added = builderReducer(state, {
-      type: "record",
-      intent: {
-        type: "addSeat",
-        key: "new:ops",
-        placement: { parent: "unit:Sales", after: null },
-        data: { name: "Ops", handle: "ops-lead" },
-      },
-    });
-    expect(handleOf(added, "new:ops")).toBe("ops-lead");
+    expect(homeUnitOf(later, "new:qa")).toBeUndefined();
+    expect(handlesOf(later).get("new:qa")).toBe("qa-engine");
   });
 
   test("the units a seat leads are the ones that declare it", () => {
@@ -121,7 +105,6 @@ describe("integrations", () => {
     expect(gitLabAccessLevel(company, "sre")).toBe("maintainer");
     expect(gitLabAccessLevel(company, "ceo")).toBe("");
     expect(gitLabAccessLevel(company, undefined)).toBe("");
-    expect(datadogFallback(company)).toBe("sre");
   });
 
   // A provisioner acts only where the document names a secret store entry, and

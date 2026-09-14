@@ -38,8 +38,9 @@ import { allKeys, locate, type Draft, EMPTY_DRAFT } from "./draft.ts";
 import {
   buildPatch,
   fromDocument,
-  handlesByKey,
+  knownHandles,
   toDocument,
+  type CheckedDocument,
   type IndexedDocument,
 } from "./document.ts";
 import { COMPANY_KEY, type NodeKey } from "./keys.ts";
@@ -255,10 +256,18 @@ export function hasChanges(state: BuilderState): boolean {
   return Object.keys(patch).length > 0;
 }
 
-/** The engine's handles for the draft's seats, from a check of this very generation. */
-function currentHandles(state: BuilderState): ReadonlyMap<NodeKey, string> {
-  if (state.check.generation !== state.generation || !state.check.sent) return new Map();
-  return handlesByKey(state.check.sent, state.check.derived);
+/**
+ * The last check's document and derivation, when that check answered with
+ * one. Any generation: what a derivation still says about the draft is the
+ * reader's to decide (see `document.knownHandles`, `chartModel.ts`).
+ */
+export function checkedDocument(check: CheckView): CheckedDocument | null {
+  return check.sent && check.derived ? { sent: check.sent, derived: check.derived } : null;
+}
+
+/** The handle each seat of the draft runs under, where one is known (`document.knownHandles`). */
+export function handlesOf(state: Pick<BuilderState, "draft" | "check">): Map<NodeKey, string> {
+  return knownHandles(state.draft, checkedDocument(state.check));
 }
 
 /** What recording an intent against a state would answer, before anything is dispatched. */
@@ -296,7 +305,7 @@ export function recordIntent(state: BuilderState, intent: Intent): RecordAnswer 
         "The engine has not described this company yet. Wait for the check to finish, then make the change.",
     };
   }
-  const handles = currentHandles(state);
+  const handles = handlesOf(state);
   return record(state.draft, intent, { handleOf: (key) => handles.get(key) });
 }
 
@@ -640,7 +649,7 @@ function redoes(draft: Draft, undone: readonly Operation[]): boolean {
 
 /** The recording context of a base: the handles its derivation reports. */
 function contextOf(baseDraft: Draft, derived: Derived | null) {
-  const handles = handlesByKey(toDocument(baseDraft), derived);
+  const handles = knownHandles(baseDraft, derived && { sent: toDocument(baseDraft), derived });
   return { handleOf: (key: NodeKey) => handles.get(key) };
 }
 

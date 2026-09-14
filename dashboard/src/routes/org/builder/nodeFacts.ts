@@ -2,21 +2,24 @@
  * What the node editor and the builder's dialogs read about one node, beyond
  * its own authored fields.
  *
- * READ, NEVER DERIVED. A seat's handle, its manager, the units it leads by
- * inheritance and its effective home are the ENGINE's answers, and they come
- * from the derivation the last check returned, placed on nodes through the
- * path index of the document that check sent (the same pairing
- * `model/problems.ts` uses). A node the last check has not described (one
+ * READ, NEVER DERIVED. A seat's manager, the units it leads by inheritance
+ * and its effective home are the ENGINE's answers, and they come from the
+ * derivation the last check returned, placed on nodes through the path index
+ * of the document that check sent (`model/document.placeDerivation`, the one
+ * placing every reader shares). A node the last check has not described (one
  * added since) has no answer here, and the screens say so rather than guess.
+ * What the charts read about a node, its handle, the seat a reported handle
+ * names and the Datadog fallback, is `chartModel.ts`'s, so a card and the
+ * dialog it opens can never name a seat two ways.
  *
  * ONLY A CHECK OF THE DRAFT AS IT STANDS. A check still out, or one that
  * answered for an older draft, describes a company the operator has since
  * changed: a unit added since is missing from it, a lead changed since is the
  * old one. Read through it, a dialog states the old answer as the
  * consequence of the next change. So nothing here answers from a check of
- * another generation, which is the line the Builder's own context and the
- * reducer's handles already hold (`BuilderApi.derived`, `currentHandles`),
- * and a screen and the operation it records agree on what is known.
+ * another generation, which is the line the Builder's own context holds
+ * (`BuilderApi.derived`), and a screen and the operation it records agree on
+ * what is known.
  *
  * A few small rules ARE restated, each because a screen has to say something
  * the engine does not report, and each marked at its definition: the order
@@ -40,73 +43,40 @@ import type {
   CompanyDocument,
   ConfigRole,
   ConfigUnit,
-  Derived,
   DerivedSeat,
   DerivedUnit,
   SandboxEntry,
 } from "~/protocol/index.ts";
 import { runState } from "~/lib/seats.ts";
-import type { IndexedDocument } from "./model/document.ts";
-import { COMPANY_KEY, handleOfKey, isMintedKey, type NodeKey } from "./model/keys.ts";
+import { keyOfHandle } from "./chartModel.ts";
+import { placeDerivation, type CheckedDocument, type PlacedDerivation } from "./model/document.ts";
+import { COMPANY_KEY, isMintedKey, type NodeKey } from "./model/keys.ts";
 import { allUnits, locate, type Draft, type DraftSeat, type DraftUnit } from "./model/draft.ts";
 import { getPath, isRecord } from "./model/json.ts";
-import type { BuilderState } from "./model/reducer.ts";
+import { checkedDocument, type BuilderState } from "./model/reducer.ts";
 
 // ---------------------------------------------------------------------------
 // The engine's derivation, placed on nodes
 // ---------------------------------------------------------------------------
 
-/** What a check of the draft as it stands described, and the document it was sent. */
-export interface CurrentCheck {
-  readonly sent: IndexedDocument;
-  readonly derived: Derived;
-}
+/** What a check of the draft as it stands described, placed on the draft's nodes. */
+export interface CurrentCheck extends CheckedDocument, PlacedDerivation {}
 
 /** The last check, when it answered for this very draft with a derivation; see the module doc. */
 export function currentCheck(state: BuilderState): CurrentCheck | undefined {
-  const { generation, sent, derived } = state.check;
-  if (generation !== state.generation || sent === null || derived === null) return undefined;
-  return { sent, derived };
+  const checked = checkedDocument(state.check);
+  if (!checked || state.check.generation !== state.generation) return undefined;
+  return { ...checked, ...placeDerivation(checked.sent.index, checked.derived) };
 }
 
 /** The current check's derivation of a seat, when that check described it. */
 export function derivedSeatOf(state: BuilderState, key: NodeKey): DerivedSeat | undefined {
-  const check = currentCheck(state);
-  const path = check?.sent.index.pathOf.get(key);
-  if (path === undefined || key === COMPANY_KEY) return undefined;
-  return (check?.derived.seats ?? []).find((seat) => seat.path === path);
+  return key === COMPANY_KEY ? undefined : currentCheck(state)?.seatByKey.get(key);
 }
 
 /** The current check's derivation of a unit, when that check described it. */
 export function derivedUnitOf(state: BuilderState, key: NodeKey): DerivedUnit | undefined {
-  const check = currentCheck(state);
-  const path = check?.sent.index.pathOf.get(key);
-  if (path === undefined || key === COMPANY_KEY) return undefined;
-  return (check?.derived.units ?? []).find((unit) => unit.path === path);
-}
-
-/**
- * A seat's handle: the one its key carries (a seat of the base), the one it
- * declares, or the one the current check derived. `undefined` for a seat
- * nobody has named a handle for yet.
- */
-export function handleOf(state: BuilderState, key: NodeKey): string | undefined {
-  const found = locate(state.draft, key);
-  if (found?.kind !== "seat") return undefined;
-  const declared = found.node.data.handle;
-  return (
-    handleOfKey(key) ??
-    (typeof declared === "string" && declared !== "" ? declared : undefined) ??
-    derivedSeatOf(state, key)?.handle
-  );
-}
-
-/** The key of the seat the current check gave this handle, when it still stands in the draft. */
-export function keyOfHandle(state: BuilderState, handle: string): NodeKey | undefined {
-  const check = currentCheck(state);
-  const seat = (check?.derived.seats ?? []).find((s) => s.handle === handle);
-  const key = seat?.path === undefined ? undefined : check?.sent.index.byPath.get(seat.path);
-  return key !== undefined && locate(state.draft, key)?.kind === "seat" ? key : undefined;
+  return key === COMPANY_KEY ? undefined : currentCheck(state)?.unitByKey.get(key);
 }
 
 /**
@@ -117,7 +87,7 @@ export function nameOfHandle(state: BuilderState, handle: string): string {
   const key = keyOfHandle(state, handle);
   const found = key === undefined ? undefined : locate(state.draft, key);
   if (found?.kind === "seat") return found.node.data.name;
-  const reported = currentCheck(state)?.derived.seats?.find((s) => s.handle === handle);
+  const reported = state.check.derived?.seats?.find((s) => s.handle === handle);
   return reported?.name ?? handle;
 }
 
@@ -129,7 +99,7 @@ export function nameOfHandle(state: BuilderState, handle: string): string {
  */
 export function homeUnitOf(state: BuilderState, key: NodeKey): DraftUnit | undefined {
   const check = currentCheck(state);
-  const path = derivedSeatOf(state, key)?.unit_path;
+  const path = check?.seatByKey.get(key)?.unit_path;
   if (check === undefined || path === undefined || path === "") return undefined;
   const unit = check.sent.index.byPath.get(path);
   const found = unit === undefined ? undefined : locate(state.draft, unit);
@@ -219,12 +189,6 @@ export function mattermostBotUsername(company: CompanyDocument, handle: string):
     "username_prefix",
   ]);
   return `${typeof prefix === "string" ? prefix.trim() : ""}${handle}`.toLowerCase();
-}
-
-/** The handle of the Datadog fallback seat, when Datadog names one. */
-export function datadogFallback(company: CompanyDocument): string | undefined {
-  const handle = getPath(company, ["integrations", "datadog", "route_to"]);
-  return typeof handle === "string" && handle !== "" ? handle : undefined;
 }
 
 // ---------------------------------------------------------------------------
