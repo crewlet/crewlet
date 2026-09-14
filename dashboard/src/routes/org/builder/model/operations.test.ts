@@ -1305,6 +1305,25 @@ describe("editing a node in one operation", () => {
     expect(() => apply(theirs, op)).toThrow(ApplyError);
   });
 
+  // The person resolving a conflict chooses for the whole edit, so every part
+  // that conflicts is on screen together, not only the first.
+  test("every conflicting part of an edit is reported together", () => {
+    const draft = fixture();
+    const op = recordOk(draft, devEdit());
+    const goal = run(draft, {
+      type: "updateSeat",
+      target: "seat:dev",
+      set: [{ path: ["goal"], value: "Theirs" }],
+    }).draft;
+    const both = run(goal, { type: "setManages", target: "seat:dev", manages: ["CEO"] }).draft;
+    const outcome = evaluate(both, op);
+    expect(outcome.kind).toBe("conflict");
+    expect(outcome.kind === "conflict" && outcome.conflicts.map((c) => c.subject)).toEqual([
+      "goal",
+      "manages",
+    ]);
+  });
+
   test("an edit is data: it round-trips, records again from its intent, and is malformed when no build could record it", () => {
     const draft = fixture();
     const op = recordOk(draft, devEdit());
