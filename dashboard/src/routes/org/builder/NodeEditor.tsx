@@ -1400,7 +1400,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
       <ReadOnlyFact
         key="datadog"
         label="Datadog fallback"
-        reason="An alert whose tags name no seat wakes the fallback seat. It is chosen from Integrations, or when the fallback seat is deleted."
+        reason="An alert whose tags name no seat wakes the fallback seat. It is chosen from Integrations, or here when the fallback seat is deleted or changed to a human seat."
         link={{ to: ["integrations"], label: "Open Integrations" }}
       >
         {fallback ? "This seat is the Datadog fallback." : "Not the Datadog fallback."}

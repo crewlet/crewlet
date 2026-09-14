@@ -506,6 +506,12 @@ describe("integrations", () => {
     expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();
     expect(screen.getByText("This seat is the Datadog fallback.")).toBeDefined();
+    // Where it is chosen, which is also where the builder asks for a new one.
+    expect(
+      screen.getByText(
+        /chosen from Integrations, or here when the fallback seat is deleted or changed to a human seat/,
+      ),
+    ).toBeDefined();
   });
 
   test("no credential reaches the page: not a mask, not a reference, not the literal half of a partial one", () => {
