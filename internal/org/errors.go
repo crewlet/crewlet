@@ -47,6 +47,19 @@ var (
 	// collide with another unit's NAME as readily as with another id.
 	ErrDuplicateUnit = errors.New("duplicate unit key")
 
+	// ErrDuplicateIdentity reports two seats claiming one external account.
+	//
+	// A contact identity is how an inbound message finds a person, and two
+	// seats declaring one id resolve DIFFERENTLY depending on who is
+	// asking: notification registration keys a map on the identity, so the
+	// LAST seat in chart order silently takes it, while every lookup that
+	// walks the chart answers the FIRST. The person who lost the race keeps
+	// a correct-looking config and stops receiving their own mail — and
+	// with `crewlet_operator_id` the two directions disagree outright, so a
+	// token resolves to one seat's dashboard and that person's wakes go to
+	// another's.
+	ErrDuplicateIdentity = errors.New("duplicate contact identity")
+
 	// ErrHumanSeatField reports a runtime-only field set on a human seat.
 	// Human seats are addressable but never spawned, so an LLM key or a
 	// budget on one is dead config at best and misleading at worst.
