@@ -515,7 +515,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, ok := takeSummary(w, r, body, !dryRun,
+	summary, sent, ok := takeSummary(w, r, body, !dryRun,
 		"PUT /config needs an audit summary: the X-Summary header, "+
 			"or a top-level _summary key in the body. The revision history "+
 			"is the record of who changed what and why")
@@ -523,7 +523,7 @@ func (s *Service) put(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	incoming, err := parseDocument(body)
+	incoming, err := sent.company()
 	if err != nil {
 		refuseDocument(w, httpjson.CodeInvalidBody, err.Error(), "", &DocumentError{Err: err})
 		return
@@ -591,7 +591,7 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 		refuseBody(w, err)
 		return
 	}
-	summary, body, ok := takeSummary(w, r, body, !dryRun,
+	summary, sent, ok := takeSummary(w, r, body, !dryRun,
 		"PATCH /config needs an audit summary: the X-Summary "+
 			"header, or a top-level _summary key in the body. A patch is "+
 			"the change least visible in a diff, so the sentence saying "+
@@ -618,8 +618,8 @@ func (s *Service) patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	prepared, err := s.prepare(r.Context(), patchDraft(ApplyRequest{
-		Patch: body, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
-	}))
+		Patch: sent.text, Summary: summary, Operator: operatorOf(r), Expect: active.ID,
+	}, sent.doc))
 	if err != nil {
 		s.refuseApply(w, err)
 		return

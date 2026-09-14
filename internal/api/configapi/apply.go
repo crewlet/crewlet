@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -190,7 +192,7 @@ type ApplyRequest struct {
 // redacted read handed back, validate the whole document, seal it, store it,
 // then flip the pointer as a compare-and-set naming the parent.
 func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) {
-	prepared, err := s.prepare(ctx, patchDraft(req))
+	prepared, err := s.prepare(ctx, patchDraft(req, nil))
 	if err != nil {
 		return Applied{}, err
 	}
@@ -395,7 +397,12 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 }
 
 // patchDraft is a JSON Merge Patch over the active document.
-func patchDraft(req ApplyRequest) draft {
+//
+// sent is the patch as parsed from what an HTTP caller sent, so a key it
+// names that this build does not know is reported at the line it was written
+// on; nil reads the patch from req.Patch, which is all a programmatic caller
+// has.
+func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
 		expect: req.Expect, requireActive: true,
 		rules: (*config.Company).Validate,
@@ -407,7 +414,7 @@ func patchDraft(req ApplyRequest) draft {
 			if err != nil {
 				return nil, nil, &PatchError{Err: err}
 			}
-			incoming, err := readPatched(req.Patch, merged)
+			incoming, err := readPatched(req.Patch, sent, merged)
 			if err != nil {
 				return nil, nil, &PatchError{Err: err}
 			}
@@ -499,7 +506,7 @@ func replaceDraft(incoming *config.Company, built string) draft {
 // the authored reader decides about it is meaningful yet: a redaction marker
 // is restored after the merge, and a shape is judged by Validate once it has
 // been. Only [config.ErrUnknownField] is a fact about the patch alone.
-func readPatched(patch, merged []byte) (*config.Company, error) {
+func readPatched(patch []byte, sent *yaml.Node, merged []byte) (*config.Company, error) {
 	cfg, err := parseDocument(merged)
 	if err != nil && !errors.Is(err, config.ErrUnknownField) {
 		// Every other refusal the authored reader makes is about the
@@ -517,7 +524,8 @@ func readPatched(patch, merged []byte) (*config.Company, error) {
 	// key it cannot represent that the write does not name. It was the one
 	// silent no-op on a surface whose whole rule is that an unknown key in a
 	// patch is refused rather than ignored.
-	if patchErr := onlyUnknownField(parseDocument(patch)); patchErr != nil {
+	named := submitted{text: patch, doc: sent}
+	if patchErr := onlyUnknownField(named.company()); patchErr != nil {
 		return nil, patchErr
 	}
 	if err == nil {

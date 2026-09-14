@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -995,6 +996,50 @@ func TestADocumentWithNoSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	detail, _ := decode(t, res)["detail"].(string)
 	if !strings.Contains(detail, "line 3") {
 		t.Errorf("the error does not name line 3: %q", detail)
+	}
+}
+
+// AND A DOCUMENT CARRYING THE KEY KEEPS ITS LINE NUMBERS TOO.
+//
+// Lifting `_summary` out used to hand the reader the body encoded again, and
+// that renumbers it: a YAML body opening with its summary, a blank line and a
+// comment had a typo on line 6 reported on line 2. The reader takes the
+// document as it was parsed from what the caller sent, so a failure names the
+// line in their file, on every route that reads a body.
+func TestADocumentCarryingTheSummaryKeyKeepsItsLineNumbers(t *testing.T) {
+	t.Parallel()
+	const opening = "_summary: break it\n\n# the company\n"
+	for _, tc := range []struct {
+		name, method, path, body string
+		seeded                   bool
+		line                     int
+	}{
+		{"a put", http.MethodPut, "/config",
+			opening + "name: Acme\nnotification_coalesce_max_batch: 3\nnonsense: true\n", false, 6},
+		{"a patch", http.MethodPatch, "/config",
+			opening + "mission: checked\nnonsense: true\n", true, 5},
+		{"an entity", http.MethodPut, "/config/roles/cto",
+			opening + "name: CTO\nhandle: cto\nllm: zulu\ngaol: ship it\n", true, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			if tc.seeded {
+				s.seed(t, companyDoc, nil)
+			}
+			res := s.do(t, tc.method, tc.path, tc.body, nil)
+			if res.Code != http.StatusBadRequest {
+				t.Fatalf("got %d: %s", res.Code, res.Body)
+			}
+			problems := problemsOf(t, res)
+			if len(problems) != 1 || problems[0].Line != tc.line {
+				t.Errorf("problems = %+v, want one on line %d, where the body has it", problems, tc.line)
+			}
+			detail, _ := decode(t, res)["detail"].(string)
+			if want := "(line " + strconv.Itoa(tc.line) + ")"; !strings.Contains(detail, want) {
+				t.Errorf("the detail %q does not name %s", detail, want)
+			}
+		})
 	}
 }
 

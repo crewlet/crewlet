@@ -54,7 +54,7 @@ func (e *EntityError) Unwrap() error { return e.Err }
 
 // ApplyEntity splices one entity into the active revision and activates it.
 func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Applied, error) {
-	d, err := entityDraft(req.Kind, req.ID, req.Body, req.Expect)
+	d, err := entityDraft(req.Kind, req.ID, asText(req.Body), req.Expect)
 	if err != nil {
 		return Applied{}, err
 	}
@@ -69,7 +69,7 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 //
 // Nothing to splice into is refused rather than treated as an empty company:
 // building the first revision out of one seat is not what this write is for.
-func entityDraft(kind, id string, body []byte, expect string) (draft, error) {
+func entityDraft(kind, id string, body submitted, expect string) (draft, error) {
 	access, ok := entityKinds[kind]
 	if !ok {
 		return draft{}, &EntityError{Err: fmt.Errorf("%w: %q (want one of %v)",

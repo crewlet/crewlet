@@ -89,12 +89,13 @@ type entityAccess struct {
 	// find returns the entity under an id, and whether it was there.
 	find func(*config.Company, string) (any, bool)
 	// replace splices a decoded entity in under an id, or reports why not.
+	// The body is read as it was sent, so its failures name its own lines.
 	// It never CREATES: an id that is not already there is refused, because
 	// "PUT the entity called X" arriving for an X nobody has is far more
 	// often a typo than an intent to add one. It never RENAMES either: a
 	// body whose own identity disagrees with the id is ErrIdentityMismatch,
 	// for the reasons on that sentinel.
-	replace func(*config.Company, string, []byte) error
+	replace func(*config.Company, string, submitted) error
 	// stored finds the entity under an id in a STORED document, decoded as
 	// a tree: the same entity find returns, found the same way, so a write
 	// replaces exactly the bytes of the entity it decoded.
@@ -122,7 +123,7 @@ var entityKinds = map[string]entityAccess{
 			}
 			return found, true
 		},
-		replace: func(c *config.Company, id string, raw []byte) error {
+		replace: func(c *config.Company, id string, raw submitted) error {
 			// FOUND FIRST, judged second. Both orders refuse the same
 			// requests, but they answer a PUT to an id nothing carries
 			// differently: identity-first calls that a rename and blames
@@ -181,7 +182,7 @@ var entityKinds = map[string]entityAccess{
 			}
 			return found, true
 		},
-		replace: func(c *config.Company, id string, raw []byte) error {
+		replace: func(c *config.Company, id string, raw submitted) error {
 			var target *config.Unit
 			var at config.Path
 			eachUnitAt(c, func(p config.Path, u *config.Unit) {
@@ -221,7 +222,7 @@ var entityKinds = map[string]entityAccess{
 			}
 			return p, true
 		},
-		replace: func(c *config.Company, id string, raw []byte) error {
+		replace: func(c *config.Company, id string, raw submitted) error {
 			if _, ok := c.Providers.LLM[id]; !ok {
 				return ErrNoSuchEntity
 			}
@@ -255,7 +256,7 @@ var entityKinds = map[string]entityAccess{
 			}
 			return nil, false
 		},
-		replace: func(c *config.Company, id string, raw []byte) error {
+		replace: func(c *config.Company, id string, raw submitted) error {
 			for i := range c.MCPServers {
 				if c.MCPServers[i].Name != id {
 					continue
@@ -395,7 +396,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		// The same rule the whole-document write has, and for the same
 		// reason: a list of revisions with no summaries is a list of
 		// uuids. A per-entity write can say more, so the hint does.
-		summary, body, ok := takeSummary(w, r, body, true,
+		summary, sent, ok := takeSummary(w, r, body, true,
 			"this write needs an audit summary: the X-Summary header, "+
 				"or a top-level _summary key in the body. Name what changed "+
 				"about "+kind+"/"+id)
@@ -422,7 +423,7 @@ func (s *Service) putEntity(kind string) http.HandlerFunc {
 		if _, ok := s.checkPrecondition(w, r, active, found); !ok {
 			return
 		}
-		d, err := entityDraft(kind, id, body, active.ID)
+		d, err := entityDraft(kind, id, sent, active.ID)
 		if err != nil {
 			s.fail(w, "address the entity", err)
 			return
@@ -616,9 +617,13 @@ func sorted(in []string) []string {
 // It also closes the one hole a whole-document write does not have: the body
 // key that carries a revision summary is lifted out before this runs, and a
 // route that forgot to lift it would be caught here rather than storing it.
-func decodeEntity[T any](raw []byte, at config.Path) (T, error) {
+func decodeEntity[T any](raw submitted, at config.Path) (T, error) {
 	var out T
-	if err := config.ParseMember(raw, &out); err != nil {
+	read := func() error { return config.ParseMember(raw.text, &out) }
+	if raw.doc != nil {
+		read = func() error { return config.ParseMemberNode(raw.doc, &out) }
+	}
+	if err := read(); err != nil {
 		var zero T
 		eachFault(err, func(f *config.Fault) {
 			f.Path = append(slices.Clone(at), f.Path...)
