@@ -516,6 +516,55 @@ Four more controls that looked like something they were not:
   focus ring is not decoration: a keyboard verb that changes meaning on
   click is a secret without one.
 
+Three more that announced as something they were not. Each of these is a
+control a sighted reader could use and a keyboard or screen-reader one could
+not, which is the class of defect that never shows up in a screenshot:
+
+- **A segmented control is a radio group, not a tab list.** `Segmented`
+  declared `role="tablist"` with `role="tab"` children, and not one of its
+  eight call sites is a tab widget: they pick a theme, a density, a grouping,
+  a scope, a window and a lens. A tab controls a `tabpanel` it is adjacent to
+  and labels; these narrow or regroup what is already on screen, and several
+  sit in a screen head with the content they affect hundreds of pixels below.
+  It is `role="radiogroup"` with `aria-checked` options now. `Tabs` keeps the
+  tab role — it is the one control here whose options sit directly above the
+  panel each of them shows.
+- **A group of choices is ONE tab stop, with arrow keys inside it.** Both
+  controls rendered plain buttons under the old role, so the ARIA promised
+  one stop and arrow-key movement while the DOM delivered N stops and no
+  arrow keys — neither behaviour, rather than one or the other. The shell's
+  theme and density controls alone put six stops in front of the page on
+  every screen. One shared roving-focus hook gives both of them the contract
+  their role implies: `tabIndex` 0 on the selected option only, arrows (both
+  axes) and Home/End moving the selection, focus moving with it, and every
+  other key — Tab above all — left to the browser.
+- **A meter needs a name, and a value inside its own range.** `role="meter"`
+  with no accessible name announces as a bare number on screens that render
+  several, and the visible legend is not the name: two call sites pass none
+  at all, and the ones that do pass a reading ("94% of the meter used")
+  rather than a noun. `ariaLabel` is a required prop for that reason, as it
+  already is on `Segmented`, `Tabs` and `Select`. The bar's fill was clamped
+  and `aria-valuenow` was not, so a budget *lowered* under a counter that has
+  already spent past it — the exact state an operator opens the screen in —
+  published a value above `aria-valuemax`; it is clamped now, with the true
+  figures in `aria-valuetext` so the overage is reported rather than hidden.
+  A meter with no ceiling drops the role entirely instead of announcing "0 of
+  100", which is a confident claim that nothing has been spent where the
+  truth is that nobody has said what the limit is.
+
+And one that was only reachable by mouse. `.code` is `overflow: auto` under a
+460px cap, so **any** block taller than that is a scroll container — and in
+Chrome and Safari a scroll container is reachable by keyboard only if
+something makes it focusable. The `selectable` blocks were, because ⌘A needed
+it; the rest were not, and they are the tall ones: a phase card's verbatim
+system prompt runs to tens of kilobytes and could not be scrolled from the
+keyboard at all. `Code` measures its own box — both axes, since `plain` sets
+`white-space: pre` and scrolls sideways — and the blocks that actually
+overflow become named `region`s with a tab stop. A stop on every block would
+put one in front of each of a round's tool arguments, so it is measured rather
+than assumed, and `label` is required on every block because taking focus
+without a name is the other half of the same trade.
+
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
 change shape when it completes. `decision`, `exhausted_rounds`,

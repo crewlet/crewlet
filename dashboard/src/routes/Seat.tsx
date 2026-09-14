@@ -774,6 +774,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Meter
                 used={agent.budget.used}
                 max={agent.budget.max}
+                ariaLabel={`${agent.role}'s token budget`}
                 label={agent.budget.refused_at ? "Refusing charges" : "Used"}
                 right={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
                 tone={agent.budget.refused_at ? "critical" : undefined}

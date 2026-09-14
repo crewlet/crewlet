@@ -209,6 +209,96 @@ export function PhaseTag({ phase, children }: { phase: string; children?: ReactN
   );
 }
 
+/**
+ * One tab stop for a whole group, and the arrow keys that move within it.
+ *
+ * BOTH `Segmented` and `Tabs` need it, and it is the half each of them was
+ * missing. A radio group and a tab list share one keyboard contract — the
+ * group is ONE stop in the page's tab order, arrows move the selection inside
+ * it, Home and End jump to the ends — and a group of plain buttons has the
+ * opposite behaviour: every option is its own tab stop, and arrow keys do
+ * nothing. On the density control in the shell that is three extra stops
+ * before a keyboard reader reaches the page content, on every screen.
+ *
+ * SELECTION FOLLOWS FOCUS, which is what a radio group does by definition and
+ * what the tab-list pattern calls automatic activation. It is the right choice
+ * for both here because every one of these switches a rendered view with no
+ * fetch behind it, so arrowing through the options costs nothing a reader has
+ * to undo.
+ *
+ * Returns the props each option needs, so neither component keeps a second
+ * idea of which option is current: `tabIndex` is 0 on exactly the selected
+ * one, and focus is MOVED rather than requested, because changing tabIndex
+ * alone leaves the browser's focus where it was.
+ */
+function useRovingGroup<T extends string>(
+  values: readonly T[],
+  value: T,
+  onChange: (value: T) => void,
+) {
+  const box = useRef<HTMLDivElement>(null);
+
+  const step = (from: number, by: number) => {
+    // WRAPS, which is the pattern's own rule for both roles: a reader
+    // holding the arrow key gets the whole group rather than stopping at an
+    // end they cannot see.
+    const next = values[(from + by + values.length) % values.length];
+    if (next === undefined || next === value) return;
+    onChange(next);
+    // The newly selected option is the one that will carry tabIndex 0 on the
+    // next render, and focus has to follow it there or the reader is left
+    // focused on an option that is no longer in the tab order.
+    const buttons = box.current?.querySelectorAll<HTMLElement>("[data-roving]");
+    buttons?.[values.indexOf(next)]?.focus();
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const at = values.indexOf(value);
+    // BOTH AXES. These render as a horizontal row today, but a group that
+    // wraps to two lines is the same control and a reader pressing Down on
+    // it is asking for the next option either way.
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        step(at, 1);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        step(at, -1);
+        break;
+      case "Home":
+        step(at, -at);
+        break;
+      case "End":
+        step(at, values.length - 1 - at);
+        break;
+      default:
+        // Everything else is the browser's — Tab above all, which is how a
+        // reader LEAVES the group.
+        return;
+    }
+    // Only for a key this handled: the arrows scroll the page otherwise, and
+    // swallowing a key without acting on it takes a gesture away and puts
+    // nothing in its place.
+    e.preventDefault();
+  };
+
+  return { box, onKeyDown };
+}
+
+/**
+ * One of N choices, drawn as a joined row.
+ *
+ * A RADIO GROUP, not a tab list. It used to declare `role="tablist"` with
+ * `role="tab"` children, and not one of its call sites is a tab widget: they
+ * pick a theme, a density, a grouping, a scope, a window and a kind. A tab
+ * controls a `tabpanel` it is adjacent to and labels; these narrow, regroup or
+ * re-scope what is already on the screen, and several of them sit in a screen
+ * head with the content they affect hundreds of pixels below. Announcing them
+ * as tabs promises a reader a panel relationship that does not exist, which is
+ * a mis-role rather than a missing handler — and it would not have been fixed
+ * by adding the keyboard behaviour alone.
+ */
 export function Segmented<T extends string>({
   value,
   options,
@@ -222,13 +312,30 @@ export function Segmented<T extends string>({
   size?: "sm";
   ariaLabel: string;
 }) {
+  const { box, onKeyDown } = useRovingGroup(
+    options.map((o) => o.value),
+    value,
+    onChange,
+  );
   return (
-    <div className={cx("segmented", size === "sm" && "sm")} role="tablist" aria-label={ariaLabel}>
+    <div
+      ref={box}
+      className={cx("segmented", size === "sm" && "sm")}
+      role="radiogroup"
+      aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
+    >
       {options.map((o) => (
         <button
           key={o.value}
-          role="tab"
-          aria-selected={o.value === value}
+          type="button"
+          data-roving
+          role="radio"
+          aria-checked={o.value === value}
+          // The GROUP is one tab stop. Without this every option is its own,
+          // and the shell's two controls alone put six of them in front of
+          // the page on every screen.
+          tabIndex={o.value === value ? 0 : -1}
           title={o.title}
           onClick={() => onChange(o.value)}
         >
@@ -240,6 +347,10 @@ export function Segmented<T extends string>({
   );
 }
 
+/**
+ * A tab list, and the one control here that genuinely is one: its options sit
+ * directly above the panel each of them shows.
+ */
 export function Tabs<T extends string>({
   value,
   options,
@@ -251,13 +362,21 @@ export function Tabs<T extends string>({
   onChange: (value: T) => void;
   ariaLabel: string;
 }) {
+  const { box, onKeyDown } = useRovingGroup(
+    options.map((o) => o.value),
+    value,
+    onChange,
+  );
   return (
-    <div className="tabs" role="tablist" aria-label={ariaLabel}>
+    <div ref={box} className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
       {options.map((o) => (
         <button
           key={o.value}
+          type="button"
+          data-roving
           role="tab"
           aria-selected={o.value === value}
+          tabIndex={o.value === value ? 0 : -1}
           onClick={() => onChange(o.value)}
         >
           {o.icon && <Icon name={o.icon} size="sm" />}
@@ -397,20 +516,46 @@ export function Avatar({
 // Measure
 // ---------------------------------------------------------------------------
 
+/**
+ * How full something is, drawn as a bar.
+ *
+ * Two things about the ARIA here, both of which it got wrong.
+ *
+ * A `role="meter"` with no accessible name announces as "meter, 120000" and
+ * nothing else — a number with no subject, on a screen that has several. The
+ * visible legend is not the name: `label` is a ReactNode, several call sites
+ * pass a percentage sentence rather than a noun, and two sites pass none at
+ * all because the meter sits in a table cell whose column heading does the
+ * naming for a sighted reader. So the name is a required prop of its own,
+ * exactly as it is on [Segmented], [Tabs] and Select.
+ *
+ * And `aria-valuenow` may not exceed `aria-valuemax`. The fill is clamped —
+ * a bar cannot be 130% long — but the value was not, so a budget LOWERED
+ * under a counter that has already spent past it (which is the whole reason
+ * an operator opens this screen) published an out-of-range value that a
+ * screen reader is entitled to render as anything at all. The clamp goes on
+ * the value and the true figures go in `aria-valuetext`, so the overage is
+ * reported rather than hidden.
+ */
 export function Meter({
   used,
   max,
   label,
+  ariaLabel,
   right,
   tone,
 }: {
   used: number;
   max: number;
   label?: ReactNode;
+  /** What this meter measures, as a bare noun phrase — "Company budget", not
+      "94% used". The accessible name; see the note above. */
+  ariaLabel: string;
   right?: ReactNode;
   tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
 }) {
-  const pct = max > 0 ? Math.min(100, (used / max) * 100) : 0;
+  const scaled = max > 0;
+  const pct = scaled ? Math.min(100, (used / max) * 100) : 0;
   // The tone is DERIVED from the fill unless the caller overrides it, so a bar
   // that is nearly full says so without every call site remembering to.
   const auto = pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
@@ -424,10 +569,21 @@ export function Meter({
       )}
       <div
         className="meter-track"
-        role="meter"
-        aria-valuenow={used}
-        aria-valuemin={0}
-        aria-valuemax={max}
+        // NO SCALE, NO METER. `aria-valuemax` defaults to 100 when it is
+        // absent or not greater than the minimum, so a meter with an
+        // unknown ceiling would announce "0 out of 100" — a confident claim
+        // that nothing has been spent, where the truth is that nobody has
+        // said what the limit is. Drawn as decoration instead; the legend
+        // beside it carries whatever is actually known.
+        role={scaled ? "meter" : undefined}
+        aria-label={scaled ? ariaLabel : undefined}
+        aria-valuenow={scaled ? Math.max(0, Math.min(used, max)) : undefined}
+        aria-valuemin={scaled ? 0 : undefined}
+        aria-valuemax={scaled ? max : undefined}
+        // THE TRUE FIGURES, past the clamp. A meter reading "100%" when the
+        // counter is at 130% of a budget somebody just lowered is the one
+        // state where the exact numbers are the whole message.
+        aria-valuetext={scaled ? `${used} of ${max}` : undefined}
       >
         <div className="meter-fill" data-tone={tone ?? auto} style={{ width: `${pct}%` }} />
       </div>
@@ -579,21 +735,27 @@ export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
  * mounted. Focus is the reader saying which one; everywhere else ⌘A keeps
  * meaning what it has always meant.
  */
-type CodeProps = { children: ReactNode; plain?: boolean } & (
-  | {
-      /** Take ⌘A / Ctrl+A while focused, and take focus. */
-      selectable: true;
-      /**
-       * What this block is. REQUIRED with `selectable`, not optional beside
-       * it: a focusable `role="region"` with no accessible name is a tab stop
-       * a screen reader announces as nothing, which is worse than the plain
-       * block it replaced. The union is what stops the two drifting apart —
-       * a typed prop cannot be forgotten.
-       */
-      label: string;
-    }
-  | { selectable?: false; label?: never }
-);
+interface CodeProps {
+  children: ReactNode;
+  plain?: boolean;
+  /** Take ⌘A / Ctrl+A while focused. */
+  selectable?: boolean;
+  /**
+   * What this block is.
+   *
+   * REQUIRED ON EVERY BLOCK, not only on a selectable one, and that is the
+   * defect this replaced. `.code` is `overflow: auto` with a `max-height`, so
+   * ANY block taller than 460px is a scroll container — and in Chrome and
+   * Safari a scroll container is only reachable by keyboard if something
+   * makes it focusable. The `selectable` ones were, because ⌘A needed it; the
+   * others were not, and they are the tall ones: a phase card's verbatim
+   * system prompt is tens of kilobytes, and a keyboard reader could not
+   * scroll it at all. Taking focus without a name is the other half of that
+   * trade — a tab stop a screen reader announces as nothing — so the two
+   * arrive together or neither does.
+   */
+  label: string;
+}
 
 /**
  * A labelled section the reader opens.
@@ -649,6 +811,36 @@ export function Disclosure({
 
 export function Code({ children, plain, selectable, label }: CodeProps) {
   const box = useRef<HTMLPreElement>(null);
+  // WHETHER THIS BLOCK ACTUALLY SCROLLS, measured rather than assumed.
+  //
+  // A tab stop on every code block would put one in front of each of a phase
+  // card's tool arguments — dozens on a long round — and most of them are
+  // three lines that never overflow. So the stop is given to the blocks that
+  // need it, which is a fact about the rendered box and not about any prop:
+  // the same content overflows or does not depending on the viewport. Firefox
+  // does this natively and Chrome and Safari do not, hence measuring.
+  const [scrolls, setScrolls] = useState(false);
+  useEffect(() => {
+    const node = box.current;
+    if (!node) return;
+    // BOTH AXES: `plain` sets `white-space: pre`, so a wide line scrolls
+    // sideways in a box that is not tall enough to scroll at all.
+    const measure = () =>
+      setScrolls(node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth);
+    measure();
+    // The box is resized by the window, by a Disclosure opening above it and
+    // by its own content arriving on a streamed frame, and none of those is
+    // a render of THIS component. ResizeObserver is the only one of the
+    // three it can see.
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(node);
+    return () => watch.disconnect();
+  }, [children, plain]);
+
+  // Focusable when it owns ⌘A, and when it is a scroll container a reader
+  // would otherwise be unable to reach.
+  const focusable = Boolean(selectable) || scrolls;
 
   const onKeyDown = (e: KeyboardEvent<HTMLPreElement>) => {
     // THE PHYSICAL KEY FIRST. Browsers resolve select-all from the key's
@@ -679,9 +871,9 @@ export function Code({ children, plain, selectable, label }: CodeProps) {
     <pre
       ref={box}
       className={cx("code", plain && "plain", selectable && "selectable")}
-      tabIndex={selectable ? 0 : undefined}
-      role={selectable ? "region" : undefined}
-      aria-label={selectable ? label : undefined}
+      tabIndex={focusable ? 0 : undefined}
+      role={focusable ? "region" : undefined}
+      aria-label={focusable ? label : undefined}
       onKeyDown={selectable ? onKeyDown : undefined}
     >
       {children}

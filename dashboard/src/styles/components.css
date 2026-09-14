@@ -788,7 +788,11 @@ a.brand:hover {
 .segmented > button:hover {
   color: var(--text);
 }
-.segmented > button[aria-selected="true"] {
+/* A RADIO GROUP, so the state attribute is aria-checked. The role moved from
+   `tab` to `radio` because not one call site controls a tabpanel — see
+   `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
+   is how a correct role ships with the selected segment drawn as unselected. */
+.segmented > button[aria-checked="true"] {
   background: var(--surface-1);
   color: var(--text);
   box-shadow: var(--shadow-1);

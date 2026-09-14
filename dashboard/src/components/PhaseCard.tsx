@@ -81,9 +81,15 @@ function ToolRow({
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
-          <Code plain>{args || "{}"}</Code>
+          {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable
+              block announces the name and nothing around it, and half a
+              dozen regions called "Arguments" on one round is the same as
+              none. */}
+          <Code plain label={`${name} — arguments`}>
+            {args || "{}"}
+          </Code>
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <Code>{result || "(empty)"}</Code>
+          <Code label={`${name} — ${failed ? "error" : "result"}`}>{result || "(empty)"}</Code>
         </div>
       </Disclosure>
     </div>
@@ -440,13 +446,20 @@ export function PhaseCard({
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
-                    <Code>{record.systemPrompt}</Code>
+                    {/* The tallest block on the page by a wide margin — a
+                        seat's system prompt runs to tens of kilobytes — so
+                        this is the one that most needed to be reachable. */}
+                    <Code label={`The ${record.phase} phase's system prompt`}>
+                      {record.systemPrompt}
+                    </Code>
                   </div>
                 )}
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <Code>{record.userPrompt}</Code>
+                    <Code label={`The ${record.phase} phase's user message`}>
+                      {record.userPrompt}
+                    </Code>
                   </div>
                 )}
               </div>
