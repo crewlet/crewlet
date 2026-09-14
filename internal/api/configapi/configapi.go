@@ -17,9 +17,7 @@ package configapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
@@ -782,7 +780,7 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 	// OPENED, not copied. A revision sealed under a key no longer in the
 	// keyring cannot be reverted to, and finding that out now beats
 	// activating a document every node will fail to read.
-	_, company, err := s.openDocument(target)
+	document, company, err := s.openDocument(target)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "unreadable_revision", "detail": err.Error(),
@@ -804,11 +802,11 @@ func (s *Service) revert(w http.ResponseWriter, r *http.Request) {
 		// The answer's warnings name each one, and each node warns about
 		// it when it applies the epoch.
 		rules: (*config.Company).ValidateRunnable,
+		// THE TARGET'S BYTES AS THEY WERE STORED. A revert carries the old
+		// document, and this build's struct of it is not that document when
+		// a newer peer wrote it: every field this build cannot represent
+		// would be gone from the revision the fleet reverts to.
 		build: func(base) (*config.Company, []byte, error) {
-			document, encodeErr := json.Marshal(company)
-			if encodeErr != nil {
-				return nil, nil, fmt.Errorf("configapi: encode the config: %w", encodeErr)
-			}
 			return company, document, nil
 		},
 	})

@@ -201,6 +201,12 @@ consequences worth knowing before you script against it:
 A seat inside a unit is reachable by handle like any other — you do not have
 to know which list it lives in, or how deeply the unit is nested.
 
+A write keeps what the node's own build cannot represent. During a rolling
+upgrade a node may hold a document a newer node wrote, with settings its
+`GET` cannot show you; whatever you send back through it, those settings
+survive on every seat, unit and MCP server matched by its identity. See
+[Fields a newer build wrote survive every write](../reference/api-endpoints.md#fields-a-newer-build-wrote-survive-every-write).
+
 ### `X-Summary` and `If-Match`
 
 Both work exactly as they do on the full PUT, and `X-Summary` is **required**:

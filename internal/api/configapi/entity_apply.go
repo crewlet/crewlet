@@ -2,7 +2,6 @@ package configapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -96,9 +95,10 @@ func entityDraft(kind, id string, body []byte, expect string) (draft, error) {
 			// The masks the caller was shown come back as the values they
 			// hide, against the revision they were shown FROM.
 			spliced.RestoreRedacted(b.prior)
-			document, err := json.Marshal(spliced)
+			entity, _ := access.find(spliced, id)
+			document, err := spliceStored(b.document, access, id, entity)
 			if err != nil {
-				return nil, nil, fmt.Errorf("configapi: encode the config: %w", err)
+				return nil, nil, err
 			}
 			return spliced, document, nil
 		},

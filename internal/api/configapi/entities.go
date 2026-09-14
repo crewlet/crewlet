@@ -96,6 +96,10 @@ type entityAccess struct {
 	// body whose own identity disagrees with the id is ErrIdentityMismatch,
 	// for the reasons on that sentinel.
 	replace func(*config.Company, string, []byte) error
+	// stored finds the entity under an id in a STORED document, decoded as
+	// a tree: the same entity find returns, found the same way, so a write
+	// replaces exactly the bytes of the entity it decoded.
+	stored func(root map[string]any, id string) (map[string]any, bool)
 }
 
 // entityKinds is the table, and the four keys are the paths the dashboard's
@@ -154,6 +158,9 @@ var entityKinds = map[string]entityAccess{
 			*target = incoming
 			return nil
 		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			return firstElement(root, false, id)
+		},
 	},
 	EntityUnits: {
 		ids: func(c *config.Company) []string {
@@ -196,6 +203,9 @@ var entityKinds = map[string]entityAccess{
 			*target = incoming
 			return nil
 		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			return firstElement(root, true, id)
+		},
 	},
 	EntityLLMProviders: {
 		ids: func(c *config.Company) []string {
@@ -219,6 +229,12 @@ var entityKinds = map[string]entityAccess{
 			}
 			c.Providers.LLM[id] = incoming
 			return nil
+		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			providers, _ := root["providers"].(map[string]any)
+			llm, _ := providers["llm"].(map[string]any)
+			provider, ok := llm[id].(map[string]any)
+			return provider, ok
 		},
 	},
 	EntityMCPServers: {
@@ -256,6 +272,14 @@ var entityKinds = map[string]entityAccess{
 				return nil
 			}
 			return ErrNoSuchEntity
+		},
+		stored: func(root map[string]any, id string) (map[string]any, bool) {
+			for _, server := range objects(root["mcp_servers"]) {
+				if name, _ := server["name"].(string); name == id {
+					return server, true
+				}
+			}
+			return nil, false
 		},
 	},
 }
@@ -451,6 +475,71 @@ func (s *Service) refuseEntity(w http.ResponseWriter, kind, id string, err error
 		refuseDocument(w, httpjson.CodeInvalidBody, entityErr.Err.Error(), "",
 			&DocumentError{Err: entityErr.Err})
 	}
+}
+
+// firstElement is the first seat, or unit, of a stored document tree whose
+// identity is id, visited in the order [eachRole] and [eachUnit] visit the
+// struct, so it is the element find returned.
+func firstElement(root map[string]any, isUnit bool, id string) (map[string]any, bool) {
+	var found map[string]any
+	consider := func(element map[string]any, unit bool) {
+		if found != nil || unit != isUnit {
+			return
+		}
+		if identityOfElement(element, unit) == id {
+			found = element
+		}
+	}
+	for _, seat := range objects(root["roles"]) {
+		consider(seat, false)
+	}
+	var visit func(map[string]any)
+	visit = func(unit map[string]any) {
+		consider(unit, true)
+		for _, seat := range objects(unit["roles"]) {
+			consider(seat, false)
+		}
+		for _, child := range objects(unit["children"]) {
+			visit(child)
+		}
+	}
+	for _, unit := range objects(root["units"]) {
+		visit(unit)
+	}
+	return found, found != nil
+}
+
+// identityOfElement is a stored seat's or unit's identity as the config model
+// derives it, and empty for an element this build cannot read as one.
+func identityOfElement(element map[string]any, isUnit bool) string {
+	raw, err := json.Marshal(element)
+	if err != nil {
+		return ""
+	}
+	if isUnit {
+		var unit config.Unit
+		if json.Unmarshal(raw, &unit) != nil {
+			return ""
+		}
+		return unit.IdentityKey()
+	}
+	var role config.Role
+	if json.Unmarshal(raw, &role) != nil {
+		return ""
+	}
+	return role.IdentityKey()
+}
+
+// objects is the object elements of a list, and nothing for anything else.
+func objects(value any) []map[string]any {
+	list, _ := value.([]any)
+	out := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		if object, ok := item.(map[string]any); ok {
+			out = append(out, object)
+		}
+	}
+	return out
 }
 
 // --- walking the document -------------------------------------------------

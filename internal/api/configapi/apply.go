@@ -395,6 +395,11 @@ func patchDraft(req ApplyRequest) draft {
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: restore the merged config: %w", err)
 			}
+			// AND THE ARRAYS THAT MERGE REPLACED keep the fields this build
+			// cannot represent: see unknown.go.
+			if final, err = carryUnknown(b.document, final); err != nil {
+				return nil, nil, err
+			}
 			return incoming, final, nil
 		},
 	}
@@ -423,6 +428,15 @@ func replaceDraft(incoming *config.Company, built string) draft {
 			document, err := json.Marshal(incoming)
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: encode the config: %w", err)
+			}
+			if b.found {
+				// A full replacement still keeps what this build cannot
+				// represent: nobody sending it through this build could have
+				// named such a field, so nobody meant to remove one. See
+				// unknown.go.
+				if document, err = carryUnknown(b.document, document); err != nil {
+					return nil, nil, err
+				}
 			}
 			return incoming, document, nil
 		},
@@ -539,12 +553,12 @@ func (s *Service) Reload(ctx context.Context, summary, operator string) (Applied
 		// document predates would make a rotation impossible until somebody
 		// restructured the org. The answer's warnings name each one.
 		rules: (*config.Company).ValidateRunnable,
+		// THE STORED BYTES, UNCHANGED, which is what re-publishing the
+		// active document means. Encoding this build's struct of it would
+		// drop every field a newer peer wrote, on the gesture an operator
+		// makes precisely because they changed nothing in the document.
 		build: func(b base) (*config.Company, []byte, error) {
-			document, err := json.Marshal(b.prior)
-			if err != nil {
-				return nil, nil, fmt.Errorf("configapi: encode the config: %w", err)
-			}
-			return b.prior, document, nil
+			return b.prior, b.document, nil
 		},
 	})
 	if err != nil {

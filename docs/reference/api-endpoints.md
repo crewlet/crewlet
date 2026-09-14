@@ -208,7 +208,7 @@ curl -X PATCH https://engine.example.com/config \
 
 - **Deep merge.** `{"providers": {"llm": {"main": {"model": "claude-opus-5"}}}}` changes that model and leaves the provider's type, its keys and every other provider alone.
 - **`null` deletes.** `{"integrations": {"gitlab": null}}` removes the section — without it a config surface can only add.
-- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question.
+- **Arrays replace.** RFC 7396 cannot address a list element, so `roles: [...]` in a patch replaces the whole roster. Editing one seat is what [`PUT /config/roles/{handle}`](#per-entity-read-and-write) is for; inventing a list syntax here would give two answers to one question. What a replacement does not remove is a field this build cannot represent: see [Fields a newer build wrote survive every write](#fields-a-newer-build-wrote-survive-every-write).
 - **Unknown keys are refused**, not ignored. A patch is the edit least visible in a diff, so a typo that silently changes nothing is the worst outcome available — the caller believes they changed something.
 - **Validated as the whole document it produces.** A section that is fine alone is still refused when it leaves the company invalid.
 - Same summary rule and same `If-Match` as `PUT /config`, and a **409** when nothing is active: a patch is defined against a document, and building a company out of one section is not what this route is for.
@@ -542,6 +542,32 @@ document, and to the rules its question needs:
   admission rule is accepted, and each node logs `org_admission_warning` when it
   applies it. A revert to a revision sealed under a key this node does not hold
   answers `409 unreadable_revision`.
+
+#### Fields a newer build wrote survive every write
+
+During a rolling upgrade an older node holds, byte for byte, documents a newer
+node wrote, including settings the older build has no field for. `GET /config`
+on the older node cannot show them, because its types cannot hold them, so a
+document read there and sent back never names them. Every write keeps them
+anyway: `PUT`, `PATCH`, a per-entity `PUT`, a reload and a revert all store a
+document built from the stored bytes, and carry back each key the writing
+build cannot represent that the write does not name.
+
+- **Only keys the writing build cannot decode are carried.** A key it knows and
+  the write left out was removed on purpose and stays removed. A caller of the
+  older build cannot name an unknown key at all (the strict reader refuses it),
+  so no write through it can mean to remove one.
+- **A list member is matched by identity, not by position**: a seat by its
+  handle and a unit by its name anywhere in the document, so a seat moved to
+  another unit keeps its settings; an MCP server or a sandbox setup step by its
+  name within its own list. An identity held twice in the stored document, or
+  empty, matches nothing, so no seat's setting reaches another. A member of a
+  list with no identity (a schedule, for example) keeps nothing the write
+  replaced.
+- **A reload and a revert store the document exactly as it was stored**, since
+  neither changes it.
+- **A renamed seat or unit is a new identity**, so it keeps nothing of the old
+  one's unknown settings.
 
 ## Setting an integration up
 

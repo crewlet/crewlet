@@ -82,12 +82,14 @@ func mergePatch(target, patch any) any {
 // the same reason the full-document write is: YAML is a superset of JSON, so
 // one reader accepts the form an operator edits and the form a script sends.
 func applyMergePatch(document, patch []byte) ([]byte, error) {
-	var target any
-	if err := json.Unmarshal(document, &target); err != nil {
+	// NUMBERS AS WRITTEN: see [decodeTree]. A patch to the mission used to
+	// round every stored integer above 2^53 to a neighbour.
+	target, err := decodeTree(document)
+	if err != nil {
 		return nil, fmt.Errorf("configapi: decode the active document: %w", err)
 	}
 	var overlay any
-	if err := yaml.Unmarshal(patch, &overlay); err != nil {
+	if err = yaml.Unmarshal(patch, &overlay); err != nil {
 		return nil, fmt.Errorf("the patch is not valid JSON or YAML: %w", err)
 	}
 	if overlay == nil {
