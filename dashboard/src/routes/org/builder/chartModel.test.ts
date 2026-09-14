@@ -18,7 +18,7 @@ import type { Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import { INITIAL_BUILDER, type BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
-import { checkedEdit, PLACED, record, run } from "./stateTestkit.ts";
+import { answered, checkedEdit, PLACED, record, run } from "./stateTestkit.ts";
 import {
   chartInputs,
   CYCLE_GROUP,
@@ -255,6 +255,37 @@ describe("structure", () => {
     });
   });
 
+  test("a created seat's checked handle holds only while it is still called what the check saw", () => {
+    const added = record(checkedEdit(fixtureCompany()), {
+      type: "addSeat",
+      key: "new:a1",
+      placement: { parent: unitKey("Sales"), after: null },
+      data: { name: "Closer" },
+    });
+    const checked = answered(added, {
+      status: "clean",
+      warnings: [],
+      derived: fixtureDerived(toDocument(added.draft).document, PLACED),
+    });
+    expect(seatOf(checked, "new:a1").handle).toBe("closer");
+    // The engine derives an undeclared handle from the name, so after a
+    // rename the handle is the next check's to report.
+    const renamed = record(checked, { type: "renameSeat", target: "new:a1", name: "Deal Closer" });
+    expect(seatOf(renamed, "new:a1").handle).toBeUndefined();
+    // The reporting chart, still drawn from that check, reads it the same way.
+    expect(reporting(chartInputs(checked)).items.get("new:a1")?.handle).toBe("closer");
+    expect(reporting(chartInputs(renamed)).items.get("new:a1")).toMatchObject({
+      name: "Deal Closer",
+      handle: undefined,
+    });
+    // A seat of the saved company keeps the handle its key carries, even
+    // when the last check could not describe the draft at all.
+    const saved = record(checked, { type: "renameSeat", target: seatKey("dev"), name: "Builder" });
+    expect(seatOf(saved, seatKey("dev")).handle).toBe("dev");
+    const unreachable = answered(checked, { status: "unreachable", detail: "offline" });
+    expect(seatOf(unreachable, seatKey("sre")).handle).toBe("sre");
+  });
+
   test("a manager is named as the draft names that seat now", () => {
     const doc = fixtureCompany();
     const state = checkedEdit(doc, {
@@ -306,6 +337,8 @@ describe("reporting", () => {
     });
     const chart = reporting(chartInputs(renamed));
     expect(chart.known).toBe(true);
+    // Its handle is read as the structure chart reads it: pinned by its key.
+    expect(chart.items.get(seatKey("ops"))).toMatchObject({ name: "Operations", handle: "ops" });
     expect(chart.roots.map((r) => [r.id, r.root, r.reports.map((c) => c.name)])).toEqual([
       [seatKey("chief"), true, ["Operations"]],
     ]);

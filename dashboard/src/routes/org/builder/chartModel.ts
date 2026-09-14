@@ -114,7 +114,11 @@ export interface SeatView {
   readonly key: NodeKey;
   readonly name: string;
   readonly kind: SeatKind;
-  /** The handle the engine runs it under: declared, carried by its key, or reported by the last check. */
+  /**
+   * The handle the engine runs it under: declared, carried by its key, or
+   * reported by the last check while the seat is still called what that
+   * check saw. `undefined` while no check has said.
+   */
   readonly handle: string | undefined;
   /**
    * The seat as the saved company holds it: the handle and name its own
@@ -203,6 +207,27 @@ function engineOf({ sent, derived }: ChartInputs): Engine {
 const text = (value: unknown): string =>
   typeof value === "string" && value.trim() !== "" ? value : "";
 
+/**
+ * The handle a seat runs under, or `undefined` while no check has said.
+ *
+ * The one it declares, else the one its key carries (a seat of the saved
+ * company, whose handle every rename pins), else the one the last check
+ * derived. That last holds only while the seat still declares none and is
+ * still called what the check saw: the engine derives an undeclared handle
+ * from the name, so a seat this draft created and then renamed runs under a
+ * handle no check has reported yet, and showing the old one would name a
+ * seat that will never exist.
+ */
+function handleOf(seat: DraftSeat, engine: Engine): string | undefined {
+  const declared = text(seat.data.handle);
+  if (declared !== "") return declared;
+  const carried = handleOfKey(seat.key);
+  if (carried !== undefined) return carried;
+  const checked = engine.sentData(seat.key);
+  if (!checked || text(checked.handle) !== "" || checked.name !== seat.data.name) return undefined;
+  return engine.handles.get(seat.key);
+}
+
 /** Builds the structure chart of a draft. */
 export function structure(inputs: ChartInputs): Structure {
   const { draft, baseDraft } = inputs;
@@ -250,8 +275,7 @@ export function structure(inputs: ChartInputs): Structure {
 
   const seatView = (seat: DraftSeat, parent: NodeKey): SeatView => {
     const kind = kindOf(seat.data);
-    const declared = text(seat.data.handle) || undefined;
-    const handle = declared ?? handleOfKey(seat.key) ?? engine.handles.get(seat.key);
+    const handle = handleOf(seat, engine);
     const base = locate(baseDraft, seat.key);
     const savedSeat =
       base?.kind === "seat"
@@ -389,7 +413,12 @@ export interface ReportingItem {
   readonly key: NodeKey | null;
   readonly name: string;
   readonly kind: SeatKind;
-  readonly handle: string;
+  /**
+   * The handle, read as the structure chart reads it for a seat still in the
+   * draft (`undefined` while no check has reported it), else the one the
+   * derivation carries.
+   */
+  readonly handle: string | undefined;
   /** No manager: a top of the forest. */
   readonly root: boolean;
   /** How many seats the cycle it belongs to holds; absent outside a cycle. */
@@ -410,11 +439,12 @@ export interface Reporting {
 /**
  * Builds the reporting chart from the last check's derivation, arranged by
  * the model's forest (primary managers, no-manager roots, the cycle group).
- * A seat's name is its CURRENT name in the draft, so a rename since the check
- * is not shown stale on a line that has not changed.
+ * A seat's name and handle are its CURRENT ones in the draft, so a rename
+ * since the check is not shown stale on a line that has not changed.
  */
 export function reporting(inputs: ChartInputs): Reporting {
   const { sent, derived, draft } = inputs;
+  const engine = engineOf(inputs);
   const items = new Map<string, ReportingItem>();
   if (!sent || !derived) {
     return { known: false, roots: [], cycles: [], tree: [], items };
@@ -423,13 +453,13 @@ export function reporting(inputs: ChartInputs): Reporting {
   const convert = (node: ReportingNode, root: boolean): ReportingItem => {
     const key = node.seat.path === undefined ? undefined : sent.index.byPath.get(node.seat.path);
     const found = key === undefined ? undefined : locate(draft, key);
-    const current = found?.kind === "seat" ? found.node.data : undefined;
+    const current = found?.kind === "seat" ? found.node : undefined;
     const item: ReportingItem = {
       id: key ?? `reporting:${node.index}`,
       key: current ? key! : null,
-      name: current?.name ?? node.seat.name,
-      kind: current ? kindOf(current) : node.seat.kind === "human" ? "human" : "agent",
-      handle: node.seat.handle,
+      name: current?.data.name ?? node.seat.name,
+      kind: current ? kindOf(current.data) : node.seat.kind === "human" ? "human" : "agent",
+      handle: current ? handleOf(current, engine) : node.seat.handle,
       root,
       ...(node.cycle ? { cycleSize: node.cycle.length } : {}),
       reports: node.reports.map((r) => convert(r, false)),
