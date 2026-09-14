@@ -84,6 +84,23 @@ describe("outside the chart", () => {
     ).toBe("dev");
   });
 
+  // The replacements follow the removal. Choosing a seat placed in the unit by
+  // its reference and then deleting the placed seats too would otherwise write
+  // a fallback naming a seat this removal deletes, which the engine refuses.
+  test("a replacement the removal then takes is no longer chosen", () => {
+    const view = open(keyedState(fixtureCompany()), "unit:Platform");
+    replaceFallback("designer");
+    expect(deleteButton().disabled).toBe(false);
+    fireEvent.click(screen.getByRole("radio", { name: "Delete them too" }));
+    expect((screen.getByLabelText("Datadog fallback") as HTMLSelectElement).value).toBe("");
+    expect(deleteButton().disabled).toBe(true);
+    replaceFallback("ceo");
+    fireEvent.click(deleteButton());
+    expect(
+      getPath(toDocument(view.state().draft).document, ["integrations", "datadog", "route_to"]),
+    ).toBe("ceo");
+  });
+
   // Delete stays unavailable until a fallback is chosen, so with nothing to
   // choose the dialog has to name the way out rather than leave a button that
   // never becomes available beside a picker with nothing in it.

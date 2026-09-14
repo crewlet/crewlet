@@ -96,12 +96,17 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
     .filter((seat) => kindOf(seat.data) === "agent" && !removing.includes(seat))
     .map((seat) => ({ seat, handle: handleOf(state, seat.key) }))
     .filter((c): c is { seat: DraftSeat; handle: string } => c.handle !== undefined);
+  // A CHOICE COUNTS ONLY WHILE IT IS STILL ON OFFER. The replacements follow
+  // the removal, and "Delete them too" can take the seat that was chosen, so
+  // a stale choice would write a fallback naming a seat this very removal
+  // deletes: the next check refuses it, and nothing in the builder fixes it.
+  const replacement = replacements.some((c) => c.handle === routeTo) ? routeTo : "";
 
   const intent: Intent = {
     type: "remove",
     target: nodeKey,
     placedSeats,
-    ...(fallbackSeat && routeTo !== "" ? { routeTo } : {}),
+    ...(fallbackSeat && replacement !== "" ? { routeTo: replacement } : {}),
   };
   const preview = simulate(state, intent);
   const op = preview.ok && preview.op.type === "remove" ? preview.op : null;
@@ -119,7 +124,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   const blocked =
     !preview.ok ||
     api.readOnly ||
-    (fallbackSeat !== undefined && routeTo === "") ||
+    (fallbackSeat !== undefined && replacement === "") ||
     (mass !== null && !acknowledged);
 
   function remove() {
@@ -200,7 +205,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         agents={agents}
         fallbackSeat={fallbackSeat}
         replacements={replacements.map((c) => ({ value: c.handle, label: c.seat.data.name }))}
-        routeTo={routeTo}
+        routeTo={replacement}
         onRouteTo={setRouteTo}
         accessLevels={op?.accessLevels ?? []}
       />
