@@ -684,7 +684,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
-	e.leaseTTL = leaseTTL(opts.Bootstrap)
+	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	n, err := node.New(node.Config{
 		Queue: backends.Queue,
 		Coord: backends.Coord,

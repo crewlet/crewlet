@@ -603,9 +603,15 @@ coordination:
                                     #   booting with a different value does not
                                     #   rewrite it, and logs
                                     #   `coord_kv_lease_ttl_differs` naming the
-                                    #   one in force. So make it agree across
-                                    #   the fleet: changing it takes deleting
-                                    #   the bucket while the fleet is down
+                                    #   one in force — AND RUNS AT IT, because
+                                    #   the bucket's age is what expires a
+                                    #   lease and a node claiming longer than
+                                    #   it would have every acquire refused.
+                                    #   Its heartbeat and release budget are
+                                    #   fractions of the live value too. So
+                                    #   make it agree across the fleet:
+                                    #   changing it takes deleting the bucket
+                                    #   while the fleet is down
 
 api:
   host: "0.0.0.0"

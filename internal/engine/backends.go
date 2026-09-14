@@ -486,3 +486,50 @@ func leaseTTL(b *config.Bootstrap) time.Duration {
 	}
 	return b.Coordination.LeaseTTL()
 }
+
+// leaseTTLInForce is the coordination backend that knows the TTL leases are
+// ACTUALLY held at, which is not always the one this node's Tier A asks for.
+//
+// Declared here, in the package that calls it, and kept to the one method:
+// [coord.Backend] says nothing about a TTL because the in-process backend has
+// no ceiling to report, and widening the contract for one implementation would
+// make every other one answer a question it has no basis for.
+type leaseTTLInForce interface {
+	TTL() time.Duration
+}
+
+// effectiveLeaseTTL resolves what this node must acquire and renew with.
+//
+// # Why this cannot simply be the configured value
+//
+// The KV backend ADOPTS the lease bucket rather than rewriting it, so on a
+// fleet the TTL in force is whichever member created the bucket first — see
+// [kv.Open]. The bucket's own age is the arbiter, and [kv.Store.validateTTL]
+// refuses a claim longer than it. A node that went on acquiring at its own
+// configured value would therefore be wrong in both directions, and one of
+// them is fatal: configured SHORTER than the bucket and its leases lapse
+// earlier than the operator asked for; configured LONGER and every single
+// acquire is refused as too long, so the node holds no seats at all and the
+// company's work sits unclaimed on a node that looks healthy.
+//
+// Taking the live value is also what keeps the derived timings coherent: the
+// heartbeat and the release budget are fractions of this number, so a node
+// renewing on a 90-second cadence against a 45-second bucket would lose every
+// seat it held between beats.
+//
+// A mismatch is not silent — [kv.Open] logs it with both values and the
+// remedy. It is not fatal either: refusing to boot over it would take a
+// company down for a disagreement the fleet is already resolving one way.
+func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration {
+	configured := leaseTTL(b)
+	live, ok := backend.(leaseTTLInForce)
+	if !ok {
+		// The in-process backend: this node is the only holder, so its
+		// own configuration is the whole truth.
+		return configured
+	}
+	if got := live.TTL(); got > 0 {
+		return got
+	}
+	return configured
+}
