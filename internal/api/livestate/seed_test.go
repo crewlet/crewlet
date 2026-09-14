@@ -81,7 +81,7 @@ func TestSeedingFillsTheFeedAndTheSpendWindow(t *testing.T) {
 // THE LIVE STREAM AND THE STORE OVERLAP, and the overlap is counted once.
 //
 // The caller subscribes BEFORE it reads the store, so an event published in
-// between cannot be lost — and arrives both ways.
+// between cannot be lost, and arrives both ways.
 func TestSeedingDoesNotCountWhatTheStreamAlreadyApplied(t *testing.T) {
 	t.Parallel()
 	s := seededState(t)

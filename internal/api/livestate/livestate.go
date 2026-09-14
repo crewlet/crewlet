@@ -6,8 +6,10 @@
 // task, phase and iteration, its live token meter, and the IN-FLIGHT LLM call.
 // What a seat has SPENT is not held per seat: it is the per-agent row of the
 // spend rollup, folded from the same records by internal/tokens, so a seat
-// card and the Spend screen cannot disagree about one seat. It solves two problems, and both are worth stating because they are why
-// this exists at all rather than the dashboard querying the store.
+// card and the Spend screen cannot disagree about one seat.
+//
+// It solves two problems, and both are worth stating because they are why this
+// exists at all rather than the dashboard querying the store.
 //
 // REFRESH SURVIVAL. agent_turn_progress events are stream-only — the event
 // store drops them — so the durable record of a turn appears only once its
@@ -667,7 +669,7 @@ func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
 		ParentSpanID: env.ParentSpanID, Topic: env.Topic,
 		// Read off the envelope Apply just stamped, rather than derived a
 		// second time: one derivation is what keeps the live row and the
-		// hydrated one agreeing about the same event.
+		// seeded one agreeing about the same event.
 		Failed: env.Failed,
 	}
 	s.feed = append(s.feed, row)
