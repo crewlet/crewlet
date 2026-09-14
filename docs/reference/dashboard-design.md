@@ -1168,14 +1168,13 @@ to.
   `.popup-layer` over the grid, placed from their trigger, and follow a
   sideways scroll (or close once their trigger has left the frame) rather than
   being cut off under the last rows. An inline add row closes each unit's rows
-  and the company's while the draft can change.
-  Alt+Up and Alt+Down move a row among its siblings of the same kind, past
-  the row drawn beside it (a root seat the engine placed in a unit by its
-  reference is drawn in that unit, so the root seats step over it rather than
-  making a move nobody can see), and
-  because the engine's primary manager is the first seat that lists a seat,
-  the reporting lines the next check reports are compared with the ones
-  before and a changed primary manager is announced.
+  and the company's while the draft can change. Alt+Up and Alt+Down move a row
+  among its siblings of the same kind, past the row drawn beside it: a root
+  seat the engine placed in a unit by its reference is drawn in that unit, so
+  the root seats around it step over it rather than make a move nobody can
+  see. Because the engine's primary manager is the first seat that lists a
+  seat, the reporting lines the next check reports are compared with the ones
+  before, and a changed primary manager is announced.
 
 ---
 
