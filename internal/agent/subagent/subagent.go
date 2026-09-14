@@ -144,11 +144,11 @@ var controlDenylist = map[string]struct{}{
 	ToolName: {},
 
 	// Launching a detached coding run is engine control keyed to the
-	// PARENT: the pending row carries the parent's turn id and the
-	// completion pauses the parent seat's inbox. A sub-agent's loop cannot
-	// suspend, so the parent turn would finish normally, never persist an
-	// execute state, and the seat would stay deaf for the whole coding run
-	// with nothing to resume into.
+	// PARENT: the pending row carries the parent's turn id, and the
+	// completion re-enters the parent's own suspended executor. A
+	// sub-agent's loop cannot suspend, so the parent turn would finish
+	// normally, never persist an execute state, and the run would come back
+	// to a seat with nothing to resume into.
 	//
 	// The annotation filter below happens to catch it too — a coding run is
 	// open-world, and internal/agent/builtin says so. Named here anyway,
@@ -827,8 +827,8 @@ func stopReason(ctx context.Context) (kind, reason string) {
 		return KindTimeout, errCallDeadline.Error()
 	default:
 		// The parent turn was torn down. NOT a timeout: nothing exceeded a
-		// cap, and a planner told "timed out" would helpfully retry with a
-		// smaller task against an engine that is shutting down.
+		// cap, and an executor told "timed out" would helpfully retry with
+		// a smaller task against an engine that is shutting down.
 		return KindCancelled, ledger.Elide(cause.Error(), errorLimit)
 	}
 }

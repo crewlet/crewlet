@@ -1290,7 +1290,7 @@ func TestParseSummaryToleratesWhatAModelActuallySends(t *testing.T) {
 			want: Summary{CommonTaskPattern: "p", CommonOutcome: "done",
 				SubjectsInvolved: []string{"a", "b"}, NotablePatterns: "n"}},
 		// The fields are read one at a time, so a wrong-typed one costs
-		// itself and not the sentence the planner actually reads.
+		// itself and not the sentence the executor actually reads.
 		{name: "a field of the wrong shape", raw: `{"common_task_pattern":"p","subjects_involved":"nobody"}`,
 			want: Summary{CommonTaskPattern: "p"}},
 		{name: "the heterogeneous escape hatch", raw: `{"common_task_pattern":"(heterogeneous)"}`,
@@ -1657,7 +1657,7 @@ func (c compactionFaultConn) BeginTx(ctx context.Context, opts driver.TxOptions)
 }
 
 // BenchmarkRecallScan is where defaultThreshold comes from. Recall is a brute
-// scan of every embedded row a seat owns and it runs in the Plan phase of every
+// scan of every embedded row a seat owns and it runs in the prefetch of every
 // turn, so the raw-row count IS a per-turn latency budget. Re-measured at the
 // pin, 30 iterations per cell, 1 536 dimensions:
 //
@@ -1715,7 +1715,7 @@ func BenchmarkRecallScan(b *testing.B) {
 // by tool-sequence overlap, and Jaccard over an empty set is undefined. So
 // for a chat-only seat the fold that bounds every other seat's raw rows never
 // fires, and the table grows for the life of the deployment — every row of it
-// scanned and cosined on the Plan phase of every turn.
+// scanned and cosined in the prefetch of every turn.
 //
 // This is the only bound on those rows, so it is the only thing standing
 // between a chat-heavy seat and a recall that slows down for ever.

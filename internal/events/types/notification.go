@@ -62,7 +62,7 @@ type ExternalNotification struct {
 	Agent              string `json:"agent_id"`
 	Sender             string `json:"sender"`
 	Subject            string `json:"subject"`
-	// Body is the ENRICHED planner prompt: the notification builder front-loads
+	// Body is the ENRICHED trigger prompt: the notification builder front-loads
 	// triage and how-to boilerplate (for Slack, ~1.5k characters) before the
 	// actual message.
 	Body string `json:"body"`
@@ -129,11 +129,11 @@ func (e ExternalNotification) IntegrationEventType() string { return e.SourceEve
 // defers to the rest of the chain rather than replacing a value with nothing.
 func (e ExternalNotification) Actor() string { return e.Sender }
 
-// Brief is the ask: the enriched planner prompt the notification builder
+// Brief is the ask: the enriched trigger prompt the notification builder
 // assembled, which is the message plus the triage guidance wrapped around it.
 //
 // Body rather than SalientBody, because the scaffolding is not noise here —
-// it is the integration prompt that tells the planner how to read this surface.
+// it is the integration prompt that tells the agent how to read this surface.
 // The salient half is what the LEARNING workers want (see
 // engine.salientBody), and the two readers wanting different halves is
 // exactly why both fields exist.

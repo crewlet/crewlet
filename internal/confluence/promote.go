@@ -22,7 +22,7 @@ import (
 // # Why the parent is created rather than required
 //
 // The Auto-Drafted Skills parent is what hides a draft from every agent: the
-// Plan-phase knowledge search excludes its subtree. A promotion that landed
+// turn-start knowledge search excludes its subtree. A promotion that landed
 // at the space root because the parent did not exist would be reachable by
 // every seat in the company, unreviewed — which is the one outcome the whole
 // review step exists to prevent. So a missing parent is created, and a

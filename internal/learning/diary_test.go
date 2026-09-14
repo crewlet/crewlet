@@ -331,10 +331,10 @@ func diaryHitIDs(hs []learning.DiaryHit) []string {
 	return out
 }
 
-// A durable entry has no deadline, so nothing ages it out — but recall scans
-// and cosines every one of a seat's rows on every Plan phase, so an unbounded
-// diary is a per-turn cost that only grows. The bound is a cap, and what it
-// drops is decided by USE rather than by age.
+// A durable entry has no deadline, so nothing ages it out, but recall scans
+// and cosines every one of a seat's rows in every turn's prefetch, so an
+// unbounded diary is a per-turn cost that only grows. The bound is a cap, and
+// what it drops is decided by USE rather than by age.
 func TestTheDurableDiaryIsCappedByWorthNotByAge(t *testing.T) {
 	d := diary(t)
 	ctx := context.Background()

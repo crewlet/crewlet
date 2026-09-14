@@ -24,7 +24,8 @@ import (
 type SkillState string
 
 const (
-	// SkillActive is a skill the Plan prefetch offers and the loader loads.
+	// SkillActive is a skill the turn-start prefetch offers and the loader
+	// loads.
 	SkillActive SkillState = "active"
 	// SkillStale is one going unused. It is still listed and still
 	// loadable — the prefetch renders it with a marker so the agent knows
@@ -706,7 +707,7 @@ type Use struct {
 // stopped refreshing.
 //
 // The revival is part of the same transaction as the bump, deliberately: a
-// skill used again is visible to the very next Plan prefetch, not only after
+// skill used again is visible to the very next turn-start prefetch, not only after
 // the curator's next tick, which on the default schedule is up to a day later.
 //
 // An archived row's counters still move and it stays archived. Loading one is
@@ -1026,7 +1027,7 @@ func (s *Skills) Curate(ctx context.Context, p CuratorPolicy, handle string, now
 		}
 		if change.To != SkillActive {
 			// Demotions are guarded against the snapshot this pass read. The
-			// Plan prefetch caches a seat's skills at turn start, so without
+			// the prefetch caches a seat's skills at turn start, so without
 			// the guard a skill loaded mid-turn can be archived underneath
 			// the agent holding it and its next use_skill fails.
 			//

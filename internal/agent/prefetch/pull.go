@@ -24,7 +24,7 @@ import (
 // The push happens once, against the TRIGGER, and a thin trigger — "PR #42 got
 // a comment" — is a pointer with no content: a similarity search against it
 // returns the seat's most recent work rather than its most relevant, so both
-// blocks deliberately render a hint instead. The hint tells the planner to
+// blocks deliberately render a hint instead. The hint tells the executor to
 // look again once recon has made the task real. Without these two methods
 // there was nothing for it to look with: `query_episodes` read recency and
 // `refresh_memory` dumped the newest notes, so the documented escape hatch for
@@ -34,7 +34,7 @@ import (
 //
 // NO FALLBACK TO RECENCY, matching the block: episode recall's whole claim is
 // "this resembles what you are doing now", the three most recent turns carry
-// no such claim, and a planner told they are similar work treats them as
+// no such claim, and an executor told they are similar work treats them as
 // precedent. A company with no embeddings gets (nil, nil) and the caller says
 // so — which is a different sentence from "you have done nothing like this".
 func (f *Fetcher) RecallEpisodes(ctx context.Context, seat *org.Role, text string, limit int) ([]learning.Hit, error) {

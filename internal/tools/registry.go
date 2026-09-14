@@ -420,11 +420,11 @@ func (v *OriginView) RegisterWith(tool Callable, ann Annotations, opts ...Option
 // Unregister removes every tool this view registered.
 func (v *OriginView) Unregister() []string { return v.reg.UnregisterOrigin(v.origin) }
 
-// Catalogue renders the slim tool catalogue a planner is shown: first-party
+// Catalogue renders the slim tool catalogue an executor is shown: first-party
 // tools by name and one-line description, MCP servers by name only.
 //
 // MCP servers are named rather than expanded because a real server publishes
-// dozens of tools and a planner shown all of them plans against a wall of
+// dozens of tools and a model shown all of them decides against a wall of
 // text. Discovery is a tool call — which is also what keeps the prompt prefix
 // stable while a server's catalogue changes underneath.
 func (r *Registry) Catalogue() string {
@@ -572,8 +572,9 @@ func (s Snapshot) Entries() []Entry { return slices.Clone(s.entries) }
 
 // With returns a snapshot carrying one additional entry.
 //
-// A COPY, because the extra tool is per-phase state: Plan's submission tool
-// and Review's are different objects belonging to different phases of one
+// A COPY, because the extra tool is per-phase state: the executor's
+// submission tool and the reviewer's are different objects belonging to
+// different phases of one
 // turn, and registering either into the shared registry would leave it visible
 // to the other — or, worse, to the next turn, still holding the last one's
 // answer.

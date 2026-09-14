@@ -246,9 +246,9 @@ func (a *attachment) wait(d time.Duration) {
 // Holds live on the QUEUE, keyed by the (topic, group) pair, not on an
 // attachment. Two reasons, both learned the hard way.
 //
-// Keyed by the PAIR rather than by topic alone, because two subsystems gate
-// one inbox — the sandbox busy gate and the config-divergence shed — and a
-// topic-keyed hold also gated every other group on a shared subject.
+// Keyed by the PAIR rather than by topic alone, because a topic-keyed hold
+// also gated every other group on a shared subject, and because a second
+// subsystem gating one inbox must not release the first one's hold.
 //
 // Owned by the QUEUE rather than by an attachment, because a hold is
 // routinely taken BEFORE anything attaches: an engine that knows a seat is
@@ -646,8 +646,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // Unquiesce resumes a quiesced attachment.
 //
 // Does NOT touch pause holds: a seat resuming from a stale-renew window may
-// still be legitimately paused for a running sandbox, and clearing that
-// would deliver into a suspended turn.
+// still be legitimately held by another subsystem (the engine's own is the
+// park of a node with no turn engine), and clearing that would restart the
+// requeue loop the hold exists to stop.
 //
 // This needs no prefetch reclamation — pull
 // consumers never pushed anything into a client-side queue, so resuming is

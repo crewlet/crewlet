@@ -208,13 +208,14 @@ func TestNoRegistryMeansNoSkillScaffolding(t *testing.T) {
 	}
 }
 
-// Execute's surface is the plan's tools_needed plus the always-on builtins,
-// so a skill for a tool this executor will never call must not appear.
-func TestExecuteCatalogueIsScopedToThePlannedSurface(t *testing.T) {
+// The executor's catalogue is scoped to the tools it has available, so a skill
+// for a tool this executor cannot call must not appear.
+func TestExecuteCatalogueIsScopedToTheExecutorsSurface(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
 	p := BuildExecutor(engineer(), ExecutorInput{Skills: cat})
 	excludes(t, p, "tool:refresh_memory")
-	// Server-keyed skills still fire: they key on the role, not the plan.
+	// Server-keyed skills still fire: they key on the role's MCP servers,
+	// not on the tool list.
 	contains(t, p, "mcp:github")
 }

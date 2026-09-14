@@ -410,7 +410,7 @@ func TestAnAbsentTrackerRoutesNothing(t *testing.T) {
 // THE KNOWLEDGE BASE IS THE ONE INTEGRATION WHOSE ABSENCE IS INVISIBLE.
 //
 // A routing gap surfaces as an agent that never answers. A search gap
-// surfaces as an empty "## Relevant knowledge" block on every Plan phase,
+// surfaces as an empty "## Relevant knowledge" block in every turn's prompt,
 // which is indistinguishable from a company that has written nothing down —
 // so a configured Confluence has to produce a searcher, and a company with
 // no knowledge backend has to produce a nil one rather than a typed nil that
@@ -615,8 +615,8 @@ integrations:
 		t.Fatalf("a reconnected knowledge base does not route: %v", e.RoutedSources())
 	}
 	// AND ITS SEARCHER COMES BACK WITH IT. A revived parser beside a dead
-	// searcher would route page activity while every Plan phase went on
-	// getting an empty knowledge block.
+	// searcher would route page activity while every turn went on getting
+	// an empty knowledge block.
 	if searcher := e.Knowledge(); searcher == nil || searcher.Backend() != "confluence" {
 		t.Error("the knowledge searcher did not come back with the parser")
 	}

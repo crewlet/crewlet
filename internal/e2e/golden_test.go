@@ -31,7 +31,7 @@ import (
 //
 // Every other test in this tree stops at a seam. This one starts a real engine
 // on a real broker, wakes a real seat with a real trigger, drives a real
-// Plan/Execute/Review loop against a scripted vendor endpoint, and reads the
+// executor and reviewer loop against a scripted vendor endpoint, and reads the
 // result off a WebSocket dialled the way the dashboard dials it — then feeds
 // those exact frames through the dashboard's OWN store.js and socket.js.
 //
@@ -559,7 +559,7 @@ func nodeBinary(t *testing.T) string {
 
 func TestTheSeatCanReachItsBuiltins(t *testing.T) {
 	t.Parallel()
-	// The catalogue a planner is SHOWN, and the surface it can actually
+	// The catalogue an executor is SHOWN, and the surface it can actually
 	// call, are built from the epoch's registry — which NewCompany leaves
 	// empty, because building an epoch must be something `crewlet validate`
 	// can do without a database. So the engine fills it, per epoch, and a
@@ -586,7 +586,7 @@ func TestTheSeatCanReachItsBuiltins(t *testing.T) {
 	} {
 		if !have[want] {
 			t.Errorf("%s is not in the epoch's registry, so no seat can call "+
-				"it and no planner is told it exists", want)
+				"it and no executor is told it exists", want)
 		}
 	}
 }

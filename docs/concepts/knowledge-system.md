@@ -42,7 +42,7 @@ result would act on it by writing a page that already exists.
 Ranking is BM25 with term-frequency saturation and length normalisation — the
 part that stops a 20 KB runbook outranking the one-paragraph page that is
 actually the answer. There is no phrase query, no proximity and no query
-language, because the seam deliberately does not have one: a planner writes a
+language, because the seam deliberately does not have one: an agent writes a
 keyword line and a person types into a box.
 
 ### Semantic search: two stages, no index, no new dependency

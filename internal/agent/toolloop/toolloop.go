@@ -2,9 +2,9 @@
 //
 // It is the innermost loop of the engine: ask the model, run whatever tools it
 // asked for, feed the results back, repeat until it stops asking or the round
-// budget runs out. Everything above it — Plan, Execute, Review, the extension
-// judge, a sub-agent — is this loop with a different surface and a different
-// prompt.
+// budget runs out. Everything above it is this loop with a different surface
+// and a different prompt: the executor, the reviewer, the extension judge, a
+// worker.
 //
 // Four things here are load-bearing and each replaced an incident:
 //
@@ -85,8 +85,9 @@ const maxEmptyAnswerRetries = 1
 // Surface is the set of tools a phase runs against.
 //
 // An interface rather than a concrete registry because the phases differ in
-// what they expose and the loop must not know which phase it is running: Plan
-// sees planning tools, Execute sees the world, a sub-agent sees a subset. It
+// what they expose and the loop must not know which phase it is running: the
+// executor sees the world, the reviewer sees only the tool it submits its
+// decision with, a worker sees a subset of its parent's. It
 // is re-read at the TOP OF EVERY ROUND so a surface mutated mid-loop — a
 // meta-tool activating another tool — is visible on the next provider call
 // rather than the one after.
@@ -128,8 +129,8 @@ type ToolResult struct {
 
 // Execution records one tool call for the prior-work ledger and the phase
 // record. It is the engine's own account of what ran, which is what makes a
-// self-iterate round able to tell an already-fired delivery from a planned
-// one.
+// self-iterate round able to tell a delivery that already fired from one the
+// model only described.
 type Execution struct {
 	Round int
 	Name  string
@@ -364,7 +365,7 @@ type Config struct {
 	// SUCCESSFULLY, even if the model asked for more. A phase whose
 	// delivery tool has fired is finished; letting it keep going spends
 	// rounds re-deciding something already done — measured at four
-	// identical plan submissions before the round cap stopped it.
+	// identical submissions before the round cap stopped it.
 	//
 	// A failed call does not terminate: its failure went back to the
 	// model, and ending the phase there means the retry never happens.

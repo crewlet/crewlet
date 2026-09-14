@@ -334,7 +334,7 @@ type EpisodeLifecycle struct {
 	// The ONE bound on a chat-only seat's raw rows: compaction pools turns
 	// by tool-sequence overlap, so a turn with no tools has nothing to be
 	// clustered with and is never folded. Left alone the table grows for
-	// the life of the deployment, and every row is scanned on the Plan
+	// the life of the deployment, and every row is scanned at the turn
 	// phase of every turn.
 	//
 	// Much longer than the other raw horizons by design — those drop rows

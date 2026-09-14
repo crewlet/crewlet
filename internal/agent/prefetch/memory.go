@@ -75,7 +75,7 @@ const (
 // surfaced.
 //
 // Without it a context-thin trigger and a brand-new agent render the same
-// empty block, leaving the planner no signal that looking again would help.
+// empty block, leaving the executor no signal that looking again would help.
 // The wording points at the tool that re-runs the filter, because after
 // recon the trigger is no longer thin and the answer may genuinely differ.
 const EmptyMemoryHint = "(no stored memories surfaced at turn start — re-run " +
@@ -211,8 +211,8 @@ func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []le
 
 // markRetrieved records that the filter SELECTED these entries.
 //
-// HERE, and only here, because this is where both recall paths meet — the
-// Plan-phase block and refresh_memory's hinted re-filter — and because what
+// HERE, and only here, because this is where both recall paths meet, the
+// turn-start block and refresh_memory's hinted re-filter, and because what
 // counts as a use is what the filter picked. A candidate is not a use: the
 // pool is similarity union recency, so counting candidates would move the
 // counter for every entry a seat owns on every turn and make the trim's

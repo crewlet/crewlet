@@ -1332,7 +1332,7 @@ func TestAUseDuringThePassIsCountedAsARaceNotAsATransition(t *testing.T) {
 	ctx := context.Background()
 	sk := mustInsert(t, s, newSkill("alice", "triage", base.Add(-100*24*time.Hour)))
 
-	// The Plan prefetch caches a seat's skills at turn start; the agent can
+	// The turn-start prefetch caches a seat's skills; the agent can
 	// load one at any point after that. Reproduce the window exactly: the
 	// use lands between the pass reading the row and the pass writing it.
 	fault.before(sqlTransition, func() {

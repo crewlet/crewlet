@@ -308,13 +308,13 @@ func (r *recordingTelemetry) Publish(_ context.Context, topic string, ev *events
 	return r.err
 }
 
-// --- the pull side of the Plan phase's two searches ----------------------- //
+// --- the pull side of the turn-start prefetch's two searches -------------- //
 
 // The re-query-after-recon path the docs lean on, and which did not exist:
 // query_episodes declared `conversation` and `limit` and nothing else, so the
-// escape hatch for a thin trigger — a pointer with no content, where the Plan
-// block deliberately renders a hint instead of a search — had nothing to
-// search with.
+// escape hatch for a thin trigger (a pointer with no content, where the
+// prefetch block deliberately renders a hint instead of a search) had nothing
+// to search with.
 func TestQueryEpisodesSearchesByMeaning(t *testing.T) {
 	t.Parallel()
 	recall := &fakeRecall{hits: []learning.Hit{
@@ -618,7 +618,7 @@ func notesIn(out string) string {
 	return notes
 }
 
-// fakeRecall stands in for the Plan phase's searches.
+// fakeRecall stands in for the turn-start prefetch's searches.
 type fakeRecall struct {
 	hits  []learning.Hit
 	notes []learning.DiaryEntry

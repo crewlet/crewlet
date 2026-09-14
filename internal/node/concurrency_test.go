@@ -169,7 +169,7 @@ func TestTheConfiguredCeilingIsWhatTheNodeEnforces(t *testing.T) {
 
 // A DRAIN RELEASES THE TURNS STILL WAITING FOR A SLOT, and leaves the running
 // one alone. Without the split, a backlog admitted before the quiesce runs
-// full Plan → Execute → Review turns one after another through a shutdown
+// whole turns, executor and reviewer, one after another through a shutdown
 // that waits for them indefinitely.
 func TestADrainDefersTheTurnsStillWaitingForASlot(t *testing.T) {
 	t.Parallel()

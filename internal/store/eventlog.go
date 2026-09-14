@@ -621,8 +621,9 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 
 // Turn returns every event of one turn, OLDEST first.
 //
-// Ordered like a trace and for the same reason: a turn is read forwards — plan,
-// then execute, then review — rather than as a feed. It is a DIFFERENT set from
+// Ordered like a trace and for the same reason: a turn is read forwards, the
+// executor and then the reviewer round by round, rather than as a feed. It is a
+// DIFFERENT set from
 // the trace, which is why it is a separate read: one trace can span several
 // turns (a webhook that wakes two seats), and a turn resumed on another node
 // after a restart can span several traces.
