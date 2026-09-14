@@ -1228,26 +1228,6 @@ function Lens({
         )}
         {documentProblems.length > 0 && <DocumentProblems problems={documentProblems} />}
 
-        {created && <NextSteps onDismiss={() => setCreated(false)} />}
-
-        {creating && !templateApplied ? (
-          <CreateCompany
-            keys={keys}
-            disabled={readOnly}
-            onApply={(intent) => dispatch({ type: "record", intent })}
-          />
-        ) : (
-          <TabPanel id={viewPanel} value={view}>
-            {view === "canvas" ? (
-              <TabPanel id={chartPanel} value={chart}>
-                <Surface component={viewSurface} name="The canvas" />
-              </TabPanel>
-            ) : (
-              <Surface component={viewSurface} name="The outline" />
-            )}
-          </TabPanel>
-        )}
-
         {savedRevision && <AfterSaveStrip saved={savedRevision} onDismiss={clearSavedRevision} />}
 
         {save.unsettled && !reviewing && (
@@ -1267,6 +1247,26 @@ function Lens({
             The engine did not confirm whether the last save was stored. Editing is paused until it
             does.
           </Banner>
+        )}
+
+        {created && <NextSteps onDismiss={() => setCreated(false)} />}
+
+        {creating && !templateApplied ? (
+          <CreateCompany
+            keys={keys}
+            disabled={readOnly}
+            onApply={(intent) => dispatch({ type: "record", intent })}
+          />
+        ) : (
+          <TabPanel id={viewPanel} value={view}>
+            {view === "canvas" ? (
+              <TabPanel id={chartPanel} value={chart}>
+                <Surface component={viewSurface} name="The canvas" />
+              </TabPanel>
+            ) : (
+              <Surface component={viewSurface} name="The outline" />
+            )}
+          </TabPanel>
         )}
 
         {reviewing && save.writeId && (
