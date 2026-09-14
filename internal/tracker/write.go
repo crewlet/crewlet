@@ -463,6 +463,17 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 					return statelog.Decision{}, err
 				}
 			}
+			// AND A SPRINT THE PROJECT ACTUALLY MINTED, on the home
+			// the patch is landing on rather than the one it left.
+			if patch.Sprint != nil {
+				home := current.Project
+				if patch.Project != nil {
+					home = *patch.Project
+				}
+				if err := mintedSprint(ctx, tx, home, patch.Sprint); err != nil {
+					return statelog.Decision{}, err
+				}
+			}
 			charged, err := w.chargeHandOff(current, patch)
 			if err != nil {
 				return statelog.Decision{}, err
