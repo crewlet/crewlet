@@ -269,7 +269,7 @@ var _ coord.Backend = (*Store)(nil)
 // that is still electing. And the caller's context reaches nats.go with no
 // deadline of its own — `crewlet run` passes a signal-cancellable one — so the
 // client's FIVE-SECOND default API timeout applied here, not the provisioning
-// budget the neighbouring fifteen buckets get. The two compound: the call most
+// budget every other bucket on this boot path gets. The two compound: the call most
 // likely to be held by an electing group had the least patience of any on the
 // path, and it runs on every node at every boot.
 //
@@ -288,8 +288,9 @@ var _ coord.Backend = (*Store)(nil)
 //
 // Two creates are already bounded by their own budgets, so a ceiling over them
 // would bind on nothing. The one that matters spans this call AND [OpenFleet]
-// — fifteen buckets rather than two — and the engine applies it once where it
-// makes both, in internal/engine's attachCoordination.
+// — those thirteen and these two rather than these two alone — and the engine
+// applies it once where it makes both, in internal/engine's
+// attachCoordination.
 func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")

@@ -488,6 +488,19 @@ draining, and rolling upgrades. The two things that bite hardest:
 > fleet's leases with it. Against an external NATS cluster the quorum is that
 > cluster's to provide rather than the engine's to count; see
 > [An external NATS server](#an-external-nats-server).
+>
+> **Raising it on a fleet that already ran needs the existing objects resized.**
+> Nothing the engine provisions is ever rewritten by a booting node — a
+> shared stream's configuration has one writer and it is not whichever node
+> started last — so a rolling restart after raising `stream.replicas` finds
+> every stream and bucket already there at the old count and adopts it. A node
+> that is short refuses to start and says so, naming both counts: a stream
+> because an acknowledged publish would be proving fewer copies than
+> `stream.replicas` promises, and a coordination bucket because the leases,
+> the fencing epochs and the company's secrets would be on fewer disks than
+> the config claims. Resize the objects deliberately (`nats stream update
+> --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
+> stand the fleet up fresh.
 
 ### What an acknowledged publish has reached
 

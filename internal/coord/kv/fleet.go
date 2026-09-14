@@ -97,7 +97,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 
 	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
 	case err == nil:
-		return bucket, nil
+		return bucket, observeReplicas(createCtx, bucket, cfg)
 	case !errors.Is(err, jetstream.ErrBucketNotFound):
 		return nil, err
 	}
@@ -141,7 +141,66 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 		// confirms the create really did fail.
 		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
-	return bucket, nil
+	// THE PEER MADE IT, so it is the peer's replica count that is in force
+	// and this node has to agree with it — the same question the adopt
+	// path above asks, for the same reason.
+	return bucket, observeReplicas(ctx, bucket, cfg)
+}
+
+// observeReplicas refuses a bucket replicated below what this node is
+// configured for.
+//
+// # Why a booting node refuses rather than resizing
+//
+// Because the durability this store promises is not something whichever node
+// booted last gets to decide, and because a bucket is a stream: this is the
+// rule [internal/queue/jetstream]'s observeStream already applies to one, in
+// the same words — "an acknowledged publish would be proving fewer copies than
+// stream.replicas promises". Nothing here is ever APPLIED to a bucket that
+// exists (see openBucket's doc for what CreateOrUpdate cost), so a mismatch is
+// an operator gesture, not a write.
+//
+// # Why it is the one bucket field worth refusing over
+//
+// The rest are reported instead — the lease TTL in force is warned about in
+// [Open], for the reason recorded there. Replication is different in kind:
+// every other difference changes how this store BEHAVES and is visible in
+// what it does, while this one changes only what survives losing a node, and
+// is visible in nothing at all until that happens. A fleet raised from one
+// replica to three, whose buckets were all made at one, goes on holding every
+// lease, every fencing epoch and the company's SECRETS on a single disk while
+// each node reports itself correctly configured.
+//
+// Equal or higher passes, so a single-replica development node against a
+// three-replica fleet's buckets still starts.
+func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
+	cfg jetstream.KeyValueConfig) error {
+
+	want := max(cfg.Replicas, 1)
+	if want <= 1 {
+		// Nothing to be short of, and no round trip spent asking.
+		return nil
+	}
+	status, err := bucket.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read %s status: %w", cfg.Bucket, err)
+	}
+	got, ok := status.(*jetstream.KeyValueBucketStatus)
+	if !ok || got.StreamInfo() == nil {
+		return fmt.Errorf("coord/kv: %s reported no backing stream", cfg.Bucket)
+	}
+	if live := got.StreamInfo().Config.Replicas; live < want {
+		return fmt.Errorf(
+			"coord/kv: the running bucket %q is replicated %dx and this node is "+
+				"configured for %dx: it holds leases, fencing epochs and this "+
+				"company's secrets on fewer copies than stream.replicas promises, "+
+				"and losing one node loses them. Nothing is applied to a bucket "+
+				"that already exists, so this is an operator gesture: align "+
+				"stream.replicas across the fleet, or resize this bucket's stream "+
+				"deliberately (a bucket IS a stream: nats stream update --replicas)",
+			cfg.Bucket, live, want)
+	}
+	return nil
 }
 
 // createKeyValue makes the bucket, waiting out a cluster that has not yet seen
@@ -403,10 +462,16 @@ var _ coord.Fleet = (*FleetStore)(nil)
 //
 // The buckets below are opened one after another and each takes its own
 // provisioning budget, so without a ceiling the real bound on this call is the
-// PRODUCT rather than the term: a wedged cluster is rediscovered fifteen times
-// over, and a boot that nobody meant to allow ten minutes gets it. Nothing
-// declared that number, which is the shape of a limit that is not a decision.
-// [jsprovision.SequenceBudget] is the decision, applied once here.
+// PRODUCT rather than the term: a wedged cluster is rediscovered once per
+// bucket, thirteen buckets in a row, and a boot that nobody meant to allow ten
+// minutes gets it. Nothing declared that number, which is the shape of a limit
+// that is not a decision. [jsprovision.SequenceBudget] is the decision,
+// applied once here.
+//
+// THE COUNT IS SPELLED so the estate gate catches it: this paragraph is the
+// sizing argument, and a sizing argument over the wrong number of buckets is
+// worse than none — see TestEveryBucketHasALifetimeClass, which holds every
+// "N buckets" in this file against the open table below.
 func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")
