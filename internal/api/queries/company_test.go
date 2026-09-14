@@ -878,15 +878,40 @@ func TestAnEngineRoutingNothingIsNotUnknown(t *testing.T) {
 // a blank inbound path, and both sides' tests passed, because each was
 // checked against its own idea of the other.
 //
-// This reads the FIELD NAMES out of the room's own source and asserts the
-// answer carries each. It is the cheap half of the gate `internal/e2e` gives
-// the push protocol; the query channel had none at all.
+// This reads the FIELD NAMES out of the client's own declaration and asserts
+// the answer carries each. It is the cheap half of the gate `internal/e2e`
+// gives the push protocol; the query channel had none at all.
+//
+// TWICE NOW THIS GATE HAS POINTED AT A PATH THAT DOES NOT EXIST, so it is
+// worth saying what it reads and why. It read
+// `static/dashboard/js/views/integrations.js` — the hand-written bundle the
+// React rewrite deleted — so os.ReadFile failed, the t.Skipf below it fired,
+// and this certified NOTHING on every machine and in CI for the whole of that
+// rewrite while reporting a pass. [rooms_test.go] records the identical bug
+// being found and fixed in this same package; this file was missed, and
+// nothing noticed, because nothing counted skips. So: the source, never the
+// build output, and a missing file is FATAL — a broken checkout is not a
+// reason to certify nothing.
+//
+// It reads the TYPE rather than the room's access sites, and that is the
+// second lesson. The old sweep matched `row.<field>` and `data.<field>`
+// literally. Integrations.tsx destructures (`const { data } = useQuery(…)`,
+// then `data?.integrations`) and names a row `r` inside its map callback, so
+// the `data.` half matched nothing at all and the `row.` half missed `r.key`
+// — a sweep whose whole job is to notice a missing name, silently narrowing
+// to whichever identifiers one file happened to use. A declared interface is
+// ONE place, and a field added there without a server that sends it fails
+// here.
 func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	t.Parallel()
-	source, err := os.ReadFile(filepath.Join(
-		"..", "..", "..", "static", "dashboard", "js", "views", "integrations.js"))
+	// dashboardTree is rooms_test.go's, for the reason its comment gives:
+	// the source tree, not the build output.
+	typesPath := filepath.Join(dashboardTree, "protocol", "types.ts")
+	source, err := os.ReadFile(typesPath)
 	if err != nil {
-		t.Skipf("the dashboard tree is not in this checkout: %v", err)
+		t.Fatalf("read %s: %v — this gate cannot run without the client's "+
+			"declaration, and skipping would certify nothing while reporting "+
+			"a pass", typesPath, err)
 	}
 
 	// EVERY third-party app, because the per-integration detail fields (url,
@@ -916,22 +941,64 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 		}
 	}
 
-	// Every `row.<field>` and `data.<field>` the view reads.
-	rowFields := regexp.MustCompile(`\brow\.([a-z_]+)`)
-	dataFields := regexp.MustCompile(`\bdata\.([a-z_]+)`)
+	// Every field the client declares on a row, and on the answer around it.
+	for field, required := range declaredFields(t, string(source), "IntegrationRow") {
+		switch {
+		case sent[field]:
+		case required:
+			t.Errorf("IntegrationRow declares %s as REQUIRED and the answer "+
+				"never sends it — that field renders as undefined on every card", field)
+		default:
+			// An optional field no row carries is within the type's contract,
+			// so it is not a failure — but it is either dead client code or a
+			// server that stopped sending something, and both are worth
+			// seeing. The required half above is what fails.
+			t.Logf("IntegrationRow declares %s (optional) and no row carries it", field)
+		}
+	}
+	for field, required := range declaredFields(t, string(source), "IntegrationsAnswer") {
+		if _, ok := body[field]; !ok && required {
+			t.Errorf("IntegrationsAnswer declares %s as REQUIRED and the "+
+				"answer never sends it", field)
+		}
+	}
+}
 
-	for _, m := range rowFields.FindAllStringSubmatch(string(source), -1) {
-		if !sent[m[1]] {
-			t.Errorf("the room reads row.%s and the answer never sends it — "+
-				"that field renders as undefined on every card", m[1])
-		}
+// declaredFields returns the fields of one TypeScript interface, mapped to
+// whether the client declares them REQUIRED (no `?`).
+//
+// Deliberately a small parser over the declaration rather than a sweep of
+// access sites: an interface states the contract once, where a `row.x` /
+// `r.x` / destructured-`x` sweep states it as many times as the room has
+// spellings and silently covers only the spellings it guessed.
+func declaredFields(t *testing.T, source, iface string) map[string]bool {
+	t.Helper()
+
+	start := regexp.MustCompile(`(?m)^export interface ` + iface + ` \{$`).FindStringIndex(source)
+	if start == nil {
+		t.Fatalf("no `export interface %s` in the client's protocol types — "+
+			"it was renamed or removed, and this gate is asserting about nothing", iface)
 	}
-	for _, m := range dataFields.FindAllStringSubmatch(string(source), -1) {
-		// `integrations` is the row list itself.
-		if _, ok := body[m[1]]; !ok {
-			t.Errorf("the room reads data.%s and the answer never sends it", m[1])
-		}
+	end := regexp.MustCompile(`(?m)^\}$`).FindStringIndex(source[start[1]:])
+	if end == nil {
+		t.Fatalf("interface %s is not closed at column 0", iface)
 	}
+	body := source[start[1] : start[1]+end[0]]
+
+	// A field line, at one level of indentation: `name?: type;`. The leading
+	// `^  ` anchors to the interface's own fields, so a nested object literal
+	// contributes nothing; the `[a-z_]` class excludes the `[key: string]:
+	// unknown` index signature, which is not a field anybody reads by name.
+	field := regexp.MustCompile(`(?m)^  ([a-z][a-z0-9_]*)(\??):`)
+	out := map[string]bool{}
+	for _, m := range field.FindAllStringSubmatch(body, -1) {
+		out[m[1]] = m[2] == ""
+	}
+	if len(out) == 0 {
+		t.Fatalf("interface %s declared no fields this could read; the shape "+
+			"of the declaration changed and this gate stopped asserting", iface)
+	}
+	return out
 }
 
 // brokenPlane is a config plane that answers nothing, for the case where the
