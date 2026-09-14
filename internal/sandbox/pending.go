@@ -105,6 +105,28 @@ func AnswerTail(launch string) Tail {
 	return Tail{Launch: launch, From: Awaiting}
 }
 
+// Release is how a claimed tail is handed back for its signal's retry: the
+// claim it hands back, and where to.
+//
+// A RELEASE NAMES WHAT IT RELEASES, for the reason a claim names what it
+// claims. The claim is held across the resume, and the resumed turn is free to
+// move the row on: an executor that calls run_sandbox again opens a new launch
+// on it, and a seat's next owner reaps a claim its previous owner abandoned. A
+// failed resume that put back whatever the row held by then reverted the new
+// launch to running, with no box or no conversation, or revived a run already
+// reaped and announced lost.
+type Release struct {
+	// Launch is the [PendingRun.LaunchID] the claim took, matched exactly.
+	Launch string
+
+	// To is the status the claim took the run out of, which is one of
+	// [Claimable].
+	To string
+
+	// Fence is the lease the claim was taken under.
+	Fence Fence
+}
+
 // Holding are the statuses in which a run holds its seat, so the seat takes no
 // new turn while it is in one.
 //
@@ -373,6 +395,19 @@ type PendingStore interface {
 	// carries ClaimedFrom, so a failed dispatch can put it back exactly
 	// where it was.
 	ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error)
+
+	// ReleaseClaim hands a claimed run back to the status it was claimed
+	// from, reporting whether THIS call did.
+	//
+	// Only while the claim still stands: the run is resumed, holds the
+	// release's launch, and no newer lease outranks the release's fence.
+	// Anything else means the run has moved on from the claim (see
+	// [Release]), and a retry of the signal has nothing left to take.
+	//
+	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
+	// gone. A release to a status outside [Claimable] is an error, because
+	// no claim ever takes a run out of one.
+	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
 
 	// MarkCharged records that a claimed run's collected tokens are on
 	// the token counter, reporting whether THIS call recorded it.

@@ -46,6 +46,12 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AClaimForAnotherLaunchIsRefused", testAClaimForAnotherLaunchIsRefused},
 		{"ACompletionDoesNotClaimAParkedRun", testACompletionDoesNotClaimAParkedRun},
 		{"AnAnswerDoesNotClaimARunningRun", testAnAnswerDoesNotClaimARunningRun},
+		{"AReleaseHandsTheClaimBackWhereItFoundIt", testAReleaseHandsTheClaimBackWhereItFoundIt},
+		{"AReleaseOfAnotherLaunchIsRefused", testAReleaseOfAnotherLaunchIsRefused},
+		{"AReleaseOfARunNoLongerClaimedIsRefused", testAReleaseOfARunNoLongerClaimedIsRefused},
+		{"AStaleFenceCannotRelease", testAStaleFenceCannotRelease},
+		{"AReleaseGoesBackOnlyToAClaimableStatus", testAReleaseGoesBackOnlyToAClaimableStatus},
+		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
 		{"AChargeIsRecordedOnce", testAChargeIsRecordedOnce},
 		{"OnlyAClaimedRunRecordsACharge", testOnlyAClaimedRunRecordsACharge},
 		{"AChargeRecordComesBackOnTheRetrysClaim", testAChargeRecordComesBackOnTheRetrysClaim},
@@ -456,6 +462,154 @@ func testAnAnswerDoesNotClaimARunningRun(t *testing.T, s sandbox.PendingStore) {
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
 		t.Errorf("status = %q, want the job still running", got.Status)
+	}
+}
+
+// releaseOf is the release that hands a claimed run back where it was taken
+// from, under the lease it was taken under.
+func releaseOf(claimed sandbox.PendingRun) sandbox.Release {
+	return sandbox.Release{
+		Launch: claimed.LaunchID, To: claimed.ClaimedFrom,
+		Fence: sandbox.Fence{Owner: claimed.Owner, Epoch: claimed.OwnerEpoch},
+	}
+}
+
+// mustRelease hands a claimed run back.
+func mustRelease(t *testing.T, s sandbox.PendingStore, claimed sandbox.PendingRun) {
+	t.Helper()
+	released, err := s.ReleaseClaim(t.Context(), claimed.TurnID, releaseOf(claimed))
+	if err != nil || !released {
+		t.Fatalf("release %s: released=%v err=%v", claimed.TurnID, released, err)
+	}
+}
+
+func testAReleaseHandsTheClaimBackWhereItFoundIt(t *testing.T, s sandbox.PendingStore) {
+	// The retry a failed resume opens has to find the run exactly where the
+	// signal it is retrying can take it: a completion's job running, an
+	// answer's question waiting.
+	mustLaunched(t, s, run("t1"))
+	mustRelease(t, s, mustClaim(t, s, "t1"))
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
+		t.Fatalf("status = %q, want the completion's job running again", got.Status)
+	}
+	mustClaim(t, s, "t1")
+
+	mustLaunched(t, s, run("t2"))
+	if err := s.MarkAwaiting(t.Context(), "t2", sandbox.Clarification{Question: "which branch?"}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	answered, won, err := s.ClaimForResume(t.Context(), "t2", answerTo(t, s, "t2"))
+	if err != nil || !won {
+		t.Fatalf("claim the answer: won=%v err=%v", won, err)
+	}
+	mustRelease(t, s, answered)
+	if got := mustGet(t, s, "t2"); got.Status != sandbox.StatusAwaiting || got.Question != "which branch?" {
+		t.Fatalf("row = %s %q, want the question waiting on its answer again", got.Status, got.Question)
+	}
+}
+
+func testAReleaseOfAnotherLaunchIsRefused(t *testing.T, s sandbox.PendingStore) {
+	// The resumed executor called run_sandbox again, so the row holds a new
+	// launch with the claimed job's conversation cleared. Handed back, that
+	// launch would read as a running job with nothing to resume into, and
+	// its completion would collect whatever the box still held.
+	mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	mustBeginLaunch(t, s, run("t1"))
+	relaunched := mustGet(t, s, "t1")
+
+	if released, err := s.ReleaseClaim(t.Context(), "t1", releaseOf(claimed)); err != nil || released {
+		t.Fatalf("the claim handed back a launch it never took: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusLaunching || got.LaunchID != relaunched.LaunchID {
+		t.Fatalf("row = %s under %q, want the relaunch left as it was", got.Status, got.LaunchID)
+	}
+	// Nor once the new job is claimed in its turn: the status is the same,
+	// and only the launch tells the two claims apart.
+	if suspended, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !suspended {
+		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
+	}
+	next := mustClaim(t, s, "t1")
+	if released, err := s.ReleaseClaim(t.Context(), "t1", releaseOf(claimed)); err != nil || released {
+		t.Fatalf("the claim handed back the next job's claim: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed {
+		t.Fatalf("status = %q, want the next job still claimed", got.Status)
+	}
+	mustRelease(t, s, next)
+}
+
+func testAReleaseOfARunNoLongerClaimedIsRefused(t *testing.T, s sandbox.PendingStore) {
+	// The seat's next owner reaps a claim its previous owner abandoned, and
+	// announces the run lost. A release landing after that would revive it
+	// with its box torn down. And a run nobody claimed has no claim to hand
+	// back at all.
+	mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusFailed, sandbox.Fence{}); err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", releaseOf(claimed)); err != nil || released {
+		t.Fatalf("a reaped run was handed back: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusFailed {
+		t.Fatalf("status = %q, want the reaped run left failed", got.Status)
+	}
+
+	mustLaunched(t, s, run("t2"))
+	unclaimed := sandbox.Release{Launch: mustGet(t, s, "t2").LaunchID, To: sandbox.StatusRunning}
+	if released, err := s.ReleaseClaim(t.Context(), "t2", unclaimed); err != nil || released {
+		t.Errorf("a run nobody claimed reported a release: released=%v err=%v", released, err)
+	}
+}
+
+func testAStaleFenceCannotRelease(t *testing.T, s sandbox.PendingStore) {
+	// A claim taken under a lease that has since moved hands nothing back:
+	// the seat's new owner decides what becomes of the run.
+	mustLaunched(t, s, run("t1"))
+	if _, err := s.ClaimOwnership(t.Context(), "t1", "node-a:1", 3); err != nil {
+		t.Fatalf("own: %v", err)
+	}
+	claimed := mustClaim(t, s, "t1")
+	if _, err := s.ClaimOwnership(t.Context(), "t1", "node-b:2", 5); err != nil {
+		t.Fatalf("take over: %v", err)
+	}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", releaseOf(claimed)); err != nil || released {
+		t.Fatalf("a stale fence handed the claim back: released=%v err=%v", released, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed {
+		t.Fatalf("status = %q, want the claim left where the new owner finds it", got.Status)
+	}
+	current := releaseOf(claimed)
+	current.Fence = sandbox.Fence{Owner: "node-b:2", Epoch: 5}
+	if released, err := s.ReleaseClaim(t.Context(), "t1", current); err != nil || !released {
+		t.Errorf("the current lease could not hand the claim back: released=%v err=%v", released, err)
+	}
+}
+
+func testAReleaseGoesBackOnlyToAClaimableStatus(t *testing.T, s sandbox.PendingStore) {
+	// No claim takes a run out of any other status, so a release naming one
+	// is a caller's mistake, and writing it would strand the run where no
+	// signal can take it.
+	mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
+	for _, to := range []string{sandbox.StatusLaunching, sandbox.StatusResumed, sandbox.StatusDone, ""} {
+		release := releaseOf(claimed)
+		release.To = to
+		if released, err := s.ReleaseClaim(t.Context(), "t1", release); err == nil || released {
+			t.Errorf("a release to %q was accepted: released=%v err=%v", to, released, err)
+		}
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusResumed {
+		t.Errorf("a refused release moved the run to %q", got.Status)
+	}
+}
+
+func testAReleaseOfAMissingRunIsNotAnError(t *testing.T, s sandbox.PendingStore) {
+	released, err := s.ReleaseClaim(t.Context(), "never-launched",
+		sandbox.Release{To: sandbox.StatusRunning})
+	if err != nil || released {
+		t.Errorf("a missing run reported a release: released=%v err=%v", released, err)
 	}
 }
 

@@ -470,7 +470,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 	})
 	ev.Source = run.Role
 	if err := c.queue.Publish(ctx, topics.Event(announcement.EventType()), ev); err != nil {
-		c.unclaim(ctx, run)
+		c.unclaim(ctx, run, true)
 		return fmt.Errorf("sandbox: announcing the question %s asked: %w", run.TurnID, err)
 	}
 
@@ -478,7 +478,7 @@ func (c *Coordinator) park(ctx context.Context, run PendingRun, result Result) e
 		Question: result.Question, Audience: result.AskTo,
 		Branch: firstRef(result.DeliveredRefs), SessionID: result.SessionID,
 	}); err != nil {
-		c.unclaim(ctx, run)
+		c.unclaim(ctx, run, true)
 		return fmt.Errorf("sandbox: parking %s: %w", run.TurnID, err)
 	}
 	c.clearBusy(run.AgentHandle)
@@ -595,8 +595,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// conversation is permanently lost with the row stranded in resumed.
 		log.ErrorContext(ctx, "sandbox_resume_failed",
 			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
-		c.unclaim(ctx, run)
-		c.markBusy(run.AgentHandle)
+		c.unclaim(ctx, run, false)
 		return err
 	}
 
@@ -633,17 +632,37 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 }
 
 // unclaim hands a claimed tail back, so the signal's retry can win the flip
-// again.
+// again, and leaves the seat's busy count saying what the run holds after it.
 //
 // To the EXACT status the claim took it from, which the claim snapshotted: a
 // run answered out of a clarification goes back to waiting for its answer,
 // and one collected from a running job goes back to running for its
 // completion. A tail left in resumed is refused by every retry and looked at
 // by nothing but the seat's next owner.
-func (c *Coordinator) unclaim(ctx context.Context, run PendingRun) {
-	if err := c.pending.SetStatus(ctx, run.TurnID, claimedFrom(run), fenceOf(run)); err != nil {
+//
+// ONLY THE CLAIM THIS CALL TOOK (see [Release]). A run that has moved on from
+// it, relaunched by the resumed turn or reaped by the seat's next owner, is
+// left as it stands, and what holds the seat is then the store's answer rather
+// than this claim's. counted is whether the busy count still includes this
+// run, which it does until the resume frees the seat.
+func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool) {
+	to := claimedFrom(run)
+	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
+		Launch: run.LaunchID, To: to, Fence: fenceOf(run),
+	})
+	switch {
+	case err != nil:
 		log.ErrorContext(ctx, "sandbox_claim_revert_failed",
-			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+			"turn_id", run.TurnID, "revert_to", to, "error", err.Error())
+		c.syncBusy(ctx, run.AgentHandle)
+	case !released:
+		log.WarnContext(ctx, "sandbox_claim_moved_on",
+			"turn_id", run.TurnID, "launch_id", run.LaunchID,
+			"detail", "the run no longer holds this claim, so nothing was handed back: "+
+				"the resumed turn launched another job, or the seat's next owner reaped it")
+		c.syncBusy(ctx, run.AgentHandle)
+	case !counted:
+		c.markBusy(run.AgentHandle)
 	}
 }
 

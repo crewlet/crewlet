@@ -177,6 +177,23 @@ func (s *CoordStore) ClaimForResume(ctx context.Context, turnID string, tail Tai
 	return run, true, nil
 }
 
+// ReleaseClaim hands a claimed run back while the claim still stands. See the
+// contract on [PendingStore].
+func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	if !slices.Contains(Claimable, release.To) {
+		return false, fmt.Errorf("sandbox: a claim is never taken out of %q, so it cannot be released to it",
+			release.To)
+	}
+	_, released, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
+		if run.Status != StatusResumed || run.LaunchID != release.Launch || outranked(*run, release.Fence) {
+			return false
+		}
+		run.Status = release.To
+		return true
+	})
+	return released, err
+}
+
 // MarkCharged records that a claimed run's spend is on the token counter. See
 // the contract on [PendingStore].
 func (s *CoordStore) MarkCharged(ctx context.Context, turnID string) (bool, error) {
