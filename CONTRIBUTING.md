@@ -55,10 +55,12 @@ and answering it in pieces is how a push goes red on the piece you skipped.
 `make help` lists the rest.
 
 Every target runs the command [`ci.yml`](.github/workflows/ci.yml) runs, with
-the same flags. Nothing asserts the two have not drifted — a test did, and it
-was dropped — so a convenience target that quietly loses `-race` would report
-a pass CI does not honour and nothing else would notice. Change a target and
-its `ci.yml` step together, and read both. `make check` is:
+the same flags. The two test jobs call `make` directly, so for those there is
+one command rather than a copy. For every other job nothing asserts the two
+have not drifted — a test did, and it was dropped — so a convenience target
+that quietly loses `-race` would report a pass CI does not honour and nothing
+else would notice. Change a target and its `ci.yml` step together, and read
+both. `make check` is:
 
 ```bash
 gofmt -l .               # formatting — prints the files that need it
@@ -68,8 +70,8 @@ scripts/check-signoff_test.sh  # ... and that gate's own suite
 go vet ./...
 golangci-lint run        # what CI's lint job runs
 go build ./...
-go test $(go list ./... | grep -v /internal/e2e) -race -count=1  # the suite
-go test ./internal/e2e/... -race -count=1 -v                  # ... and e2e
+make test        # the suite, minus the packages that run alone
+make test-solo   # ... and those, at -p 1, with a runner to themselves
 # then, for each of CROSS_TARGETS (linux and darwin x amd64/arm64):
 CGO_ENABLED=0 GOOS=$OS GOARCH=$ARCH go build ./...            # test-cross
 # and the dashboard, whose build output is committed:
@@ -85,14 +87,25 @@ CI and in `make check`. `-count=1` is the other half: without it a cached
 PASS recorded before the change answers for the change. `make test-norace`
 skips the detector when you want the faster loop, and says so.
 
-`internal/e2e` runs on its own, in `make test-e2e` and in CI's `end-to-end
-gates` job, and `make test` leaves it out. That is a contention split, not a
-coverage one — `make check` depends on both targets. The suite stands up N
-engines, each embedding its own NATS server, in ONE process, and packages run
-in parallel: sharing a two-core runner with everything else, its fleet cases
-could not form a two-member JetStream quorum inside the 30s stream-provisioning
-budget and failed every cluster-start attempt with `context deadline exceeded`.
-Alone on a runner the same cases pass in about five minutes.
+Some packages stand up N engines, each embedding its own NATS server, in ONE
+process. Sharing a two-core runner with everything else — `go test ./...` runs
+package binaries in parallel — their cluster cases cannot form a multi-member
+JetStream quorum inside the 30s stream-provisioning budget, and fail every
+cluster-start attempt with `context deadline exceeded`. Alone on a runner the
+same cases pass.
+
+So those packages run in `make test-solo` and in CI's `end-to-end gates` job,
+and `make test` leaves them out. A contention split, not a coverage one —
+`make check` depends on both targets.
+
+**Which packages those are is computed, not listed.** A package declares it by
+importing `internal/solo` from its `TestMain`, and `internal/solo`'s roster
+guard fails the build both ways: a package that stands up a multi-member broker
+without declaring, and a package that declares without needing to. Read
+`go doc ./internal/solo` before reaching for a build tag — it records what each
+alternative measured, and every one of them fails silently. This was a
+hand-maintained `grep -v /internal/e2e` in three places, and it named one
+package while three others stood up clusters in the shared runner.
 
 `make dashboard-check` gates the same shape of problem one level out. The
 dashboard's build output is committed — `go build ./...` and
@@ -257,11 +270,11 @@ files sit beside what they cover, as Go expects.
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
 replays the frames its socket produced through the dashboard's own
-`store.js`. Both halves of the wire protocol are checked against each other
+`protocol.js`. Both halves of the wire protocol are checked against each other
 there and nowhere else, so it needs node too:
 
 ```bash
-make test-e2e   # go test ./internal/e2e/... -race -count=1 -v
+make test-solo   # internal/e2e, and every other package that runs alone
 ```
 
 ## Project conventions

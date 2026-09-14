@@ -244,43 +244,32 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      # The race detector is not optional here: the engine's whole
-      # concurrency model changed from one cooperative event loop to real
-      # parallelism, so every "atomic because asyncio" assumption the
-      # Python code made is a potential data race in the port.
+      # THE MAKEFILE IS THE COMMAND, rather than a copy of it. Every other job
+      # here inlines its own, and CLAUDE.md's rule that "the Makefile is the
+      # same command CI runs, or it is a lie" was therefore held by hand —
+      # by nothing, since internal/version/makefile_test.go was dropped. The
+      # two test jobs call `make` so that for them it is true by construction.
       #
-      # -timeout is a HANG DETECTOR rather than a budget, and it is stated
-      # because go's own default is 10 minutes PER PACKAGE. Thirty minutes is
-      # well inside this job's own limit, and the Makefile's TEST_TIMEOUT
-      # carries the same value.
+      # The race detector is not optional: the engine's concurrency model is
+      # real parallelism, so every "atomic because single-threaded" assumption
+      # is a data race until the detector says otherwise. -count=1, -race and
+      # -timeout 30m all live in the Makefile now; 30m is a HANG DETECTOR
+      # rather than a budget, because go's own default is 10 minutes PER
+      # PACKAGE.
       #
-      # internal/e2e IS EXCLUDED, and runs in the `end-to-end gates` job
-      # below with a runner to itself. That is not a coverage cut — CI runs
-      # both jobs and `make check` depends on both targets — it is a
-      # CONTENTION cut, and the measurement is unambiguous. On one commit the
-      # dedicated job passed in 5m24s while these same cases, inside
-      # `go test ./...`, failed on all three cluster-start attempts with
-      # `context deadline exceeded` creating streams and KV buckets:
+      # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
+      # gates` job below. Not a coverage cut — CI runs both jobs and `make
+      # check` depends on both targets — a CONTENTION cut, and which packages
+      # those are is COMPUTED from a marker import rather than named here:
+      # `go doc ./internal/solo` carries the measurement and the reason, and
+      # internal/solo's roster guard fails the build when a package that
+      # stands up a multi-member broker has not declared itself.
       #
-      #   cluster attempt 1/3 lost a race at member 1: engine.New: engine:
-      #   stream client: ensure stream CREWLET_AGENT: context deadline exceeded
-      #
-      # internal/e2e stands up N engines, each embedding its OWN NATS server,
-      # in one process; `./...` runs packages in parallel; and a two-core
-      # runner under the race detector cannot form a two-member JetStream
-      # quorum inside the 30s provisioning budget while doing that. Running
-      # the suite in both places bought nothing — the same cases, twice, and
-      # only the contended copy was ever red.
-      #
-      # The exclusion is a `go list` filter because `go test` has no negative
-      # package form, and it is GUARDED: an empty list would silently test
-      # the current directory and report a pass over nothing.
-      - name: the suite, minus the fleet cases that need a whole runner
-        run: |
-          set -euo pipefail
-          pkgs="$(go list ./... | grep -v '/internal/e2e\(/\|$\)')"
-          test -n "$pkgs"
-          go test $pkgs -race -count=1 -timeout 30m
+      # This step was a `go list ./... | grep -v '/internal/e2e…'` filter, and
+      # it named ONE package while THREE others stood up multi-member clusters
+      # inside this job.
+      - name: the suite, minus the packages that run alone
+        run: make test
 
   gates:
     name: end-to-end gates
@@ -291,21 +280,29 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      # internal/e2e runs a real engine, a real broker and the real API, then
-      # replays the frames its socket produced through the dashboard's OWN
-      # protocol module — the built static/dashboard/protocol.js, which is
-      # committed, so nothing has to be built here. Both halves of the wire
-      # protocol are checked against each other here and nowhere else, so a
-      # missing node fails rather than skips.
+      # THE PACKAGES THAT RUN ALONE — `make test-solo`, which is every package
+      # importing internal/solo, run at -p 1 so their brokers do not contend
+      # with each other either. Today that is internal/e2e, internal/node,
+      # internal/statelog and the cluster harness's own suite; the list is
+      # computed, never written here. See `go doc ./internal/solo`.
       #
-      # `latest` for the same reason as the `dashboard` job above, and it has
-      # to be the SAME answer: what this job runs under plain node IS that
-      # job's build output. No npm and no install here — this only needs a
-      # node.
+      # internal/e2e is why this job installs node: it runs a real engine, a
+      # real broker and the real API, then replays the frames its socket
+      # produced through the dashboard's OWN protocol module — the built
+      # static/dashboard/protocol.js, which is committed, so nothing has to be
+      # built here. Both halves of the wire protocol are checked against each
+      # other here and nowhere else, so a missing node fails rather than skips.
+      #
+      # `latest` for the reason the `dashboard` job above states at length: no
+      # node version is pinned anywhere in the tree, because Dependabot moves
+      # neither a workflow `with:` nor an `engines` field, so a pin would go
+      # quietly out of date rather than stay put. No npm and no install here —
+      # this only needs a node. (It does NOT have to match the dashboard job:
+      # what runs here is the COMMITTED bundle, not that job's fresh output.)
       - uses: actions/setup-node@v7
         with:
           node-version: latest
-      - run: go test ./internal/e2e/... -race -count=1 -v -timeout 30m
+      - run: make test-solo
 
   # THERE IS NO SEPARATE "stores" JOB ANY MORE. One existed, running the store
   # contract suites twice over CREWLET_STORE_DRIVER=turso|sqlite, because

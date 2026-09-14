@@ -5,8 +5,14 @@
 # and passes only where CI would pass. A convenience target that quietly drops
 # `-race`, or runs the store suite on one driver, is worse than no target at
 # all: it reports a pass CI will not honour, and the divergence is invisible
-# until the pull request goes red. Nothing asserts the two agree -- keep them
-# in step by hand, and change both in the same commit.
+# until the pull request goes red.
+#
+# For the two TEST jobs that is now true by construction rather than by care:
+# ci.yml's `test (race)` and `end-to-end gates` steps are `make test` and
+# `make test-solo`, so there is one command and no copy to keep in step. Every
+# other job still inlines its own, and NOTHING asserts those agree --
+# internal/version/makefile_test.go used to and was dropped -- so for the rest,
+# change a target and its ci.yml step in the same commit, and read both.
 #
 # The second thing this file is for is the parts that need something the
 # machine may not have. The dashboard is a React + TypeScript application built
@@ -72,22 +78,37 @@ TEST_TIMEOUT := 30m
 
 GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 
-# The packages `test` runs: everything EXCEPT internal/e2e, which has its own
-# target and its own CI job.
+# The two halves of the suite, COMPUTED rather than listed.
 #
 # NOT A COVERAGE CUT — `check` depends on both, and ci.yml runs both. It is a
-# CONTENTION cut, and the measurement is unambiguous: on one commit, the
-# dedicated job (`go test ./internal/e2e/... -race`, alone on its runner)
-# passed in 5m24s, while the same cases inside `go test ./...` failed on all
-# three of their cluster-start attempts with `context deadline exceeded`
-# creating streams and KV buckets. internal/e2e stands up N engines, each
-# embedding its own NATS server, in ONE process; `./...` runs packages in
-# parallel; a two-core runner under the race detector cannot form a two-member
-# JetStream quorum inside the 30s provisioning budget while doing that.
+# CONTENTION cut: a solo package stands up N engines, each embedding its own
+# NATS server, in ONE process, and a two-core runner under the race detector
+# cannot form a multi-member JetStream quorum inside the 30s provisioning
+# budget while `./...` runs package binaries in parallel. `go doc ./internal/solo`
+# is the whole story — the measurement, and what every obvious alternative
+# (a build tag, -short, a flag, -skip, a nested module) cost when it was tried.
 #
-# Running it in both places bought nothing — the same suite, twice, and only
-# the contended copy was red.
-TEST_PKGS = $(shell $(GO) list ./... | grep -v '/internal/e2e\(/\|$$\)')
+# This was a hand-written `go list ./... | grep -v '/internal/e2e…'` in two
+# files and a third, already divergent, copy in CONTRIBUTING.md. It named ONE
+# package. Three others stand up multi-member clusters — internal/node and
+# internal/statelog at THREE members each, plus the harness's own suite — and
+# all three ran in the contended half, surviving on the harness's four-attempt
+# port-race retry. A filter that names packages cannot say which packages it
+# should have named; a marker plus internal/solo's roster guard can, and does.
+#
+# LAZY, BUT COMPUTED ONCE. Both forms of the obvious assignment are wrong here
+# and in opposite directions: `:=` runs the partition while make is still
+# PARSING, so `make help`, `make build` and `make fmt` each pay ~0.6s for two
+# `go list` walks they never look at; plain `=` costs nothing until referenced
+# but then re-runs per reference, and each of these is referenced twice below
+# (a guard, then the recipe).
+#
+# So each expands once and redefines itself as a simple variable — `$(eval)`
+# expands to nothing, and what is left is the value it just assigned. Every
+# later reference is a plain lookup.
+PARTITION      = $(GO) run ./internal/solo/partition
+PARALLEL_PKGS  = $(eval PARALLEL_PKGS := $(shell $(PARTITION) parallel))$(PARALLEL_PKGS)
+SOLO_PKGS      = $(eval SOLO_PKGS := $(shell $(PARTITION) solo))$(SOLO_PKGS)
 
 # The release targets, cross-compiled. Nothing else builds for anything but
 # the machine you are on, so a build tag or a platform-gated file that only
@@ -108,7 +129,7 @@ COMPANY ?=
 
 .PHONY: help build crewlet install fmt tidy schema metrics-doc alarms-doc \
         dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
-        check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-e2e \
+        check fmt-check tidy-check signoff-check signoff-test vet lint test test-norace test-cross test-solo \
         require-npm \
         mattermost-up mattermost-down \
         gitlab-up gitlab-down \
@@ -197,7 +218,7 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 
 ##@ Gates — `make check` is all of them
 
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-e2e test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-solo test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"
@@ -296,17 +317,36 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	fi
 	golangci-lint run
 
-# This includes ./internal/e2e/... — the end-to-end gates are ordinary Go
-# tests, so `make test-e2e` is the same suite again with -v, for when one of
-# them is what you are debugging.
-test: require-node ## the suite minus e2e, under the race detector (ci: test (race))
-	@test -n "$(TEST_PKGS)" || { echo "TEST_PKGS is empty - go list failed" >&2; exit 1; }
-	$(GOTEST) $(TEST_PKGS)
+# No require-node: the ONLY consumer of `node` in the Go suite is
+# internal/e2e's dashboard replay (golden_test.go), which is a solo package and
+# therefore not in this half. The prerequisite was here anyway, which made this
+# target stricter than the CI job it mirrors — ci.yml's `test (race)` installs
+# no node and passes — and a Makefile stricter than CI is the same lie as one
+# looser than it, just in the direction nobody notices.
+test: ## the suite, minus the packages that run alone (ci: test (race))
+	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition is empty" >&2; exit 1; }
+	$(GOTEST) $(PARALLEL_PKGS)
+
+# The solo half: every package that needs the runner to itself.
+#
+# -p 1 is not decoration. `go test pkgA pkgB …` runs package BINARIES at
+# -p=GOMAXPROCS, so handing it four packages that each stand up a multi-member
+# broker recreates precisely the contention this partition exists to remove.
+# The old target ran one package and did not need it.
+test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
+	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
+	$(GOTEST) -p 1 $(SOLO_PKGS) -v
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.
+#
+# It ran `./...` — the whole tree, solo packages included, in one contended
+# run. The documented "faster loop" was the exact arrangement the partition
+# exists to avoid, so it flaked for the reason the split was measured on and
+# looked like an unstable suite rather than a mis-stated target.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) ./...
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS)
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS)
 
 # Every target reports in one run rather than stopping at the first failure —
 # ci.yml sets `fail-fast: false` on this matrix for the same reason: when a
@@ -328,9 +368,6 @@ test-cross: ## cross-compile every release target (ci: cross-compile the release
 	    $(GO) build ./... || status=1; \
 	done; \
 	exit $$status
-
-test-e2e: require-node ## the end-to-end gates, verbose (ci: end-to-end gates)
-	$(GOTEST) ./internal/e2e/... -v
 
 # internal/e2e replays a real company's socket frames through the dashboard's
 # own protocol module under plain `node`, and it SKIPS without one — so a green
