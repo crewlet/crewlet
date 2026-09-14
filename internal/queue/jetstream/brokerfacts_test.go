@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -154,5 +155,56 @@ func TestTheVendoredClientBoundsAFetchByBytesAndNotByBoth(t *testing.T) {
 			"bound did not bind, so a replay of a log whose largest record is "+
 			"over a megabyte would pull the whole backlog into one transaction",
 			got, bytes)
+	}
+}
+
+// SHUTTING A SERVER DOWN CLEARS ITS ROUTE ADDRESS.
+//
+// Which is why [notReadyError]'s routed argument is read at the call site,
+// before the Shutdown beside it, rather than inside the helper. Asked
+// afterwards, ClusterAddr answers nil on a member whose route listener bound
+// perfectly — so a readiness failure caused by unreachable peers would be
+// reported as a port collision, and the operator would go looking for a
+// process that is not there.
+//
+// If a server bump stops clearing it, this goes red and the reason recorded at
+// that call site is stale — not the other way round: reading it first stays
+// correct either way.
+func TestShuttingDownClearsTheRouteAddress(t *testing.T) {
+	t.Parallel()
+
+	opts := &server.Options{
+		Host:     "127.0.0.1",
+		Port:     -1,
+		NoLog:    true,
+		NoSigs:   true,
+		StoreDir: t.TempDir(),
+		Cluster: server.ClusterOpts{
+			Name: "crewlet-route-address",
+			Host: "127.0.0.1",
+			Port: -1,
+		},
+	}
+	ns, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("configure a clustered member: %v", err)
+	}
+	go ns.Start()
+	if !ns.ReadyForConnections(30 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("a clustered member with no peers never became ready")
+	}
+	if ns.ClusterAddr() == nil {
+		ns.Shutdown()
+		t.Fatal("a running member whose route listener bound reports no route " +
+			"address, so the failure message cannot tell a lost listener from " +
+			"unreachable peers at all")
+	}
+	ns.Shutdown()
+	ns.WaitForShutdown()
+	if ns.ClusterAddr() != nil {
+		t.Error("a shut-down member still reports its route address — the read " +
+			"at the call site no longer has to come first, and the comment " +
+			"saying it does is now wrong")
 	}
 }

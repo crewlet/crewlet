@@ -436,29 +436,17 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	select {
 	case ok := <-ready:
 		if !ok {
+			// FORMED BEFORE THE SHUTDOWN, which is the whole reason this
+			// is one expression rather than a branch below: Shutdown
+			// closes the route listener and clears ClusterAddr, so read
+			// afterwards it answers nil on every clustered member and
+			// every readiness failure there is would be reported as a
+			// port collision.
+			err := notReadyError(budget, clustered, opts.Cluster.Port,
+				opts.Cluster.Host, ns.ClusterAddr() != nil)
 			ns.Shutdown()
 			removeScratch(scratch)
-			// THE ROUTE LISTENER FIRST, because when it is the cause
-			// every other word here is a wrong lead. The probe above
-			// catches the ordinary case; this catches the port lost in
-			// the window between that probe and the bind, and it is the
-			// only evidence of it — the listener error went to the log
-			// and the server carried on serving clients.
-			if clustered && opts.Cluster.Port != 0 && ns.ClusterAddr() == nil {
-				return nil, fmt.Errorf(
-					"embedded nats server bound no route listener within %v: "+
-						"stream.cluster.port %d on %s was taken while this member "+
-						"was starting, so it can never form a route to a peer",
-					budget, opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
-			}
-			// THE BUDGET IS IN THE MESSAGE, and whether this member was
-			// waiting on peers: "did not become ready" alone sends an
-			// operator to the disk when a route was the problem.
-			return nil, fmt.Errorf(
-				"embedded nats server did not become ready within %v (clustered: %v). "+
-					"A clustered member also waits for its routes to dial and for "+
-					"the metadata group to elect a leader, so check that its peers "+
-					"in stream.cluster.routes are reachable", budget, clustered)
+			return nil, err
 		}
 	case <-ctx.Done():
 		// Shutdown makes the in-flight ReadyForConnections return, so the
@@ -471,6 +459,41 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	return &embeddedServer{
 		ns: ns, inProcess: opts.DontListen, scratch: scratch, clustered: clustered,
 	}, nil
+}
+
+// notReadyError says what a readiness failure MEANS, which is not one thing:
+// a member that never bound its route listener has a different problem, a
+// different remedy and a different thing to go and look at from one whose
+// peers did not answer.
+//
+// routed is whether the route listener was bound, and it is the caller's to
+// read BEFORE it shuts the server down — see the call site. It is a plain
+// argument rather than a *server.Server for that reason: a helper handed the
+// server could read it at the wrong moment, which is the bug this shape
+// removes.
+func notReadyError(budget time.Duration, clustered bool,
+	routePort int, routeHost string, routed bool) error {
+
+	// THE ROUTE LISTENER FIRST, because when it is the cause every other
+	// word here is a wrong lead. The pre-bind probe catches the ordinary
+	// case; this catches the port lost in the window between that probe
+	// and the bind, and it is the only evidence of it — the listener error
+	// went to the log and the server carried on serving clients.
+	if clustered && routePort != 0 && !routed {
+		return fmt.Errorf(
+			"embedded nats server bound no route listener within %v: "+
+				"stream.cluster.port %d on %s was taken while this member "+
+				"was starting, so it can never form a route to a peer",
+			budget, routePort, routeHostLabel(routeHost))
+	}
+	// THE BUDGET IS IN THE MESSAGE, and whether this member was waiting on
+	// peers: "did not become ready" alone sends an operator to the disk
+	// when a route was the problem.
+	return fmt.Errorf(
+		"embedded nats server did not become ready within %v (clustered: %v). "+
+			"A clustered member also waits for its routes to dial and for "+
+			"the metadata group to elect a leader, so check that its peers "+
+			"in stream.cluster.routes are reachable", budget, clustered)
 }
 
 // awaitClusterReady waits for this member to be able to serve the writes the

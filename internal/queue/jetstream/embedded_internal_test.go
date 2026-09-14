@@ -3,7 +3,10 @@ package jetstream
 import (
 	"context"
 	"net"
+	"strconv"
+	"strings"
 	"testing"
+	"time"
 )
 
 // A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, and telling the two apart is
@@ -64,5 +67,62 @@ func TestAPortProbeSaysWhetherItCouldAnswerAtAll(t *testing.T) {
 	if free, err := PortAvailable(ctx, "127.0.0.1", port); free || err == nil {
 		t.Errorf("a cancelled probe answered (free=%v, err=%v) rather than "+
 			"reporting that it never ran", free, err)
+	}
+}
+
+// A READINESS FAILURE NAMES THE ROUTE LISTENER OR THE PEERS, NEVER BOTH AND
+// NEVER THE WRONG ONE.
+//
+// # Why this branch is worth a case of its own
+//
+// Because it was wrong in the direction that is invisible. The read of "did
+// the route listener bind" used to happen AFTER the server was shut down, and
+// shutting a server down closes that listener and clears the address — so the
+// answer was nil on every clustered member, and a member whose peers were
+// simply unreachable was told its port had been taken. That sends an operator
+// to hunt for a process holding a port nobody is holding, while the peer they
+// needed to look at goes unmentioned.
+//
+// Nothing caught it: the pre-bind probe covers the ordinary taken-port case
+// and returns long before here, so this branch had no test at all and the
+// message it produces is the only thing that distinguishes the two failures.
+func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.T) {
+	t.Parallel()
+
+	const (
+		budget = 90 * time.Second
+		port   = 6222
+		host   = "127.0.0.1"
+	)
+
+	// THE ROUTE LISTENER NEVER BOUND: the port is the finding, because it
+	// is the one fact an operator cannot derive from anywhere else.
+	lost := notReadyError(budget, true, port, host, false)
+	if !strings.Contains(lost.Error(), "no route listener") {
+		t.Errorf("a member that never bound its route listener is not told so: %v", lost)
+	}
+	if !strings.Contains(lost.Error(), strconv.Itoa(port)) {
+		t.Errorf("the failure does not name the port that was taken: %v", lost)
+	}
+
+	// THE LISTENER BOUND: the routes and the metadata group are what is
+	// left, and naming the port here is the wrong lead.
+	peers := notReadyError(budget, true, port, host, true)
+	if !strings.Contains(peers.Error(), "stream.cluster.routes") {
+		t.Errorf("a clustered member waiting on peers is not pointed at them: %v", peers)
+	}
+	if strings.Contains(peers.Error(), "no route listener") {
+		t.Errorf("a member whose route listener DID bind is blamed for it: %v", peers)
+	}
+
+	// A SOLO MEMBER HAS NO ROUTE LISTENER TO BLAME, whatever it answers
+	// about one: it configures no route port, so the question does not
+	// arise and the port branch must not fire on it.
+	solo := notReadyError(budget, false, 0, "", false)
+	if strings.Contains(solo.Error(), "no route listener") {
+		t.Errorf("a solo member is blamed for a route listener it never wanted: %v", solo)
+	}
+	if !strings.Contains(solo.Error(), "clustered: false") {
+		t.Errorf("the failure does not say this member had no peers to wait for: %v", solo)
 	}
 }
