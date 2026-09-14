@@ -306,11 +306,10 @@ you opted into by sending the second signal.
 
 On a fleet, a node that is not draining keeps serving and answers for **itself**: its `/health` carries its own in-flight count, and the draining node has already left the fleet view, because a drain gives up its presence lease at once. The draining node's logs are the view of its own drain.
 
-The count is available programmatically up to the moment the surface closes:
+`GET /health` carries the count for as long as it answers:
 
-- the engine's in-flight turn count
-- `engine.shutting_down` — `True` from the first moment of `stop()` (unlike `is_running`, which only flips once teardown completes)
-- `GET /health`: the JSON includes `in_flight` and `shutting_down`, and `status` reads `"shutting_down"` during the drain. Every process that serves the API runs the engine beside it, so both fields are always there
+- `in_flight` is the handler invocations mid-flight on this node, the number the drain waits to reach zero. It is always present, and a `0` is a real zero.
+- `shutting_down`, and a `status` of `"shutting_down"`, are set once the seat host begins draining. On a signal that is *after* the listener has closed, so a probe sees the listener go away rather than the flag, and the logs above stay the drain's view.
 
 The console shows the same story: the first Ctrl+C prints what is being waited for and how to escalate, and the engine logs `drain_in_progress` with the in-flight count every 10 seconds until the drain converges (`drain_complete`).
 

@@ -518,7 +518,8 @@ reference to anything.
 
 `present` and `resolved` are the same two facts `secret_present` and
 `secret_usable` are, asked per field: written down, and actually usable in
-this process. `resolved` is `null` where nothing resolved the document.
+this process. `resolved` is `null` for a field the document leaves empty,
+since there is nothing to resolve.
 `blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
 that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
@@ -1036,8 +1037,8 @@ could learn from, and an overlay merge cannot express a row going away.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
-The API process maintains an **in-memory projection** of every agent's
-current state (`internal/api/livestate.LiveState`, owned by
+Every node that serves the API maintains an **in-memory projection** of
+every agent's current state (`internal/api/livestate.LiveState`, owned by
 `internal/api/stream.Service`).  It is fed by the same event stream the
 WebSocket fan-out consumes and read in O(1) thereafter — so `/agents`,
 `/stream/snapshot`, and the WebSocket handshake never re-derive state from a
@@ -1182,15 +1183,15 @@ second round trip.
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. Precedence is `shutting_down` > a diverged posture > `unconfigured` > `ok`: a draining engine is draining first whatever else is true of it, and a diverged posture outranks `unconfigured` because it names the cause of it. |
+| `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. Precedence is `shutting_down` > that posture > `unconfigured` > `ok`: a draining engine is draining first whatever else is true of it, and the posture outranks `unconfigured` because it names the cause of it. |
 | `node` | This process's `node.id`, which is the only way a caller can tell which node a load balancer sent it to. |
 | `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` every inbound webhook is answered `503` rather than routed, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. There is no second `engine_started_at` beside it, because there was never a second process to have one. |
+| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this node. |
-| `in_flight` | Turns running on this node. Always present, and a `0` is a real zero: every process that serves the API runs the engine beside it. |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens. The API server keeps serving until the engine has fully stopped. |
+| `in_flight` | Handler invocations mid-flight on this node: the deliveries its seats are working on, and the number a drain waits to reach zero. Always present, and a `0` is a real zero. |
+| `shutting_down` | `true` once this node's seat host has begun draining. On a signal, `crewlet run` closes the listener *before* the drain begins, so a probe sees the listener go away rather than this flag; the logs are the drain's live view (see [Watching the drain](../concepts/agent-runtime.md#graceful-shutdown)). |
 | `posture` | What this node concluded about its own config lag: `serve`, `wait`, `shed`, `isolated` or `stuck`. The only place an operator can see *why* a node left rotation, since `/ready` answers a bare `503` either way. |
 | `applied_epoch` | The config revision this node is running. |
 | `seats` | The handles this node is serving, `[]` on a node holding none. |
@@ -1228,10 +1229,7 @@ by id); that surface only knows it is done when a page returns zero rows.
 
 The persistent store retains 30 days. Once a cursor crosses that floor
 every page is empty — which is why a client must distinguish it from
-quiet, rather than drawing the gap as silence. A deployment with no
-event store answers **503** (and `no_event_store` on the query channel)
-rather than an empty page, for the same reason: "there is nothing older"
-and "I cannot answer" are different facts.
+quiet, rather than drawing the gap as silence.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
@@ -1319,7 +1317,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
-| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `no_event_store`, `no_pending_store`, `fleet_unavailable`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* — a projection still catching up after a restart or a fresh join — so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it — a parameter missing, malformed, or outside the set the field accepts — so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
+| `error`    | Reply to a client `query` that could not be answered. | `{ id, what, error }` where `error` is a code: `not_found`, `bad_params`, `unavailable`, `unauthorized`, `unknown_query`, `query_failed`. **`unavailable` is not `query_failed`**: it says this node understood the question and cannot answer it *yet* (a projection still catching up after a restart or a fresh join), so a client says "ask again in a moment" rather than reporting a fault. Its REST twin is `503` with `Retry-After`. **`bad_params` is not `query_failed` either**, in the opposite direction: the node understood the question and *refused* it (a parameter missing, malformed, or outside the set the field accepts), so the fault is the caller's and retrying sends the same bad request again. Its REST twin is `400`. |
 | `pong`     | Reply to a client `ping`. | `null` |
 
 **Client → server kinds**
@@ -1343,8 +1341,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |
-| `fleet` | — | `GET /fleet` — leases move with no event to push, so the Fleet view polls this rather than waiting for one. `fleet_unavailable` when a configured lease store cannot be read (the REST twin answers `503` for the same case) |
-| `sandbox_runs` | — | `GET /sandbox-runs` — `no_pending_store` when no database is configured; the REST twin answers that case with the `degraded` body below |
+| `fleet` | — | `GET /fleet`. Leases move with no event to push, so the Fleet view polls this rather than waiting for one. `query_failed` when the lease table cannot be read (the REST twin answers `500`), never an empty fleet |
+| `sandbox_runs` | — | `GET /sandbox-runs`. `query_failed` when the fleet's run record cannot be read (the REST twin answers `500`), never an empty list |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
@@ -1732,7 +1730,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 
 | Route | What it does |
 |---|---|
-| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, `404` when the stream is not one this node runs, and `503` on a process running no state log. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
 
@@ -1742,9 +1740,10 @@ its position and its operation id: a gate the caller believes has landed and
 which is only `pending` is the difference between a node that has stopped
 writing and one that is about to.
 
-A process with no coordination store answers `503`, not `404`. The route exists
-on this build, and telling an operator it does not sends them looking for a
-version mismatch that is not there.
+A node whose company runs no native tracker has no eviction gate, and both gate
+routes answer `503 no_tracker` rather than `404`. The routes exist on this
+build, and telling an operator they do not sends them looking for a version
+mismatch that is not there.
 
 ### The capacity window
 
@@ -1971,9 +1970,10 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 deliberately not returned: it is the largest column in the row and every
 prompt in it is already reachable through the event store.
 
-Without a database the engine cannot park a run at all, so that
-deployment gets `{"runs": [], "degraded": "..."}` rather than an error;
-a store that is configured and unreadable answers `503`.
+The run record lives in the fleet's coordination store, which every node
+opens, so every node answers with the fleet's runs. A record that cannot be
+read answers `500 query_failed` rather than an empty list: "no run is
+parked" is a claim, and a store blip is not evidence for it.
 
 ### `GET /budgets`
 
@@ -2019,10 +2019,11 @@ Two fields carry the honesty. `durable` is `false` when the shared counter
 could not be read — a counter that cannot be read is not a counter that
 reads zero, and without the flag a database blip renders every seat at the
 bottom of its cap, which is the most reassuring possible picture drawn at
-the moment nothing is known. `live_used` / `live_max` are `null`, never
-`0`, on a node with no engine in the process: zero would let a client draw
-an empty bar and call it "nothing spent this run", a claim about a run
-that is not happening.
+the moment nothing is known. `live_used` is `null`, never `0`, where this
+node's projection holds no meter for the scope (nothing has reported one
+since the process started): zero would let a client draw an empty bar and
+call it "nothing spent this run", a claim about a run this process has not
+seen.
 
 Exhaustion is `refused_at`, the moment a charge was turned away — never
 `used >= max`. `TokenBudget` refuses a charge that would exceed the cap
@@ -2301,9 +2302,9 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 }
 ```
 
-`recent_runs` is empty when no database is configured (the configured
-list and `next_run` still render). Disabled schedules return an empty
-`next_run`.
+`recent_runs` is empty when the dispatch ledger cannot be read (the
+configured list and `next_run` still render). Disabled schedules return an
+empty `next_run`.
 
 ---
 

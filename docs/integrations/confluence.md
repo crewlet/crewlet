@@ -367,9 +367,9 @@ per-page expiry: a page nobody has touched inside that window drops its
 subscribers, which is the right forgetting — a seat that edited a page a year
 ago is not waiting on it.
 
-A node with **no coordination store** (a single embedded node) has no list and
-routes by mentions and space leads alone. That is a supported shape, not a
-degraded one; what it costs is step 1.
+Every node reads the same list, a single embedded node included: the bucket
+rides the node's own broker, so there is no shape that routes by mentions and
+space leads alone.
 
 #### An edit subscribes you; a comment does not
 
