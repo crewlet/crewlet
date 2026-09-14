@@ -41,7 +41,7 @@ import { isBaseKeyed, type BuilderAction, type BuilderState } from "./model/redu
 /**
  * When this page last kept a draft, by its `savedAt`. Module state, because a
  * lens switch unmounts the Builder and the next mount is the one that has to
- * recognise the draft as its own.
+ * recognize the draft as its own.
  */
 let keptByThisPage: number | null = null;
 

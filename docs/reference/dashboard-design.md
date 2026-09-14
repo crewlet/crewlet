@@ -1033,6 +1033,19 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   other mode. It writes nothing before that decision, because the plan for an
   empty log is to clear. A token change or a refused token clears it and
   withdraws an offer.
+- **A save is the checked write, signed, and never believed blindly.**
+  `useSave.ts` sends the model's save request with the audit summary signed by
+  a write id minted when the review opens and kept for as long as the draft
+  does not change, so a second press after a lost answer carries the same id.
+  A lost answer is settled from the revision history before anything else
+  happens; while it is unknown the lens records nothing. A write in flight is
+  never aborted, and a save that lands after the lens was left still records
+  the revision and clears the kept draft. `ReviewSaveDialog.tsx` states every
+  change and consequence and gates the irreversible ones on an
+  acknowledgement.
+- **The status is the last answer about the current draft**, whoever asked:
+  a save's refusal is placed on the nodes like a check's, and the check
+  machine decides the status only while a check is out or before any answer.
 - **A read-only lens records nothing.** The guarded and read-only postures, a
   conflict and a base the engine has not keyed yet all refuse operations at
   the one door every view goes through, and say why in the live region.

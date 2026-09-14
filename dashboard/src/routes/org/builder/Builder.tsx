@@ -70,7 +70,7 @@ import {
   cx,
   type Tone,
 } from "~/ui/primitives.tsx";
-import { ToastProvider } from "~/ui/Toast.tsx";
+import { ToastProvider, useToast } from "~/ui/Toast.tsx";
 import { isModalOpen } from "~/ui/useModal.ts";
 import {
   BuilderContext,
@@ -102,7 +102,15 @@ import {
   type HttpAnswer,
 } from "./model/transport.ts";
 import type { DraftStorage } from "./model/persistence.ts";
-import { browserClock, restTransport, sessionDraftStorage } from "./runtime.ts";
+import { clearDraft } from "./model/persistence.ts";
+import { deriveChanges } from "./model/changes.ts";
+import { saveRules } from "./model/scheduler.ts";
+import { seatsNeedingContact } from "./model/templates.ts";
+import type { KeySource } from "./model/keys.ts";
+import { ReviewSaveDialog } from "./ReviewSaveDialog.tsx";
+import { recordSavedRevision } from "./savedRevision.ts";
+import { browserClock, randomKeys, restTransport, sessionDraftStorage } from "./runtime.ts";
+import { useSave, type SaveEvents } from "./useSave.ts";
 import { useCheck } from "./useCheck.ts";
 import { useDraftKeeping } from "./useDraftKeeping.ts";
 
@@ -341,6 +349,7 @@ export function Builder({
   transport = restTransport,
   clock = browserClock,
   storage,
+  keys = randomKeys,
 }: {
   surfaces: BuilderSurfaces;
   /** Injected by a suite; the browser bindings otherwise. */
@@ -348,6 +357,8 @@ export function Builder({
   clock?: Clock;
   /** Where the draft's log is kept; the tab's session storage otherwise. */
   storage?: DraftStorage | null;
+  /** Where write ids come from; the browser's random source otherwise. */
+  keys?: KeySource;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [kept] = useState(() => (storage === undefined ? sessionDraftStorage() : storage));
@@ -359,6 +370,7 @@ export function Builder({
           transport={transport}
           clock={clock}
           storage={kept}
+          keys={keys}
           container={container}
         />
       </ToastProvider>
@@ -371,15 +383,18 @@ function Lens({
   transport,
   clock,
   storage,
+  keys,
   container,
 }: {
   surfaces: BuilderSurfaces;
   transport: ConfigTransport;
   clock: Clock;
   storage: DraftStorage | null;
+  keys: KeySource;
   container: RefObject<HTMLDivElement | null>;
 }) {
   const nav = useNavigator();
+  const toast = useToast();
   const org = useOrg();
   const { connected, authRejected } = useConnection();
   const agents = useAgents();
@@ -508,8 +523,15 @@ function Lens({
 
   // ---- Editing ------------------------------------------------------------
 
-  const status = check.machine.status;
   const problemsCurrent = state.check.generation === state.generation;
+  // THE LAST ANSWER ABOUT THIS DRAFT, whoever asked. The check machine knows
+  // what it sent; a save's refusal is an answer about the same document that
+  // the machine never saw, and it lands in the reducer. So a settled answer
+  // for the current draft decides the status, and the machine decides it only
+  // while a check is out or before any answer.
+  const answered = problemsCurrent ? state.check.outcome : null;
+  const status: CheckStatus =
+    check.machine.status === "checking" || !answered ? check.machine.status : answered.status;
   const keeping = useDraftKeeping({ state, dispatch: dispatchRaw, loaded, storage, now: Date.now });
   const { forget } = keeping;
   // A refused read may be the tab changing hands: the kept draft is not
@@ -518,7 +540,17 @@ function Lens({
     if (posture.kind === "guarded") forget();
   }, [posture.kind, forget]);
 
+  // What a save's answer leads to. A ref, because a save outlives the render
+  // that started it, and may outlive the Builder.
+  const saveEvents = useRef<SaveEvents>({
+    onLanded: () => {},
+    onConflict: () => {},
+    onRefused: () => {},
+  });
+  const save = useSave({ stateRef, transport, keys, events: saveEvents });
+
   const readOnlyReason = useMemo((): string | null => {
+    if (save.unsettled) return "the outcome of the last save is not known yet";
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
     if (posture.kind === "guarded") return "the engine refused this browser's token";
     if (status === "guarded") return "the engine refused this browser's token";
@@ -526,7 +558,7 @@ function Lens({
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
     return null;
-  }, [keeping.offer, posture.kind, status, loaded, state]);
+  }, [save.unsettled, keeping.offer, posture.kind, status, loaded, state]);
   const readOnly = !loaded || readOnlyReason !== null;
 
   const dispatch = useCallback(
@@ -701,6 +733,67 @@ function Lens({
 
   const conflict = status === "conflict" ? conflictOf(state) : null;
 
+  // ---- Saving -------------------------------------------------------------------
+
+  const [reviewing, setReviewing] = useState(false);
+  const reviewAfterUpdate = useRef(false);
+  const changed = useMemo(() => hasChanges(state), [state]);
+  const rules = saveRules(status, changed);
+  const openReview = useCallback(() => {
+    save.prepare();
+    setReviewing(true);
+  }, [save]);
+
+  saveEvents.current = {
+    onLanded: (landed) => {
+      // Recorded and cleared first: this runs even when the Builder has gone
+      // away while the save was in flight, and a kept log of a saved draft
+      // would be offered for replay onto its own revision.
+      recordSavedRevision({ revisionId: landed.revisionId, epoch: landed.epoch });
+      clearDraft(storage);
+      dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
+      setReviewing(false);
+      toast.ok("Saved. The engine is applying it.");
+      announce("Saved. The engine is applying it.");
+      load(true);
+    },
+    onConflict: ({ reason, currentRevisionId }) => {
+      setReviewing(false);
+      reset();
+      if (reason === "revision_advanced" || reason === "base_moved") {
+        reviewAfterUpdate.current = true;
+        void beginUpdate(currentRevisionId);
+      }
+    },
+    onRefused: (settled) => {
+      // The refusal is the engine's answer about exactly this draft, so it is
+      // placed like a check's; asking again would only repeat it.
+      if (settled.generation === stateRef.current.generation) {
+        dispatchRaw({ type: "checked", settled });
+      } else {
+        reset();
+      }
+    },
+  };
+
+  // An update that started from a refused save goes back to the review once
+  // it is confirmed: the operator was saving, and still is.
+  const reviewAfterConfirm = useRef(false);
+  const confirmUpdate = useCallback(() => {
+    reviewAfterConfirm.current = reviewAfterUpdate.current;
+    reviewAfterUpdate.current = false;
+    dispatchRaw({ type: "updateConfirm" });
+  }, []);
+  const cancelUpdate = useCallback(() => {
+    reviewAfterUpdate.current = false;
+    dispatchRaw({ type: "updateCancel" });
+  }, []);
+  useEffect(() => {
+    if (!reviewAfterConfirm.current || state.update) return;
+    reviewAfterConfirm.current = false;
+    if (hasChanges(stateRef.current)) openReview();
+  }, [state.update, openReview]);
+
   // ---- The context --------------------------------------------------------------
 
   const api = useMemo((): BuilderApi => {
@@ -761,7 +854,6 @@ function Lens({
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
   const look = statusLook(status, problemCount);
-  const changed = hasChanges(state);
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   const viewSurface = view === "canvas" ? surfaces.canvas : surfaces.outline;
@@ -881,6 +973,16 @@ function Lens({
               Discard changes
             </Button>
           </span>
+          <Button
+            size="sm"
+            variant="primary"
+            icon="save"
+            onClick={openReview}
+            disabled={!rules.review || save.unsettled}
+            title={rules.reason ?? undefined}
+          >
+            Review and save
+          </Button>
         </div>
 
         {(posture.kind === "guarded" || status === "guarded") && (
@@ -1043,6 +1145,41 @@ function Lens({
           )}
         </TabPanel>
 
+        {save.unsettled && !reviewing && (
+          <Banner
+            tone="caution"
+            action={
+              <span className="row gap-1 wrap">
+                <Button size="sm" onClick={() => void save.checkAgain()}>
+                  Check again
+                </Button>
+                <Button size="sm" variant="primary" onClick={openReview}>
+                  Open the review
+                </Button>
+              </span>
+            }
+          >
+            The engine did not confirm whether the last save was stored. Editing is paused until it
+            does.
+          </Banner>
+        )}
+
+        {reviewing && save.writeId && (
+          <ReviewPanel
+            state={state}
+            status={status}
+            rules={rules}
+            writeId={save.writeId}
+            phase={save.phase}
+            onSave={(summary) => void save.save(summary)}
+            onCheckAgain={() => void save.checkAgain()}
+            onClose={() => {
+              save.acknowledge();
+              setReviewing(false);
+            }}
+          />
+        )}
+
         {state.update && (
           <UpdateDraftDialog
             update={state.update}
@@ -1050,8 +1187,8 @@ function Lens({
               describeOperation(op, state.update?.restoring ? state.update.baseDraft : state.draft)
             }
             onChoose={(index, choice) => dispatchRaw({ type: "updateChoose", index, choice })}
-            onConfirm={() => dispatchRaw({ type: "updateConfirm" })}
-            onCancel={() => dispatchRaw({ type: "updateCancel" })}
+            onConfirm={confirmUpdate}
+            onCancel={cancelUpdate}
           />
         )}
 
@@ -1072,6 +1209,62 @@ function Lens({
         </div>
       </div>
     </BuilderContext.Provider>
+  );
+}
+
+/** The review, with the changes derived from the draft as it stands. */
+function ReviewPanel({
+  state,
+  status,
+  rules,
+  writeId,
+  phase,
+  onSave,
+  onCheckAgain,
+  onClose,
+}: {
+  state: BuilderState;
+  status: CheckStatus;
+  rules: ReturnType<typeof saveRules>;
+  writeId: string;
+  phase: Parameters<typeof ReviewSaveDialog>[0]["phase"];
+  onSave: (summary: string) => void;
+  onCheckAgain: () => void;
+  onClose: () => void;
+}) {
+  const current = state.check.generation === state.generation;
+  const changes = useMemo(
+    () =>
+      deriveChanges({
+        base: { draft: state.baseDraft, derived: state.base.derived },
+        next: { draft: state.draft, derived: current ? state.check.derived : null },
+        ops: state.log.ops,
+        reports: state.reports,
+      }),
+    [state, current],
+  );
+  const outcome = current ? state.check.outcome : null;
+  const needsContact = useMemo(
+    () =>
+      seatsNeedingContact(state.draft).map((key) => locate(state.draft, key)?.node.data.name ?? ""),
+    [state.draft],
+  );
+  return (
+    <ReviewSaveDialog
+      mode={state.mode}
+      changes={changes}
+      rules={rules}
+      status={status}
+      warnings={outcome?.status === "clean" ? outcome.warnings : []}
+      problemCount={current ? state.check.problems.problemCount : 0}
+      documentProblems={current ? state.check.problems.document : []}
+      needsContact={needsContact}
+      writeId={writeId}
+      phase={phase}
+      onSave={onSave}
+      onCheckAgain={onCheckAgain}
+      onClose={onClose}
+    />
   );
 }
 

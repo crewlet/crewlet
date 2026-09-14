@@ -92,6 +92,8 @@ export class Engine {
   document: CompanyDocument | null;
   revision: string;
   readonly requests: SentRequest[] = [];
+  /** Every revision a write stored: its parent and its audit summary. */
+  readonly revisions = new Map<string, { parent: string | null; summary: string }>();
   script: Script = () => null;
 
   constructor(document: CompanyDocument | null, revision = "r1") {
@@ -118,12 +120,38 @@ export class Engine {
     ) as CompanyDocument;
   }
 
+  /** Stores a write as the engine does, making it the active revision, and names it. */
+  commit(request: SentRequest): string {
+    const revision = this.revisions.size === 0 ? "r-saved" : `r-saved-${this.revisions.size + 1}`;
+    const parent = this.document ? this.revision : null;
+    this.document = this.result(request);
+    this.revision = revision;
+    const summary = (request.body as { _summary?: unknown })._summary;
+    this.revisions.set(revision, { parent, summary: typeof summary === "string" ? summary : "" });
+    return revision;
+  }
+
   /** The default answer: the configuration surface as the spec describes it. */
   answer(request: SentRequest): Response {
     if (request.method === "GET" && request.path === "/config") {
       return this.document
         ? json(this.document, 200, { ETag: `"${this.revision}"` })
         : json({ error: "no_active_revision" }, 404);
+    }
+    if (request.method === "GET" && request.path.startsWith("/config/revisions/")) {
+      const id = decodeURIComponent(request.path.slice("/config/revisions/".length));
+      const revision = this.revisions.get(id);
+      return revision
+        ? json({
+            revision_id: id,
+            parent_revision_id: revision.parent ?? "",
+            summary: revision.summary,
+            source: "api",
+            created_by: "operator",
+            created_at: "2026-09-13T12:00:00Z",
+            payload: {},
+          })
+        : json({ error: "not_found" }, 404);
     }
     if (request.path === "/config" && (request.method === "PATCH" || request.method === "PUT")) {
       const expected = request.headers["If-Match"];
@@ -143,7 +171,11 @@ export class Engine {
           derived,
         });
       }
-      return json({ revision_id: "r-saved", epoch: 2, warnings: [], derived }, 201);
+      const revision = this.commit(request);
+      return json(
+        { revision_id: revision, epoch: this.revisions.size + 1, warnings: [], derived },
+        201,
+      );
     }
     return json({});
   }
@@ -191,6 +223,17 @@ export function FakeView() {
   return (
     <div>
       <p>{api.readOnly ? "read only" : "editable"}</p>
+      <button
+        type="button"
+        onClick={() =>
+          api.dispatch({
+            type: "record",
+            intent: { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
+          })
+        }
+      >
+        Rename the company
+      </button>
       <ul aria-label="Seats">
         {[...allSeats(api.state.draft)].map(({ seat }) => (
           <li key={seat.key}>

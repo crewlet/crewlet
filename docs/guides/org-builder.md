@@ -70,6 +70,48 @@ agent seat can run without one, and the dashboard does not write providers.
 Add one with `crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
 
+## Reviewing and saving
+
+**Review and save** opens once the draft has changes, and says what the save
+would do before it does it:
+
+- **What changes:** the units and seats added, removed, renamed, moved and
+  edited, and the charter fields.
+- **What follows:** the consequences the engine attaches to those changes,
+  computed from the hierarchy it derives for the base and for the draft:
+  seats that onboard again (and why), handle changes, reporting lines and
+  leads that move (including a reorder that only changes which manager comes
+  first), channels, where unrouted Jira and Confluence work goes, the tool
+  credentials a seat gains or loses (names only), fields a kind change
+  removes, references a removal clears, the Datadog fallback seat and GitLab
+  access levels, and a new seat that takes a removed seat's handle and with it
+  its memory.
+- **Warnings** the engine gave for exactly this save.
+
+A company rename, a handle change, a kind change, a change of tool
+credentials and removing more than half of the seats each need an
+acknowledgement before **Save** enables. While the engine reports problems
+the review opens so you can read it, with Save disabled until they are fixed.
+While a check is out, Save waits for it. If the engine could not be reached to
+check, saving is still allowed: the write itself is validated.
+
+The **audit summary** is prefilled from the changes and recorded with the
+revision, followed by a write id such as `(write 4f1c...)`. A save is the
+same request as its checks: a `PATCH /config` merge patch of what changed,
+with `If-Match` naming the revision the draft was started from, so a newer
+revision is refused (and offered as an update) rather than overwritten.
+
+### When the answer does not arrive
+
+A save whose answer is lost (a dropped connection, a gateway timeout) may
+still have been stored. The builder never assumes either way: it reads the
+revision history and treats the save as done when it finds a revision whose
+parent is the draft's base and whose summary carries the write id. If the
+save did not land, it says so and offers to save again. If the engine cannot
+be asked, editing pauses and the review offers **Check again** and **Save
+again**; a second save carries the same write id, so a first save that did
+land is recognized as yours rather than replayed on top of itself.
+
 ## A draft survives a reload
 
 The builder keeps the draft's list of changes (never the document itself,
