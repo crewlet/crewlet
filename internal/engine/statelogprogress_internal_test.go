@@ -44,7 +44,8 @@ func TestEveryHealthInputIsPopulated(t *testing.T) {
 	// read. Listed here rather than derived, because the list IS the
 	// claim: a field added to a decision and not to this list is a field
 	// nobody asked to be produced.
-	want := []string{"Err", "Stalled", "Evicted", "Floor", "CaughtUp", "Deferred", "LastSeq"}
+	want := []string{"Err", "Stalled", "Evicted", "Floor", "CaughtUp", "Deferred",
+		"LastSeq", "StreamRecreated"}
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "statelog.go", nil, 0)

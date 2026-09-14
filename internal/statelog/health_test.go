@@ -188,7 +188,7 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 	}
 }
 
-// HEALTH IS FOURTEEN FIELDS, DECLARED ONCE.
+// HEALTH IS FIFTEEN FIELDS, DECLARED ONCE.
 //
 // The count is asserted because the failure is a copy: written out per reader
 // it becomes three lists that disagree, and the fields most likely to be
@@ -198,8 +198,8 @@ func TestEstablishedRefusesEachSideForItsOwnReason(t *testing.T) {
 func TestHealthCarriesEveryFieldItsContractsCite(t *testing.T) {
 	t.Parallel()
 	typ := reflect.TypeFor[statelog.Health]()
-	if got := typ.NumField(); got != 14 {
-		t.Fatalf("Health has %d fields, want 14 — this struct is cited from the "+
+	if got := typ.NumField(); got != 15 {
+		t.Fatalf("Health has %d fields, want 15 — this struct is cited from the "+
 			"framework's contracts, the readiness gate, the operator surface and "+
 			"the register's heartbeat, and a field added here without a reason "+
 			"is a field one of them will not know about", got)
@@ -270,6 +270,12 @@ func TestEveryFieldTheDecisionsReadCanChangeTheAnswer(t *testing.T) {
 			end := uint64(40)
 			h.Position.Seq, h.LastSeq = 41, &end
 		}, statelog.RefuseWrongStream},
+		// AND THE REBUILT STREAM THE SEQUENCES CANNOT SHOW. It comes
+		// back at generation 0 counting from 1, so once it has
+		// published past this node's checkpoint the term above goes
+		// quiet while the node applies a different history.
+		{"StreamRecreated", func(h *statelog.Health) { h.StreamRecreated = true },
+			statelog.RefuseWrongStream},
 	} {
 		h := serving()
 		tc.mutil(&h)

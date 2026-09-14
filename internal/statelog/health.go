@@ -197,6 +197,26 @@ type Health struct {
 	// reporting nothing pending.
 	LastSeq *uint64
 
+	// StreamRecreated is a live stream that is not the one this node's applier
+	// started against — a delete and a rebuild under the same name.
+	//
+	// # Why it is observed rather than derived
+	//
+	// Because nothing this node holds can show it. The generation does not move
+	// (a rebuilt stream comes back at 0), the sequences count from 1 again, and
+	// once the new stream has published past this node's checkpoint even
+	// [Health.AheadOfLog] goes quiet — the checkpoint is no longer past an end
+	// that has caught up with it. What is left is a node applying a DIFFERENT
+	// history into rows keyed by the old one, reporting itself caught up.
+	//
+	// The only thing that separates the two streams is the broker's own creation
+	// instant, and the only place that sees the live one while a node runs is the
+	// position heartbeat, which reads the stream's state every ten seconds anyway.
+	// So the heartbeat compares and sets this, and the refusal it produces is the
+	// same one the boot's own identity check produces — with the same remedy, an
+	// operator's re-anchor.
+	StreamRecreated bool
+
 	// Coverage is COMPACTED domains only: the fraction of rows present
 	// against rows expected. A gap here is the compaction policy working
 	// rather than a fault, which is why it is a number and not a bool.
@@ -231,7 +251,7 @@ func (h Health) Refusal(now time.Time) ReadRefusal {
 		return RefuseFloorUnknown
 	case h.Floor.Effective(now) == FloorBelow:
 		return RefuseBelowFloor
-	case h.AheadOfLog():
+	case h.AheadOfLog() || h.StreamRecreated:
 		return RefuseWrongStream
 	case h.Err != "" || h.Stalled:
 		return RefuseStalled
@@ -272,7 +292,8 @@ func (h Health) AheadOfLog() bool {
 // A compacted domain's coverage does not make it false either: a derived row's
 // gaps are the compaction policy working.
 func (h Health) Healthy(now time.Time, deferredSince DeferredSince) bool {
-	if h.Err != "" || h.Evicted || !h.Floor.Serves(now) || h.AheadOfLog() {
+	if h.Err != "" || h.Evicted || !h.Floor.Serves(now) ||
+		h.AheadOfLog() || h.StreamRecreated {
 		return false
 	}
 	if !h.CaughtUp || h.Stalled {
@@ -322,7 +343,7 @@ func (h Health) Established(strict bool) (bool, ReadRefusal) {
 		// failure is silent.
 		return false, RefuseBrokerUnreachable
 	}
-	if h.AheadOfLog() {
+	if h.AheadOfLog() || h.StreamRecreated {
 		return false, RefuseWrongStream
 	}
 	if strict && !h.CaughtUp {

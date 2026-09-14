@@ -395,8 +395,17 @@ than resuming — the log line names both instants and this verb — the node's
 reads refuse `stalled` with that reason, its seats move to a peer, and
 `crewlet retention status` shows the domain as stopped. A checkpoint past the
 log's end is caught the same way, as `wrong_stream`, because a position the
-log has never reached is a position on another stream. `reanchor` is the
-response:
+log has never reached is a position on another stream.
+
+**A rebuild under a node that never restarts is caught too**, on the position
+heartbeat: it reads the stream's state every ten seconds anyway, and the
+creation instant arrives in that same answer. Nothing else can see it — a
+rebuilt stream comes back at generation 0 counting from 1, so once it has
+published past the node's checkpoint every sequence term reads healthy while
+the node applies a different history into rows keyed by the old one. The node
+refuses `wrong_stream`, gives up its seats, and logs both instants.
+
+`reanchor` is the response:
 
 ```
 crewlet retention reanchor -stream CREWLET_TRACKER_LOG

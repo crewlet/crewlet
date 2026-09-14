@@ -93,6 +93,11 @@ type runningDomain struct {
 	// is what DETECTS a recreated one — the generation is the response.
 	createdAt time.Time
 
+	// recreated is set when the position heartbeat finds the LIVE stream
+	// is not the one this applier started against. It is atomic because
+	// the heartbeat writes it while every health read takes it.
+	recreated atomic.Bool
+
 	// evicted is this domain's own eviction gate, taken from the write
 	// fence so readiness reads the row the write path reads.
 	//
@@ -918,6 +923,10 @@ func (s *stateLog) health(ctx context.Context, running *runningDomain) (statelog
 	// at zero, so a checkpoint PAST the end reads as caught up through
 	// it, and the end is what [statelog.Health.AheadOfLog] refuses on.
 	health.LastSeq = &end
+	// AND WHETHER THIS IS THE SAME STREAM AT ALL, as the heartbeat last
+	// saw it — the one term here that is OBSERVED rather than derived,
+	// because nothing this node holds can show a rebuilt log.
+	health.StreamRecreated = running.recreated.Load()
 	lag := uint64(0)
 	if end > at.Seq {
 		lag = end - at.Seq
@@ -1407,16 +1416,47 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 			return nil, statelog.OfferRequest{}, err
 		}
 		first := stats.FirstSeq
-		at, _, _, err := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
+		at, _, found, err := statelog.CursorFor(ctx, s.db.Replicated(), domain.Stream().Name)
 		if err != nil {
 			return nil, statelog.OfferRequest{}, err
 		}
-		floor, err := s.trimFloor(name, func() uint32 { return at.Generation })(ctx)
+		// A NODE WITH NO CHECKPOINT IS NOT AT GENERATION ZERO — IT IS AT
+		// NO GENERATION AT ALL, and the difference is the whole of this.
+		//
+		// The absent row used to be read as `{generation 0, sequence 0}`,
+		// which in a fleet that has never re-anchored is exactly right: a
+		// fresh node has the whole log ahead of it. In one that HAS, it
+		// is a lie in the direction that cannot be recovered from. The
+		// stream still begins at sequence 1, so the behind test below
+		// passes and the node replays — stamping every row it writes at
+		// generation 0 while every peer holds the same records at N,
+		// reporting itself caught up over a database that contains only
+		// the records published since the re-anchor, blocking the fleet's
+		// trim (a counted node at a lower generation makes the applied
+		// term unknown), and, once a floor at N is published, failing its
+		// own boot on the floor comparison — which is the call that would
+		// have sent it to adopt, so the state is terminal.
+		//
+		// So the generation comes from the FLEET, and a node with no rows
+		// in a fleet that has moved past zero must ADOPT: the records
+		// before the re-anchor are not on the log to be replayed.
+		generation := at.Generation
+		if !found {
+			generation, err = s.fleetGeneration(ctx, name)
+			if err != nil {
+				return nil, statelog.OfferRequest{}, err
+			}
+		}
+		floor, err := s.trimFloor(name, func() uint32 { return generation })(ctx)
 		if err != nil {
 			return nil, statelog.OfferRequest{}, err
 		}
-		want.Generations[name] = at.Generation
+		want.Generations[name] = generation
 		want.StreamCreatedAt[name] = stats.CreatedAt
+		if !found && generation > 0 {
+			behind = append(behind, name)
+			continue
+		}
 
 		// WHAT AN ARTEFACT MUST COVER is one below the HIGHER of the
 		// two: the stream's first surviving sequence is what is gone
@@ -1447,6 +1487,46 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		}
 	}
 	return behind, want, nil
+}
+
+// fleetGeneration is the number space the FLEET is on for a domain, for a node
+// whose own rows cannot say.
+//
+// TWO SOURCES BECAUSE EITHER MAY BE THE ONLY ONE. Every live node publishes
+// its own generation per domain in the position register, and the trim
+// publishes the one it concluded at; a fleet whose peers are all restarting
+// has the floor and no positions, and one that has never trimmed has positions
+// and no floor. The MAXIMUM is taken because a re-anchor moves the fleet one
+// node at a time: the highest anybody reports is the space the company is
+// moving into, and an artefact from below it is one this node would have to
+// adopt again.
+//
+// Zero is a real answer — a company that has never re-anchored — and it is
+// what makes a genuinely new node in a genuinely new fleet replay from the
+// beginning rather than ask for a snapshot nobody has.
+func (s *stateLog) fleetGeneration(ctx context.Context, domain string) (uint32, error) {
+	var newest uint32
+	rows, err := s.fleet.Positions(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("engine: read the fleet's published positions to "+
+			"establish which generation %s is on: %w", domain, err)
+	}
+	for _, row := range rows {
+		if at, named := row.Domains[domain]; named && at.Generation > newest {
+			newest = at.Generation
+		}
+	}
+	floors, err := s.fleet.Floors(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("engine: read the fleet's published trim floors to "+
+			"establish which generation %s is on: %w", domain, err)
+	}
+	for _, f := range floors {
+		if f.Domain == domain && f.Generation > newest {
+			newest = f.Generation
+		}
+	}
+	return newest, nil
 }
 
 // stillUsable re-checks, after the transfer, that every position the artefact
@@ -2106,14 +2186,39 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		// not move because there is nothing to move it, and a stall is
 		// only a stall when there is work it owes.
 		behind := false
-		if first, end, err := running.log.Bounds(ctx); err == nil {
-			behind = end > at.Seq
+		if stats, err := running.log.Stats(ctx); err == nil {
+			behind = stats.LastSeq > at.Seq
 			// AND BELOW: the next record this node needs is gone from
 			// the log. It cannot replay its way back, so it adopts —
 			// the same repair the boot makes, made by a node that is
 			// running.
-			if first > at.Seq+1 {
+			if stats.FirstSeq > at.Seq+1 {
 				below = true
+			}
+			// AND WHETHER IT IS EVEN THE SAME LOG.
+			//
+			// This is the only place a running node sees the live
+			// stream's creation instant: it is sampled once at start
+			// and never re-read, so a stream deleted and rebuilt under
+			// a node was never named as one. The sequence terms above
+			// cannot see it — a rebuilt stream comes back at
+			// generation 0 counting from 1, so once it has published
+			// past this node's checkpoint every one of them reads as
+			// healthy while the node applies a different history into
+			// rows keyed by the old one. The instant already arrives
+			// in this same answer; it was being thrown away.
+			if statelog.IdentityOf(running.createdAt, stats.CreatedAt, true) ==
+				statelog.StreamRecreated && !running.recreated.Swap(true) {
+
+				log.ErrorContext(ctx, "statelog_stream_recreated",
+					"node", s.nodeID, "domain", name,
+					"started_against", running.createdAt.UTC(),
+					"live", stats.CreatedAt.UTC(),
+					"detail", "this domain's log was deleted and rebuilt under "+
+						"a running node, so its sequences name a history this "+
+						"node's rows are not keyed to; reads and writes refuse "+
+						"until an operator re-anchors it — crewlet retention "+
+						"reanchor")
 			}
 		}
 		running.progress.observe(row.At, pos.AppliedThrough, behind, held)

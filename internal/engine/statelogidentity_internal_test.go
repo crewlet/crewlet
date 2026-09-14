@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -148,5 +149,95 @@ func TestTheApplierIsHandedTheBrokersOwnStreamIdentity(t *testing.T) {
 			t.Fatalf("the tracker's status row is %+v, want not ready and naming "+
 				"the recreation", row)
 		}
+	}
+}
+
+// AND A STREAM REBUILT UNDER A RUNNING NODE IS NAMED WHILE IT RUNS.
+//
+// The boot's identity check is the one above, and it was the only one: the
+// live creation instant was sampled once in start and never read again, so a
+// stream deleted and rebuilt under a node that stayed up was never named as a
+// recreation at all.
+//
+// The sequence terms cannot stand in for it. A rebuilt stream comes back at
+// generation 0 counting from 1, so the checkpoint-past-the-end term reports it
+// only until the new stream has published past this node's position — after
+// which every term reads healthy while the node applies a different history
+// into rows keyed by the old one, and the diagnosis an operator gets names
+// anything but the rebuild.
+//
+// The instant arrives in the same answer the heartbeat already reads for the
+// stream's bounds; it was being thrown away.
+func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
+	b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	cfg, err := config.ParseCompany([]byte(nativeCleanupCompany))
+	if err != nil {
+		t.Fatalf("parse the company: %v", err)
+	}
+	back, err := OpenBackends(t.Context(), &b, cfg)
+	if err != nil {
+		t.Fatalf("OpenBackends: %v", err)
+	}
+	t.Cleanup(func() { back.Close(context.Background()) })
+	e, err := New(t.Context(), Options{Bootstrap: &b, Company: cfg, Backends: back})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	s := e.native.log
+	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+
+	running := s.Domain(tracker.Domain{}.Name())
+	if running == nil {
+		t.Fatal("the tracker domain is not running")
+	}
+	spec := tracker.Domain{}.Stream()
+	q, ok := back.Queue.(interface{ Conn() *nats.Conn })
+	if !ok {
+		t.Skip("the memory queue has no broker to rebuild a stream on")
+	}
+	js, err := natsjs.New(q.Conn())
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+
+	// THE REBUILD, under a node that never stops: the same name, a new
+	// creation instant, and sequences counting from 1 again.
+	if err := js.DeleteStream(t.Context(), spec.Name); err != nil {
+		t.Fatalf("delete the stream: %v", err)
+	}
+	// THROUGH THE BROKER'S OWN API rather than the queue's, which
+	// remembers what it has provisioned and would no-op — and a
+	// broker-level rebuild is precisely a stream this process did not
+	// create.
+	if _, err := js.CreateStream(t.Context(), natsjs.StreamConfig{
+		Name: spec.Name, Subjects: spec.Subjects,
+		MaxBytes: 16 << 20, Duplicates: spec.Duplicates,
+	}); err != nil {
+		t.Fatalf("rebuild the stream: %v", err)
+	}
+
+	// THE HEARTBEAT IS WHAT SEES IT, on the round trip it already makes.
+	s.publishPositions(t.Context())
+
+	health, err := s.health(t.Context(), running)
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if !health.StreamRecreated {
+		t.Fatal("the heartbeat did not name the rebuild — the live instant is " +
+			"sampled once at start and never read again, so a node that stays " +
+			"up applies a different history into rows keyed by the old one")
+	}
+	if code := health.Refusal(time.Now()); code != statelog.RefuseWrongStream {
+		t.Errorf("a node on a rebuilt stream refuses with %q, want wrong_stream — "+
+			"its rows are keyed to a history this log does not have", code)
+	}
+	if health.Healthy(time.Now(), statelog.DeferredSince{}) {
+		t.Error("a node on a rebuilt stream is healthy, so it keeps its seats " +
+			"and goes on deciding from rows nothing else in the fleet has")
 	}
 }
