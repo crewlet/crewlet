@@ -596,7 +596,16 @@ coordination:
                                     #   intervals, so two consecutive missed
                                     #   renewals still leave a full interval to
                                     #   recover in. Shorter speeds failover and
-                                    #   sheds healthy seats on ordinary jitter
+                                    #   sheds healthy seats on ordinary jitter.
+                                    #   IT IS THE BUCKET'S TTL, set by whichever
+                                    #   node created the lease bucket first and
+                                    #   ADOPTED by every node after it — a peer
+                                    #   booting with a different value does not
+                                    #   rewrite it, and logs
+                                    #   `coord_kv_lease_ttl_differs` naming the
+                                    #   one in force. So make it agree across
+                                    #   the fleet: changing it takes deleting
+                                    #   the bucket while the fleet is down
 
 api:
   host: "0.0.0.0"

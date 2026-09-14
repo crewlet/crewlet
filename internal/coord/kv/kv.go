@@ -127,6 +127,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -251,9 +252,39 @@ var _ coord.Backend = (*Store)(nil)
 
 // Open creates or adopts the two buckets and returns the backend.
 //
-// Idempotent, and safe to call concurrently from every node in the fleet:
-// creating a bucket that already exists with the same shape is a no-op, and a
-// changed TTL is applied as a stream update.
+// Idempotent, and safe to call concurrently from every node in the fleet: a
+// bucket that already exists is ADOPTED rather than rewritten.
+//
+// # Why this goes through openBucket like everything else
+//
+// It did not, and it was the last caller on the boot path doing both things
+// [openBucket]'s own doc records as measured-broken. `CreateOrUpdateKeyValue`
+// makes every booting node's call a WRITE, so the losers of the create race
+// rewrite a configuration they already agree with against a metadata group
+// that is still electing. And the caller's context reaches nats.go with no
+// deadline of its own — `crewlet run` passes a signal-cancellable one — so the
+// client's FIVE-SECOND default API timeout applied here, not the provisioning
+// budget the neighbouring fifteen buckets get. The two compound: the call most
+// likely to be held by an electing group had the least patience of any on the
+// path, and it runs on every node at every boot.
+//
+// # What adopting costs, and why the TTL is read back rather than asserted
+//
+// Create-else-observe cannot apply a changed TTL, and for the leases bucket
+// that TTL is not decoration — it IS the arbiter, and [Store.validateTTL]
+// refuses claims against it. So the live bucket's TTL is what this store
+// carries, not the configured one, and a difference is reported rather than
+// silently resolved in either direction. That is the honest answer for a value
+// with one writer and N nodes holding possibly-different Tier A files: a node
+// that came up late must not quietly redefine how long every other node's
+// leases live, and it must not quietly believe a number that is not in force.
+//
+// # And why there is no sequence ceiling here
+//
+// Two creates are already bounded by their own budgets, so a ceiling over them
+// would bind on nothing. The one that matters spans this call AND [OpenFleet]
+// — fifteen buckets rather than two — and the engine applies it once where it
+// makes both, in internal/engine's attachCoordination.
 func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")
@@ -266,7 +297,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
-	leases, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+	leases, err := openBucket(ctx, js, jetstream.KeyValueConfig{
 		Bucket:      cfg.BucketPrefix + leasesSuffix,
 		Description: "Crewlet lease ownership; the bucket TTL is the lease TTL and its expiry is the arbiter",
 		TTL:         cfg.TTL,
@@ -276,7 +307,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: open %s: %w", cfg.BucketPrefix+leasesSuffix, err)
 	}
 
-	epochs, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+	epochs, err := openBucket(ctx, js, jetstream.KeyValueConfig{
 		Bucket: cfg.BucketPrefix + epochsSuffix,
 		Description: "Crewlet fencing epochs and placement hints; NO TTL — this must survive " +
 			"the lease key's expiry or the counter resets",
@@ -287,8 +318,12 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	}
 
 	// Resolved once, here, where nothing is concurrent yet — see the
-	// leaseStream field for why it is not read per call.
-	status, err := leases.Status(ctx)
+	// leaseStream field for why it is not read per call. ITS OWN DEADLINE,
+	// short for [jsprovision.ReadBack]'s reason: an ordinary metadata read
+	// against a group that has just proven it works.
+	readCtx, cancelRead := context.WithTimeout(ctx, jsprovision.ReadBack)
+	defer cancelRead()
+	status, err := leases.Status(readCtx)
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: read %s status: %w", leases.Bucket(), err)
 	}
@@ -297,13 +332,30 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 		return nil, fmt.Errorf("coord/kv: %s reported no backing stream", leases.Bucket())
 	}
 
-	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "epochs", epochs.Bucket(), "ttl", cfg.TTL)
+	// THE TTL IN FORCE, which is the bucket's and not this node's config
+	// whenever a peer created it first. Reported at WARN rather than
+	// reconciled: the remedy is an operator's (align coordination.lease_ttl
+	// across the fleet, or delete the bucket to re-create it), and a node
+	// that rewrote it here would be the silent-overwrite this package
+	// removed everywhere else.
+	ttl := bucket.TTL()
+	if ttl != cfg.TTL {
+		log.WarnContext(ctx, "coord_kv_lease_ttl_differs",
+			"bucket", leases.Bucket(), "in_force", ttl, "this_node", cfg.TTL,
+			"detail", "a peer created this bucket with a different lease TTL and "+
+				"a booting node does not rewrite one; every lease on this node is "+
+				"held to the TTL in force",
+			"remedy", "make coordination.lease_ttl agree across the fleet, or delete "+
+				"the bucket while the fleet is down so the next boot re-creates it")
+	}
+
+	log.DebugContext(ctx, "coord_kv_open", "leases", leases.Bucket(), "epochs", epochs.Bucket(), "ttl", ttl)
 	return &Store{
 		js:          js,
 		leases:      leases,
 		epochs:      epochs,
 		leaseStream: bucket.StreamInfo().Config.Name,
-		ttl:         cfg.TTL,
+		ttl:         ttl,
 	}, nil
 }
 

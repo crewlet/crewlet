@@ -613,3 +613,54 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		t.Fatalf("PreferredResources(seat) = %v, %v; want the three seat hints", hints, err)
 	}
 }
+
+// A SECOND NODE ADOPTS THE LEASE BUCKET RATHER THAN REWRITING IT, and is
+// honest about the TTL that is actually in force.
+//
+// Open used to call CreateOrUpdateKeyValue, which makes every booting node's
+// call a WRITE: the losers of the create race rewrote a configuration they
+// already agreed with against a metadata group that was still electing, which
+// is the shape this package removed from every other bucket. The consequence
+// when the two disagree is worse than the write: whichever node booted LAST
+// silently redefined how long every other node's leases lived.
+//
+// So the bucket is adopted, and the store carries the live TTL. Believing the
+// configured one instead would let validateTTL accept claims the bucket will
+// not honour — a deadline handed back that is a lie about when the lease ends.
+func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+
+	const inForce = 90 * time.Second
+	first, err := Open(context.Background(), nc, Config{TTL: inForce, BucketPrefix: prefix})
+	if err != nil {
+		t.Fatalf("the first Open: %v", err)
+	}
+	if first.TTL() != inForce {
+		t.Fatalf("the node that created the bucket reports %v, want %v",
+			first.TTL(), inForce)
+	}
+
+	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
+	// holding possibly-different Tier A files actually do.
+	second, err := Open(context.Background(), nc, Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	if err != nil {
+		t.Fatalf("a second Open against an existing bucket: %v", err)
+	}
+	if second.TTL() != inForce {
+		t.Errorf("the second node reports a lease TTL of %v; the bucket's is "+
+			"%v, and a store that believes its own config here hands back "+
+			"deadlines the bucket will not honour", second.TTL(), inForce)
+	}
+
+	// AND THE BUCKET ITSELF IS UNCHANGED — the second node wrote nothing.
+	status, err := second.leases.Status(context.Background())
+	if err != nil {
+		t.Fatalf("read the lease bucket's status: %v", err)
+	}
+	if status.TTL() != inForce {
+		t.Errorf("the lease bucket's TTL is now %v: the second node rewrote a "+
+			"configuration it does not own", status.TTL())
+	}
+}
