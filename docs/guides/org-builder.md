@@ -123,6 +123,17 @@ this company runs; the dashboard does not write providers. Add one with
 `crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
 
+## Adding a unit or a seat
+
+**Add unit**, **Add agent seat** and **Add human seat** on the company or a unit
+open the Add dialog, which adds the new node at the end of that unit (or at the
+top level of the company). Seat names are unique, and so are unit names,
+because a lead, a unit reference and a `manages` entry each name exactly one.
+The dialog starts with a name nobody holds, and when you type a name that is
+taken it offers the next free one, such as "Software Engineer 2". A human seat
+needs one contact identity before the company can be saved; the dialog asks
+for it, and it can also be added later in the seat's editor.
+
 ## Editing a node
 
 Choose **Edit** on the company, a unit or a seat to open its editor at the side
