@@ -1037,7 +1037,11 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   instead, since there is nothing to update. The update is read only from a node serving the
   conflict's revision or a descendant of it, and `UpdateDraftDialog.tsx` shows
   what still applies, what is dropped and every conflict with its three values;
-  confirming waits for a choice on each.
+  confirming waits for a choice on each. A value is shown as a person reads
+  it: the model tags a conflict over its own structures with their shape, so
+  a node key reads as the node's name, a removed node as the fields that
+  changed, a kind change's stripped fields by name only, and a credential's
+  mask as "A literal value is set (hidden)", never as the marker or as JSON.
 - **Only the operation log is kept, and nothing is written before it is
   decided.** `useDraftKeeping.ts` reads the kept draft once the base is keyed,
   offers Keep or Discard for the same revision (read-only until answered),

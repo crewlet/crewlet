@@ -301,6 +301,14 @@ export function FakeView() {
             >
               {`Edit ${seat.data.name}`}
             </button>
+            <button
+              type="button"
+              onClick={() =>
+                api.dispatch({ type: "record", intent: { type: "remove", target: seat.key } })
+              }
+            >
+              {`Remove ${seat.data.name}`}
+            </button>
           </li>
         ))}
       </ul>

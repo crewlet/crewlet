@@ -394,10 +394,32 @@ export type Outcome =
   | { readonly kind: "gone"; readonly reason: string }
   | { readonly kind: "conflict"; readonly conflicts: readonly Conflict[] };
 
+/**
+ * What a conflict's values ARE, for a view that shows them to a person.
+ *
+ * Most conflicts are about a field, and their values are that field's values
+ * as the document writes them. The rest carry the builder's own structures,
+ * which are not something to print: node keys never leave the builder, a
+ * placement is two of them, a removal's snapshot is a whole node (masked
+ * credentials and all), and a kind change records the very fields it strips.
+ * So each of those says which structure it holds, and the view names what it
+ * is about instead of dumping it.
+ *
+ * - `sibling`: the node key a node sits after, or `null` for none.
+ * - `parent`: the node key of the unit a node sits in ([COMPANY_KEY] at the root).
+ * - `placement`: a [Placement].
+ * - `snapshot`: a whole node as it stood (`mine` is absent: a removal).
+ * - `placed`: the seats a unit reference places, as `{ key, json }` entries.
+ * - `fields`: [FieldChange] entries of the fields a kind change removes.
+ */
+export type ConflictShape = "sibling" | "parent" | "placement" | "snapshot" | "placed" | "fields";
+
 /** One precondition that no longer holds, with every value a person needs to choose. */
 export interface Conflict {
   /** What it is about, as a short phrase: "goal", "placement", "the whole seat". */
   readonly subject: string;
+  /** What the three values are; absent for a field's own values. */
+  readonly shape?: ConflictShape;
   /** The value when this operation was recorded. */
   readonly base?: unknown;
   /** The value in the draft now. */
@@ -1326,8 +1348,16 @@ const gone = (reason: string): Outcome => ({ kind: "gone", reason });
 /** Whether an operation's preconditions hold on a draft. */
 export function evaluate(draft: Draft, op: Operation): Outcome {
   const conflicts: Conflict[] = [];
-  const expect = (subject: string, base: unknown, theirs: unknown, mine?: unknown) => {
-    if (!jsonEqual(base, theirs)) conflicts.push({ subject, base, theirs, mine });
+  const expect = (
+    subject: string,
+    base: unknown,
+    theirs: unknown,
+    mine?: unknown,
+    shape?: ConflictShape,
+  ) => {
+    if (!jsonEqual(base, theirs)) {
+      conflicts.push({ subject, ...(shape ? { shape } : {}), base, theirs, mine });
+    }
   };
   let goneReason: string | undefined;
   const expectAccessLevels = (changes: readonly AccessLevelChange[]) => {
@@ -1369,6 +1399,7 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
     ) {
       conflicts.push({
         subject: "position",
+        shape: "sibling",
         base: placement.after,
         theirs: null,
         mine: placement.after,
@@ -1402,13 +1433,15 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
         found.kind === "seat" ? "the whole seat" : "the whole unit",
         op.snapshot.json,
         nodeJson(found),
+        undefined,
+        "snapshot",
       );
       if (found.kind === "unit") {
         const placed = placedByReference(draft, found.node).map((s) => ({
           key: s.key,
           json: s.data,
         }));
-        expect("seats placed in it by reference", op.placed, placed);
+        expect("seats placed in it by reference", op.placed, placed, undefined, "placed");
       }
       expectAccessLevels(op.accessLevels);
       expectRouteTo(op.routeTo);
@@ -1450,9 +1483,9 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
       if (!found) return gone("It is no longer in the organization.");
       const at = placementOf(found);
       if (op.type === "reorder") {
-        expect("position", op.from, at, op.to);
+        expect("position", op.from, at, op.to, "placement");
       } else {
-        expect("where it sits", op.from.parent, at.parent, op.to.parent);
+        expect("where it sits", op.from.parent, at.parent, op.to.parent, "parent");
       }
       if (
         found.kind === "unit" &&
@@ -1514,7 +1547,13 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
       const found = locate(draft, op.target);
       if (found?.kind !== "seat") return gone("The seat is no longer in the organization.");
       expect("kind", op.before, writtenKind(found.node.data), op.after);
-      expect("fields the new kind removes", op.stripped, forbiddenFor(found.node.data, op.after));
+      expect(
+        "fields the new kind removes",
+        op.stripped,
+        forbiddenFor(found.node.data, op.after),
+        undefined,
+        "fields",
+      );
       expectRouteTo(op.routeTo);
       return finish();
     }

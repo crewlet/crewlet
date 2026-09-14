@@ -249,6 +249,10 @@ now, and sorts every change into one of three outcomes:
   newer revision. The dialog shows the value when you started, the value saved
   now and yours, and you choose **Keep mine** or **Keep theirs** for each. A
   change is never replayed over somebody else's value without that choice.
+  Where a change is about a whole seat or unit (a removal) the dialog names
+  the fields somebody changed, a position reads as where the node sits, and a
+  kind change lists the fields it would remove by name; a credential is never
+  shown, only that a literal value is set.
 
 "The same seat" means what it means to the engine: a seat is its handle and a
 unit is its name, because those are what its memory, mailbox, schedules and

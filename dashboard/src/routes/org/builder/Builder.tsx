@@ -80,7 +80,7 @@ import {
   type BuilderViewHandle,
 } from "./BuilderContext.tsx";
 import { handlesByKey } from "./model/document.ts";
-import { allUnits, locate } from "./model/draft.ts";
+import { allUnits, locate, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, handleOfKey, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
@@ -968,6 +968,7 @@ function Lens({
   // attribute, because `.org-builder-toolbar` sets `display: flex` and an
   // author rule beats the user agent's `[hidden] { display: none }`.
   const startingCompany = creating && !templateApplied;
+  const pending = state.update;
   const Canvas = surfaces.canvas;
   const Outline = surfaces.outline;
   const fill = view === "canvas";
@@ -1442,12 +1443,13 @@ function Lens({
           />
         )}
 
-        {state.update && (
+        {pending && (
           <UpdateDraftDialog
-            update={state.update}
+            update={pending}
             describe={(op) =>
-              describeOperation(op, state.update?.restoring ? state.update.baseDraft : state.draft)
+              describeOperation(op, pending.restoring ? pending.baseDraft : state.draft)
             }
+            nameOf={(key) => nameIn(key, [state.draft, state.baseDraft, pending.baseDraft])}
             onChoose={(index, choice) => dispatchRaw({ type: "updateChoose", index, choice })}
             onConfirm={confirmUpdate}
             onCancel={cancelUpdate}
@@ -1557,6 +1559,19 @@ function ReviewPanel({
       onClose={onClose}
     />
   );
+}
+
+/**
+ * A node's name, from the first draft that holds its key. A conflict's keys
+ * name nodes of the draft, of the base it stood on or of the newer revision,
+ * and a key is the same node in all three.
+ */
+function nameIn(key: NodeKey, drafts: readonly Draft[]): string | null {
+  for (const draft of drafts) {
+    const found = locate(draft, key);
+    if (found) return found.node.data.name || null;
+  }
+  return null;
 }
 
 /** Whether keys pressed in an element edit text there. */

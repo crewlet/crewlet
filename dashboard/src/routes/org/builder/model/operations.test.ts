@@ -786,6 +786,77 @@ describe("evaluating", () => {
     expect(() => apply(theirs, op)).toThrow(ApplyError);
   });
 
+  // A CONFLICT'S VALUES ARE NOT ALWAYS A FIELD'S. Node keys, placements, a
+  // removal's whole node and a kind change's stripped fields are the
+  // builder's own structures, so each says which it is and a view can name
+  // what it is about rather than print keys and masked credentials.
+  test("a conflict over the builder's own structures says which structure it holds", () => {
+    const draft = fixture();
+    const shapes = (theirs: Draft, op: Operation) => {
+      const outcome = evaluate(theirs, op);
+      if (outcome.kind !== "conflict") throw new Error(`expected a conflict, got ${outcome.kind}`);
+      return outcome.conflicts.map((c) => [c.subject, c.shape]);
+    };
+    const editDev = {
+      type: "updateSeat",
+      target: "seat:dev",
+      set: [{ path: ["goal"], value: "Ship" }],
+    } as const;
+
+    const removal = recordOk(draft, { type: "remove", target: "seat:dev" });
+    expect(shapes(run(draft, editDev).draft, removal)).toEqual([["the whole seat", "snapshot"]]);
+
+    const moveDev = recordOk(draft, {
+      type: "move",
+      target: "seat:dev",
+      to: { parent: "unit:Sales", after: null },
+    });
+    const movedUp = run(draft, {
+      type: "move",
+      target: "seat:dev",
+      to: { parent: "unit:Platform", after: null },
+    }).draft;
+    expect(shapes(movedUp, moveDev)).toContainEqual(["where it sits", "parent"]);
+
+    const reorderDev = recordOk(draft, {
+      type: "reorder",
+      target: "seat:dev",
+      to: { parent: "unit:Engineering", after: null },
+    });
+    const addedAhead = run(draft, {
+      type: "addSeat",
+      key: mintKey(countingKeys("a")),
+      placement: { parent: "unit:Engineering", after: "seat:vp-engineering" },
+      data: { name: "QA" },
+    }).draft;
+    expect(shapes(addedAhead, reorderDev)).toEqual([["position", "placement"]]);
+
+    const addAfterDev = recordOk(draft, {
+      type: "addSeat",
+      key: mintKey(countingKeys("b")),
+      placement: { parent: "unit:Engineering", after: "seat:dev" },
+      data: { name: "QA" },
+    });
+    const devGone = run(draft, { type: "remove", target: "seat:dev" }).draft;
+    expect(shapes(devGone, addAfterDev)).toEqual([["position", "sibling"]]);
+
+    const toHuman = recordOk(draft, { type: "changeKind", target: "seat:sre", kind: "human" });
+    const trackerMoved = run(draft, {
+      type: "updateSeat",
+      target: "seat:sre",
+      set: [{ path: ["integrations", "jira", "project"], value: "SUP" }],
+    }).draft;
+    expect(shapes(trackerMoved, toHuman)).toContainEqual(["fields the new kind removes", "fields"]);
+
+    // A field's own values carry no shape: they are what the document writes.
+    const editOp = recordOk(draft, editDev);
+    const refactored = run(draft, {
+      ...editDev,
+      set: [{ path: ["goal"], value: "Refactor" }],
+    }).draft;
+    expect(shapes(refactored, editOp)).toEqual([["goal", undefined]]);
+  });
+
   test("a missing target is gone", () => {
     const draft = fixture();
     const op = recordOk(draft, {
