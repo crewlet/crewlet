@@ -119,10 +119,12 @@ export function UnitTypeField({
   value,
   onChange,
   error,
+  disabled,
 }: {
   value: string;
   onChange: (next: string) => void;
   error?: string;
+  disabled?: boolean;
 }) {
   const known = value === "" || (UNIT_TYPES as readonly string[]).includes(value);
   // Chosen, not inferred: picking "Custom type" opens an empty box to type
@@ -155,9 +157,17 @@ export function UnitTypeField({
         }}
         help="Informational: the engine runs every unit type the same way."
         error={custom ? undefined : error}
+        disabled={disabled}
       />
       {custom && (
-        <Field label="Custom type" kind="id" value={value} onChange={onChange} error={error} />
+        <Field
+          label="Custom type"
+          kind="id"
+          value={value}
+          onChange={onChange}
+          error={error}
+          disabled={disabled}
+        />
       )}
     </>
   );

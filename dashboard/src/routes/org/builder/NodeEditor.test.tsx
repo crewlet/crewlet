@@ -131,6 +131,31 @@ describe("applying", () => {
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
     view.unmount();
   });
+
+  // THE BANNER SAYS THESE FIELDS ARE FOR READING, so every one of them is: a
+  // box that still takes typing makes the form dirty, asks whether to discard
+  // work that was never going anywhere, and reads as a save the builder lost.
+  test("every field of a read-only editor is for reading, the charter's and a unit's type included", () => {
+    const readOnly = { readOnly: true };
+    const enabled = () =>
+      ["textbox", "combobox", "checkbox"]
+        .flatMap((role) => screen.queryAllByRole(role))
+        .filter((el) => !(el as HTMLInputElement).disabled)
+        .map((el) => el.getAttribute("aria-label") ?? el.id);
+
+    edit(keyedState(fixtureCompany()), COMPANY_KEY, readOnly);
+    expect(field("Company name")).toBeDefined();
+    expect(enabled()).toEqual([]);
+    cleanup();
+
+    edit(keyedState(fixtureCompany()), "unit:Engineering", readOnly);
+    expect(field("Type")).toBeDefined();
+    expect(enabled()).toEqual([]);
+    cleanup();
+
+    edit(keyedState(connected()), "seat:dev", readOnly);
+    expect(enabled()).toEqual([]);
+  });
 });
 
 describe("the unsaved-changes prompt", () => {

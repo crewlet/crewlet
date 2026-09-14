@@ -399,6 +399,8 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   const [acknowledged, setAcknowledged] = useState(false);
   const { errorFor, rest } = placeOnFields(placedOn(api, COMPANY_KEY), COMPANY_FIELDS);
 
+  const disabled = api.readOnly;
+
   const savedName = typeof state.base.document?.name === "string" ? state.base.document.name : "";
   const renaming = savedName !== "" && form.name.trim() !== savedName;
   const blocked =
@@ -424,6 +426,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         label="Company name"
         value={form.name}
         onChange={(name) => set({ name })}
+        disabled={disabled}
         error={errorFor(["name"])}
       />
       {renaming && (
@@ -434,6 +437,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
           description="An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged."
           checked={acknowledged}
           onChange={setAcknowledged}
+          disabled={disabled}
         />
       )}
       <Field
@@ -442,6 +446,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         value={form.mission}
         onChange={(mission) => set({ mission })}
         required={false}
+        disabled={disabled}
         error={errorFor(["mission"])}
       />
       <Field
@@ -450,6 +455,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         value={form.vision}
         onChange={(vision) => set({ vision })}
         required={false}
+        disabled={disabled}
         error={errorFor(["vision"])}
       />
       <ListField
@@ -459,6 +465,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         value={form.policies}
         onChange={(policies) => set({ policies })}
         required={false}
+        disabled={disabled}
         error={errorFor(["policies"])}
       />
     </EditorShell>
@@ -557,6 +564,7 @@ function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void })
         value={form.type}
         onChange={(type) => set({ type })}
         error={errorFor(["type"])}
+        disabled={disabled}
       />
       <Field
         label="Purpose"
