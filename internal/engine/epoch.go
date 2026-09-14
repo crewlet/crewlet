@@ -202,8 +202,15 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// org and its model registry — while the dispatcher, its subscription
 	// and its redelivery ring stay put. A failure leaves the previous
 	// epoch's workers serving rather than failing the apply: reflecting
-	// against a stale org is a far smaller wrong than not reflecting.
-	e.reconfigureReflection(next)
+	// against a stale org is a far smaller wrong than not reflecting. The
+	// one refusal is a node's FIRST company, whose dispatcher is attached
+	// here and would otherwise not exist at all.
+	if err := e.reconfigureReflection(ctx, next); err != nil {
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the reflect dispatcher could not be attached for this "+
+				"node's first company; the revision is not served here yet")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	applied = append(applied, "learning")
 	// The sandbox MANAGER is swapped, and only the manager: the coordinator
 	// and the waiter hold this process's busy set and poll loop, so

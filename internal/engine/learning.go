@@ -193,11 +193,22 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 
 // reconfigureReflection points the dispatcher at this epoch.
 //
-// The dispatcher itself is built once, at start, and outlives every apply —
-// see [learning.Reflector] for why its redelivery ring must not reset.
-func (e *Engine) reconfigureReflection(c *Company) {
+// The dispatcher itself is built once and outlives every apply — see
+// [learning.Reflector] for why its redelivery ring must not reset. Once is at
+// boot for a node that booted with a company, and HERE for one that did not:
+// its first company attaches the dispatcher, and every later apply swaps what
+// runs behind it. Before that, this returned early with no dispatcher to
+// point, so a company created on a fresh node reflected on no turn at all (no
+// diary row, no episode, no skill) until the process restarted, while looking
+// entirely healthy.
+//
+// An error is a dispatcher that could not be attached, which fails the apply
+// for the reason it fails a boot: a company served without the write side
+// learns nothing while nothing says so, and the retry attaches it again.
+// Swapping the workers of a running dispatcher never fails the apply.
+func (e *Engine) reconfigureReflection(ctx context.Context, c *Company) error {
 	if e.reflector == nil {
-		return
+		return e.attachReflection(ctx, c)
 	}
 	workers := e.buildReflectionWorkers(c)
 	if err := e.reflector.Reconfigure(c.Org, workers, e.learningBudget(c)); err != nil {
@@ -206,37 +217,44 @@ func (e *Engine) reconfigureReflection(c *Company) {
 		// and this is a bug in the wiring above rather than in the
 		// operator's config — which is why it is an error, not a warn.
 		log.Error("reflection_reconfigure_failed", "error", err)
-		return
+		return nil
 	}
 	if len(workers) == 0 {
 		log.Info("learning_write_side_idle",
 			"detail", "no learning worker is wired for this revision; "+
 				"nothing will be written and every prefetch block stays empty")
 	}
+	return nil
 }
 
-// startReflection builds the dispatcher and attaches it to completed turns.
+// startReflection builds the dispatcher and attaches it to completed turns,
+// for the company this node booted with.
 //
 // Called ONCE, from start, before the first apply — so the subscription
 // exists for the life of the process and an apply only ever swaps what runs
-// behind it.
+// behind it. A node that booted with no company has no org to resolve seats
+// against and no models to run a pass on, so it attaches nothing here and its
+// first apply does instead (see [Engine.reconfigureReflection]).
 func (e *Engine) startReflection(ctx context.Context) error {
-	if e.backends == nil || e.backends.Queue == nil {
+	return e.attachReflection(ctx, e.Company())
+}
+
+// attachReflection builds the dispatcher for c and subscribes it.
+//
+// DETACHED from the caller's context, because the subscription is the
+// process's rather than the call's: the first apply hands in a reconcile
+// tick's context, and a consumer bound to it would stop reading completed
+// turns the moment that tick returned.
+func (e *Engine) attachReflection(ctx context.Context, c *Company) error {
+	if c == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}
-	company := e.Company()
-	if company == nil {
-		// No active revision. There is no org to resolve seats against
-		// and no models to run a pass on; the config plane will call
-		// reconfigureReflection when one arrives, and this returns then.
-		return nil
-	}
-	reflector, err := learning.NewReflector(company.Org, e.backends.Queue,
-		e.buildReflectionWorkers(company), e.learningBudget(company))
+	reflector, err := learning.NewReflector(c.Org, e.backends.Queue,
+		e.buildReflectionWorkers(c), e.learningBudget(c))
 	if err != nil {
 		return fmt.Errorf("engine: build the reflect dispatcher: %w", err)
 	}
-	if err := reflector.Start(ctx, e.backends.Queue); err != nil {
+	if err := reflector.Start(context.WithoutCancel(ctx), e.backends.Queue); err != nil {
 		return fmt.Errorf("engine: attach the reflect dispatcher: %w", err)
 	}
 	e.reflector = reflector
