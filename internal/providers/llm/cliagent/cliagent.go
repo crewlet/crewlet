@@ -38,6 +38,8 @@ package cliagent
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -209,7 +211,7 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	// THE SYSTEM PROMPT ON ITS OWN CHANNEL where the CLI has one. Lifted
 	// before the transcript is rendered, so it is never both.
 	var system string
-	if len(p.profile.SystemPromptArgs) > 0 || p.profile.SystemPromptEnv != "" {
+	if p.profile.hasSystemChannel() {
 		system, req = SplitSystem(req)
 	}
 	prompt, err := RenderPrompt(req)
@@ -276,20 +278,40 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 			req.Send(llm.Delta{Content: chunk})
 		}
 	}
-	if system != "" {
+	// A USAGE REPORT THE CLI WRITES ITSELF, for a vendor whose one-shot
+	// surface prints the answer and nothing else. Appended before the
+	// system and prompt arguments for the same reason the model flag is:
+	// a CLI taking its prompt on argv reads the first non-flag argument,
+	// so nothing may come after it.
+	var usagePath string
+	if len(p.profile.UsageFileArgs) > 0 {
+		usagePath = filepath.Join(checkout.Work, usageFileName)
+		for _, arg := range p.profile.UsageFileArgs {
+			in.args = append(in.args, strings.ReplaceAll(arg, "{usage_file}", usagePath))
+		}
+	}
+	// EVERY CALL WHERE THE FILE CARRIES POLICY, not only the calls that
+	// have something to put in it — see [SystemPromptFile]. A profile whose
+	// prompt channel is a vendor agent file declares that CLI's tool
+	// denial in the same file, so skipping it on a request with no system
+	// prompt would hand the vendor's default agent, and every tool it has,
+	// to exactly the probes that exist to prove the tools are off.
+	if system != "" || p.profile.SystemPromptFile != nil {
 		// One channel or the other — the profile validator refuses a
 		// build that declares both.
 		switch {
 		case len(p.profile.SystemPromptArgs) > 0:
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			args, err := systemArgs(p.profile.SystemPromptArgs, system, checkout.Work)
+			args, err := systemArgs(
+				p.profile.SystemPromptArgs, p.profile.SystemPromptFile, system, checkout.Work)
 			if err != nil {
 				return nil, p.fail(llm.KindFatal, 0, err)
 			}
 			in.args = append(in.args, args...)
 		case p.profile.SystemPromptEnv != "":
 			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			pair, err := systemEnv(p.profile.SystemPromptEnv, system, checkout.Work)
+			pair, err := systemEnv(
+				p.profile.SystemPromptEnv, p.profile.SystemPromptFile, system, checkout.Work)
 			if err != nil {
 				return nil, p.fail(llm.KindFatal, 0, err)
 			}
@@ -330,7 +352,24 @@ func (p *Provider) Complete(ctx context.Context, req llm.Request) (*llm.Completi
 	log.DebugContext(ctx, "cli_agent_call", "provider", p.key, "agent", p.agent, "model", p.model,
 		"seat", seat, "exit", res.exitCode, "elapsed_ms", time.Since(started).Milliseconds())
 
-	return p.completion(ctx, prompt, res)
+	// READ BEFORE THE CHECKOUT IS RELEASED, which removes the directory.
+	// A missing or unreadable report is not an error: the vendor writes it
+	// "even when the run fails", so its absence says the run did not get
+	// that far — and failing a completion that the model answered, over a
+	// count, would throw away work the operator paid for. The counts then
+	// fall back to whatever stdout said, which for such a CLI is an
+	// estimate.
+	var usageDoc string
+	if usagePath != "" {
+		if raw, readErr := os.ReadFile(usagePath); readErr == nil { //nolint:gosec // rooted in the per-call dir
+			usageDoc = string(raw)
+		} else if !os.IsNotExist(readErr) {
+			log.WarnContext(ctx, "cli_agent_usage_file_unreadable", "provider", p.key,
+				"agent", p.agent, "path", usagePath, "error", readErr)
+		}
+	}
+
+	return p.completion(ctx, prompt, res, usageDoc)
 }
 
 // argv is the invocation's arguments: the profile's completion argv, then the
@@ -353,7 +392,9 @@ func (p *Provider) argv() []string {
 // EMPTY is a real outcome rather than an error (see the fall-through below),
 // and the one place that can say so is here, where the token counts that
 // explain it are still in hand.
-func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult) (*llm.Completion, error) {
+func (p *Provider) completion(
+	ctx context.Context, prompt string, res *rawResult, usageDoc string,
+) (*llm.Completion, error) {
 	if res.timedOut {
 		return nil, p.fail(llm.KindTimeout, 0, fmt.Errorf(
 			"the CLI did not answer within %s — raise cli.timeout_seconds if this model "+
@@ -377,6 +418,10 @@ func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult
 	}
 
 	out := extract(p.profile, res.stdout)
+	// The CLI's own report wins over anything stdout happened to carry:
+	// a profile only names one when its vendor puts the counts nowhere
+	// else, so a hit here is the only real figure there is.
+	out.applyUsageFile(p.profile, usageDoc)
 
 	// A spent subscription is checked BEFORE the exit code, because it
 	// arrives on a successful one: the process exits 0 and the answer is
@@ -530,7 +575,17 @@ func (p *Provider) completion(ctx context.Context, prompt string, res *rawResult
 // to check a shipped profile's sentinels against the output its CLI actually
 // produces is to be able to ask without a running provider.
 func classifyMarkers(p Profile, text, stderr string) (markerHit, bool) {
+	// THE ANSWER IS A HAYSTACK ONLY WHERE A VENDOR PUTS ITS FAILURES IN
+	// ONE — see [MarkerScope]. Searching the model's own words is what
+	// makes a spent Claude Code plan recognisable at all, and it is also
+	// how a seat asked "what is our quota?" answers in prose that benches
+	// its own credential. A profile whose CLI reports on stderr and
+	// nowhere else opts out, and then no sentence the model writes can
+	// classify anything.
 	haystacks := []string{text, stderr}
+	if p.markerScope() == MarkerScopeStderr {
+		haystacks = []string{stderr}
+	}
 	for _, marker := range p.LimitMarkers {
 		for _, hay := range haystacks {
 			idx := strings.Index(hay, marker.Sentinel)

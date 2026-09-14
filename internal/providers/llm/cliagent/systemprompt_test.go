@@ -120,8 +120,9 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// Checked against each CLI's own --help — or, where the vendor
 	// documents its flags rather than printing them all, against that — at
 	// the version named in docs/concepts/subscription-llm-backends.md.
-	// Seven of the nine have no such flag at all, and an empty entry here
-	// is that fact rather than an omission.
+	// Eight of the twelve have no such flag at all — two of those read a
+	// file named by an environment variable instead — and an empty entry
+	// here is that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.263: --system-prompt-file
 		// 1.0.13, xAI's OWN CLI from x.ai/cli:
@@ -147,6 +148,21 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// travel through AGENTS.md / CLAUDE.md, which load only once a
 		// workspace is TRUSTED — and the per-call directory never is.
 		"muse-code": "",
+		// 0.42.x, MoonshotAI's OWN CLI from @moonshot-ai/kimi-code:
+		// --agent-file, a path — but an AGENT FILE rather than a bare
+		// prompt, which is what system_prompt_file exists for. Not the
+		// unscoped `kimi-code` package on npm, which is a Claude Code
+		// wrapper and has none of this.
+		"kimi-code": "{file}",
+		// No channel. 0.21.2's identity slot is SOUL.md, a file in the
+		// CLI's home rather than a per-call argument — and this
+		// profile's --ignore-rules switches its injection off. `-p` on
+		// this CLI selects a PROFILE, not a prompt.
+		"hermes": "",
+		// 0.85.x: --system-prompt, string only. Its one file channel,
+		// ~/.pi/agent/SYSTEM.md, is static per home and cannot carry a
+		// prompt that differs per phase.
+		"pi": "{system}",
 	}
 	// THE TABLE IS THE SHIPPED SET. Without this, a profile added later is
 	// simply absent from the map and covered by nothing — the failure is
@@ -229,7 +245,7 @@ func TestSystemPromptFileIsPrivateToTheCall(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	args, err := cliagent.SystemArgsForTest(
-		[]string{"--system-prompt-file", "{file}"}, "the seat's whole identity", dir)
+		[]string{"--system-prompt-file", "{file}"}, nil, "the seat's whole identity", dir)
 	if err != nil {
 		t.Fatal(err)
 	}

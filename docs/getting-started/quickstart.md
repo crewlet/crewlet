@@ -221,7 +221,8 @@ providers:
       model: sonnet                   # whatever the CLI's --model accepts
       cli:
         agent: claude-code            # or codex | gemini-cli | opencode
-                                      #    | muse-code | ...
+                                      #    | muse-code | kimi-code | hermes
+                                      #    | pi | ...
 ```
 
 A `cli-agent` entry is authenticated once, on the engine host, and then
