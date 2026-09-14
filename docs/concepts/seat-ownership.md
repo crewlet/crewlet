@@ -256,10 +256,12 @@ The same decision guards the other path a turn can arrive by. A **resumed**
 turn re-enters the executor's suspended conversation, so a redelivery repeats
 every call the resumed round made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
-acting, or that panicked, therefore leaves its run row claimed, which is what
-stops a retry winning the flip; every other resume failure still un-claims and comes back,
-because the suspended conversation is the expensive thing there and a resume
-that proved nothing has lost nothing by trying again.
+acting, or that panicked, therefore keeps its claim, which is what stops a retry
+winning the flip, and its run is settled like one that finished: the box is
+reclaimed and the seat is free for its next turn. Every other resume failure
+still un-claims and comes back, because the suspended conversation is the
+expensive thing there and a resume that proved nothing has lost nothing by
+trying again.
 
 Two bounds worth stating plainly. The record is **per turn, in one process**:
 two nodes that both run one partition — possible if a turn outlives the

@@ -462,6 +462,76 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 	}
 }
 
+// AN ABANDONED RESUME IS OVER, AND SETTLED LIKE ONE.
+//
+// Keeping the claim is what stops the completion re-entering the conversation;
+// it is not a reason to keep the run. The abandon path re-marked the seat busy
+// and returned before the settle, so the row stayed in resumed, which holds
+// the seat, and only a seat acquisition ever reaps a resumed row: on a live
+// node the seat requeued every delivery it was sent, and its box stayed up and
+// billed, until the process restarted or the seat moved.
+//
+// BOTH CAUSES, because they reach this path from opposite directions and only
+// the sentinel is shared: a turn that wrote outside the engine, and one that
+// panicked.
+func TestAnAbandonedResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
+	for name, cause := range map[string]string{
+		"after acting":    "the reviewer's provider went away",
+		"after panicking": "panic: assignment to entry in nil map",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newCoordRig(t)
+			run := rig.launch("t1")
+			if err := rig.coordinator.OnStarted(t.Context(), types.SandboxRunStarted{
+				AgentHandle: "swe", TurnID: "t1",
+			}); err != nil {
+				t.Fatalf("OnStarted: %v", err)
+			}
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			rig.resumer.err = fmt.Errorf("%w: %s", ErrResumeAbandoned, cause)
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("OnCompleted: %v", err)
+			}
+			if rig.coordinator.AwaitingSandbox("swe") {
+				t.Fatal("the seat stayed parked on a run whose turn is over, so it " +
+					"requeues every delivery until the process restarts")
+			}
+			rig.finished("t1")
+			if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+				t.Fatalf("killed %v, want the finished run's box reclaimed", killed)
+			}
+		})
+	}
+}
+
+// The same holds when the resume was a person's answer to the run's question
+// rather than its completion: the box the answer would have continued in is
+// reclaimed, and the seat is not left holding a question nobody will resume.
+func TestAnAbandonedAnswerResumeFreesTheSeatAndReclaimsTheBox(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	if err := rig.pending.MarkAwaiting(t.Context(), "t1", Clarification{
+		Question: "which branch?", Audience: "requester",
+	}); err != nil {
+		t.Fatalf("MarkAwaiting: %v", err)
+	}
+	rig.resumer.err = fmt.Errorf("%w: panic: nil map", ErrResumeAbandoned)
+
+	handled, err := rig.coordinator.TryResumeFromAnswer(t.Context(), "swe", "chat:C1", "use main", nil)
+	if err != nil || !handled {
+		t.Fatalf("TryResumeFromAnswer = (%v, %v), want the answer handled", handled, err)
+	}
+	if rig.coordinator.AwaitingSandbox("swe") {
+		t.Fatal("the seat stayed parked after its answer's resume was abandoned")
+	}
+	rig.finished("t1")
+	if killed := rig.provider.KilledIDs(); len(killed) != 1 || killed[0] != run.SandboxID {
+		t.Fatalf("killed %v, want the parked box reclaimed", killed)
+	}
+}
+
 // The claim snapshots the EXACT prior status, so a run answered out of a
 // clarification reverts there rather than to running.
 func TestAFailedResumeRevertsToWhereTheClaimFoundIt(t *testing.T) {
