@@ -414,9 +414,26 @@ after an empty answer is the same prompt against the same model, which is
 the retry [the provider contract](subscription-llm-backends.md) refuses
 to do. One also fits inside the smallest budget any caller declares —
 `workers.max_turns` is validated at ≥ 1 — so the corrective can never eat
-a delegated task's whole allowance. Rounds that reached nobody are
-counted on the phase record as `empty_answer_rounds`, and the dashboard
-badges them.
+a delegated task's whole allowance.
+
+Both allowances bound a **run** of rounds that produced nothing, not the
+phase's lifetime: a round that emits a tool call clears them, so the
+model's next stall is a new stall and earns its own nudge. Counted for
+the phase instead, they bound a different quantity — how many times a
+model may *ever* stall — and one stall early disarms the corrective for
+every round after it. That was the shape of a real incident: an executor
+on a 24-round budget stalled at round 2, filed a work item at round 3,
+had a submission bounced at round 4, and broke on the stall at round 5
+with nineteen rounds unspent, one round before the message it had just
+said it was about to send. The allowance clears on the **call**, not on
+the call's success — a tool that returned an error is a round the model
+has to read and answer, which is the opposite of one that has stopped
+responding.
+
+Rounds that reached nobody are still counted on the phase record as
+`empty_answer_rounds` — that stays a phase **total**, since it measures
+what the turn cost rather than what the loop will tolerate — and the
+dashboard badges them.
 
 The **executor** stays on `auto`, and the **judge** takes no tools at
 all — it answers in two lines of text, and a tool on its surface would
