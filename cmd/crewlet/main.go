@@ -1239,10 +1239,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, nil
 	}
 
-	nodeID, err := config.ResolveNodeID(boot, nil)
-	if err != nil {
-		return nil, fmt.Errorf("api: node identity: %w", err)
-	}
+	// THE NAME THE ENGINE RUNS UNDER, not a second resolution of it. The
+	// engine resolved it once, from `node.id` or CREWLET_NODE_ID, and its
+	// presence lease carries exactly this value, so /health, the fleet
+	// answer and a backup's trim hold name this node the way its peers
+	// already do.
+	nodeID := e.Node().ID()
 	// The config surface is the caller's, built before this function so a
 	// node with no HTTP listener still has a config WRITER (see runEngine).
 	// One instance, shared by the REST routes, the socket queries and the
@@ -1341,9 +1343,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// fleet with a working nightly backup would still never trim its
 		// log.
 		Backups: e.Backends().Fleet,
-		// RESOLVED, never boot.Node.ID: the raw field is empty on a node
-		// named through CREWLET_NODE_ID, and this id keys the node's trim
-		// hold and its announced backup point.
+		// The engine's own name for this node, never boot.Node.ID: the
+		// raw field is empty on a node named through CREWLET_NODE_ID, and
+		// this id keys the node's trim hold and its announced backup point.
 		NodeID: nodeID,
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
