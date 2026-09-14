@@ -59,6 +59,15 @@ type FeedRow struct {
 	Failed       bool   `json:"failed"`
 }
 
+// WebhookTopic is the topic a webhook delivery's envelope and feed row name.
+//
+// Not a subject anything is published on: the receiver writes a delivery's row
+// itself and ingests its envelope directly, because the engine never publishes
+// it on crewlet.events.*. The label tells a reader which surface a delivery came
+// through, and ONE spelling is what keeps the live row the receiver pushes and
+// the row a restarted process seeds from the store the same.
+func WebhookTopic(source string) string { return "crewlet.webhooks." + source }
+
 // ErrorInfo is why a seat stopped.
 //
 // One shape for every stop — a failed phase, a failed task, an exhausted

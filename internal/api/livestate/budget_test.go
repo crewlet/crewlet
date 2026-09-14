@@ -341,7 +341,7 @@ func TestSpendRecordsAreCappedByCount(t *testing.T) {
 // the whole window. Every screen reading this rollup then said the company had
 // spent nothing, in a window it labelled a full day, next to a chart drawn
 // from the store showing the real spend.
-func TestHydrationSeedsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
+func TestTheSeedFillsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()
 	now := time.Now().UTC()
@@ -351,41 +351,41 @@ func TestHydrationSeedsTheWindowFromWhatTheStoreAlreadyHolds(t *testing.T) {
 			AgentRole: "Lead", Phase: "plan", TotalTokens: total,
 		}
 	}
-	landed := s.HydrateSpend([]tokens.Record{
+	change := s.Seed(livestate.History{Spend: []tokens.Record{
 		rec("h1", now.Add(-2*time.Hour), 10),
 		rec("h2", now.Add(-time.Hour), 20),
-	})
-	if landed != 2 || len(s.SpendRecords()) != 2 {
-		t.Fatalf("hydrated %d records, holding %d; want both", landed, len(s.SpendRecords()))
+	}})
+	if !change.Tokens || len(s.SpendRecords()) != 2 {
+		t.Fatalf("seeded tokens=%v, holding %d; want both records", change.Tokens, len(s.SpendRecords()))
 	}
 
 	// DEDUPED AGAINST WHAT IS ALREADY HERE, in both directions, which is
-	// what makes the ORDER of hydration and subscription a non-question:
-	// the API subscribes before it hydrates, so a live event lands ahead of
+	// what makes the ORDER of the seed and the subscription a non-question:
+	// the caller subscribes before it seeds, so a live event lands ahead of
 	// the older records this appends behind it.
-	if again := s.HydrateSpend([]tokens.Record{rec("h1", now.Add(-2*time.Hour), 10)}); again != 0 {
-		t.Errorf("a second hydration landed %d records; a rollup that grows on "+
-			"every reload is worse than one that is slightly short", again)
+	if again := s.Seed(livestate.History{Spend: []tokens.Record{rec("h1", now.Add(-2*time.Hour), 10)}}); again.Tokens {
+		t.Error("a second seed counted a record it had already counted; a rollup " +
+			"that grows on every reload is worse than one that is slightly short")
 	}
 	s.Apply(phaseSpend("h2", now.Add(-time.Hour).Format(time.RFC3339Nano), 20))
 	if held := len(s.SpendRecords()); held != 2 {
-		t.Errorf("holding %d records after the stream redelivered a hydrated "+
+		t.Errorf("holding %d records after the stream redelivered a seeded "+
 			"one; want the same 2", held)
 	}
 
 	// AND A RECORD WITH NO ID IS DROPPED: the dedupe has nothing to hold it
-	// by, so a second hydration would add it again.
-	if landed := s.HydrateSpend([]tokens.Record{rec("", now, 5)}); landed != 0 {
-		t.Errorf("an id-less record landed; it cannot be deduped")
+	// by, so a second seed would add it again.
+	if landed := s.Seed(livestate.History{Spend: []tokens.Record{rec("", now, 5)}}); landed.Tokens {
+		t.Error("an id-less record landed; it cannot be deduped, so it is summed twice")
 	}
 
 	// THE WINDOW STILL BINDS. A record older than the live window is
-	// pruned on arrival rather than seeded in, so hydration cannot widen
-	// the window the rollup claims to cover.
-	s.HydrateSpend([]tokens.Record{rec("old", now.Add(-livestate.LiveSpendWindow-3*time.Hour), 99)})
+	// pruned rather than seeded in, so a seed cannot widen the window the
+	// rollup claims to cover.
+	s.Seed(livestate.History{Spend: []tokens.Record{rec("old", now.Add(-livestate.LiveSpendWindow-3*time.Hour), 99)}})
 	for _, r := range s.SpendRecords() {
 		if r.EventID == "old" {
-			t.Error("a record from outside the live window survived hydration")
+			t.Error("a record from outside the live window survived the seed")
 		}
 	}
 }

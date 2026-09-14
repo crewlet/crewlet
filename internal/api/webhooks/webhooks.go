@@ -508,7 +508,7 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 		ID: id, Type: d.label, Timestamp: at.Format(time.RFC3339Nano),
 		Source: d.source, Actor: d.source, Summary: d.summary,
 		Category: "webhook", TraceID: trace.TraceID, SpanID: trace.SpanID,
-		Topic:   "crewlet.webhooks." + d.source,
+		Topic:   livestate.WebhookTopic(d.source),
 		Payload: d.body,
 	})
 }

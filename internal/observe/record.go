@@ -225,3 +225,30 @@ func payloadOf(ev *events.Event) map[string]any {
 	_, fields := body(ev)
 	return fields
 }
+
+// FeedRow renders a stored event as the activity feed's row, the shape the
+// live projection builds from an [Envelope].
+//
+// Here, beside [Record] and [Envelope], for the reason this file exists: a row
+// a restarted process seeds from the store has to read exactly like the row it
+// would have built had it seen the event live, or a reload changes the feed a
+// reader was looking at. The fields the store keeps are the same derivations
+// (the actor, the summary, the category and the failure mark were computed by
+// [Record] when the row was written); the TOPIC is the one the store does not
+// keep, and it is derived the way each live producer names it.
+func FeedRow(rec store.EventRecord) livestate.FeedRow {
+	topic := topics.Event(rec.Type)
+	if rec.Category == events.WebhookCategory {
+		topic = livestate.WebhookTopic(rec.Source)
+	}
+	return livestate.FeedRow{
+		ID: rec.ID, Type: rec.Type,
+		// RFC3339Nano in UTC, the spelling [Envelope] gives a live row, so
+		// the two order against each other by instant.
+		Timestamp: rec.Time.UTC().Format(time.RFC3339Nano),
+		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary,
+		Category: rec.Category, TraceID: rec.TraceID, SpanID: rec.SpanID,
+		ParentSpanID: rec.ParentSpanID, Topic: topic,
+		Failed: rec.Failed,
+	}
+}

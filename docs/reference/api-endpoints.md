@@ -1340,13 +1340,31 @@ completed record when the phase finishes. Progress envelopes carry
 `turn_id` / `phase` / `iteration` for this correlation; they are
 stream-only and never persisted to the event store.
 
-The **spend rollup** is maintained by the projection too, over the last 24
-hours (`livestate.LiveSpendWindow`) of the phases this process has seen, using
-the same `tokens.Aggregate` the REST endpoint calls. It ships in the
-snapshot and is re-pushed (coalesced to at most one frame per second)
-whenever a phase completes, so the Tokens view and the overview widget
-stay live without a fetch and without a second implementation of the
-aggregation in the browser.
+The **spend rollup** is maintained by the projection too. It HOLDS the
+per-phase records for its own 24-hour window and folds them with
+`internal/tokens`, which is the same aggregation the event store's wider
+windows are folded with, so changing the window on screen cannot change
+what a phase is counted as. It ships in the snapshot and is re-pushed on
+the shared 5-second tick after any phase completed, so the Spend screen
+and the overview widget stay live without a fetch and without a second
+implementation of the aggregation in the browser. What a seat has spent
+is that rollup's per-agent row: the projection keeps no second total of
+its own.
+
+**The projection is seeded from the event store when the process starts**,
+after the broadcast subscription is attached and before the HTTP listener
+binds. Two bounded reads, each bound the projection's own: the newest 400
+persisted events for the feed, and every phase record inside the 24-hour
+spend window. Without it every one of these surfaces started at this
+process's boot, so a restart, a deploy or a node joining a fleet showed an
+operator a company that had apparently done nothing beside a store that
+said otherwise. An event that is both in the store and already applied off
+the live stream is recognised by its id and counted once, and history is
+ordered behind the live rows it predates. On a fleet the seed is what
+**this node** published (the event store is per node), while everything
+after the boot is the whole company's. A read that fails is logged as
+`live_projection_not_seeded` and costs the history, never the start-up:
+`GET /events` and the `tokens` query still read the store directly.
 
 ### `GET /stream/snapshot`
 
@@ -1614,7 +1632,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `agents`   | After an event moved one or more agents. | The changed agents' overlays, each with its `role` — the *result* of applying the event, so a client merges them rather than running its own state machine over the raw stream. |
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
-| `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
+| `tokens`   | On the shared 5-second tick, when a phase completed since the last one. The fold runs on the tick rather than on the publish, so a busy company costs one aggregation every five seconds rather than one per phase. | The spend rollup, same shape as `GET /tokens/breakdown`. |
 | `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
@@ -2884,14 +2902,12 @@ Notes:
 - All lists are sorted by `total_tokens` descending; `by_turn` is
   sorted by `ended_at` descending and capped at `recent_turns`.
 - `aggregated_through` is the latest event timestamp this rollup
-  aggregated (empty when no events matched). It is a **live-folding
-  watermark**: this endpoint is a one-shot snapshot, so the dashboard
-  treats the response as a baseline and folds subsequent
-  `agent_phase_completed` events streamed over `/ws/stream` onto it,
-  skipping any event at or before the watermark (already counted) to
-  avoid double-counting. This is why the **Token Spend** widget keeps
-  climbing in lock-step with the per-agent rows instead of freezing at
-  the value of the initial fetch.
+  aggregated, and empty when no events matched. It is the rollup's own
+  freshness: the dashboard renders it as "counted through", so a reader
+  looking at a total knows how recent the last thing in it is. It is not a
+  baseline a client folds onto: the whole rollup is re-folded and pushed
+  by the server, which is what keeps one aggregation rather than a second
+  one in the browser.
 - Returns the same skeleton with zero totals (and an empty
   `aggregated_through`) when the event store is unavailable rather than
   erroring.
