@@ -77,13 +77,14 @@ type Service struct {
 
 // Options wire the service.
 type Options struct {
-	// Store holds the revisions. Required — without it there is no
-	// surface, and the routes are not registered at all.
+	// Store holds the revisions. Required: every node that serves this
+	// surface opens one, and [New] refuses to build without it.
 	Store *store.DB
 
-	// Plane publishes the fleet's activation pointer. Required for the
-	// write routes: storing a revision nothing points at activates
-	// nothing, and a caller that got a 201 back would believe otherwise.
+	// Plane publishes the fleet's activation pointer. Required: storing a
+	// revision nothing points at activates nothing, and a caller that got
+	// a 201 back would believe otherwise. Every node holds one, because
+	// the fleet store is opened on every topology.
 	Plane coord.Plane
 
 	// Cipher opens and seals a stored revision. Nil reads plaintext and
@@ -101,40 +102,35 @@ type Options struct {
 	Now func() time.Time
 }
 
-// New builds the service, or nil when there is no store to serve from.
+// New builds the service.
 //
-// Nil rather than an error: a standalone API with no store genuinely has no
-// config surface, and the routes then 404 rather than 500 — which is the
-// honest answer for a process that does not implement them.
-func New(opts Options) *Service {
-	if opts.Store == nil {
-		return nil
+// A MISSING STORE OR PLANE IS REFUSED rather than served as a narrower surface.
+// Both used to be optional, for an API process that ran without the engine's
+// store or coordination: no store left /config unregistered, and no plane made
+// every write answer 503. No process runs that way. `crewlet run` builds this
+// beside an engine that holds both, so a nil here is a wiring mistake, and a
+// surface that quietly shrank around it would hide exactly that.
+func New(opts Options) (*Service, error) {
+	switch {
+	case opts.Store == nil:
+		return nil, errors.New("configapi: Options.Store is required: the revisions " +
+			"live in the node's store, which the engine opens")
+	case opts.Plane == nil:
+		return nil, errors.New("configapi: Options.Plane is required: a revision " +
+			"takes effect only once the fleet's activation pointer names it")
 	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	if opts.Plane == nil {
-		// SAID AT REGISTRATION, because the write routes answer 503
-		// rather than panicking and a 503 with no explanation anywhere
-		// is a support ticket. A standalone API process with no
-		// coordination store genuinely cannot activate anything.
-		log.Warn("config_writes_disabled",
-			"hint", "this process has no coordination store, so /config is read-only")
-	}
 	return &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, queue: opts.Queue, now: now,
-	}
+	}, nil
 }
 
 // Routes registers the surface on the API's mux.
 func (s *Service) Routes(mux *http.ServeMux) {
-	if s == nil {
-		log.Warn("config_surface_disabled",
-			"hint", "this process has no store, so /config is not served here")
-		return
-	}
 	// ONE SUB-MUX BEHIND ONE WRAPPER, so no response under /config can be
 	// written without the Cache-Control below: not a route added later, not
 	// an error path, not the 404 or 405 this mux answers for a path or a
@@ -698,13 +694,6 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var patchErr *PatchError
 	var invalid *ValidationError
 	switch {
-	case errors.Is(err, ErrNoControlPlane):
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no_control_plane",
-			"detail": "this process has no coordination store, so it cannot " +
-				"activate a revision",
-			"hint": "post to a node running the engine",
-		})
 	case errors.Is(err, ErrNoActiveRevision):
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"error": "no_active_revision",

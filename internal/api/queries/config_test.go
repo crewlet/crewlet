@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -42,7 +43,11 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 		}
 		ids = append(ids, id)
 	}
-	return configapi.New(configapi.Options{Store: db}), ids
+	svc, err := configapi.New(configapi.Options{Store: db, Plane: coordmemory.NewFleet()})
+	if err != nil {
+		t.Fatalf("configapi.New: %v", err)
+	}
+	return svc, ids
 }
 
 func TestTheConfigQueryIsOperatorOnly(t *testing.T) {

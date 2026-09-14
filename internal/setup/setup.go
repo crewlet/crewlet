@@ -408,10 +408,11 @@ func IsReference(value string) bool {
 // Present AND resolved, when resolution is knowable. A requirement whose
 // value is written down but did not resolve is the exact state that looks
 // configured from every other surface while the route refuses every
-// delivery, so it is NOT satisfied. Where resolution is unknown, present is
-// the most that can be claimed and it is claimed: refusing to call it
-// satisfied on a standalone API would show every operator a permanent list
-// of things to fix that are already fine.
+// delivery, so it is NOT satisfied. Where resolution is unknown (a caller that
+// passed no resolver, such as a vendor package describing a document it is not
+// running), present is the most that can be claimed and it is claimed:
+// refusing to call it satisfied would show a permanent list of things to fix
+// that are already fine.
 func (r Requirement) Satisfied() bool {
 	if !r.Present {
 		return false

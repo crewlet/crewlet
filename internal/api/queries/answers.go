@@ -42,9 +42,11 @@ const (
 // Sources are what the answers read from.
 //
 // Every field is optional, and an absent one makes its questions report
-// themselves unavailable rather than answer emptily. A standalone API with no
-// store and an engine mid-boot are both real, and "there is no event log here"
-// and "the event log is empty" are answers a screen must be able to tell apart.
+// themselves unavailable rather than answer emptily. A node without a source is
+// a real shape (a company on Jira has no native tracker, one on Confluence no
+// native wiki, one with no embeddings no recall), and "there is no tracker
+// here" and "the tracker is empty" are answers a screen must be able to tell
+// apart.
 type Sources struct {
 	State  *livestate.LiveState
 	Events *store.EventLog
@@ -137,10 +139,11 @@ type Sources struct {
 	Config *configapi.Service
 
 	// Routed names the integrations whose deliveries can wake a seat, or
-	// nil when this process cannot say — a standalone API has no engine to
-	// ask. The app populates it from its NodeRuntime; nil here is not an
-	// error and not "none route", and the integrations answer keeps those
-	// three apart rather than folding them into a boolean.
+	// nil when this node cannot say: an engine mid-boot, or one with no
+	// active revision, has not started its notification service yet. The
+	// app populates it from its NodeRuntime; nil here is not an error and
+	// not "none route", and the integrations answer keeps those three apart
+	// rather than folding them into a boolean.
 	Routed func(ctx context.Context) []string
 
 	// Verifiable names the integrations whose resolved material could
@@ -162,8 +165,8 @@ type Sources struct {
 	// Nil is "cannot say" and an empty slice is "nothing has been
 	// reconciled", exactly as with Routed and Verifiable above. The
 	// integrations answer keeps the two apart rather than folding a
-	// standalone API's silence into a claim that every surface is
-	// unchecked.
+	// coordination store that could not be read into a claim that every
+	// surface is unchecked.
 	Reconciles func(ctx context.Context) []integration.State
 
 	// Work and Pages are this node's projections of the company's own
@@ -208,9 +211,8 @@ type Sources struct {
 	// for every company that writes one, for ever.
 	//
 	// Nil is "cannot say", exactly as with Routed, Verifiable and Reconciles
-	// above: a standalone API has no resolution chain, and a node that
-	// cannot read the value must not be the reason a screen calls a healthy
-	// registration stale.
+	// above: a node that cannot read the value must not be the reason a
+	// screen calls a healthy registration stale.
 	PublicBase func() string
 	// Retention is this node's answer about the state log's own history:
 	// how far each domain's log may be trimmed, what is stopping it, and
@@ -221,8 +223,8 @@ type Sources struct {
 	// this node's own loops, and a document captured when the API was
 	// assembled would name a fleet from before every node it describes
 	// had reported. Nil leaves the question unregistered, which is honest
-	// for a process running no state log — a standalone API has no
-	// applier and no stream to say anything about.
+	// for a node running no state log: it has no applier and no floor to
+	// say anything about.
 	Retention func(ctx context.Context) any
 
 	// NodeID names this node in the fleet answer, so a reader can tell
@@ -706,8 +708,8 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 }
 
 // RoleHandles maps each seat's role name to its handle, for the per-agent
-// rollup's cross-links. Empty when this node has no company — a standalone API
-// links to nothing rather than guessing a handle.
+// rollup's cross-links. Empty when no revision is active, which links to
+// nothing rather than guessing a handle.
 //
 // Exported because the live stream needs the same map for the rollup it
 // pushes: two derivations of "which handle is this role" is how a pushed row

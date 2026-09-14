@@ -183,24 +183,3 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 		t.Errorf("a point was written anyway: %v", register.point)
 	}
 }
-
-// A NODE RUNNING NO STATE LOG SAYS SO rather than writing a point it cannot
-// stamp: the generation belongs to the running log, and this process has none.
-func TestAnAcknowledgementNeedsARunningStateLog(t *testing.T) {
-	t.Parallel()
-	register := &fakeBackupRegister{}
-	b := closedPosture()
-	a := newApp(t, api.Options{Bootstrap: &b, Retention: register})
-
-	code, body := postAck(t, a,
-		"/work/retention/ack?stream=CREWLET_TRACKER_LOG&position=918100000")
-	if code != http.StatusServiceUnavailable {
-		t.Fatalf("the route answered %d: %v", code, body)
-	}
-	if body["error"] != "no_state_log" {
-		t.Errorf("the refusal reads %q", body["error"])
-	}
-	if register.calls != 0 {
-		t.Errorf("a point was written anyway: %v", register.point)
-	}
-}

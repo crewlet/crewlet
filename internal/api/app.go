@@ -7,19 +7,16 @@ import (
 	"io/fs"
 	"net/http"
 	"strconv"
-	"sync/atomic"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
-	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/opsmcp"
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/api/secretsapi"
-	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
@@ -37,16 +34,16 @@ type App struct {
 	state  *livestate.LiveState
 	stream *stream.Service
 
-	// runtime is nil on a standalone API. See NodeRuntime.
+	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
 	nodeID       string
-	startedAt    string
 	queueBackend string
 
 	// events is the node's own log, for the ONE thing this package does
 	// with it outside the read registry: seeding the live spend window at
-	// boot. Nil on a process with no store, which simply starts empty.
+	// boot. Required, like every other estate the engine beside this
+	// process opens.
 	events *store.EventLog
 
 	// now is the clock, shared with the stream service so a hydration
@@ -57,18 +54,15 @@ type App struct {
 	queries *queries.Registry
 
 	// budgets is the fleet's token counter, for the one route that WRITES
-	// to it. Nil on a standalone API with no coordination store, which
-	// that route reports rather than hides.
+	// to it.
 	budgets budgetResetter
 
-	// backup takes a copy of this node's durable state. Nil on a process
-	// holding neither a store nor a broker, which that route reports
-	// rather than hides.
+	// backup takes a copy of this node's durable state.
 	backup backupTaker
 
 	// retention is the fleet's own record of what the log may delete, for
 	// the one gesture that WRITES to it: an operator's backup
-	// acknowledgement. Nil on a standalone API with no coordination store.
+	// acknowledgement.
 	retention retentionWriter
 
 	// nodes installs and lifts the eviction gate. A RECORD on the log
@@ -84,40 +78,66 @@ type App struct {
 	purger TaskPurger
 
 	// capacity drives a stream's byte ceiling through the maintenance
-	// window. Nil on a process with no state log — and on one that is
-	// publishing, the verb refuses rather than the route being absent,
-	// because "you are in the wrong mode" is the answer an operator needs.
+	// window. On a node that is publishing the verb refuses rather than
+	// the route being absent, because "you are in the wrong mode" is the
+	// answer an operator needs.
 	capacity capacityRunner
 
-	// configured flips once a company revision is active. Atomic because
-	// the config refresher sets it from its own goroutine while every
-	// health probe reads it.
-	configured atomic.Bool
-
-	// isConfigured is the live answer when this process holds an engine.
-	// Nil for one that does not, which falls back to the flag above.
-	isConfigured func() bool
+	// company reads the engine's CURRENT epoch, which is what
+	// [App.Configured] asks.
+	company func() *config.Company
 
 	handler http.Handler
 }
 
+// routeMounter is what the API needs of a surface it mounts and never calls
+// otherwise: its routes.
+//
+// Declared here, by the consumer, so a test can mount an inert one without
+// standing up the store, the plane or the keyring the real surface is built
+// from.
+type routeMounter interface {
+	Routes(mux *http.ServeMux)
+}
+
 // Options configure the app.
+//
+// # What is required, and why a nil is refused rather than served around
+//
+// Runtime, Sources.Company, Sources.Events, the Inbound edge's Publisher,
+// Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets, Retention,
+// Capacity and Backup are REQUIRED, and [New] refuses a missing one by name.
+//
+// Each used to be optional, for a "standalone API": a process serving this
+// surface with no engine beside it, and so with no runtime to ask, no store and
+// no coordination plane. Every nil had a narrower answer built around it (a
+// health body with engine=false, a 503 naming no_coordination_store, an absent
+// /config) and no process ever took any of them: `crewlet run` is the only
+// thing that builds an App, it builds one beside an engine that holds all of
+// these, and a node that serves no API (api.port 0) builds none at all. So a
+// nil here is a wiring mistake, and a narrower answer built around it hides
+// that mistake behind something an operator reads as deliberate.
+//
+// What stays optional is what a real node can lack: a native tracker (a company
+// on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
+// unset environment variable), and the defaults a test injects.
 type Options struct {
 	// Bootstrap supplies the auth posture and the node's identity. Nil is
 	// permitted and is not the same as absent config: the guard then
 	// refuses every write, because nobody has said who may make one.
 	Bootstrap *config.Bootstrap
 
-	// Runtime is the co-located engine, or nil for a standalone API.
+	// Runtime is the engine this process runs beside.
 	Runtime NodeRuntime
 
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
-	// Sources are what the read surface answers from. A source left nil
-	// makes its questions UNREGISTERED rather than failing — the honest
-	// answer for a node that does not have that surface at all, and
-	// distinct from an empty one.
+	// Sources are what the read surface answers from. Company and Events
+	// are required; see above. Any other source left nil makes its
+	// questions UNREGISTERED rather than failing, which is the honest
+	// answer for a node that does not have that surface at all (no
+	// knowledge backend, no native tracker) and distinct from an empty one.
 	Sources queries.Sources
 
 	// QueueBackend names the broker, for the health body.
@@ -129,34 +149,30 @@ type Options struct {
 	// HealthInterval overrides the shared tick's cadence.
 	HealthInterval time.Duration
 
-	// Inbound wires the webhook edge. Zero means this process serves no
-	// webhook endpoint — see [Inbound].
+	// Inbound wires the webhook edge. See [Inbound].
 	Inbound Inbound
 
-	// Config serves /config. Nil serves none, which is what a process with
-	// no store genuinely has.
-	Config *configapi.Service
+	// Config serves /config, normally a configapi.Service.
+	Config routeMounter
 
-	// Setup serves /setup: collecting what an integration still needs and
-	// writing it, half into the sealed store and half into the company
-	// document. Nil serves none, which is what a process with no company
-	// configuration has to answer.
-	Setup *setupapi.Service
+	// Setup serves /setup, normally a setupapi.Service: collecting what
+	// an integration still needs and writing it, half into the sealed store
+	// and half into the company document.
+	Setup routeMounter
 
-	// Secrets serves /secrets — the fleet's credential store. Nil serves
-	// none, which is what a process that cannot reach the coordination
-	// store genuinely has; the routes then 404 rather than 500.
-	Secrets *secretsapi.Service
+	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
+	// credential store.
+	Secrets routeMounter
 
 	// OtelReceiver serves the sandbox telemetry edge. Nil serves none, and
 	// the route is then ABSENT rather than refusing — an endpoint that
 	// exists and answers 503 to everything reads as broken, while one that
 	// is not there matches what the config says.
 	//
-	// It belongs to the API rather than to the engine because in a SPLIT
-	// deployment this is the externally reachable process: the engine
-	// mints a run's endpoint, and a different process verifies the token.
-	// That is why the token is signed rather than stored.
+	// It belongs to the API rather than to the engine because the route is
+	// served by whichever node the box can reach, which need not be the
+	// node whose engine minted the endpoint. That is why the token is
+	// signed rather than stored.
 	OtelReceiver *sandbox.OtelReceiver
 
 	// Bridge serves a running seat's tool surface to a coding agent over
@@ -187,8 +203,7 @@ type Options struct {
 	Budgets budgetResetter
 
 	// Retention is the fleet's record of what the log may delete, for the
-	// operator's backup acknowledgement. Nil leaves that route answering
-	// 503 rather than 404 — the route exists on this build.
+	// operator's backup acknowledgement.
 	Retention retentionWriter
 
 	// Nodes installs and lifts the eviction gate. Nil leaves the evict and
@@ -199,13 +214,11 @@ type Options struct {
 	// purge route unmounted.
 	Purger TaskPurger
 
-	// Capacity drives a stream's byte ceiling. Nil leaves the maintenance
-	// routes answering 503.
+	// Capacity drives a stream's byte ceiling.
 	Capacity capacityRunner
 
 	// Backup copies this node's durable state to a path an operator
-	// names. Nil where there is nothing to copy — a process running
-	// neither a store nor a broker — which the route reports as such.
+	// names.
 	Backup backupTaker
 
 	// Assets overrides the embedded dashboard tree. Nil serves the one
@@ -215,12 +228,16 @@ type Options struct {
 	Assets fs.FS
 }
 
-// New assembles the app.
+// New assembles the app, or refuses a missing required dependency by name.
+// See [Options] for which are required and why.
 //
 // The auth guard is mounted UNCONDITIONALLY. Tier A supplies the posture, never
 // the existence of a check — see the auth package for what the alternative
 // costs.
-func New(opts Options) *App {
+func New(opts Options) (*App, error) {
+	if err := opts.missing(); err != nil {
+		return nil, err
+	}
 	now := opts.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -235,20 +252,17 @@ func New(opts Options) *App {
 		state:        state,
 		runtime:      opts.Runtime,
 		nodeID:       nodeIDOf(opts.Bootstrap),
-		startedAt:    nowISO(now()),
 		queueBackend: opts.QueueBackend,
 		events:       opts.Sources.Events,
 		now:          now,
+		// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a
+		// second field an embedder could set inconsistently with it:
+		// Sources.Company reads the CURRENT epoch, and "is there one" is
+		// the whole question [App.Configured] asks.
+		company: opts.Sources.Company,
 	}
-	// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a second
-	// field an embedder could set inconsistently with it: Sources.Company
-	// reads the CURRENT epoch, and "is there one" is the whole question
-	// [App.Configured] asks. A process that supplies no company source has
-	// no engine to ask and keeps the stored flag.
-	if opts.Sources.Company != nil {
-		a.isConfigured = func() bool { return opts.Sources.Company() != nil }
-	}
-	a.stream = stream.NewService(state, stream.Options{
+	var err error
+	a.stream, err = stream.NewService(state, stream.Options{
 		Health: a.streamHealth,
 		// Read through the SOURCES rather than captured, for the same
 		// reason every other read here is: a config apply replaces the
@@ -268,6 +282,9 @@ func New(opts Options) *App {
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("api: %w", err)
+	}
 
 	tree := opts.Assets
 	if tree == nil {
@@ -285,19 +302,14 @@ func New(opts Options) *App {
 	if sources.State == nil {
 		sources.State = state
 	}
-	// Only a co-located engine knows which parsers registered. Left nil on
-	// a standalone API, which is the honest answer rather than a confident
-	// empty list.
-	if sources.Routed == nil && opts.Runtime != nil {
-		sources.Routed = func(ctx context.Context) []string {
-			return opts.Runtime.Snapshot(ctx).RoutedSources
-		}
+	// Only the engine knows which parsers registered and what its ${VAR}s
+	// resolved to, so both are read off the runtime rather than taken from
+	// the caller: one source for each, and the one that actually knows.
+	sources.Routed = func(ctx context.Context) []string {
+		return opts.Runtime.Snapshot(ctx).RoutedSources
 	}
-	// And only a co-located engine knows what its ${VAR}s resolved to.
-	if sources.Verifiable == nil && opts.Runtime != nil {
-		sources.Verifiable = func(ctx context.Context) []string {
-			return opts.Runtime.Snapshot(ctx).VerifiableSources
-		}
+	sources.Verifiable = func(ctx context.Context) []string {
+		return opts.Runtime.Snapshot(ctx).VerifiableSources
 	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
@@ -348,7 +360,9 @@ func New(opts Options) *App {
 	// The inbound edge. Exempt from the guard by prefix (see the auth
 	// package) because each route authenticates by provider credential,
 	// which is why every one of them verifies before it does anything.
-	a.mountWebhooks(mux, opts.Inbound, sources, now)
+	if err := a.mountWebhooks(mux, opts.Inbound, sources, now); err != nil {
+		return nil, err
+	}
 	// The SANDBOX TELEMETRY edge, exempt by the same prefix rule and for
 	// the same reason: the exporter inside a box holds no API token, and
 	// giving it one would hand a sandbox the credential that reads the
@@ -387,21 +401,55 @@ func New(opts Options) *App {
 	// refuses: see [App.drainGate].
 	a.cors = auth.NewCORS(opts.Bootstrap)
 	a.handler = pagepolicy.Apply(a.cors.Middleware(a.guard.Middleware(a.drainGate(mux))))
-	return a
+	return a, nil
+}
+
+// missing names every required dependency these options leave nil, or reports
+// nil when there is none. See [Options] for why each is required.
+func (o Options) missing() error {
+	var names []string
+	for _, field := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Runtime", o.Runtime == nil},
+		{"Sources.Company", o.Sources.Company == nil},
+		{"Sources.Events", o.Sources.Events == nil},
+		{"Inbound.Publisher", o.Inbound.Publisher == nil},
+		{"Inbound.Claims", o.Inbound.Claims == nil},
+		{"Inbound.Secrets", o.Inbound.Secrets == nil},
+		{"Inbound.AppFlow", o.Inbound.AppFlow == nil},
+		{"Config", o.Config == nil},
+		{"Secrets", o.Secrets == nil},
+		{"Setup", o.Setup == nil},
+		{"Budgets", o.Budgets == nil},
+		{"Retention", o.Retention == nil},
+		{"Capacity", o.Capacity == nil},
+		{"Backup", o.Backup == nil},
+	} {
+		if field.absent {
+			names = append(names, "Options."+field.name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return fmt.Errorf("api: %s required: every process that serves the API "+
+		"runs the engine that supplies them, so a missing one is a wiring "+
+		"mistake rather than a narrower node", strings.Join(names, ", "))
 }
 
 // Inbound is what the webhook edge needs that only the surrounding process
 // has: somewhere to republish a delivery, the epoch's verification material,
 // and the cross-process dedupe.
 //
-// The rest of what the edge needs — the event log, the live stream, whether a
-// revision is active, the clock — comes from the app itself, so those cannot be
+// The rest of what the edge needs (the event log, the live stream, whether a
+// revision is active, the clock) comes from the app itself, so those cannot be
 // wired differently here than they are everywhere else on this node.
 //
-// A nil Publisher turns the edge OFF, and it is the one field that decides it:
-// the edge exists exactly when there is a queue to republish onto, because
-// recording a delivery that never reaches an agent is worse than not accepting
-// it.
+// Publisher, Claims, Secrets and AppFlow are required; see [Options]. The edge
+// is mounted on every node that serves the API, because every such node runs
+// the queue a delivery is republished onto.
 type Inbound struct {
 	Secrets   func() webhooks.Secrets
 	Publisher queue.Publisher
@@ -409,10 +457,9 @@ type Inbound struct {
 
 	// AppFlow finishes a GitHub App creation begun on the setup surface.
 	//
-	// Threaded from the caller rather than built here because it holds the
-	// setup service, and the redirect URL baked into every app this engine
-	// creates points at the webhook mux. Nil serves the landing page with
-	// an honest refusal rather than a 404.
+	// Threaded from the caller rather than built here because it belongs to
+	// the setup service (setupapi.Service.AppFlow), and the redirect URL
+	// baked into every app this engine creates points at the webhook mux.
 	AppFlow webhooks.AppCompleter
 
 	// Recheck asks the reconcile loop to look at GitHub immediately, when
@@ -426,20 +473,9 @@ type Inbound struct {
 	Keys webhooks.KeySource
 }
 
-// mountWebhooks registers the inbound edge, or says why it did not.
-//
-// Silence is the failure mode here: an operator whose integration never fires
-// has no way to tell a misconfigured provider from a node that never had the
-// endpoint, and the webhook is the only surface where "nothing happened" is
-// the normal appearance of both.
-func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sources, now func() time.Time) {
-	if in.Publisher == nil {
-		log.Warn("webhooks_disabled",
-			"hint", "this process has no event queue, so it serves no webhook "+
-				"endpoint and every integration pointed at it will 404")
-		return
-	}
-	webhooks.New(webhooks.Options{
+// mountWebhooks registers the inbound edge.
+func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sources, now func() time.Time) error {
+	receiver, err := webhooks.New(webhooks.Options{
 		Secrets:    in.Secrets,
 		Publisher:  in.Publisher,
 		Claims:     in.Claims,
@@ -450,7 +486,12 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 		Stream:     a.stream,
 		Configured: a.Configured,
 		Now:        now,
-	}).Routes(mux)
+	})
+	if err != nil {
+		return fmt.Errorf("api: %w", err)
+	}
+	receiver.Routes(mux)
+	return nil
 }
 
 func nodeIDOf(b *config.Bootstrap) string {
@@ -478,28 +519,13 @@ func (a *App) CORS() *auth.CORS { return a.cors }
 
 // Configured reports whether a company revision is active.
 //
-// THROUGH THE SEAM WHEN THERE IS ONE, so this cannot go stale. An embedded
-// node hands over a function reading the engine's live epoch, which is the
-// only thing that actually knows: an apply can make a node configured, and a
-// flag pushed at startup would have said "yes" from the first boot and never
-// been corrected — which is exactly what it did, unconditionally, leaving the
-// unconfigured posture below unreachable in the shipped binary.
-//
-// The stored flag remains for a process with no engine to ask.
-func (a *App) Configured() bool {
-	if a.isConfigured != nil {
-		return a.isConfigured()
-	}
-	return a.configured.Load()
-}
-
-// SetConfigured records that a revision applied, or stopped being active.
-//
-// For a process that has no engine to ask; an app built with the seam above
-// ignores it. Load-bearing on readiness: an unconfigured node cannot verify a
-// webhook signature, so it must leave rotation rather than answer deliveries
-// it would only reject.
-func (a *App) SetConfigured(v bool) { a.configured.Store(v) }
+// READ THROUGH THE ENGINE'S LIVE EPOCH on every call, so it cannot go stale. A
+// flag pushed at startup said "yes" from the first boot and was never
+// corrected, which left the unconfigured posture below unreachable in the
+// shipped binary. Load-bearing on readiness: an unconfigured node cannot
+// verify a webhook signature, so it must leave rotation rather than answer
+// deliveries it would only reject.
+func (a *App) Configured() bool { return a.company() != nil }
 
 // Start brings up the shared health tick.
 //

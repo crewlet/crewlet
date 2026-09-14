@@ -360,11 +360,6 @@ func (r *Receiver) githubAppLanding(w http.ResponseWriter, req *http.Request) {
 				"to look immediately."
 		}
 
-	case r.appFlow == nil:
-		view.Heading, status = "App not created", http.StatusServiceUnavailable
-		view.Error = "This engine cannot finish creating an app: it has no setup " +
-			"surface. The app exists at GitHub and should be deleted there."
-
 	case strings.TrimSpace(q.Get("code")) == "":
 		view.Heading, status = "App not created", http.StatusBadRequest
 		view.Error = "GitHub did not send a code, so there is nothing to convert."

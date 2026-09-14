@@ -869,13 +869,14 @@ integrations:
 	}
 }
 
-// AND A PROCESS THAT CANNOT SEE AN ENGINE DOES NOT GUESS.
-func TestAnApiWithNoEngineCannotSayWhatResolved(t *testing.T) {
+// AND A NODE THAT HAS RESOLVED NOTHING YET DOES NOT GUESS.
+func TestANodeThatCannotSayWhatResolvedAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		// No Verifiable: the standalone shape.
+		// No Verifiable: the shape of a node whose engine has not started
+		// its notification service yet.
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -896,16 +897,16 @@ func TestAnApiWithNoEngineCannotSayWhatResolved(t *testing.T) {
 
 // NOT KNOWING IS NOT KNOWING NOTHING.
 //
-// A standalone API has no co-located engine to ask which parsers registered,
-// so it answers null rather than false. Reporting false would tell an
-// operator their integrations are broken on the one deployment shape that
-// cannot see them.
-func TestAnApiWithNoEngineCannotSayWhatRoutes(t *testing.T) {
+// A node whose notification service has not started cannot say which parsers
+// registered, so it answers null rather than false. Reporting false would tell
+// an operator their integrations are broken over a window that closes on its
+// own.
+func TestANodeThatCannotSayWhatRoutesAnswersNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
 	body := asMap(t, answer(t, queries.Sources{
 		Company: func() *config.Company { return cfg },
-		// No Routed: the standalone shape.
+		// No Routed: nothing has registered a parser yet.
 	}, "integrations", nil))
 
 	rows, _ := body["integrations"].([]any)
@@ -1233,10 +1234,11 @@ func TestAnUnreadableEventLogReportsNullOutcomes(t *testing.T) {
 // THE THREE-VALUED RECONCILE FIELD, and the third value is the one that took
 // a subsystem to be able to say at all.
 //
-// A standalone API has no loop to ask, and reporting that as "no surface has
-// been reconciled" would put an alarming claim on a screen that had asked the
-// wrong node. So null is "cannot say", an absent entry is "the loop has not
-// reached this surface yet", and a present one is a real finding.
+// A node that could not read the fleet's rows has no findings to report, and
+// rendering that as "no surface has been reconciled" would put an alarming
+// claim on a screen over a store that was briefly unreachable. So null is
+// "cannot say", an absent entry is "the loop has not reached this surface
+// yet", and a present one is a real finding.
 func TestIntegrationsCarriesWhatTheReconcileLoopFound(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)
@@ -1514,10 +1516,10 @@ func TestAReferencePublicBaseIsComparedResolved(t *testing.T) {
 
 // AND A PROCESS THAT CANNOT READ THE ADDRESS SAYS NOTHING, rather than false.
 //
-// A standalone API has no resolution chain, so it cannot know what the current
-// address is. Answering false there would report every registration as stale
-// on the strength of a value this process never had — the same three-valued
-// rule Routed, Verifiable and Reconciles already follow.
+// A node that cannot read the address cannot know what the current one is.
+// Answering false there would report every registration as stale on the
+// strength of a value this node never had, which is the same three-valued rule
+// Routed, Verifiable and Reconciles already follow.
 func TestAnUnknowablePublicBaseLeavesTheAnswerNull(t *testing.T) {
 	t.Parallel()
 	cfg := company(t)

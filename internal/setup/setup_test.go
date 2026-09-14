@@ -197,8 +197,8 @@ func TestSatisfiedNeedsBothHalves(t *testing.T) {
 		{"present and resolved", setup.Requirement{Present: true, Resolved: boolPtr(true)}, true},
 		{"present and unresolved", setup.Requirement{Present: true, Resolved: boolPtr(false)}, false},
 		// Where resolution is unknown, present is the most that can be
-		// claimed and it is claimed: a standalone API must not show a
-		// permanent list of things to fix that are already fine.
+		// claimed and it is claimed: a reader with no resolver must not
+		// show a permanent list of things to fix that are already fine.
 		{"present, cannot say", setup.Requirement{Present: true}, true},
 	}
 	for _, tc := range cases {

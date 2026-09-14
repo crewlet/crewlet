@@ -88,24 +88,6 @@ type TaskPurger interface {
 // call naming neither is refused rather than guessed at, because guessing here
 // moves the floor the trim deletes against.
 func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
-	if a.retention == nil {
-		// A standalone API with no coordination store. 503 rather than
-		// 404, on this surface's own rule: the route EXISTS on this
-		// build, and a 404 sends an operator looking for a version
-		// mismatch that is not there.
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_coordination_store"})
-		return
-	}
-	if a.capacity == nil {
-		// AND THE OTHER HALF OF THE GESTURE. The generation a point is
-		// stamped with belongs to the RUNNING log — see [App.generationOf]
-		// — so a process holding no state log has nothing to stamp it
-		// from, and 503 rather than 404 for the reason above it.
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_state_log"})
-		return
-	}
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
 	if stream == "" || err != nil || position == 0 {
@@ -427,11 +409,6 @@ func (a *App) mountCapacity(mux *http.ServeMux) {
 // thing I am re-anchoring": a verb that printed the value and accepted it back
 // in one call would be confirming against its own output.
 func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
-	if a.capacity == nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_state_log"})
-		return
-	}
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
 		writeJSON(w, http.StatusBadRequest,
@@ -451,11 +428,6 @@ func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 
 // serveReanchor answers POST /work/retention/reanchor.
 func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
-	if a.capacity == nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_state_log"})
-		return
-	}
 	stream, confirm := r.URL.Query().Get("stream"), r.URL.Query().Get("confirm")
 	if stream == "" || confirm == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -486,11 +458,6 @@ func (a *App) serveReanchor(w http.ResponseWriter, r *http.Request) {
 
 // serveSetCapacity answers POST /work/retention/capacity.
 func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
-	if a.capacity == nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_state_log"})
-		return
-	}
 	stream := r.URL.Query().Get("stream")
 	target, err := strconv.ParseUint(r.URL.Query().Get("bytes"), 10, 64)
 	if stream == "" || err != nil || target == 0 {
@@ -536,11 +503,6 @@ func (a *App) serveSetCapacity(w http.ResponseWriter, r *http.Request) {
 
 // serveMaintenanceStatus answers GET /work/retention/maintenance.
 func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
-	if a.capacity == nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_state_log"})
-		return
-	}
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
 		writeJSON(w, http.StatusBadRequest,
@@ -601,11 +563,6 @@ func (a *App) serveExclude(w http.ResponseWriter, r *http.Request) {
 func (a *App) capacityGesture(w http.ResponseWriter, r *http.Request, what string,
 	run func(context.Context, string) (coord.MaintenanceOperation, error)) {
 
-	if a.capacity == nil {
-		writeJSON(w, http.StatusServiceUnavailable,
-			map[string]string{"error": "no_state_log"})
-		return
-	}
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
 		writeJSON(w, http.StatusBadRequest,

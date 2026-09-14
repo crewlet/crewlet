@@ -256,12 +256,12 @@ func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 
 func TestAQuestionWithNoSourceIsUnknownRatherThanEmpty(t *testing.T) {
 	t.Parallel()
-	// A dashboard drawing "no events" for "this node has no event log"
-	// would report a quiet company during a misconfiguration.
+	// A dashboard drawing "no pages" for "this company keeps its knowledge
+	// base somewhere else" would report an empty wiki that is not empty.
 	a := newApp(t, api.Options{})
-	status, body := overREST(t, a, "events", nil)
+	status, body := overREST(t, a, "pages", nil)
 	if status != http.StatusNotFound {
-		t.Errorf("status = %d, want 404 with no event log wired", status)
+		t.Errorf("status = %d, want 404 with no native knowledge base wired", status)
 	}
 	if got := body.(map[string]any)["error"]; got != "unknown_query" {
 		t.Errorf("error = %v", got)

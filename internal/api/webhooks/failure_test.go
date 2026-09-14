@@ -72,31 +72,39 @@ func TestAFailedStoreWriteDoesNotFailTheDelivery(t *testing.T) {
 	}
 }
 
-func TestAReceiverWiredToNothingRefusesRatherThanPanics(t *testing.T) {
+// A RECEIVER IS REFUSED, BY NAME, FOR EVERY DEPENDENCY THE ENGINE SUPPLIES.
+//
+// Each used to have a defined absence (no secrets verified nothing, no claim
+// registry deduplicated nothing, no configured flag read as serving) for a
+// receiver built with nothing beside it. No process builds one that way, and a
+// receiver that did less around a nil turned a wiring mistake into a duplicate
+// turn or an empty feed that looked like a quiet company.
+func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 	t.Parallel()
-	// A zero Options is what an embedder writes first. Every field it
-	// leaves out has a defined absence — no secrets is "cannot verify",
-	// no clock is the wall clock, no configured flag is "serving" — and
-	// none of them may be a nil dereference on the request path.
-	mux := http.NewServeMux()
-	webhooks.New(webhooks.Options{}).Routes(mux)
-
-	req := httptest.NewRequest(http.MethodPost, "/webhooks/github",
-		strings.NewReader(`{"action":"opened"}`))
-	res := httptest.NewRecorder()
-	mux.ServeHTTP(res, req)
-	if res.Code != http.StatusServiceUnavailable {
-		t.Fatalf("got %d, want 503 — a receiver with no secrets can verify nothing", res.Code)
+	_, err := webhooks.New(webhooks.Options{})
+	if err == nil {
+		t.Fatal("a receiver wired to nothing was built")
+	}
+	for _, field := range []string{
+		"Secrets", "Publisher", "Events", "Claims", "Stream", "Configured", "AppFlow",
+	} {
+		if !strings.Contains(err.Error(), "Options."+field) {
+			t.Errorf("the refusal does not name Options.%s: %v", field, err)
+		}
 	}
 }
 
-func TestTheOAuthLandingIsStillReachableWithNothingWired(t *testing.T) {
+func TestTheOAuthLandingIsReachableBeforeAnythingIsConfigured(t *testing.T) {
 	t.Parallel()
 	// It holds no secret and touches no dependency, so it is the one route
-	// that must work on a receiver wired to nothing: an operator reaches it
-	// mid-install, before anything else is configured.
-	mux := http.NewServeMux()
-	webhooks.New(webhooks.Options{}).Routes(mux)
+	// that must work on a node with no active revision and no secret set:
+	// an operator reaches it mid-install, before anything else is
+	// configured.
+	e := newEdge(t, func(o *webhooks.Options) {
+		o.Secrets = func() webhooks.Secrets { return webhooks.Secrets{} }
+		o.Configured = func() bool { return false }
+	})
+	mux := e.mux
 
 	// THE CLI'S ARRIVAL carries the handle in `state`, which is what its
 	// authorize URL puts there, and there is a prompt waiting on the code.

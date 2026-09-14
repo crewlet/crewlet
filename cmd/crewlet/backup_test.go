@@ -115,16 +115,17 @@ func TestBackupRefusesARelativeDestinationLocally(t *testing.T) {
 	}
 }
 
-// A node holding only one estate produces something that is NOT a restorable
-// backup, and the command has to say so — the manifest alone shows a dash
-// that reads as "nothing to back up" rather than "this is incomplete".
-func TestBackupSaysWhenANodeHoldsOnlyPartOfTheState(t *testing.T) {
+// A node whose broker is somebody else's produces something that is NOT a
+// restorable backup on its own, and the command has to say so: the manifest
+// alone shows a dash that reads as "nothing to back up" rather than "the rest
+// of this lives on the cluster".
+func TestBackupSaysWhenTheStreamEstateIsNotInTheCopy(t *testing.T) {
 	node := newBackupNode(t)
 	node.answer = map[string]any{
 		"taken_at": "2026-08-30T12:00:00Z", "finished_at": "2026-08-30T12:00:01Z",
-		"node_id": "ingress-1",
-		"streams": []map[string]any{
-			{"name": "CREWLET_AGENT", "file": "streams/a.snapshot", "bytes": 10, "messages": 1},
+		"node_id": "node-1",
+		"stores": []map[string]any{
+			{"estate": "node", "file": "store.db", "bytes": 2048, "migrations": []string{"0001"}},
 		},
 	}
 	stdout, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/tmp/partial")
@@ -134,18 +135,21 @@ func TestBackupSaysWhenANodeHoldsOnlyPartOfTheState(t *testing.T) {
 	if !strings.Contains(stdout, "only part of the deployment's state") {
 		t.Errorf("a partial backup was reported as a whole one:\n%s", stdout)
 	}
+	if !strings.Contains(stdout, "nats account backup") {
+		t.Errorf("the note does not say where the rest of the state is:\n%s", stdout)
+	}
 }
 
 // The node refusing is reported as the node's answer, not swallowed.
 func TestBackupReportsANodeThatCannotTakeOne(t *testing.T) {
 	node := newBackupNode(t)
 	node.status = http.StatusServiceUnavailable
-	node.answer = map[string]any{"error": "nothing_to_back_up"}
+	node.answer = map[string]any{"error": "backup_failed"}
 	_, _, err := cli(t, "backup", bootstrapForURL(t, node.server.URL), "-dir", "/tmp/x")
 	if err == nil {
 		t.Fatal("a 503 was reported as a successful backup")
 	}
-	if !strings.Contains(err.Error(), "nothing_to_back_up") {
+	if !strings.Contains(err.Error(), "backup_failed") {
 		t.Errorf("the node's reason was lost: %v", err)
 	}
 }

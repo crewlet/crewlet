@@ -302,15 +302,14 @@ const (
 	OtelUpstreamHeadersVar  = "OTEL_EXPORTER_OTLP_HEADERS"
 )
 
-// BuildOtelReceiver is THE construction path, called by the engine and by a
-// standalone API alike.
+// BuildOtelReceiver is THE construction path, called by every engine.
 //
-// Both need one and for different halves: the engine MINTS a run's endpoint,
-// and whichever process is externally reachable VERIFIES the token. A
-// deployment where only one of them built a receiver answered 401 to every
-// export while its config looked complete — which is the failure the signed,
-// stateless token exists to prevent, and it cannot prevent it if one side
-// never constructs the verifier.
+// A run's endpoint is minted by the engine that launched it, and the token is
+// verified by whichever node the box exports to, which on a fleet need not be
+// the same one. A node that built no receiver answers 401 to every export
+// while its config looks complete, which is the failure the signed, stateless
+// token exists to prevent, and it cannot prevent it if the verifying side
+// never constructs one.
 //
 // keyMaterial is the Tier A keyring, which every process already loads. Nil
 // or empty takes a per-process key: correct for a single process, and warned

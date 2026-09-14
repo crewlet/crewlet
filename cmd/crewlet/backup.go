@@ -123,14 +123,23 @@ func runBackup(args []string, stdout, stderr io.Writer) error {
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	if len(manifest.Stores) == 0 || len(manifest.Streams) == 0 {
+	if len(manifest.Streams) == 0 {
 		// Said plainly rather than left to be inferred from a dash: a
-		// backup missing an estate is not restorable on its own, and an
-		// operator running this against an ingress node would otherwise
-		// file the output as a backup of their company.
-		fmt.Fprintln(stdout, "\nThis node holds only part of the deployment's state. "+
-			"A restorable backup needs both estates — take this against a node "+
-			"running seats or workers.")
+		// backup of the store alone is not restorable on its own, and an
+		// operator would otherwise file the output as a backup of their
+		// company.
+		//
+		// THE ONE NODE SHAPE THAT PRODUCES IT is one that dialled an
+		// external NATS cluster: the queue owns that connection, so the
+		// engine has none to snapshot the streams over and they are
+		// backed up at the cluster instead. Every node holds its own
+		// store, whatever its roles, so the other half is never the
+		// missing one.
+		fmt.Fprintln(stdout, "\nThis node holds only part of the deployment's state: "+
+			"its stream estate lives on the external NATS cluster it dialled. "+
+			"Back that up there, from the same moment as this copy "+
+			"(`nats account backup`), or take backups on a node running the "+
+			"embedded stream.")
 	}
 	return nil
 }

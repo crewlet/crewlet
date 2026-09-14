@@ -213,30 +213,31 @@ type StoreArtifact struct {
 
 // Options configures a [Service].
 type Options struct {
-	// Store is this node's database. Nil on a node running without one,
-	// which is a real deployment — the backup then covers the stream
-	// estate alone and says so in the manifest.
+	// Store is this node's database. Required: every node opens one, and
+	// [New] refuses to build without it.
 	Store *store.DB
 
-	// Conn is the broker connection the streams are snapshotted over. Nil
-	// when this process has none, which is the standalone API case.
+	// Conn is the broker connection the streams are snapshotted over.
+	//
+	// Nil on a node that DIALLED an external NATS cluster, which is a real
+	// deployment: the stream estate then belongs to that cluster and is
+	// backed up there, with `nats account backup`, so the manifest holds
+	// the store copies and no streams. The CLI says so when it prints one.
 	Conn *nats.Conn
 
 	// NodeID names the node in the manifest.
 	NodeID string
 
-	// Holds is the fleet's trim-hold register. Nil on a process with no
-	// coordination, which is the standalone API case.
+	// Holds is the fleet's trim-hold register. Required: every node opens
+	// the fleet store, and [New] refuses to build without it.
 	//
-	// WITHOUT IT THE BACKUP STILL RUNS, and the assertion is what makes
-	// that safe: a trim that raced the copy is caught and the manifest is
-	// refused, so the outcome is a failed backup rather than an
-	// unrestorable one. The hold is what makes the race not happen; the
-	// assertion is what makes its absence loud.
+	// The hold is what makes the race with the trim not happen; the
+	// assertion (see the package doc) is what makes a hold that failed
+	// loud, as a refused backup rather than an unrestorable one.
 	Holds coord.HoldRegister
 
-	// Backups is where a finished copy is announced to the fleet. Nil on a
-	// process with no coordination, exactly as Holds is.
+	// Backups is where a finished copy is announced to the fleet. Required,
+	// exactly as Holds is.
 	//
 	// WITHOUT IT THE TRIM CANNOT ADVANCE AT ALL, which is why it is here
 	// rather than left to a caller: the trim's backup term refuses to
@@ -256,7 +257,7 @@ type Options struct {
 	Now func() time.Time
 }
 
-// Service takes backups. Nil when nothing on this node can be backed up.
+// Service takes backups.
 type Service struct {
 	store   *store.DB
 	conn    *nats.Conn
@@ -280,16 +281,26 @@ const HoldPurpose = "backup"
 // ignore a live backup's pin, which is the bug the pin exists to prevent.
 const HoldHeartbeat = statelog.TrimHoldStale / 4
 
-// New builds the service, or returns nil when there is nothing to back up.
+// New builds the service.
 //
-// NIL RATHER THAN AN EMPTY SERVICE, matching the other optional surfaces in
-// this tree: a process with neither a store nor a broker cannot produce a
-// backup of anything, and a service that cheerfully wrote a manifest
-// describing nothing would be the worst possible answer — an operator would
-// have a file that says "backup" and no data.
-func New(opts Options) *Service {
-	if opts.Store == nil && opts.Conn == nil {
-		return nil
+// A MISSING STORE, HOLD REGISTER OR BACKUP REGISTER IS REFUSED. Each used to be
+// optional, for an API process that ran with no store or no coordination: no
+// store backed up the streams alone, no registers skipped the pin and the
+// announcement. No process runs that way. `crewlet run` builds this beside an
+// engine holding all three, so a nil is a wiring mistake, and a backup that
+// quietly did less around it would be an artefact the trim cannot see or one
+// missing the node's own estate.
+func New(opts Options) (*Service, error) {
+	switch {
+	case opts.Store == nil:
+		return nil, errors.New("backup: Options.Store is required: a node's " +
+			"backup starts with its own store, which the engine opens")
+	case opts.Holds == nil:
+		return nil, errors.New("backup: Options.Holds is required: without the " +
+			"fleet's trim-hold register the trim can delete what the copy needs")
+	case opts.Backups == nil:
+		return nil, errors.New("backup: Options.Backups is required: a copy the " +
+			"fleet is never told about is one the trim can never advance against")
 	}
 	now := opts.Now
 	if now == nil {
@@ -297,7 +308,7 @@ func New(opts Options) *Service {
 	}
 	return &Service{store: opts.Store, conn: opts.Conn, holds: opts.Holds,
 		backups: opts.Backups, nodeID: opts.NodeID, metrics: opts.Metrics,
-		now: now}
+		now: now}, nil
 }
 
 // Take writes a complete backup into dir and returns its manifest.
@@ -313,9 +324,6 @@ func New(opts Options) *Service {
 // anywhere leaves the directory WITHOUT a manifest, which is exactly how a
 // reader tells debris from a backup.
 func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
-	if s == nil {
-		return Manifest{}, errors.New("backup: this node has neither a store nor a broker to back up")
-	}
 	if dir == "" {
 		return Manifest{}, errors.New("backup: no destination directory")
 	}
@@ -479,9 +487,6 @@ func (s *Service) Take(ctx context.Context, dir string) (Manifest, error) {
 // estates is every database handle a node holds, in copy order, and empty on
 // a node running without a store.
 func estates(db *store.DB) []*store.DB {
-	if db == nil {
-		return nil
-	}
 	out := []*store.DB{db}
 	if peer := db.Replicated(); peer != nil {
 		out = append(out, peer)
@@ -565,11 +570,11 @@ func storeBytes(m Manifest) int64 {
 // treated as a crashed holder, which is exactly right for a crashed holder and
 // exactly wrong for a 40-minute copy of a large store.
 //
-// A node with no coordination gets a no-op release and no pin, which is
-// honest: the standalone API case has no register to write to, and the
-// assertion is what makes the missing pin loud rather than silent.
+// A handle with no replicated peer (one that IS the replicated estate, rather
+// than the node's own store) gets a no-op release and no pin: there is no
+// applier cursor to read a position from, so there is nothing to pin at.
 func (s *Service) hold(ctx context.Context) (func(), error) {
-	if s.holds == nil || s.store == nil || s.store.Replicated() == nil {
+	if s.store.Replicated() == nil {
 		return func() {}, nil
 	}
 	live, err := s.livePositions(ctx)
@@ -738,7 +743,7 @@ func assertReplayable(m Manifest) error {
 // to, and the next backup announces again. That is the safe direction, and it
 // is why this is a WARN rather than an error.
 func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
-	if s.backups == nil || len(manifest.Domains) == 0 {
+	if len(manifest.Domains) == 0 {
 		// NO DOMAINS IS NOT AN EMPTY ANNOUNCEMENT. A node with no state
 		// log has nothing to say about how far a log is covered, and a
 		// point claiming to reach no domain would be refused anyway —

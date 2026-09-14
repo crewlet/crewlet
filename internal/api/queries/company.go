@@ -132,8 +132,8 @@ func (s Sources) recentRuns(ctx context.Context) []map[string]any {
 // hundreds of events that reach nobody looks exactly like one that is working.
 //
 // THREE-VALUED, like secret_present and for the same reason: null is "this
-// process cannot say", which is what a standalone API honestly answers, and
-// is not the same claim as false.
+// node cannot say", which is what a node whose notification service has not
+// started honestly answers, and is not the same claim as false.
 func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	company := s.Company()
 	if company == nil {
@@ -145,13 +145,13 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 	// the same coordination bucket, and a per-row read would put seven
 	// round trips on a screen refresh.
 	//
-	// Nil when this process cannot say, which a standalone API honestly
-	// is, and which is NOT the same claim as "nothing has been
+	// Nil when this node cannot say, which a coordination read that failed
+	// honestly is, and which is NOT the same claim as "nothing has been
 	// reconciled". A row then carries a null reconcile rather than one
 	// asserting that nobody has ever checked.
 	reconciled, reconcileKnown := s.reconcileStates(ctx)
 
-	// Nil when no engine is co-located; an empty-but-non-nil list is a real
+	// Nil when this node cannot say; an empty-but-non-nil list is a real
 	// answer meaning nothing routes, so the two must not collapse.
 	var routed []string
 	known := s.Routed != nil
@@ -229,8 +229,8 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// from every other surface: an unset variable renders as a secret
 		// present, the third-party app's settings page shows a healthy hook, and
 		// every delivery is refused with nothing anywhere naming the
-		// variable. Null when this process cannot say — a standalone API —
-		// or when the surface has no secret to resolve, exactly as above.
+		// variable. Null when this node cannot say (nothing has resolved
+		// yet) or when the surface has no secret to resolve, as above.
 		switch {
 		case secret == nil || !verifiableKnown:
 			row["secret_usable"] = nil
@@ -906,11 +906,11 @@ func countOrNil(counts map[string]int, kind string) any {
 
 // reconcileStates reads what the loop last found, keyed by surface.
 //
-// The second result is whether this process could say at all, kept apart from
-// an empty map for the same reason [Sources.Routed] keeps them apart: a
-// standalone API has nothing to ask, and reporting that as "no surface has
-// been reconciled" would put an alarming claim on a screen that had simply
-// asked the wrong node.
+// The second result is whether this node could say at all, kept apart from an
+// empty map for the same reason [Sources.Routed] keeps them apart: a
+// coordination read that failed has nothing to report, and rendering that as
+// "no surface has been reconciled" would put an alarming claim on a screen over
+// a store that was briefly unreachable.
 func (s Sources) reconcileStates(ctx context.Context) (map[string]integration.State, bool) {
 	if s.Reconciles == nil {
 		return nil, false
