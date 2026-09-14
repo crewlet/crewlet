@@ -275,6 +275,47 @@ describe("a save whose answer never arrives", () => {
       expect(engine.requests.filter(isWrite)).toHaveLength(1);
     });
 
+    // LEFT AND OPENED AGAIN WHILE THE SAVE IS STILL OUT. The engine may not
+    // have stored it yet, so settling it from the history then would find
+    // nothing, give the log back, and have it saved or updated a second time
+    // once the first attempt landed. The page waits for its own save instead.
+    test("a save still out when the lens opens again is waited for, never settled beside it", async () => {
+      const engine = new Engine(company());
+      let answerWrite: () => void = () => {};
+      engine.script = (r, e) =>
+        isWrite(r)
+          ? new Promise<Response>((resolve) => {
+              answerWrite = () => resolve(e.answer(r));
+            })
+          : null;
+      const dialog = await reviewEdit(engine);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(engine.requests.filter(isWrite)).toHaveLength(1));
+      cleanup();
+
+      mountBuilder({ engine });
+      await screen.findByText("No problems");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Nothing restored or offered, and nothing asked of the history yet.
+      expect(screen.getByText("read only")).toBeDefined();
+      expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
+      expect(engine.requests.some((r) => r.path.startsWith("/config/revisions/"))).toBe(false);
+
+      // Stored only now, and answered to the page that has left.
+      act(() => answerWrite());
+      expect(
+        await screen.findByText(
+          "The last save from this tab was stored. The engine is applying it.",
+        ),
+      ).toBeDefined();
+      await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
+      await waitFor(() => expect(screen.getByText("editable")).toBeDefined());
+      expect(screen.queryByRole("dialog", { name: "Update my draft and review" })).toBeNull();
+      expect(engine.requests.filter(isWrite)).toHaveLength(1);
+      expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"');
+      expect(JSON.stringify(engine.checks().at(-1)!.body)).not.toContain("Lead and more");
+    });
+
     // THIS VISIT NEVER HELD THE SAVED DOCUMENT. It stands on whatever it read,
     // here a colleague's revision built on the save, and settling the save
     // must not relabel that document with the save's revision: every check

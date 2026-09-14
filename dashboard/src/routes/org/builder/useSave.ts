@@ -28,6 +28,7 @@
  * save whose outcome is still unknown when the lens is left, or the tab
  * reloaded, leaves the mark behind, and the next visit hands that attempt to
  * [Save.resume], which settles it exactly as a lost answer is settled here.
+ * A save this page still has OUT is waited for first (see [outstanding]).
  */
 
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
@@ -103,6 +104,19 @@ export interface Save {
   /** Forgets a finished outcome's message. */
   acknowledge(): void;
 }
+
+/**
+ * The saves this page has sent and not yet finished handling, by write id.
+ *
+ * MODULE STATE, because a save outlives the Builder that sent it: leaving the
+ * lens never aborts a write, and coming back while the write is still out
+ * mounts a new Builder that finds the kept log marked with its id. Settled
+ * from the revision history at that moment, the write may simply not be
+ * stored YET: it reads as not landed, the log is given back, and it is saved
+ * or updated a second time once the first attempt lands. So the page waits
+ * for its own save to be answered and handled, and only then settles it.
+ */
+const outstanding = new Map<string, Promise<void>>();
 
 /** What the review says about a refusal the check would also have given. */
 function refusalMessage(outcome: CheckOutcome): string {
@@ -239,57 +253,65 @@ export function useSave({
       // Marked before it goes: a tab that reloads while the request is out
       // must still find the save to settle.
       events.current.onSending(attempt);
-      const answer = await transport.send(request, new AbortController().signal);
-      const outcome = classifySave(answer, attempt, unsettledRef.current);
-      switch (outcome.kind) {
-        case "saved":
-          landed({
-            revisionId: outcome.revisionId,
-            // The write was conditional on this base, so the engine stored it
-            // as the new revision's parent.
-            parentRevisionId: attempt.baseRevision,
-            epoch: outcome.epoch,
-            derived: outcome.derived,
-            mode: attempt.mode,
-            activeRevisionId: outcome.revisionId,
-            resumed: false,
-          });
-          return;
-        case "unknown":
-          markUnsettled(true);
-          await settle(attempt, outcome.currentRevisionId);
-          return;
-        case "refused": {
-          const refused = outcome.outcome;
-          if (refused.status === "clean" || refused.status === "unreachable") {
-            // A success that is not a 201 stored nothing this client can name,
-            // and a failure the classifier could not place is not a refusal:
-            // both are settled as an unknown outcome rather than believed.
-            markUnsettled(true);
-            await settle(attempt, null);
+      const handled = (async () => {
+        const answer = await transport.send(request, new AbortController().signal);
+        const outcome = classifySave(answer, attempt, unsettledRef.current);
+        switch (outcome.kind) {
+          case "saved":
+            landed({
+              revisionId: outcome.revisionId,
+              // The write was conditional on this base, so the engine stored it
+              // as the new revision's parent.
+              parentRevisionId: attempt.baseRevision,
+              epoch: outcome.epoch,
+              derived: outcome.derived,
+              mode: attempt.mode,
+              activeRevisionId: outcome.revisionId,
+              resumed: false,
+            });
             return;
-          }
-          // This attempt stored nothing. A refusal says nothing about an
-          // EARLIER attempt whose answer was lost, though, so an unsettled
-          // outcome, and the mark on the kept log, stay through it.
-          if (!unsettledRef.current) events.current.onNotLanded(attempt);
-          if (refused.status === "conflict") {
-            setPhase({ kind: "idle" });
-            events.current.onConflict({
-              reason: refused.reason,
-              currentRevisionId: refused.currentRevisionId,
+          case "unknown":
+            markUnsettled(true);
+            await settle(attempt, outcome.currentRevisionId);
+            return;
+          case "refused": {
+            const refused = outcome.outcome;
+            if (refused.status === "clean" || refused.status === "unreachable") {
+              // A success that is not a 201 stored nothing this client can name,
+              // and a failure the classifier could not place is not a refusal:
+              // both are settled as an unknown outcome rather than believed.
+              markUnsettled(true);
+              await settle(attempt, null);
+              return;
+            }
+            // This attempt stored nothing. A refusal says nothing about an
+            // EARLIER attempt whose answer was lost, though, so an unsettled
+            // outcome, and the mark on the kept log, stay through it.
+            if (!unsettledRef.current) events.current.onNotLanded(attempt);
+            if (refused.status === "conflict") {
+              setPhase({ kind: "idle" });
+              events.current.onConflict({
+                reason: refused.reason,
+                currentRevisionId: refused.currentRevisionId,
+              });
+              return;
+            }
+            setPhase({ kind: "refused", message: refusalMessage(refused) });
+            events.current.onRefused({
+              generation: state.generation,
+              sent,
+              baseRevision: attempt.baseRevision,
+              outcome: refused,
             });
             return;
           }
-          setPhase({ kind: "refused", message: refusalMessage(refused) });
-          events.current.onRefused({
-            generation: state.generation,
-            sent,
-            baseRevision: attempt.baseRevision,
-            outcome: refused,
-          });
-          return;
         }
+      })();
+      outstanding.set(id, handled);
+      try {
+        await handled;
+      } finally {
+        if (outstanding.get(id) === handled) outstanding.delete(id);
       }
     },
     [stateRef, prepare, transport, landed, settle, events],
@@ -310,7 +332,12 @@ export function useSave({
       write.current = { id: attempt.writeId, generation: stateRef.current.generation };
       setWriteId(attempt.writeId);
       markUnsettled(true);
-      void settle(attempt, null);
+      void (async () => {
+        // Its own answer first, when this page still has the save out: the
+        // write may not be stored yet, and settling beside it would say so.
+        await outstanding.get(attempt.writeId)?.catch(() => undefined);
+        await settle(attempt, null);
+      })();
     },
     [settle, stateRef],
   );

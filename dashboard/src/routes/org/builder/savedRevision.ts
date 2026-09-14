@@ -40,9 +40,20 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
-/** Records a save. */
+/**
+ * Records a save.
+ *
+ * ONE REVISION RECORDED TWICE KEEPS WHAT WAS KNOWN OF IT. A save's own answer
+ * records it with its epoch, and a later visit of the same page that settles
+ * the same save from the revision history (`useSave.resume`) records it again
+ * with none. The epoch is what the strip matches a node's applied epoch
+ * against, so the second record keeps the first one's rather than erasing it.
+ */
 export function recordSavedRevision(saved: SavedRevision): void {
-  current = saved;
+  current =
+    saved.epoch === null && current?.revisionId === saved.revisionId
+      ? { ...saved, epoch: current.epoch }
+      : saved;
   emit();
 }
 

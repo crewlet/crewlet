@@ -513,7 +513,8 @@ save first: if it landed, the builder says "The last save from this tab was
 stored" and does not offer the draft again (replaying it onto its own revision
 would apply every change twice); if it did not, the draft comes back as any
 kept draft does. While the engine still cannot say, editing stays paused, with
-**Check again**.
+**Check again**. Coming back to the builder while that save is still on its
+way, the builder waits for the save's own answer before it settles anything.
 
 ### After saving
 

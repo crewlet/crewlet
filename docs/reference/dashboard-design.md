@@ -1104,7 +1104,9 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   have landed, so an answer lost after the lens was left, or across a reload,
   is settled on the next visit (`useSave.resume`) before the kept log is
   offered: replayed onto its own revision it would apply every change twice.
-  Such a save is not the draft on screen, so the revision it stored is read
+  A save this page still has out when the lens opens again is waited for
+  first, because the engine may not have stored it yet and settling it then
+  would read as not landed. Such a save is not the draft on screen, so the revision it stored is read
   like any newer revision rather than made the base. A save of the draft on
   screen makes that draft the base, keyed by the save's answer, and the
   stored document is then read back, never over an edit made while that read
