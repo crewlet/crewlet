@@ -686,6 +686,12 @@ on ordinary rollout lag makes the fastest node the cause of a fleet-wide outage,
 and stepping out of rotation when *no* peer has the epoch is not shedding, it is
 stopping.
 
+**A draining node keeps answering both.** Its listener stays up until the drain
+has completed, because the probes are what an orchestrator reads while the turns
+finish. The door it closes instead is the one to new work: every webhook and
+every write is refused with `503` from the drain's first moment. See
+[Graceful shutdown](agent-runtime.md#graceful-shutdown).
+
 **One config, agreed by pointer.** An activation is a compare-and-set on an
 append-only pointer whose own revision *is* the epoch, so two operators
 activating at once get two revisions rather than overwriting each other. Each

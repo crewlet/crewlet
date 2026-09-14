@@ -26,6 +26,33 @@ A body that does not arrive inside its deadline fails the read like any other tr
 
 ---
 
+## During a drain
+
+A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP for the whole of its [drain](../concepts/agent-runtime.md#graceful-shutdown), and closes its listener only once the drain has completed. What changes from the drain's first moment is which requests it will still take:
+
+| Request | During a drain | Why |
+|---|---|---|
+| `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
+| `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
+| Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
+| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain, which is the work the drain is waiting for. |
+| Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work. The two `GET` landings act too: the GitHub App return seals a credential and writes a config revision. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `/operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+
+A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
+
+```json
+{
+  "error": "draining",
+  "detail": "this node is draining for a shutdown: the turns already running finish, and nothing new is started here",
+  "hint": "retry against another node, or once this one has restarted; /ready answers 503 for as long as the drain lasts"
+}
+```
+
+A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close.
+
+---
+
 ## Routes
 
 | Method | Path | Description |
@@ -68,7 +95,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
@@ -1196,7 +1223,7 @@ reconnect restores every field without a second round trip.
 | `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
 | `clients` | Dashboards currently connected to this API process. |
 | `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 
 Per-socket facts — how many envelopes *this* connection dropped, how deep
 its queue is — are deliberately **not** here. The tick encodes one JSON
