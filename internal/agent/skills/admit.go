@@ -5,8 +5,8 @@ import "github.com/crewlet/crewlet/internal/logging"
 // Admitting a container's pages into a skill catalogue.
 //
 // The half of the sync that decides WHAT is a skill, kept apart from the
-// half that decides where the pages came from. Two callers need it — the
-// engine's own sync worker and the publishing CLI's `resync` — and a second
+// half that decides where the pages came from. Two callers need it (the
+// engine's own skill sync and the publishing CLI's `resync`), and a second
 // copy would eventually admit a page one of them rejected, which is the
 // difference between "the operator sees this skill loaded" and "the engine
 // loads it".
@@ -40,26 +40,57 @@ type Admission struct {
 
 // Admit turns a container's pages into the skills it holds.
 //
-// A page that fails to parse costs that page. The alternative — refusing
-// the whole walk — would take a company's entire catalogue away over one
-// operator's typo, and the catalogue is what makes agents follow this
-// company's conventions rather than their model's defaults.
+// A page that fails to parse costs that page. The alternative (refusing the
+// whole walk) would take a company's entire catalogue away over one operator's
+// typo, and the catalogue is what makes agents follow this company's
+// conventions rather than their model's defaults.
 func Admit(pages []Page) ([]Skill, Admission) {
 	out := make([]Skill, 0, len(pages))
 	report := Admission{Pages: len(pages)}
 	for _, page := range pages {
-		if !IsSkill(page.Text) {
+		skill, verdict := AdmitPage(page)
+		switch verdict {
+		case PageOrdinary:
 			report.Ordinary++
-			continue
-		}
-		skill, err := Parse(page.Text, Source{PageID: page.ID, Version: page.Version})
-		if err != nil {
-			admitLog.Warn("skill_page_undecodable", "page", page.ID,
-				"title", page.Title, "error", err.Error())
+		case PageUndecodable:
 			report.Undecodable = append(report.Undecodable, page.Title)
-			continue
+		case PageAdmitted:
+			out = append(out, skill)
 		}
-		out = append(out, skill)
 	}
 	return out, report
+}
+
+// PageVerdict is what admission concluded about one page.
+type PageVerdict int
+
+// The three things a page in a skills container can be.
+const (
+	// PageOrdinary is not a skill at all: a project home page, an
+	// operator's notes. Expected, and not a failure.
+	PageOrdinary PageVerdict = iota
+	// PageUndecodable declares a trigger and does not parse. Reported,
+	// and not admitted.
+	PageUndecodable
+	// PageAdmitted is a skill.
+	PageAdmitted
+)
+
+// AdmitPage decides what one page is, and parses it when it is a skill.
+//
+// THE ONE ADMISSION TEST, shared by a walk and by a single-page update, because
+// a page the two disagreed about would be served after an edit and gone after
+// the next walk (or the reverse) and the registry would flip between the two
+// for the life of the page.
+func AdmitPage(page Page) (Skill, PageVerdict) {
+	if !IsSkill(page.Text) {
+		return Skill{}, PageOrdinary
+	}
+	skill, err := Parse(page.Text, Source{PageID: page.ID, Version: page.Version})
+	if err != nil {
+		admitLog.Warn("skill_page_undecodable", "page", page.ID,
+			"title", page.Title, "error", err.Error())
+		return Skill{}, PageUndecodable
+	}
+	return skill, PageAdmitted
 }

@@ -83,13 +83,14 @@ var _ queue.Publisher = (*capture)(nil)
 func guardedRunner(t *testing.T, prov *scriptedProvider, pub queue.Publisher) *runner.Runner {
 	t.Helper()
 	registry := skills.NewRegistry()
-	if err := registry.Upsert(skills.Skill{
+	if _, err := registry.PutPage(skills.Skill{
 		Key: "chat-conventions", Title: "Chat conventions",
 		Summary: "how this company writes on chat",
 		Body:    "Always thread your reply.",
 		Trigger: skills.Trigger{Tool: "slack_post"}, Required: true,
+		SourcePageID: "chat-conventions-page",
 	}); err != nil {
-		t.Fatalf("Upsert: %v", err)
+		t.Fatalf("PutPage: %v", err)
 	}
 
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "default", Provider: prov}})

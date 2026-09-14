@@ -1,6 +1,8 @@
 package skills
 
 import (
+	"cmp"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -11,19 +13,40 @@ import (
 
 // The registry: the live set of skills this company has published.
 //
-// Populated at boot by the knowledge backend's sync worker and refreshed by
-// its page webhooks, so editing a skill is a wiki edit and nothing else —
-// no restart, no deploy, no config push.
+// Populated by the knowledge backend's sync (a complete walk of the skills
+// container, and a single page whenever one page changed), so editing a skill
+// is a wiki edit and nothing else: no restart, no deploy, no config push.
+//
+// # A page is the identity, and a key is only what a model asks for
+//
+// Everything that changes the registry names a PAGE: a walk returns pages, a
+// webhook names the page that moved, and a deletion names the page that went.
+// None of them can name a key, because a key is inside the page, and a page
+// whose key was edited no longer says what it used to hold. So the registry
+// keeps what each page holds, and the key-addressed set every reader sees is
+// DERIVED from that.
+//
+// Deriving it is also what makes a one-page update the same answer as a walk.
+// Two pages declaring one key are an authoring error, and a registry keyed by
+// key could keep only one of them: when the winner was edited to another key
+// the loser would be gone, and only the next walk would bring it back. Kept
+// by page, the loser is still there and takes the key the moment it is free,
+// so any sequence of page updates ends where a walk of the same pages would.
 
 // Registry is the in-memory store of tool skills.
 //
 // READS TAKE NO LOCK BEYOND A SNAPSHOT SWAP, deliberately: the prompt-build
 // path consults it once per phase and can accept an eventually-consistent
-// answer — a skill upserted mid-build lands in this prompt or the next, and
-// both are correct. Writes are serialised because a page webhook races the
-// boot walk during their brief overlap.
+// answer (a skill that changed mid-build lands in this prompt or the next, and
+// both are correct). Writes are serialised because a walk and a page update
+// may reach one registry from two goroutines.
 type Registry struct {
 	mu sync.Mutex
+
+	// pages is what each page holds, keyed by [Skill.SourcePageID]. It is
+	// the source of truth, a shadowed duplicate included, and only writers
+	// read it.
+	pages map[string]Skill
 
 	// skills and variables are swapped WHOLE rather than mutated, so a
 	// lock-free reader sees one consistent set: a reader holding a map
@@ -36,15 +59,18 @@ type Registry struct {
 
 // NewRegistry builds an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{skills: map[string]Skill{}, variables: map[string]string{}}
+	return &Registry{
+		pages: map[string]Skill{}, skills: map[string]Skill{},
+		variables: map[string]string{},
+	}
 }
 
 // SetVariables installs the operator-defined ${var} substitution map.
 //
 // Called on every apply, boot included. Re-checking every registered skill
 // against the new map is what makes a variable REMOVED by a config push
-// surface immediately rather than on that skill's next edit — which might
-// be never.
+// surface immediately rather than on that skill's next edit, which might be
+// never.
 func (r *Registry) SetVariables(variables map[string]string) {
 	if r == nil {
 		return
@@ -66,7 +92,7 @@ func (r *Registry) SetVariables(variables map[string]string) {
 // warnUnresolved reports a skill referencing a variable nobody defined.
 //
 // Substitution deliberately leaves an unknown reference as literal ${name},
-// which is visible and greppable — but the only place that literal is ever
+// which is visible and greppable, but the only place that literal is ever
 // seen is inside an LLM prompt, and no operator reads those. This turns a
 // silent prompt defect into a log line at the moment it becomes true.
 func warnUnresolved(s Skill, variables map[string]string) {
@@ -82,79 +108,206 @@ func warnUnresolved(s Skill, variables map[string]string) {
 	}
 }
 
-// Upsert registers or replaces a skill.
+// PageChange is what recording one page did to the registry.
+type PageChange struct {
+	// Before is the key the page held until now, and After the key it holds
+	// from now on. Either is empty when the page held no skill, so a page
+	// that became a skill has only After and a page that stopped being one
+	// has only Before.
+	Before, After string
+
+	// Shadowed reports that After is served from another page: two pages
+	// declare that key, and the other one keeps it (see [comparePageIDs]).
+	Shadowed bool
+}
+
+// Changed reports whether the page holds a different key than it did.
+//
+// An edit that kept its key reports false even though its body may have
+// moved, because the key is what a log line about a page can usefully name.
+func (c PageChange) Changed() bool { return c.Before != c.After }
+
+// PutPage records the skill one page now holds, replacing whatever it held.
 //
 // A REPLACE rather than a merge, because a page IS the skill: an edit that
-// removed a trigger leaf must remove it here, and a merge would keep the
-// skill matching a surface its author has just stopped claiming.
-func (r *Registry) Upsert(s Skill) error {
+// removed a trigger leaf must remove it here, and a merge would keep the skill
+// matching a surface its author has just stopped claiming. A skill whose key
+// the page no longer declares is gone with the same write, which is the case a
+// key-addressed upsert could never see.
+//
+// The skill must name its page; one that does not has no identity a later
+// change could reach, so it is refused rather than stored.
+func (r *Registry) PutPage(s Skill) (PageChange, error) {
 	if r == nil {
-		return nil
+		return PageChange{}, nil
 	}
-	if err := s.Validate(); err != nil {
-		return err
+	if err := admissible(s); err != nil {
+		return PageChange{}, err
 	}
 	r.mu.Lock()
-	next := maps.Clone(r.skills)
-	next[s.Key] = s
-	r.skills = next
+	next := maps.Clone(r.pages)
+	before := next[s.SourcePageID].Key
+	next[s.SourcePageID] = s
+	served, duplicates := derive(next)
+	r.pages, r.skills = next, served
 	variables := r.variables
 	r.mu.Unlock()
 
+	reportDuplicates(duplicates, s.SourcePageID)
 	warnUnresolved(s, variables)
-	return nil
+	return PageChange{
+		Before: before, After: s.Key,
+		Shadowed: served[s.Key].SourcePageID != s.SourcePageID,
+	}, nil
 }
 
-// Evict removes a skill, reporting whether it was there.
+// DropPage records that a page holds no skill: it was deleted, moved out of the
+// container, or edited into an ordinary page.
 //
-// The reported bool is what lets a caller tell "the page was deleted" from
-// "a page that was never a skill was deleted" — the sync worker evicts on
-// every page removal and only one of those is worth a log line.
-func (r *Registry) Evict(key string) bool {
+// A duplicate this page was shadowing takes the key in the same write, which
+// is what a walk that no longer carried this page would have served.
+func (r *Registry) DropPage(pageID string) PageChange {
+	if r == nil {
+		return PageChange{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	held, ok := r.pages[pageID]
+	if !ok {
+		return PageChange{}
+	}
+	next := maps.Clone(r.pages)
+	delete(next, pageID)
+	r.pages, r.skills = next, served(next)
+	return PageChange{Before: held.Key}
+}
+
+// HoldsPage reports whether a page contributes a skill, a shadowed duplicate
+// included.
+//
+// For a sync deciding whether a change it heard about concerns this registry:
+// a page that left the skills container is announced from the container it
+// moved to, and this is how that announcement is still recognised.
+func (r *Registry) HoldsPage(pageID string) bool {
 	if r == nil {
 		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.skills[key]; !ok {
-		return false
-	}
-	next := maps.Clone(r.skills)
-	delete(next, key)
-	r.skills = next
-	return true
+	_, ok := r.pages[pageID]
+	return ok
 }
 
-// Replace swaps the whole set, for a sync worker's full walk.
+// Replace swaps the whole set, for a complete walk of the container.
 //
-// ATOMIC, which is what makes a boot walk safe to run against a registry
-// that is already serving: a walk applied skill by skill would leave a
-// window where half the company's guidance exists.
+// ATOMIC, which is what makes a walk safe to run against a registry that is
+// already serving: a walk applied skill by skill would leave a window where
+// half the company's guidance exists.
 //
-// A caller that could not complete its walk must NOT call this — see the
-// sync worker, which refuses to seed from a partial enumeration precisely
-// because a wholesale replace from partial rows silently deletes skills.
+// A caller that could not complete its walk must NOT call this: a wholesale
+// replace from a partial enumeration silently deletes every skill it did not
+// reach.
 func (r *Registry) Replace(skills []Skill) {
 	if r == nil {
 		return
 	}
 	next := make(map[string]Skill, len(skills))
 	for _, s := range skills {
-		if err := s.Validate(); err != nil {
-			log.Warn("skill_refused", "skill", s.Key, "error", err.Error())
+		if err := admissible(s); err != nil {
+			log.Warn("skill_refused", "skill", s.Key, "page", s.SourcePageID,
+				"error", err.Error())
 			continue
 		}
-		next[s.Key] = s
+		next[s.SourcePageID] = s
 	}
+	current, duplicates := derive(next)
 	r.mu.Lock()
-	r.skills = next
+	r.pages, r.skills = next, current
 	variables := r.variables
 	r.mu.Unlock()
 
-	for _, s := range next {
+	reportDuplicates(duplicates, "")
+	for _, s := range current {
 		warnUnresolved(s, variables)
 	}
-	log.Info("skills_replaced", "count", len(next))
+	log.Info("skills_replaced", "count", len(current), "pages", len(next))
+}
+
+// admissible is what the registry refuses before it stores anything.
+func admissible(s Skill) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(s.SourcePageID) == "" {
+		return fmt.Errorf("skills: skill %q names no source page, and a page is "+
+			"what every later change to it is addressed by", s.Key)
+	}
+	return nil
+}
+
+// duplicate is one page whose key another page keeps.
+type duplicate struct {
+	key, kept, shadowed string
+}
+
+// derive is the key-addressed set a registry serves from what its pages hold.
+//
+// ONE WINNER PER KEY, chosen by page id rather than by arrival, so every node
+// serves the same page for a duplicated key whatever order its walks and
+// updates happened to come in. The losers are reported so an author learns
+// that one of their pages is not being served.
+func derive(pages map[string]Skill) (map[string]Skill, []duplicate) {
+	out := make(map[string]Skill, len(pages))
+	var duplicates []duplicate
+	for _, id := range slices.SortedFunc(maps.Keys(pages), comparePageIDs) {
+		s := pages[id]
+		if kept, taken := out[s.Key]; taken {
+			duplicates = append(duplicates, duplicate{
+				key: s.Key, kept: kept.SourcePageID, shadowed: id,
+			})
+			continue
+		}
+		out[s.Key] = s
+	}
+	return out, duplicates
+}
+
+// served is [derive] without the report, for a write that cannot create a new
+// duplicate: removing a page only ever resolves one.
+func served(pages map[string]Skill) map[string]Skill {
+	out, _ := derive(pages)
+	return out
+}
+
+// comparePageIDs orders page ids so the oldest page keeps a duplicated key.
+//
+// SHORTER FIRST, then lexically, because Confluence numbers pages in the order
+// they were created and a lexical comparison alone would rank page 9 after
+// page 10. For ids of one length (a UUID, a time-ordered id) it is plain
+// lexical order. Either way it is a total order every node computes the same.
+func comparePageIDs(a, b string) int {
+	if len(a) != len(b) {
+		return cmp.Compare(len(a), len(b))
+	}
+	return strings.Compare(a, b)
+}
+
+// reportDuplicates logs the pages whose key another page keeps.
+//
+// A single-page write passes the page it wrote, and only the duplicates that
+// page takes part in are reported: the rest were reported by the walk or the
+// write that created them, and repeating every one on every edit would bury
+// the line that is new.
+func reportDuplicates(duplicates []duplicate, page string) {
+	for _, d := range duplicates {
+		if page != "" && d.kept != page && d.shadowed != page {
+			continue
+		}
+		log.Warn("skill_key_duplicated", "skill", d.key, "served_page", d.kept,
+			"shadowed_page", d.shadowed,
+			"detail", "two pages declare this key and only one can be served; "+
+				"give the shadowed page a key of its own or remove it")
+	}
 }
 
 // Get returns one skill by key.
@@ -281,24 +434,4 @@ func (r *Registry) Body(key string) (string, bool) {
 	}
 	b.WriteString(r.Render(s.Body))
 	return strings.TrimRight(b.String(), "\n") + "\n", true
-}
-
-// All returns every registered skill, key-sorted.
-//
-// For the callers that must find a skill by something other than its key —
-// the webhook path evicts by SOURCE PAGE, because a page whose key was
-// edited would otherwise leave the old key behind for ever.
-func (r *Registry) All() []Skill {
-	if r == nil {
-		return nil
-	}
-	r.mu.Lock()
-	skills := r.skills
-	r.mu.Unlock()
-
-	out := make([]Skill, 0, len(skills))
-	for _, key := range slices.Sorted(maps.Keys(skills)) {
-		out = append(out, skills[key])
-	}
-	return out
 }

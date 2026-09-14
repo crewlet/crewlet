@@ -109,7 +109,7 @@ func parsePhases(names []string) ([]prompts.Phase, error) {
 
 // IsSkill reports whether text is a skill page at all.
 //
-// The ADMISSION TEST the sync workers share: a knowledge container holds
+// Half the ADMISSION TEST every reader shares (see [AdmitPage]): a container holds
 // ordinary pages beside its skills, and a page with no frontmatter — or with
 // frontmatter that names no trigger — is one of those rather than a broken
 // skill. Distinguishing them is what keeps a project's home page from
