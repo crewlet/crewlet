@@ -89,6 +89,7 @@ import {
   isBaseKeyed,
   type BuilderAction,
   type BuilderState,
+  type LastChange,
 } from "./model/reducer.ts";
 import { describeOperation } from "./model/operations.ts";
 import type { CheckOutcome, CheckStatus } from "./model/scheduler.ts";
@@ -331,6 +332,24 @@ function keyOfParams(state: BuilderState, params: SelectionParams): NodeKey | nu
  * every screen reader to observe the empty state.
  */
 const ANNOUNCE_DELAY_MS = 50;
+
+/**
+ * What the live region says about the last change to the draft.
+ *
+ * AN UNDO SAYS IT UNDID. The model describes an operation in the past tense
+ * ("Edited CEO: goal."), and announced bare after an undo that sentence tells
+ * a screen reader the edit was just made, the opposite of what happened.
+ */
+export function announcementOf(last: LastChange): string {
+  switch (last.kind) {
+    case "applied":
+      return last.description;
+    case "undone":
+      return `Undone: ${last.description}`;
+    case "redone":
+      return `Redone: ${last.description}`;
+  }
+}
 
 function useLiveRegion(): { text: string; announce: (message: string) => void } {
   const [text, setText] = useState("");
@@ -605,7 +624,7 @@ function Lens({
   const focusNode = useCallback((key: NodeKey) => viewHandle.current?.focusNode(key), []);
   useEffect(() => {
     if (!state.last) return;
-    announce(state.last.description);
+    announce(announcementOf(state.last));
     focusNode(state.last.focus);
   }, [state.last, announce, focusNode]);
 

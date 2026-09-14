@@ -237,8 +237,9 @@ Every change is an operation in the draft's log. **Undo** and **Redo** in the
 toolbar, or <kbd>Ctrl</kbd>+<kbd>Z</kbd> and
 <kbd>Shift</kbd>+<kbd>Ctrl</kbd>+<kbd>Z</kbd> (<kbd>Command</kbd> on a Mac),
 walk the log from anywhere in the builder except a text field, where the same
-keys undo typing. Each change is announced to screen readers, and focus moves
-to the unit or seat it touched. **Discard changes** throws the whole draft
+keys undo typing. Each change is announced to screen readers (an undo or a
+redo says it undid or redid the change), and focus moves to the unit or seat
+it touched. **Discard changes** throws the whole draft
 away after a confirmation; the saved configuration is not touched.
 
 At narrow widths Undo, Redo, Discard changes, Expand all and Collapse all move

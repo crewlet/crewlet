@@ -1023,9 +1023,11 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   it, a rename rewrites it, and a removed node clears it. The toolbar carries
   the selected node's own actions, because a canvas tree item may contain no
   tab stops of its own.
-- **One polite live region** says what each operation, undo and redo did, and
-  focus moves to the node it touched through the mounted view's registered
-  handle (`useBuilderView`).
+- **One polite live region** says what each operation, undo and redo did (an
+  undo or a redo names itself, since the operation's own sentence is in the
+  past tense and would announce the change as just made), and focus moves to
+  the node it touched through the mounted view's registered handle
+  (`useBuilderView`).
 - **Undo and redo are Ctrl or Command with Z**, and Shift with it, anywhere in
   the builder except a text field, and never under a modal.
 - **A newer revision is an update, never an overwrite.** A check answering

@@ -205,10 +205,18 @@ describe("checking the draft", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     const region = liveRegion;
     await waitFor(() => expect(region().textContent).toBe("Edited CEO: goal."));
-    // Ctrl or Command with Z, from anywhere in the page that is not a text field.
+    // Ctrl or Command with Z, from anywhere in the page that is not a text
+    // field. The region says the edit was undone: the bare sentence would
+    // tell a screen reader it was just made.
     fireEvent.keyDown(document.body, { key: "z", code: "KeyZ", ctrlKey: true });
-    await waitFor(() => expect(region().textContent).toBe("Edited CEO: goal."));
+    await waitFor(() => expect(region().textContent).toBe("Undone: Edited CEO: goal."));
     await waitFor(() => expect(engine.checks().at(-1)!.body).toEqual({}));
+    // And Shift with it redoes, saying so.
+    fireEvent.keyDown(document.body, { key: "Z", code: "KeyZ", ctrlKey: true, shiftKey: true });
+    await waitFor(() => expect(region().textContent).toBe("Redone: Edited CEO: goal."));
+    await waitFor(() =>
+      expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more"),
+    );
   });
 
   test("undo is left to a text field that has focus", async () => {
