@@ -424,7 +424,7 @@ var LiveSocket = class {
 	* in flight when the socket dropped is simply re-sent on reconnect.
 	*
 	* Rejects with an Error carrying the server's machine-readable code
-	* (`not_found`, `unauthorized`, `no_event_store`, …), `timeout` if a sent
+	* (`not_found`, `unauthorized`, `unknown_query`, …), `timeout` if a sent
 	* query goes unanswered, or `closed` if the client shuts down.
 	*/
 	query(what, params) {
