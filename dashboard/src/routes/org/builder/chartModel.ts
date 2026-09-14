@@ -23,9 +23,11 @@
  * derived fact is used only while the fields it was derived from still hold
  * the values the check saw. A root seat is drawn in the unit its reference
  * resolved to only while it still names that unit by its current name; an
- * inherited lead is shown only while the unit still declares none. When the
- * draft has moved past what the check saw, the fact is left out until the
- * next check answers, rather than shown stale.
+ * inherited lead is shown only while the unit still declares none and every
+ * unit above it still sits and declares as it did, because the engine hands
+ * a unit its parent's lead, and a unit moved under another parent inherits
+ * another one. When the draft has moved past what the check saw, the fact is
+ * left out until the next check answers, rather than shown stale.
  */
 
 import type { Derived, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
@@ -33,7 +35,12 @@ import type { TreeInput } from "~/ui/treeModel.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
 import { allUnits, locate, type Draft, type DraftSeat } from "./model/draft.ts";
-import { DATADOG_ROUTE_TO, handlesByKey, type IndexedDocument } from "./model/document.ts";
+import {
+  DATADOG_ROUTE_TO,
+  handlesByKey,
+  pathOfSegments,
+  type IndexedDocument,
+} from "./model/document.ts";
 import { getPath, isRecord } from "./model/json.ts";
 import { kindOf, type SeatKind } from "./model/operations.ts";
 import { reportingForest, type ReportingNode } from "./model/reporting.ts";
@@ -145,6 +152,8 @@ interface Engine {
   readonly handles: ReadonlyMap<NodeKey, string>;
   /** The node's JSON in the document that was checked. */
   readonly sentData: (key: NodeKey) => Record<string, unknown> | undefined;
+  /** The node it sat under in the document that was checked: a unit, the company, or unknown. */
+  readonly sentParent: (key: NodeKey) => NodeKey | undefined;
   readonly sent: IndexedDocument | null;
 }
 
@@ -178,6 +187,14 @@ function engineOf({ sent, derived }: ChartInputs): Engine {
         else at = isRecord(at) && Object.hasOwn(at, segment) ? at[segment] : undefined;
       }
       return isRecord(at) ? at : undefined;
+    },
+    sentParent: (key) => {
+      // `units[i]` and `roles[i]` sit under the company; anything deeper sits
+      // under the unit two segments up (`...children[i]`, `...roles[i]`).
+      const segments = sent?.index.segmentsOf.get(key);
+      if (!sent || !segments || segments.length < 2) return undefined;
+      if (segments.length === 2) return COMPANY_KEY;
+      return sent.index.byPath.get(pathOfSegments(segments.slice(0, -2)));
     },
     sent,
   };
@@ -266,8 +283,9 @@ export function structure(inputs: ChartInputs): Structure {
    * for none, `undefined` while unknown.
    *
    * A LEAD IS INHERITED DOWN A CHAIN, so the derivation of it holds only while
-   * every unit on that chain still declares the lead the check saw. Change an
-   * ancestor's lead and every unit below it inherits something the check never
+   * every unit on that chain still sits where the check saw it and declares
+   * the lead the check saw. Change an ancestor's lead, or move a unit under
+   * another parent, and every unit below inherits something the check never
    * saw, which the next check reports.
    */
   const inheritedLead = (key: NodeKey, chainAsChecked: boolean): LeadView | null | undefined => {
@@ -291,7 +309,11 @@ export function structure(inputs: ChartInputs): Structure {
     units.map((unit) => {
       const declared = text(unit.data.lead);
       const checked = engine.sentData(unit.key);
-      const asChecked = parentAsChecked && checked !== undefined && text(checked.lead) === declared;
+      const asChecked =
+        parentAsChecked &&
+        checked !== undefined &&
+        engine.sentParent(unit.key) === parent &&
+        text(checked.lead) === declared;
       const lead: LeadView | null | undefined =
         declared !== "" ? { name: declared, inherited: false } : inheritedLead(unit.key, asChecked);
       // With a lead of its own, the unit would inherit its parent's; without

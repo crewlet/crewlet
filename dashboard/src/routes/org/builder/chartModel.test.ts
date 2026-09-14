@@ -146,6 +146,34 @@ describe("structure", () => {
     expect(unitOf(state, unitKey("Sales")).lead).toBeNull();
   });
 
+  test("a unit moved under another parent inherits from it, so the checked lead is unknown", () => {
+    const state = checkedEdit(fixtureCompany(), {
+      ...PLACED,
+      units: { "units[0].children[0]": { lead: "vp-engineering", lead_inherited: true } },
+    });
+    // Every lead on Platform's new chain is the one the check saw (Sales and
+    // Platform declare none, as before); only where Platform sits changed.
+    const moved = record(state, {
+      type: "move",
+      target: unitKey("Platform"),
+      to: { parent: unitKey("Sales"), after: null },
+    });
+    expect(unitOf(moved, unitKey("Platform"))).toMatchObject({
+      lead: undefined,
+      inheritable: null,
+    });
+    // A reorder among the same siblings moves no unit to another parent.
+    const reordered = record(state, {
+      type: "reorder",
+      target: unitKey("Sales"),
+      to: { parent: COMPANY_KEY, after: null },
+    });
+    expect(unitOf(reordered, unitKey("Platform")).lead).toEqual({
+      name: "VP Engineering",
+      inherited: true,
+    });
+  });
+
   test("a derived placement or dangling reference holds only while the seat still writes what was checked", () => {
     const doc = fixtureCompany();
     doc.roles!.push({ name: "Scout", unit: "Ghost" });
