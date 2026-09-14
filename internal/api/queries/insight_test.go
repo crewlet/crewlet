@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,57 @@ func TestTurnAnswersEveryEventOfOneUnitOfWork(t *testing.T) {
 	}
 	if got["turn_id"] != "t-1" {
 		t.Errorf("answer does not name its turn: %v", got)
+	}
+	// A SHORT TURN IS NOT A CUT ONE. The flag has to be present and false,
+	// or a client cannot tell "read to the end" from a build that predates
+	// the field — and would have to guess, which is what it was doing.
+	if got["truncated"] != false {
+		t.Errorf("truncated = %#v on a three-event turn, want an explicit false",
+			got["truncated"])
+	}
+}
+
+// A TURN READ SHORT SAYS SO — and here that matters more than it does on a
+// trace, because of WHICH rows go missing.
+//
+// EventLog.Turn orders oldest first and stops at store.MaxTurnEvents, so the
+// events a long turn loses are its ENDING: `agent_turn_completed` and
+// `turn_completed`, which are the two records the Turn screen reads its
+// outcome, its wall clock and its plan summary off. With no flag, a turn cut
+// at the cap is indistinguishable from a turn that never finished: the screen
+// printed "no turn record" directly above the rows it did get, and fell back
+// to an event span captioned as the turn's own measurement.
+func TestATurnReadToItsCapSaysItWasCut(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	payload, err := json.Marshal(map[string]any{"turn_id": "long", "phase": "execute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One over the cap, so the read stops at it rather than at the end of
+	// the turn — which is the only way to reach the flag's true branch.
+	for i := range store.MaxTurnEvents + 1 {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:   fmt.Sprintf("e-%04d", i),
+			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
+			Category: "lifecycle", Actor: "PM", Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "long"}))
+	if n := len(rows(t, got["events"])); n != store.MaxTurnEvents {
+		t.Fatalf("%d events, want the cap %d", n, store.MaxTurnEvents)
+	}
+	if got["truncated"] != true {
+		t.Errorf("truncated = %#v on a turn read to its cap; a reader has no "+
+			"way to tell the missing ending from a turn that never ended",
+			got["truncated"])
 	}
 }
 

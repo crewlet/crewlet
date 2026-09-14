@@ -52,7 +52,22 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// that made the Trace screen answer "not found" for every trace.
 		records = []store.EventRecord{}
 	}
-	return map[string]any{"turn_id": id, "events": records}, nil
+	return map[string]any{
+		"turn_id": id,
+		"events":  records,
+		// SAYS WHEN IT CUT, exactly as `trace` does — and here the omission
+		// was worse, because of what a turn read loses. EventLog.Turn orders
+		// OLDEST FIRST and stops at store.MaxTurnEvents, so the rows a long
+		// turn loses are its ENDING: `agent_turn_completed` and
+		// `turn_completed`, which are the two records the screen reads its
+		// outcome, its wall clock and its plan summary off. Without this
+		// flag a truncated turn is indistinguishable from a turn that never
+		// finished — the screen printed "no turn record" directly above the
+		// rows it did get, and fell back to an event span it captioned as
+		// the turn's own. Additive, so a client that predates the field is
+		// unaffected.
+		"truncated": len(records) >= store.MaxTurnEvents,
+	}, nil
 }
 
 // phases answers what the models have been doing, company-wide.
