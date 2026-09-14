@@ -739,7 +739,8 @@ reference to anything.
 
 `present` and `resolved` are the same two facts `secret_present` and
 `secret_usable` are, asked per field: written down, and actually usable in
-this process. `resolved` is `null` where nothing resolved the document.
+this process. `resolved` is `null` for a field the document leaves empty,
+since there is nothing to resolve.
 `blocks` names the [reconcile finding](../concepts/integration-reconcile.md)
 that this input being absent produces, which is what lets a row reporting
 `credential_missing` offer exactly the fields that clear it.
@@ -1260,8 +1261,8 @@ could learn from, and an overlay merge cannot express a row going away.
 
 ### Live-state projection (`api/stream` + `LiveState`)
 
-The API process maintains an **in-memory projection** of every agent's
-current state (`internal/api/livestate.LiveState`, owned by
+Every node that serves the API maintains an **in-memory projection** of
+every agent's current state (`internal/api/livestate.LiveState`, owned by
 `internal/api/stream.Service`).  It is fed by the same event stream the
 WebSocket fan-out consumes and read in O(1) thereafter — so `/agents`,
 `/stream/snapshot`, and the WebSocket handshake never re-derive state from a
@@ -1439,7 +1440,7 @@ reconnect restores every field without a second round trip.
 | `node` | The name this node's engine runs under — `node.id`, else `CREWLET_NODE_ID`, else `node-0` — which is what its presence lease carries and the only way a caller can tell which node a load balancer sent it to. |
 | `configured` | Whether a company revision is active. Read off the engine's live epoch on every call, so an apply that brings this node its first revision flips it. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. There is no second `engine_started_at` beside it, because there was never a second process to have one. |
+| `started_at` | When this node's **engine** started, which is when the node started: the API is served inside the engine's process. The fleet view reports the same instant for this node. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this node. |
 | `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. Carried by `GET /health`, the snapshot's `health` section and the `stream` query; the 5-second push does not repeat it, because it does not change. |
@@ -1487,10 +1488,6 @@ that floor on the wire — read it rather than restating the number, which
 is the store's own constant and not a promise this page makes. Once a
 cursor crosses that floor every page is empty — which is why a client
 must distinguish it from quiet, rather than drawing the gap as silence.
-A process with no event store does not register the `events` question at
-all, so `GET /events` answers **404** with `unknown_query` (the same code
-on the query channel) rather than an empty page, for the same reason:
-"there is nothing older" and "I cannot answer" are different facts.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
@@ -1656,7 +1653,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `schedule_runs` | `{scope_type, scope_id, name, limit}` | `GET /schedules/{scope_type}/{scope_id}/{name}/runs`. ONE schedule's dispatch history, newest first, fifty to a page. `schedules.recent_runs` is the COMPANY's fifty most recent fires across every schedule, so twenty hourly ones fill it in two and a half hours — "did the standup fire this week" was unanswerable while every row of the answer sat in the table. The identity is all THREE parts and each is required: two units may each declare a `standup`, and a role and a unit may both, so a name alone merges two teams' histories. `truncated` says the page filled, because a full page is otherwise indistinguishable from a schedule that has fired exactly that many times |
 | `schedules` | — | `GET /schedules` |
 | `fleet` | none | `GET /fleet`: leases move with no event to push, so the Fleet view polls this rather than waiting for one. **Operator-only**, like the rest of the Admin workspace. A lease store that cannot be read answers `query_failed` (the REST twin answers `500` with the same code) |
-| `sandbox_runs` | none | `GET /sandbox-runs`; `unknown_query` on a process with no pending-run store |
+| `sandbox_runs` | none | `GET /sandbox-runs`: `query_failed` when the fleet's run record cannot be read (the REST twin answers `500` with the same code), never an empty list |
 | `budgets` | — | `GET /budgets` |
 | `a2a_channels` | — | The fleet's agent-to-agent authorization record: who asked whom, how many messages crossed, and when. `available: false` when this node could not reach the coordination store — which is not the same as no channels having been opened |
 | `knowledge` | `{q}` | The company's own knowledge search, run live through the same `knowledge.Searcher` seam a seat's own `search_knowledge` tool uses. Searched as the ORG with no seat, so it applies the engine's own account and nothing more — searching as a named seat would let a dashboard reader read, through that seat's credential, material their own account may not have. Registered whenever a company is active, NOT only when a searcher exists — "this company has no knowledge backend" is a fact the company establishes on its own, and it is a far more useful answer than an unknown query. `available: false` covers all three of no company, no backend, and a backend wired with no org-wide read scope. `reason` (`no_company` / `no_backend` / `no_scope`, empty when the search ran) is the value to branch on and `note` is the prose for a person — a screen picking which remedy to offer must not string-match the note, nor infer the state from an empty `backend`, which means "no backend" and "no company" alike. The `no_scope` note names `knowledge.scope`, because an operator whose integration is correct must not be sent to re-check it. It carries a reason on a failed search too, because search is best effort by contract and an empty result is not proof that nothing matches |
@@ -2203,7 +2200,7 @@ letting it write again are not reads, whatever a laptop deployment allows.
 
 | Route | What it does |
 |---|---|
-| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, `404` when the stream is not one this node runs, and `503` on a process running no state log. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
+| `POST /work/retention/ack?stream=NAME&position=N` | Publishes an operator backup floor. Refused `400` naming both when either is missing, and `404` when the stream is not one this node runs, which on a node running no state log is every stream. The point is stamped with **that stream's own generation**, read from the running log: a bare sequence at another log's generation names a number space the copy does not cover. |
 | `POST /work/retention/evict/{node}?confirm={node}` | Installs the eviction gate. |
 | `POST /work/retention/readmit/{node}?confirm={node}` | The inverse commit. |
 
@@ -2213,9 +2210,10 @@ its position and its operation id: a gate the caller believes has landed and
 which is only `pending` is the difference between a node that has stopped
 writing and one that is about to.
 
-A process with no coordination store answers `503`, not `404`. The route exists
-on this build, and telling an operator it does not sends them looking for a
-version mismatch that is not there.
+A node whose company runs no native tracker has no eviction gate, and both gate
+routes answer `503 no_tracker` rather than `404`. The routes exist on this
+build, and telling an operator they do not sends them looking for a version
+mismatch that is not there.
 
 ### The capacity window
 
@@ -2454,10 +2452,10 @@ those runs stored a key no chat message can reproduce. Telling somebody to
 deliberately not returned: it is the largest column in the row and every
 prompt in it is already reachable through the event store.
 
-A process with no pending-run store does not register the question, so
-the route answers `404` with `unknown_query` rather than an empty board; a
-store that is configured and unreadable answers `500` with `query_failed`,
-its reason in the log.
+The run record lives in the fleet's coordination store, which every node
+opens, so every node answers with the fleet's runs. A record that cannot be
+read answers `500 query_failed` rather than an empty list: "no run is
+parked" is a claim, and a store blip is not evidence for it.
 
 ### `GET /budgets`
 
@@ -2505,7 +2503,7 @@ itself a client of this route.
 be read: a counter that cannot be read is not a counter that reads zero, and
 without the flag a coordination blip renders every seat at the bottom of its
 cap, which is the most reassuring possible picture drawn at the moment nothing
-is known.
+is known. Human seats have no row, because they spend nothing.
 
 Exhaustion is `refused_at`, the moment a charge was turned away, never
 `durable_used >= max_tokens`. The gate refuses a charge that would exceed the
@@ -2786,9 +2784,9 @@ timezone, target → resolved runner handles, and a per-request `next_run`
 }
 ```
 
-`recent_runs` is empty when no database is configured (the configured
-list and `next_run` still render). Disabled schedules return an empty
-`next_run`.
+`recent_runs` is empty when the dispatch ledger cannot be read (the
+configured list and `next_run` still render). Disabled schedules return an
+empty `next_run`.
 
 ---
 

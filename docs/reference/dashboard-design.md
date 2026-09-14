@@ -1135,10 +1135,9 @@ of which is what makes them worth having at all:
   Model activity tab wrapped its turns in the query-state component, which
   renders nothing while a query is in flight and a banner *instead of* its
   children when one fails. So a turn happening right now was invisible until
-  the event store answered, and invisible for good on a node that keeps no
-  event log, where the engine does not serve the question at all and the
-  answer is a permanent `unknown_query`. The query's
-  state renders beside the turns now, never in place of them.
+  the event store answered, and invisible for good whenever that query
+  failed. The query's state renders beside the turns now, never in place of
+  them.
 
 The seat screen makes the same split, where it answers a second question:
 which of these turns is happening right now, readable at a glance from the
@@ -1803,17 +1802,18 @@ A screen that renders a blank where data would go is a screen that cannot be
 trusted when it IS blank. Three distinctions the product makes everywhere:
 
 - **Nothing happened** vs **nothing could be read.** "No events" on a fresh
-  company and "no events" on a node with no event log are the same empty list
-  and completely different problems. `QueryState` renders the engine's own code
-  (`unknown_query` for a question this node does not serve, such as the event
-  log on a node with none, `unauthorized`, `not_found`, `unavailable`,
+  company and "no events" from a query the engine refused are the same empty
+  list and completely different problems. `QueryState` renders the engine's own
+  code (`unknown_query`, `unauthorized`, `not_found`, `unavailable`,
   `bad_params`, `query_failed`) and the client's own `timeout` as a sentence
   saying which. `bad_params` is the one that names the SCREEN as the fault: the
   engine understood the question and refused it, so retrying sends the same bad
   request again.
-- **Zero** vs **unknown.** The integrations answer's counts are three-valued,
-  and a node not serving ingress reports `unknown`, not `0`. The budgets answer
-  says `durable: false` when the counter could not be READ.
+- **Zero** vs **unknown.** The integrations answer's `skipped` and `coalesced`
+  are three-valued, and a count this node could not read comes back `null`,
+  never `0`; `inbound` is a plain count whose unknown-ness rides on the
+  answer's own `traffic_known`. The budgets answer says `durable: false` when
+  the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
   a company with no seats says roles come from the configuration.
 - **Everything in the window** vs **everything that arrived.** Where a screen
