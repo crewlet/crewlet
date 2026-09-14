@@ -9,17 +9,15 @@
 // it exists, and a node with `api.port: 0` builds no App at all. There is no
 // API process without an engine.
 //
-// This package was once written for a "standalone API" as well, and every
-// dependency the engine supplies was optional to serve it: a nil [NodeRuntime]
-// reported `engine: false` and omitted the engine's fields, a nil budget counter
-// answered `no_coordination_store`, a nil config service left /config
-// unregistered. No process ever took those branches, and they described a
-// deployment the binary cannot run. [New] now refuses a missing dependency by
-// name instead.
+// So every dependency the engine supplies is REQUIRED, and [New] refuses a
+// missing one by name. A nil here is a wiring mistake, and an answer built
+// around it (an omitted field, a 503, an unregistered route) would read to an
+// operator as a deliberate one, hiding the mistake at the one place it could
+// have been caught.
 //
-// [NodeRuntime] stays a seam for what it always was underneath: the facts this
-// package asks the engine for, declared by the consumer, so a route can be
-// tested against fixed answers without standing a node up.
+// [NodeRuntime] is a seam for one reason: it declares, in the consumer, the
+// facts this package asks the engine for, so a route can be tested against
+// fixed answers without standing a node up.
 package api
 
 import (

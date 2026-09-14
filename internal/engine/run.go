@@ -89,10 +89,10 @@ type Engine struct {
 	// survive a restart, which is the opposite property to incarnation's.
 	id string
 
-	// startedAt is when THIS engine started, which on a split deployment
-	// is a different process on a different clock from the API's own
-	// start. Carried on the presence heartbeat so a peer can tell a node
-	// that has been up for a week from one that restarted a minute ago.
+	// startedAt is when THIS engine was built, which is when the node
+	// started: the API this process serves runs inside it and reports this
+	// same instant. Carried on the presence heartbeat so a peer can tell a
+	// node that has been up for a week from one that restarted a minute ago.
 	startedAt time.Time
 
 	// posture reports this node's config lag, from whoever owns the
@@ -187,11 +187,13 @@ type Engine struct {
 	// sandboxOtel mints each coding run's telemetry endpoint. Nil exports
 	// nothing from inside a box, which is the ordinary configuration.
 	//
-	// Held here and handed OUT to the API rather than built twice: in a
-	// split deployment the API verifies tokens this process minted, and
-	// two receivers would sign with two per-process keys unless a keyring
-	// happens to be configured — which is exactly the case that must not
-	// depend on happening to be configured.
+	// Held here and handed OUT to the API this process serves rather than
+	// built twice: that API verifies the tokens this engine minted, and two
+	// receivers would sign with two per-process keys unless a keyring
+	// happens to be configured, which is exactly the case that must not
+	// depend on happening to be configured. A peer verifies them with its
+	// own receiver, which is why the key is derived from the fleet's
+	// keyring rather than held.
 	sandboxOtel *sandbox.OtelReceiver
 
 	// bridge serves a running seat's tool surface to a coding agent over
@@ -1414,11 +1416,12 @@ func (e *Engine) nodeStatus(ctx context.Context) coord.NodeStatus {
 	return status
 }
 
-// StartedAt is when this engine started.
+// StartedAt is when this engine was built, which is when the node started.
 //
-// Its own accessor rather than a field on some larger snapshot: on a split
-// deployment the API is a different process on a different clock, and a
-// merged uptime would report one number for two windows.
+// ONE INSTANT FOR EVERY SURFACE. The API served in this process reports it as
+// the node's `started_at`, and the presence heartbeat carries it to every peer's
+// fleet view, so the node's own health and the fleet's picture of it cannot
+// disagree about how long it has been up.
 func (e *Engine) StartedAt() time.Time { return e.startedAt }
 
 // SetPosture supplies the config-lag reporter the presence heartbeat

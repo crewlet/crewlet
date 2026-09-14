@@ -309,9 +309,9 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 // A STORE AND BOTH FLEET REGISTERS ARE REQUIRED, and a missing one is refused
 // by name.
 //
-// Each used to be optional, for an API process with no store or no
-// coordination. No process runs that way, and a backup that did less around a
-// nil was either missing the node's own estate or invisible to the trim.
+// The engine beside every API holds all three, and a backup that did less
+// around a nil would be either missing the node's own estate or invisible to
+// the trim.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

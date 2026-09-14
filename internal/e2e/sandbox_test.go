@@ -211,7 +211,7 @@ esac
 	return dir
 }
 
-// bootCompany stands a merged node up over a company document.
+// bootCompany stands a node (an engine and its API) up over a company document.
 //
 // The same assembly startWith does, factored out so a suite whose subject
 // needs its own store directory — one that SURVIVES a restart — can supply it.

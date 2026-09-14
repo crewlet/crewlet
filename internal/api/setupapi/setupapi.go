@@ -92,13 +92,11 @@ const (
 // Options wire the service.
 //
 // EVERY FIELD BUT Now AND StateKeys IS REQUIRED, and [New] refuses a missing one
-// by name. Each used to be optional, for an API process that ran without the
-// engine beside it: no company served no surface, no secret store refused every
-// write, no resolver answered `resolved: null` for everything, no status store
-// refused every disconnect, and no app flow refused every GitHub App. No
-// process runs that way. `crewlet run` builds this beside an engine that holds
-// all of them, so a nil is a wiring mistake, and a surface that quietly shrank
-// around one would present the mistake as a deliberate answer.
+// by name. `crewlet run` builds this beside an engine that holds all of them, so
+// a nil is a wiring mistake, and a surface that quietly shrank around one (no
+// surface at all, every secret write refused, every requirement answering
+// `resolved: null`, every disconnect or GitHub App refused) would present the
+// mistake as a deliberate answer.
 type Options struct {
 	// Company reads the ACTIVE document. It returns nil while no revision
 	// is active, which every route answers as such.
@@ -232,10 +230,9 @@ func New(opts Options) (*Service, error) {
 		},
 	}
 	// BUILT HERE, NOT ATTACHED AFTERWARDS. The flow holds the service (the
-	// callback reaches the writer and the secret store through it), so it
-	// used to be constructed by the caller and attached with a setter, and
-	// the begin route refused with `no_app_flow` whenever nobody had. One
-	// constructor for both halves leaves no service without its flow.
+	// callback reaches the writer and the secret store through it), and one
+	// constructor for both halves leaves no window in which the begin route
+	// has a service with no flow to validate the state it would mint.
 	s.appFlow = newAppFlow(s, opts.StateKeys, opts.StateClaims)
 	return s, nil
 }

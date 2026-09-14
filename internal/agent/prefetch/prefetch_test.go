@@ -245,8 +245,8 @@ func fetch(t *testing.T, src prefetch.Sources, r prefetch.Request) prefetch.Bloc
 // ── everything degrades to nothing ──
 
 // A NIL SOURCE IS A SUPPORTED CONFIGURATION, not a degraded one: a company
-// with reflection off, no knowledge backend, or no database has exactly
-// this, and a turn must still start.
+// with reflection off or no knowledge backend has exactly this, and a turn
+// must still start.
 func TestTheZeroSourcesRenderNothingAndDoNotPanic(t *testing.T) {
 	t.Parallel()
 	blocks := fetch(t, prefetch.Sources{}, request(t))

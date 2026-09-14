@@ -472,7 +472,7 @@ func (e *Engine) VerifiableSources() []string {
 
 // Mattermost is the running chat transport, or nil when the company has no
 // chat surface. Beside [Engine.Registry] and [Engine.Status]: the facts only
-// a co-located engine can answer about what it actually built.
+// the engine can answer about what it actually built.
 func (e *Engine) Mattermost() *mattermost.Transport {
 	e.notify.mu.Lock()
 	defer e.notify.mu.Unlock()

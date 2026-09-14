@@ -77,8 +77,8 @@ type OtelReceiver struct {
 // OtelReceiverOptions configure [NewOtelReceiver].
 type OtelReceiverOptions struct {
 	// BaseURL is the externally reachable engine API base the SANDBOX
-	// exports to. In a split deployment that is the API process, which is
-	// not the process that mints.
+	// exports to. On a fleet split by node.roles that is an ingress node,
+	// which need not be the node that mints.
 	BaseURL string
 
 	// Tokens mints and verifies. Required.

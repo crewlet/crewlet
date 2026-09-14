@@ -67,9 +67,6 @@ func (s *Service) Document(ctx context.Context) (*config.Company, error) {
 // what an entity-tag needs: the document changes exactly when the active
 // revision does, so the revision id IS the validator.
 func (s *Service) documentOf(ctx context.Context) (*config.Company, store.Revision, error) {
-	if s == nil {
-		return nil, store.Revision{}, fmt.Errorf("configapi: no store on this node")
-	}
 	revision, found, err := s.configs.Active(ctx)
 	if err != nil {
 		return nil, store.Revision{}, err
@@ -121,9 +118,6 @@ func (s *Service) References(ctx context.Context) ([]config.Reference, store.Rev
 // derives an edit, and names what it read so a concurrent write is refused
 // rather than silently overwritten.
 func (s *Service) ActiveRevision(ctx context.Context) (string, error) {
-	if s == nil {
-		return "", fmt.Errorf("configapi: no store on this node")
-	}
 	revision, found, err := s.configs.Active(ctx)
 	if err != nil {
 		return "", err
@@ -136,9 +130,6 @@ func (s *Service) ActiveRevision(ctx context.Context) (string, error) {
 
 // Revisions is the history, newest first, metadata only.
 func (s *Service) Revisions(ctx context.Context, limit, offset int) ([]map[string]any, error) {
-	if s == nil {
-		return nil, fmt.Errorf("configapi: no store on this node")
-	}
 	revisions, err := s.configs.List(ctx, limit, offset)
 	if err != nil {
 		return nil, err
@@ -157,9 +148,6 @@ func (s *Service) Revisions(ctx context.Context, limit, offset int) ([]map[strin
 // the side answering over a wire, and `changes_total` is always present so a
 // reader renders how many changed rather than how many arrived.
 func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[string]any, error) {
-	if s == nil {
-		return nil, fmt.Errorf("configapi: no store on this node")
-	}
 	target, found, err := s.configs.Get(ctx, revisionID)
 	if err != nil {
 		return nil, err

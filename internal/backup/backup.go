@@ -283,13 +283,11 @@ const HoldHeartbeat = statelog.TrimHoldStale / 4
 
 // New builds the service.
 //
-// A MISSING STORE, HOLD REGISTER OR BACKUP REGISTER IS REFUSED. Each used to be
-// optional, for an API process that ran with no store or no coordination: no
-// store backed up the streams alone, no registers skipped the pin and the
-// announcement. No process runs that way. `crewlet run` builds this beside an
-// engine holding all three, so a nil is a wiring mistake, and a backup that
-// quietly did less around it would be an artefact the trim cannot see or one
-// missing the node's own estate.
+// A MISSING STORE, HOLD REGISTER OR BACKUP REGISTER IS REFUSED. `crewlet run`
+// builds this beside an engine holding all three, so a nil is a wiring mistake,
+// and a backup that quietly did less around it (the streams without the store,
+// a copy with no trim pin or no announcement) would be an artefact the trim
+// cannot see or one missing the node's own estate.
 func New(opts Options) (*Service, error) {
 	switch {
 	case opts.Store == nil:

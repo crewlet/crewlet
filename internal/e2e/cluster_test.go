@@ -53,7 +53,8 @@ type cluster struct {
 	relays *jetstreamtest.Relays
 }
 
-// startCluster stands up n merged nodes on one clustered broker.
+// startCluster stands up n nodes, each an engine and its API, on one clustered
+// broker.
 func startCluster(t *testing.T, n int) *cluster {
 	t.Helper()
 	if n < 2 {

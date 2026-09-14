@@ -118,9 +118,6 @@ type ApplyRequest struct {
 // redacted read handed back, validate the whole document, seal it, store it,
 // then flip the pointer as a compare-and-set naming the parent.
 func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) {
-	if s == nil {
-		return Applied{}, fmt.Errorf("configapi: no store on this node")
-	}
 	if len(req.Patch) == 0 {
 		return Applied{}, &PatchError{Err: errEmptyPatch}
 	}
@@ -319,9 +316,6 @@ func (s *Service) activateDocument(
 // writes one: the history stays append-only, so "the credentials were
 // reloaded at 04:12" is a fact somebody can find later.
 func (s *Service) Reload(ctx context.Context, summary, operator string) (Applied, error) {
-	if s == nil {
-		return Applied{}, fmt.Errorf("configapi: no store on this node")
-	}
 	active, found, err := s.configs.Active(ctx)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: read the active revision: %w", err)

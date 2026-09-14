@@ -271,12 +271,12 @@ func (n *Node) Stop(ctx context.Context) {
 	// detaches that seat's mailbox through OnRelease — so by the time this
 	// returns the node consumes nothing.
 	//
-	// It does NOT stop the queue. A node is GIVEN its broker client; the
-	// caller that opened it decides when it closes, and on the merged
-	// topology that client is shared with an API process which outlives
-	// the engine's shutdown. Stopping it here took the API's broker down
-	// with the engine — and did so through a layer that had no way to know
-	// it was not the owner.
+	// It does NOT stop the queue. A node is GIVEN its broker client, and
+	// whoever opened it decides when it closes: the engine's backends stop
+	// it in the one order that is correct (see engine.Backends.Close), and
+	// a caller that lent the backends keeps them after the engine stops.
+	// Stopping it here took the broker down through a layer that had no
+	// way to know it was not the owner.
 	n.host.Stop(ctx)
 }
 

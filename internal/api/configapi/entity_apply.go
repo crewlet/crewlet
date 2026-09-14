@@ -51,9 +51,6 @@ func (e *EntityError) Unwrap() error { return e.Err }
 
 // ApplyEntity splices one entity into the active revision and activates it.
 func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Applied, error) {
-	if s == nil {
-		return Applied{}, fmt.Errorf("configapi: no store on this node")
-	}
 	access, ok := entityKinds[req.Kind]
 	if !ok {
 		return Applied{}, &EntityError{Err: ErrUnknownEntityKind}

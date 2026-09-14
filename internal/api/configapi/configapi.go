@@ -95,11 +95,9 @@ type Options struct {
 // New builds the service.
 //
 // A MISSING STORE OR PLANE IS REFUSED rather than served as a narrower surface.
-// Both used to be optional, for an API process that ran without the engine's
-// store or coordination: no store left /config unregistered, and no plane made
-// every write answer 503. No process runs that way. `crewlet run` builds this
-// beside an engine that holds both, so a nil here is a wiring mistake, and a
-// surface that quietly shrank around it would hide exactly that.
+// `crewlet run` builds this beside an engine that holds both, so a nil here is a
+// wiring mistake, and a surface that quietly shrank around it (an unregistered
+// /config, a write answering 503) would hide exactly that.
 func New(opts Options) (*Service, error) {
 	switch {
 	case opts.Store == nil:

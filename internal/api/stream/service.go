@@ -31,10 +31,9 @@ const HealthInterval = 5 * time.Second
 
 // Health is what the shared tick carries.
 //
-// InFlight and ShuttingDown are always present. They were pointers, absent on
-// an API process with no engine to ask, and no such process exists: the API is
-// served beside the engine in every node that serves it, so both are always
-// known and a zero is a real zero.
+// InFlight and ShuttingDown are always present, and a zero is a real zero: the
+// API is served beside the engine in every node that serves it, so both are
+// always known.
 type Health struct {
 	Status       string `json:"status"`
 	InFlight     int    `json:"in_flight"`
@@ -87,11 +86,10 @@ type HandleFunc func() map[string]string
 // Options configure a service.
 //
 // Health, Handles, Roster, Org, Tools and Schedules are REQUIRED, and
-// [NewService] refuses a missing one by name. Each used to be optional, for an
-// API process with no engine to ask: no health answered a bare "ok", no tools
-// function drew an empty catalogue. No process runs that way, and with the
-// health fields no longer optional a missing function would push a confident
-// zero rather than an honest absence.
+// [NewService] refuses a missing one by name. Each is something the engine
+// beside the API always answers, so a missing one is a wiring mistake, and
+// serving around it would push a confident answer where there is none: a
+// health frame reading "ok", an empty catalogue, an organization with no seats.
 type Options struct {
 	Health HealthFunc
 
@@ -304,7 +302,8 @@ func (s *Service) currentHealth() Health { return s.health() }
 // [Service.Stop] is called.
 //
 // Idempotent: a second call while one is running is a no-op rather than a
-// second timer, because the merged topology can reach this from either half.
+// second timer, which would push every health frame twice and leave a goroutine
+// that [Service.Stop] never joins.
 func (s *Service) StartHealthTicks(ctx context.Context) {
 	s.mu.Lock()
 	if s.ticking {

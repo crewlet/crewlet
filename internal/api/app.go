@@ -96,15 +96,12 @@ type routeMounter interface {
 // Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets, Retention,
 // Capacity and Backup are REQUIRED, and [New] refuses a missing one by name.
 //
-// Each used to be optional, for a "standalone API": a process serving this
-// surface with no engine beside it, and so with no runtime to ask, no store and
-// no coordination plane. Every nil had a narrower answer built around it (a
-// health body with engine=false, a 503 naming no_coordination_store, an absent
-// /config) and no process ever took any of them: `crewlet run` is the only
-// thing that builds an App, it builds one beside an engine that holds all of
-// these, and a node that serves no API (api.port 0) builds none at all. So a
-// nil here is a wiring mistake, and a narrower answer built around it hides
-// that mistake behind something an operator reads as deliberate.
+// Every one of them is something the engine beside the API holds: `crewlet
+// run` is the only thing that builds an App, it builds one over an engine that
+// holds all of these, and a node that serves no API (api.port 0) builds none at
+// all. So a nil here is a wiring mistake, and a narrower answer built around it
+// (a health body missing the engine's fields, a 503, an unregistered /config)
+// would hide that mistake behind something an operator reads as deliberate.
 //
 // What stays optional is what a real node can lack: a native tracker (a company
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
@@ -167,10 +164,11 @@ type Options struct {
 	// MCP. Nil serves none, and the route is then ABSENT for the same
 	// reason OtelReceiver's is.
 	//
-	// It belongs to the API for the same reason too: in a SPLIT deployment
-	// this is the externally reachable process, so the engine opens a run's
-	// session and a different process verifies its token. That is why the
-	// token is signed rather than stored — see internal/runtoken.
+	// Unlike the receiver, it resolves a token only to a session THIS node
+	// opened: a session is a live tool surface in the process that claimed
+	// the seat. The token is still signed rather than stored (see
+	// internal/runtoken), so a peer that a box reached by mistake can tell
+	// a misrouted call from a forged one.
 	Bridge *mcpbridge.Bridge
 
 	// Operator is the company's own tracker and knowledge base, served to

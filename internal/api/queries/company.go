@@ -52,12 +52,10 @@ func (s Sources) schedules(ctx context.Context, _ Params) (any, error) {
 // The ledger half stays out. It is a store read, and the snapshot is built
 // without one — see stream.Service.Snapshot.
 func (s Sources) ConfiguredSchedules() []schedule.Row {
-	// The FUNC, not just its answer: a process with no company source at
-	// all is the state a node is in before its first revision activates,
-	// and every other config-derived surface guards it the same way.
-	if s.Company == nil {
-		return []schedule.Row{}
-	}
+	// Both callers hold a company source (the API refuses to build without
+	// one, and the schedules question is registered only beside it), so
+	// the func is never nil. What it returns is, before a node's first
+	// revision activates.
 	company := s.Company()
 	if company == nil {
 		return []schedule.Row{}

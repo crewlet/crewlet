@@ -297,9 +297,8 @@ func TestASecretNamedRekeyIsStillReachable(t *testing.T) {
 
 // A FLEET IS REQUIRED, and a missing one is refused by name.
 //
-// It used to leave /secrets unregistered, for an API process that could not
-// reach the fleet's store. No process runs that way, so a nil is a wiring
-// mistake, and a 404 built around it would look like a deliberate answer.
+// Every node opens the fleet's store, so a nil is a wiring mistake, and an
+// unregistered /secrets answering 404 would look like a deliberate answer.
 func TestWithoutAFleetTheSurfaceIsRefused(t *testing.T) {
 	t.Parallel()
 	svc, err := secretsapi.New(secretsapi.Options{Cipher: cipherFor(t, "k1")})
