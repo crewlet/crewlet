@@ -353,9 +353,9 @@ var table = []rule{
 					"policy asks for %s", round(r.BackupAge), round(r.BackupMaxAge)),
 				r.BackupMaxAge > 0 && r.BackupAge > r.BackupMaxAge
 		},
-		remedy: "Run `crewlet backup` against a node holding seats, and check " +
-			"whatever was meant to run it. The trim will not advance past a " +
-			"backup this old.",
+		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
+			"and check whatever was meant to run it. The trim will not " +
+			"advance past a backup this old.",
 	},
 	{
 		kind: KindTrimBlocked,
