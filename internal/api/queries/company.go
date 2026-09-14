@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/schedule"
@@ -510,7 +511,7 @@ func (s Sources) deliveryTraffic(ctx context.Context) traffic {
 		return traffic{}
 	}
 	rows, err := s.Events.List(ctx, store.ListQuery{
-		Category: "webhook", Limit: MaxEventPage,
+		Category: events.WebhookCategory, Limit: MaxEventPage,
 	})
 	if err != nil {
 		log.WarnContext(ctx, "integration_counts_unreadable", "error", err)
