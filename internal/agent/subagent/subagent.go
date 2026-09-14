@@ -95,22 +95,20 @@ const ToolName = "delegate"
 // It cannot widen anything: it returns prompt text and touches nothing.
 const skillLoaderTool = "load_tool_skill"
 
-// The classified reasons a child stopped short. They ride the Result and
-// become the phase event's error_kind, which is what a dashboard groups on —
-// so they are wire strings, not an internal enum.
+// The reasons [stopReason] can give for a context that ended under a child,
+// which [classify] turns into the child's [Status].
+//
+// They never reach the wire themselves. What a dashboard groups on is the
+// Status, which becomes the worker's phase event error_kind; these only tell
+// classify which of two statuses a dead context means. There were three more,
+// a budget, a panic and a catch-all, and nothing produced them: a refused
+// charge is read off the loop's own error, and a contained panic is a
+// [StatusFailed] by design, with the panic's value as its message.
 const (
-	// KindTimeout — the child's own cap or the batch's expired.
+	// KindTimeout: the child's own cap or the call's expired.
 	KindTimeout = "timeout"
-	// KindBudget — the fractional slice refused a charge.
-	KindBudget = "budget_exhausted"
-	// KindPanic — something in the child's stack panicked and was
-	// contained.
-	KindPanic = "panic"
-	// KindCancelled — the parent turn was torn down under it.
+	// KindCancelled: the parent turn was torn down under it.
 	KindCancelled = "cancelled"
-	// KindFailed — anything else the loop returned: a provider that would
-	// not answer, a surface that broke.
-	KindFailed = "failed"
 )
 
 // ScopeSubagent is the budget scope a refused sub-agent charge names.
