@@ -139,6 +139,17 @@ describe("the posture table", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(liveRegion().textContent).toContain("Editing is paused"));
     expect(engine.checks()).toHaveLength(1);
+
+    // And the toolbar's own actions say so where they are read: an entry that
+    // is offered, pressed, and answers only into a live region nobody sees
+    // is worse than one marked unavailable.
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    const menu = await screen.findByRole("menu", { name: "Add to the organization" });
+    for (const name of ["Add unit", "Add agent seat", "Add human seat"]) {
+      expect(within(menu).getByRole("menuitem", { name }).getAttribute("aria-disabled")).toBe(
+        "true",
+      );
+    }
   });
 });
 

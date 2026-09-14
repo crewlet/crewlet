@@ -923,23 +923,31 @@ function Lens({
   const selectedName = companySelected
     ? state.draft.company.name || "the company"
     : selectedNode?.node.data.name || "the selected node";
+  // READ-ONLY DISABLES, IT DOES NOT HIDE. A menu that loses half its entries
+  // teaches an operator nothing about what the builder does, and an entry
+  // that is offered and then only answers into the live region tells a
+  // sighted operator nothing at all. Edit and Open seat change no draft and
+  // stay available.
   const addItems = (parent: NodeKey | null): MenuEntry[] => [
     {
       key: "add-unit",
       label: "Add unit",
       icon: "folder",
+      disabled: readOnly,
       onSelect: () => api.openAdd(parent, "unit"),
     },
     {
       key: "add-agent",
       label: "Add agent seat",
       icon: "cpu",
+      disabled: readOnly,
       onSelect: () => api.openAdd(parent, "agent"),
     },
     {
       key: "add-human",
       label: "Add human seat",
       icon: "user",
+      disabled: readOnly,
       onSelect: () => api.openAdd(parent, "human"),
     },
   ];
@@ -972,17 +980,25 @@ function Lens({
             ? "Change to agent seat"
             : "Change to human seat",
         icon: "users",
+        disabled: readOnly,
         onSelect: () => api.openChangeKind(selected),
       });
     }
     items.push(
       { kind: "separator", key: "s2" },
-      { key: "move", label: "Move to", icon: "move", onSelect: () => api.openMove(selected) },
+      {
+        key: "move",
+        label: "Move to",
+        icon: "move",
+        disabled: readOnly,
+        onSelect: () => api.openMove(selected),
+      },
       {
         key: "delete",
         label: "Delete",
         icon: "trash",
         danger: true,
+        disabled: readOnly,
         onSelect: () => api.openDelete(selected),
       },
     );

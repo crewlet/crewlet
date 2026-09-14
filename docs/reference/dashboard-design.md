@@ -1070,7 +1070,10 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   machine decides the status only while a check is out or before any answer.
 - **A read-only lens records nothing.** The guarded and read-only postures, a
   conflict and a base the engine has not keyed yet all refuse operations at
-  the one door every view goes through, and say why in the live region.
+  the one door every view goes through, and say why in the live region. The
+  actions themselves are DISABLED rather than hidden, so an operator still
+  reads what the builder does; Edit and Open seat change no draft and stay
+  available.
 
 ---
 
