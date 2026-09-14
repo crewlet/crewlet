@@ -232,6 +232,33 @@ describe("the selection in the URL", () => {
     await waitFor(() => expect(location.hash).toContain("unit=Engineering+Two"));
   });
 
+  // THE COMPANY IS A NODE TOO, and the only one the draft's tree cannot
+  // locate: it is the root rather than an element of a list. Read as absent,
+  // the card an operator selected was deselected again on the next answer,
+  // and the charter's Edit was unreachable from the toolbar.
+  test("the company stays selected, and the toolbar offers the charter's actions", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Select the company" }));
+    const actions = await screen.findByRole("button", { name: "Acme" });
+    fireEvent.click(actions);
+    const menu = await screen.findByRole("menu", { name: "Actions for Acme" });
+    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toBeDefined();
+    expect(within(menu).getByRole("menuitem", { name: "Add unit" })).toBeDefined();
+    // Nothing moves or deletes the document the company IS.
+    expect(within(menu).queryByRole("menuitem", { name: "Move to" })).toBeNull();
+    expect(within(menu).queryByRole("menuitem", { name: "Delete" })).toBeNull();
+    fireEvent.keyDown(menu, { key: "Escape" });
+
+    // And it survives the next answer about the draft, which is what a
+    // locate-based reading of the selection did not.
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await screen.findByText("No problems");
+    expect(screen.getByRole("button", { name: "Acme" })).toBeDefined();
+  });
+
   test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine, hash: "#/org?lens=builder&view=canvas&seat=ceo" });

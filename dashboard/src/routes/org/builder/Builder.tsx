@@ -80,7 +80,7 @@ import {
 } from "./BuilderContext.tsx";
 import { handlesByKey } from "./model/document.ts";
 import { allUnits, locate } from "./model/draft.ts";
-import { handleOfKey, seatKey, type NodeKey } from "./model/keys.ts";
+import { COMPANY_KEY, handleOfKey, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
 import {
   builderReducer,
@@ -270,8 +270,22 @@ function currentHandles(state: BuilderState): ReadonlyMap<NodeKey, string> {
   return handlesByKey(state.check.sent, state.check.derived);
 }
 
+/**
+ * Whether a key still names something in the draft.
+ *
+ * The company is a node like any other to a view (its card carries the
+ * charter's Edit and the Add menu) and the only one `locate` cannot find: it
+ * is the tree's root rather than an element of a list. Read as absent, a
+ * selected company card was cleared again on the next state change.
+ */
+function isPresent(state: BuilderState, key: NodeKey): boolean {
+  return key === COMPANY_KEY || locate(state.draft, key) !== undefined;
+}
+
 /** The filters that name `key`, or `null` when the node has no name the URL can carry yet. */
 function paramsOf(state: BuilderState, key: NodeKey): SelectionParams | null {
+  // The company is what the lens opens on, so it names itself with no filter.
+  if (key === COMPANY_KEY) return { unit: "", seat: "" };
   const found = locate(state.draft, key);
   if (!found) return null;
   if (found.kind === "unit") {
@@ -632,7 +646,7 @@ function Lens({
     const params = { unit: unitParam, seat: seatParam };
     const named = params.unit !== "" || params.seat !== "";
     const key = selectedRef.current;
-    const present = key !== null && locate(state.draft, key) !== undefined;
+    const present = key !== null && isPresent(state, key);
     if (present) {
       const now = paramsOf(state, key);
       if (!now || (now.unit === params.unit && now.seat === params.seat)) return;
@@ -896,8 +910,11 @@ function Lens({
   // buttons are pointer-only (a tree item may not contain tab stops), so this
   // is where a keyboard reaches them, and it is also where a node's actions
   // are when the outline is the view.
-  const selectedNode = selected ? locate(state.draft, selected) : undefined;
-  const selectedName = selectedNode?.node.data.name || "the selected node";
+  const companySelected = selected === COMPANY_KEY;
+  const selectedNode = selected && !companySelected ? locate(state.draft, selected) : undefined;
+  const selectedName = companySelected
+    ? state.draft.company.name || "the company"
+    : selectedNode?.node.data.name || "the selected node";
   const addItems = (parent: NodeKey | null): MenuEntry[] => [
     {
       key: "add-unit",
@@ -919,12 +936,19 @@ function Lens({
     },
   ];
   const nodeItems = (): MenuEntry[] => {
-    if (!selectedNode || !selected) return addItems(null);
-    const seatHandle = handleOfKey(selected) ?? currentHandles(state).get(selected);
+    if (!selected || (!selectedNode && !companySelected)) return addItems(null);
     const items: MenuEntry[] = [
       { key: "edit", label: "Edit", icon: "pencil", onSelect: () => api.openEditor(selected) },
     ];
-    if (selectedNode.kind === "unit")
+    // The company holds seats and units as a unit does, and its Edit is the
+    // charter's. Nothing moves or deletes the document the company IS, so
+    // its menu ends there.
+    if (companySelected) {
+      items.push({ kind: "separator", key: "s" }, ...addItems(null));
+      return items;
+    }
+    const seatHandle = handleOfKey(selected) ?? currentHandles(state).get(selected);
+    if (selectedNode!.kind === "unit")
       items.push({ kind: "separator", key: "s" }, ...addItems(selected));
     else if (seatHandle) {
       items.push({
@@ -936,7 +960,9 @@ function Lens({
       items.push({
         key: "kind",
         label:
-          selectedNode.node.data.kind === "human" ? "Change to agent seat" : "Change to human seat",
+          selectedNode!.node.data.kind === "human"
+            ? "Change to agent seat"
+            : "Change to human seat",
         icon: "users",
         onSelect: () => api.openChangeKind(selected),
       });

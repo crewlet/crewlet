@@ -27,6 +27,7 @@ import {
 import { Builder, type BuilderSurfaces } from "./Builder.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import { allSeats, allUnits } from "./model/draft.ts";
+import { COMPANY_KEY } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
 import { fixtureDerived } from "./model/testkit.ts";
 
@@ -223,6 +224,9 @@ export function FakeView() {
   return (
     <div>
       <p>{api.readOnly ? "read only" : "editable"}</p>
+      <button type="button" onClick={() => api.selection.select(COMPANY_KEY)}>
+        Select the company
+      </button>
       <button
         type="button"
         onClick={() =>
