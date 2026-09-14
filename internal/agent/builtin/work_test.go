@@ -1292,3 +1292,74 @@ func TestOneCommentCanBeOpenedWholeAndAWrongIDSaysHow(t *testing.T) {
 		}
 	}
 }
+
+// THE DESCRIPTION IS BOUNDED LIKE EVERY OTHER PART OF A DETAIL READ, AND THE
+// WHOLE OF IT IS ONE CALL AWAY.
+//
+// It was the one value on this answer with no bound at all: the thread is
+// paged, the history is capped, the relation sets are capped, and the body
+// rode whole at up to [tracker.MaxBody]. That cap was exactly
+// [builtin.ToolAnswerBytes], so an item with a long description was refused
+// for weight — and `include` names the collections BESIDE the task, never the
+// task itself, so the refusal's own advice could not help. A caller who does
+// mean the description says so and gets it whole.
+func TestADescriptionIsShortenedUnlessItIsWhatWasAskedFor(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	whole := strings.Repeat("d", builtin.TaskBodyShown*3)
+	item := trk.tasks["ENG-1"]
+	item.Task.Body = whole
+	trk.tasks["ENG-1"] = item
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk})
+
+	// BY DEFAULT IT IS CUT, AND MARKED — an unmarked cut reads as a
+	// description that ended there, and the reader never learns there is
+	// more to ask for.
+	got := callWork(t, reg, builtin.GetWorkItemTool, map[string]any{"item": "ENG-1"})
+	if got.Failed {
+		t.Fatalf("an item with a long description failed: %q", got.Output)
+	}
+	if strings.Contains(got.Output, whole) {
+		t.Error("the whole description rode on an ordinary read, which is " +
+			"what put a maximal item past the ceiling with no argument to narrow it")
+	}
+	if !strings.Contains(got.Output, "…") {
+		t.Errorf("the description was cut without a mark: %.300s", got.Output)
+	}
+
+	// AND `body: true` RETURNS IT WHOLE — the half that makes the cut a
+	// pointer rather than a loss.
+	got = callWork(t, reg, builtin.GetWorkItemTool, map[string]any{
+		"item": "ENG-1", "body": true,
+	})
+	if got.Failed {
+		t.Fatalf("asking for the description failed: %q", got.Output)
+	}
+	if !strings.Contains(got.Output, whole) {
+		t.Error("`body: true` did not return the description whole, so what " +
+			"was written past the cut is reachable through no tool at all")
+	}
+	// ON ITS OWN, like `comment:` — a whole description carried beside the
+	// thread, the history and the links is the shape the ceiling refuses.
+	if trk.wants.Comments || trk.wants.History || trk.wants.Links || trk.wants.Fields {
+		t.Errorf("asking for the description also asked for comments=%v "+
+			"history=%v links=%v fields=%v", trk.wants.Comments,
+			trk.wants.History, trk.wants.Links, trk.wants.Fields)
+	}
+
+	// AND THE TWO WHOLE-VALUE READS DO NOT COMPOSE. Together they are 64
+	// KiB before escaping against a 64 KiB ceiling, so a call naming both
+	// would be refused for asking for exactly the two things these
+	// arguments exist to make reachable; the narrower ask wins.
+	got = callWork(t, reg, builtin.GetWorkItemTool, map[string]any{
+		"item": "ENG-1", "body": true, "comment": "cm-9",
+	})
+	if got.Failed {
+		t.Fatalf("naming both failed: %q", got.Output)
+	}
+	if trk.wants.Comment != "cm-9" || strings.Contains(got.Output, whole) {
+		t.Errorf("naming both gave comment=%q and a whole body=%v — one of "+
+			"them has to win, and it is the narrower",
+			trk.wants.Comment, strings.Contains(got.Output, whole))
+	}
+}
