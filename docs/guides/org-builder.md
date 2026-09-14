@@ -232,6 +232,35 @@ Datadog or Mattermost (the engine provisions every agent seat), a per-seat
 Datadog role, GitLab tiers beyond developer and maintainer, and flags that
 grant access to everything (an empty repository list already does).
 
+## Moving a node
+
+**Move to** moves a seat or a unit (with everything inside it) to the end of
+another unit, or to the top level of the company. A unit is never offered a
+destination inside itself. Before you confirm, the dialog shows what the move
+changes, read from the engine's last check of your draft:
+
+- who a moved seat reports to now, and the lead of the destination, who
+  manages a unit's direct members unless another member manages the seat;
+- the lead and the channel a moved unit, and the units inside it that declare
+  none, would inherit instead;
+- the agent seats that onboard again because the units above them change;
+- the tool credential servers a moved agent seat gains or loses from its home
+  unit's `mcp_env` (names only).
+
+The next check confirms the result, and the review lists it before you save.
+
+A unit's lead is a seat's name, so a seat that leads a unit **stays its lead**
+wherever it moves. The dialog says so and offers **Clear lead** to remove it as
+part of the move. A seat placed in a unit by its `unit:` reference is written
+into the destination and the reference is removed.
+
+The dialog also names any unit schedule the move would leave with no runner
+(a schedule for members needs a direct agent member, and a schedule for the
+lead fails when the effective lead is a human seat), because the engine refuses
+the save until the schedule is disabled or has a runner, and says when a seat
+being moved is working: its current turn continues on the previous
+configuration until the engine applies the change.
+
 ## Reviewing and saving
 
 **Review and save** opens once the draft has changes, and says what the save
