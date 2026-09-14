@@ -93,18 +93,22 @@ func inThread(kind, conversation string) *events.Event {
 
 // recorder captures what the dispatcher asked of the turn engine.
 type recorder struct {
-	reqs     []engine.Request
-	keys     []string
-	result   turn.Result
-	err      error
-	parked   [][]*events.Event
-	paused   []string
-	deferred []string
+	reqs      []engine.Request
+	keys      []string
+	result    turn.Result
+	err       error
+	panicWith any
+	parked    [][]*events.Event
+	paused    []string
+	deferred  []string
 }
 
 func (r *recorder) run(_ context.Context, req engine.Request) (turn.Result, error) {
 	r.reqs = append(r.reqs, req)
 	r.keys = append(r.keys, req.WorkKey)
+	if r.panicWith != nil {
+		panic(r.panicWith)
+	}
 	return r.result, r.err
 }
 
@@ -515,6 +519,245 @@ func TestATurnThatBrokeAfterActingIsRecordedRatherThanRedelivered(t *testing.T) 
 	if !strings.Contains(skipped.Reason, "outside the engine") {
 		t.Errorf("reason = %q, want it to say why the trigger will not come back", skipped.Reason)
 	}
+}
+
+// A PANICKED TURN IS RECORDED, even though its record proves no write.
+//
+// The proof rule above keeps a retry for a turn that proved nothing, because
+// such a turn may succeed next time. A panic will not: the redelivery runs the
+// same code on the same input. Before the loop recovered panics this reached
+// the queue backend's own guard, which NAKs, and the trigger came back up to
+// the whole delivery budget.
+func TestAPanickedTurnIsRecordedRatherThanRedelivered(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	a := ev("notification")
+	r := &recorder{
+		// What turn.Run hands back for a panicking phase: no proven
+		// write, the unhandled-exception guard, and the panic as the
+		// error.
+		result: turn.Result{Decision: phase.Failed, Breach: &turn.Breach{
+			Kind: types.GuardUnhandledException, Detail: "panic: nil map",
+		}},
+		err: fmt.Errorf("turn: execute round 1: %w", turn.Recovered("nil map")),
+	}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	d.Identify = func(string) (string, string) { return "CEO", "a-1" }
+	ctx := context.Background()
+
+	got := d.Dispatch(ctx, "ceo", []*events.Event{a})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK: a redelivery reaches the same panic", got.Outcome)
+	}
+	key := workkey.Derive([]string{a.ID.String()})
+	if !completions.Worked(ctx, "ceo", []string{key})[key] {
+		t.Error("the panicked trigger was not recorded, so a peer's redelivery runs it again")
+	}
+	// ONE record from the dispatcher, the skipped trigger. The breach is the
+	// TURN's to publish (its telemetry already did, from the result above),
+	// and a second one here would count one panic twice.
+	if len(seen) != 1 {
+		t.Fatalf("observed %d events (%v), want only the skipped trigger", len(seen), typesSeen(seen))
+	}
+	skipped, ok := seen[0].Data.(*types.TurnTriggerSkipped)
+	if !ok {
+		t.Fatalf("observed %T, want a TurnTriggerSkipped", seen[0].Data)
+	}
+	if !strings.Contains(skipped.Reason, "panicked") {
+		t.Errorf("reason = %q, want it to say the turn panicked", skipped.Reason)
+	}
+}
+
+// A PANIC THE LOOP NEVER SAW IS RECOVERED AT THE DISPATCHER.
+//
+// The loop recovers a panicking phase; everything between the broker and the
+// loop is this frame's: the screening stages, and the turn's own set-up and
+// tear-down around the loop. Each case panics somewhere different, and each
+// must settle the delivery, record the trigger and put the seat AFK, because
+// no turn telemetry ran to do it.
+func TestAPanicOutsideTheLoopIsRecoveredAtTheDispatcher(t *testing.T) {
+	t.Parallel()
+	for name, arrange := range map[string]func(d *engine.Dispatcher, r *recorder){
+		"in the turn's own frames": func(_ *engine.Dispatcher, r *recorder) {
+			r.panicWith = "runner could not be built: nil registry"
+		},
+		"in a screening stage": func(d *engine.Dispatcher, _ *recorder) {
+			d.Conditions = func(string) inbox.Conditions { panic("lease table returned nil") }
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			completions := ledgerstore.NewMemoryCompletions()
+			a := ev("notification")
+			r := &recorder{}
+			d := dispatcher(t, r)
+			d.Completions = completions
+			var seen []*events.Event
+			d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+			d.Identify = func(handle string) (string, string) {
+				if handle != "ceo" {
+					t.Errorf("identified %q, want the dispatched seat", handle)
+				}
+				return "CEO", "a-1"
+			}
+			arrange(d, r)
+			ctx := context.Background()
+
+			got := d.Dispatch(ctx, "ceo", []*events.Event{a})
+			if got.Outcome != queue.OutcomeAck {
+				t.Fatalf("outcome = %v, want an ACK: an escaped panic is NAKed by the "+
+					"queue backend and redelivered into the same defect", got.Outcome)
+			}
+			key := workkey.Derive([]string{a.ID.String()})
+			if !completions.Worked(ctx, "ceo", []string{key})[key] {
+				t.Error("the trigger was not recorded")
+			}
+			var breach *types.TurnGuardBreach
+			var skipped *types.TurnTriggerSkipped
+			for _, e := range seen {
+				switch data := e.Data.(type) {
+				case *types.TurnGuardBreach:
+					breach = data
+				case *types.TurnTriggerSkipped:
+					skipped = data
+				}
+			}
+			if breach == nil {
+				t.Fatalf("observed %v, want a guard breach: without it the seat never "+
+					"goes AFK and shows whatever it was last doing", typesSeen(seen))
+			}
+			if breach.Kind != types.GuardUnhandledException || breach.RoleName != "CEO" ||
+				breach.Agent != "a-1" {
+				t.Errorf("breach = %+v, want unhandled_exception addressed to CEO/a-1", breach)
+			}
+			if breach.TurnID != key {
+				t.Errorf("breach turn id = %q, want the partition's work key %q", breach.TurnID, key)
+			}
+			if skipped == nil || !strings.Contains(skipped.Reason, "panicked") {
+				t.Errorf("skipped = %+v, want the trigger on the record as panicked", skipped)
+			}
+		})
+	}
+}
+
+// A seat the company does not name gets no breach, and the delivery is still
+// settled: a breach addressed to no role moves no seat, and refusing to settle
+// over it would hand the panic back to the queue.
+func TestAPanicForAnUnknownSeatIsStillSettled(t *testing.T) {
+	t.Parallel()
+	r := &recorder{panicWith: "boom"}
+	d := dispatcher(t, r)
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	d.Identify = func(string) (string, string) { return "", "" }
+
+	got := d.Dispatch(context.Background(), "ghost", []*events.Event{ev("notification")})
+	if got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK", got.Outcome)
+	}
+	for _, e := range seen {
+		if _, ok := e.Data.(*types.TurnGuardBreach); ok {
+			t.Errorf("a breach was published for a seat that does not exist: %+v", e.Data)
+		}
+	}
+}
+
+// A PANIC SETTLES WHAT THE DELIVERY STILL HOLDS, NOT WHAT IT ARRIVED WITH.
+//
+// A partition that will not merge requeues its tail before its head runs, so
+// when the head's turn panics the tail's copies are already back on the queue.
+// Recording the tail as worked would drop every one of them unrun when it came
+// back, the loss inbox.Degraded keys the head apart to prevent.
+func TestAPanicInADegradedHeadLeavesTheRequeuedTailToRun(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	r := &recorder{panicWith: "nil map in the head's turn"}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	d.Identify = func(string) (string, string) { return "CEO", "a-1" }
+	ctx := context.Background()
+
+	head := said("ana", "first", clock)
+	opaque := &events.Event{ID: uuid.New(), Type: notificationType, Timestamp: clock.Add(time.Minute)}
+	notifyStamp(opaque, "slack:C1")
+
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{head, opaque}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK", got.Outcome)
+	}
+	if len(r.parked) != 1 || len(r.parked[0]) != 1 || r.parked[0][0].ID != opaque.ID {
+		t.Fatalf("the tail was not requeued before the head ran: %v", r.parked)
+	}
+	headKey := workkey.Derive([]string{head.ID.String()})
+	tailKey := workkey.Derive([]string{opaque.ID.String()})
+	worked := completions.Worked(ctx, "ceo", []string{headKey, tailKey})
+	if !worked[headKey] {
+		t.Error("the head whose turn panicked was not recorded, so it runs the defect again")
+	}
+	if worked[tailKey] {
+		t.Error("the requeued tail was recorded as worked, so its copy is dropped unrun")
+	}
+	for _, e := range seen {
+		switch data := e.Data.(type) {
+		case *types.TurnTriggerSkipped:
+			if data.TriggerID != head.ID.String() {
+				t.Errorf("a skip record names %s, which this delivery handed back "+
+					"to the queue", data.TriggerID)
+			}
+		case *types.TurnGuardBreach:
+			if data.TurnID != headKey {
+				t.Errorf("breach turn id = %q, want the head's own key %q", data.TurnID, headKey)
+			}
+		}
+	}
+}
+
+// And a constituent the ledger had already dropped is not put on the record a
+// second time as panicked: it was settled by the turn that worked it.
+func TestAPanicDoesNotReRecordWhatTheLedgerAlreadyDropped(t *testing.T) {
+	t.Parallel()
+	completions := ledgerstore.NewMemoryCompletions()
+	worked, fresh := ev("notification"), ev("notification")
+	ctx := context.Background()
+	if err := completions.Record(ctx, "ceo",
+		workkey.Derive([]string{worked.ID.String()}), "", clock); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	r := &recorder{panicWith: "boom"}
+	d := dispatcher(t, r)
+	d.Completions = completions
+	var seen []*events.Event
+	d.Observe = func(_ context.Context, e *events.Event) { seen = append(seen, e) }
+	d.Identify = func(string) (string, string) { return "CEO", "a-1" }
+
+	if got := d.Dispatch(ctx, "ceo", []*events.Event{worked, fresh}); got.Outcome != queue.OutcomeAck {
+		t.Fatalf("outcome = %v, want an ACK", got.Outcome)
+	}
+	reasons := map[string][]string{}
+	for _, e := range seen {
+		if skip, ok := e.Data.(*types.TurnTriggerSkipped); ok {
+			reasons[skip.TriggerID] = append(reasons[skip.TriggerID], skip.Reason)
+		}
+	}
+	if got := reasons[worked.ID.String()]; len(got) != 1 || strings.Contains(got[0], "panicked") {
+		t.Errorf("the already-worked trigger's records = %q, want the one skip saying "+
+			"it was worked, and no panic", got)
+	}
+	if got := reasons[fresh.ID.String()]; len(got) != 1 || !strings.Contains(got[0], "panicked") {
+		t.Errorf("the trigger whose turn panicked has records %q, want one naming the panic", got)
+	}
+}
+
+func typesSeen(evs []*events.Event) []string {
+	out := make([]string, 0, len(evs))
+	for _, e := range evs {
+		out = append(out, e.Type)
+	}
+	return out
 }
 
 // ABANDONING A TURN FILES NO REPLY TO THE THREAD.

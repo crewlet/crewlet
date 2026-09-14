@@ -1001,6 +1001,14 @@ func (e *Engine) buildDispatcher(opts Options, backends *Backends) *Dispatcher {
 	if d.Observe == nil {
 		d.Observe = e.observe
 	}
+	if d.Identify == nil {
+		// Read off the LIVE epoch at the moment of the panic, like the
+		// policies above: the dispatcher is built once and an apply can
+		// rename or remove the seat after it.
+		d.Identify = func(handle string) (string, string) {
+			return seatIdentity(e.Company(), handle)
+		}
+	}
 	// THE TWO LEDGERS COME FROM DIFFERENT PLACES, and the split is the
 	// point. Completions must be agreed across the FLEET — a redelivery
 	// that lands on a peer has to find the record, or the turn runs twice

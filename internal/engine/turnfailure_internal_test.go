@@ -260,3 +260,37 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 			breach.TurnID, breach.WorkKey, summary.TurnID, summary.WorkKey)
 	}
 }
+
+// A PANIC CLOSES THE TURN UNDER THE GUARD'S NAME, not as a generic error.
+//
+// A panicking phase is the one result that carries both an error and a breach,
+// and the summary named the error first: the Turn screen then said the engine
+// stopped it with "error", for the one failure that is the engine's own defect.
+// The breach is what the seat's AFK state reads, so it must be published too,
+// exactly once.
+func TestAPanickedTurnClosesUnderTheUnhandledExceptionGuard(t *testing.T) {
+	t.Parallel()
+	e, p, tel := failing(t)
+	tel.startedAt = time.Now().UTC().Add(-time.Second)
+	cause := fmt.Errorf("turn: execute round 2: %w", turn.Recovered("nil map"))
+
+	e.publishTurnCompleted(context.Background(), tel, runner.Spend{}, turn.Result{
+		Decision: phase.Failed,
+		Breach:   &turn.Breach{Kind: types.GuardUnhandledException, Detail: "panic: nil map"},
+	}, cause)
+
+	summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
+	if !summary.Failed || summary.ErrorKind != string(types.GuardUnhandledException) {
+		t.Errorf("summary = failed:%v kind:%q, want failed with %q",
+			summary.Failed, summary.ErrorKind, types.GuardUnhandledException)
+	}
+	// The error's own text, which names the phase and round the breach
+	// detail does not.
+	if summary.Error != cause.Error() {
+		t.Errorf("summary error = %q, want %q", summary.Error, cause.Error())
+	}
+	breach := only[*types.TurnGuardBreach](t, p, "turn.guard_breach")
+	if breach.Kind != types.GuardUnhandledException || breach.TurnID != "t-1" {
+		t.Errorf("breach = %+v, want unhandled_exception for run t-1", breach)
+	}
+}

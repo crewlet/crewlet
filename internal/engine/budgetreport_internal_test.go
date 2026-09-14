@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -53,18 +56,81 @@ func TestEveryRegisteredEventTypeIsPublishedSomewhere(t *testing.T) {
 	}
 }
 
-// payloadLiterals is every `types.X{` a non-test file in this module writes.
+// EVERY DECLARED GUARD KIND HAS A PRODUCER.
 //
-// A composite literal outside the payload's own package is what a PUBLISHER
-// looks like: the payload types have no constructors, so an event is built by
-// naming the struct. Scanning the source rather than calling anything is the
-// point — the reason this gap survived is that reaching the publishers needs a
-// broker, a store, a company and a fleet.
-func payloadLiterals(t *testing.T) map[string]bool {
-	t.Helper()
+// The same gap as the one above, one level down: a registered event type can
+// carry a value nothing ever writes into it. `unhandled_exception` was
+// declared, documented and given an AFK sentence by the dashboard, and no code
+// path set it, because nothing recovered a panic at all. The registry test
+// cannot see that, since the event type itself had producers for its other
+// kinds.
+//
+// A producer is a breach built with the kind, `Kind: types.GuardX`, in a
+// non-test file: comparing against a kind is reading it, and only a writer
+// makes the value reachable.
+func TestEveryDeclaredGuardKindIsProducedSomewhere(t *testing.T) {
+	t.Parallel()
 	root := moduleRoot(t)
+	declared := guardKinds(t, filepath.Join(root, "internal", "events", "types"))
+	written := sourceMatches(t, root, regexp.MustCompile(`\bKind:\s*types\.(Guard[A-Za-z0-9_]+)\b`))
+	for _, name := range declared {
+		if !written[name] {
+			t.Errorf("types.%s is a declared guard kind and no breach is built "+
+				"with it: a dashboard sentence for it describes a state no seat "+
+				"can reach. Produce it, or retire the kind", name)
+		}
+	}
+}
+
+// guardKinds is every constant the payload package declares as a GuardKind,
+// read from its source so a kind added there is covered without being listed
+// here.
+func guardKinds(t *testing.T, dir string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	var kinds []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				if typ, ok := value.Type.(*ast.Ident); ok && typ.Name == "GuardKind" {
+					for _, ident := range value.Names {
+						kinds = append(kinds, ident.Name)
+					}
+				}
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		t.Fatal("no GuardKind constant found, so this test could not fail")
+	}
+	return kinds
+}
+
+// sourceMatches is every first submatch of pattern in the module's non-test Go
+// files outside the payloads' own package.
+func sourceMatches(t *testing.T, root string, pattern *regexp.Regexp) map[string]bool {
+	t.Helper()
 	found := map[string]bool{}
-	literal := regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		switch {
 		case err != nil:
@@ -84,7 +150,7 @@ func payloadLiterals(t *testing.T) map[string]bool {
 		if err != nil {
 			return err
 		}
-		for _, m := range literal.FindAllStringSubmatch(string(body), -1) {
+		for _, m := range pattern.FindAllStringSubmatch(string(body), -1) {
 			found[m[1]] = true
 		}
 		return nil
@@ -92,6 +158,20 @@ func payloadLiterals(t *testing.T) map[string]bool {
 	if err != nil {
 		t.Fatalf("walk the module: %v", err)
 	}
+	return found
+}
+
+// payloadLiterals is every `types.X{` a non-test file in this module writes.
+//
+// A composite literal outside the payload's own package is what a PUBLISHER
+// looks like: the payload types have no constructors, so an event is built by
+// naming the struct. Scanning the source rather than calling anything is the
+// point: the reason this gap survived is that reaching the publishers needs a
+// broker, a store, a company and a fleet.
+func payloadLiterals(t *testing.T) map[string]bool {
+	t.Helper()
+	found := sourceMatches(t, moduleRoot(t),
+		regexp.MustCompile(`\btypes\.([A-Z][A-Za-z0-9_]*)\{`))
 	if len(found) == 0 {
 		t.Fatal("no payload literal found anywhere, so this test could not fail")
 	}

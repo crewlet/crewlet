@@ -381,7 +381,7 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 	rig := newCoordRig(t)
 	run := rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
-	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeActed)
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
 	rig.coordinator.markBusy("swe")
 
 	payload, ev := rig.completion("t1")
@@ -446,7 +446,7 @@ func TestAResumeThatRelaunchedAndThenBrokeReclaimsTheRelaunchedBox(t *testing.T)
 			t.Errorf("OnStarted: %v", err)
 		}
 	}
-	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeActed)
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
 	rig.runner.Finish(Result{Success: true, Text: "first pass"})
 
 	payload, ev := rig.completion("t1")
