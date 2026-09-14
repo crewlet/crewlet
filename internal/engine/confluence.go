@@ -129,8 +129,9 @@ func (e *Engine) reconcileConfluence(c *Company) {
 	svc := e.notify.service
 	e.notify.mu.Unlock()
 	if svc == nil {
-		// Nothing to register a parser with. `crewlet validate` applies to
-		// an engine with no inbound edge at all.
+		// Nothing to register a parser with. An apply reconciles only a
+		// running edge and starts one for a node's first company instead
+		// (see [Engine.startInbound]).
 		return
 	}
 	// IT REVIVES AS WELL AS RETIRES, and it did not.

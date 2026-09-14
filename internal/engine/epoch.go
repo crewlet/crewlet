@@ -235,23 +235,37 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// adopted, so the window that favours it is the right one.
 	e.refreshParties(next)
 	applied = append(applied, "parties")
-	// The TRACKER is rebuilt on the same edge and for the same reason: its
-	// lead map is derived from the org, so a node that kept its boot-time
-	// parser would route the new revision's work items by the old
-	// company's org chart.
-	e.reconcileConfluence(next)
-	e.reconcileDatadog(ctx, next)
-	e.reconcileJira(ctx, next)
-	e.reconcileGitLab(ctx, next)
-	e.reconcileGitHub(ctx, next)
-	// AND THE TWO CHAT SURFACES, which had no reconciler at all: their
-	// parsers were assembled once at boot, so a company that connected
-	// either one after starting had every delivery verified at the edge and
-	// routed to nobody until the process was restarted. See
-	// [Engine.reconcileSlack] for why one rebuilds unconditionally and the
-	// other does not.
-	e.reconcileSlack(ctx, next)
-	e.reconcileMattermost(ctx, next)
+	if e.inboundStarted() {
+		// The TRACKER is rebuilt on the same edge and for the same
+		// reason: its lead map is derived from the org, so a node that
+		// kept its boot-time parser would route the new revision's work
+		// items by the old company's org chart.
+		e.reconcileConfluence(next)
+		e.reconcileDatadog(ctx, next)
+		e.reconcileJira(ctx, next)
+		e.reconcileGitLab(ctx, next)
+		e.reconcileGitHub(ctx, next)
+		// AND THE TWO CHAT SURFACES, which had no reconciler at all:
+		// their parsers were assembled once at boot, so a company that
+		// connected either one after starting had every delivery
+		// verified at the edge and routed to nobody until the process
+		// was restarted. See [Engine.reconcileSlack] for why one rebuilds
+		// unconditionally and the other does not.
+		e.reconcileSlack(ctx, next)
+		e.reconcileMattermost(ctx, next)
+	} else if err := e.startInbound(ctx, next); err != nil {
+		// A NODE THAT BOOTED WITH NO COMPANY has no inbound edge for
+		// the reconcilers above to rebuild, and each of them returns
+		// early without one. So its first company STARTS the edge, and
+		// a start that fails is refused like a build: a company served
+		// with no inbound edge looks healthy and hears nothing, and the
+		// retry the refusal earns starts it again. See
+		// [Engine.startInbound].
+		log.WarnContext(ctx, "config_apply_failed", "error", err,
+			"detail", "the inbound edge could not be started for this node's "+
+				"first company; the revision is not served here yet")
+		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
+	}
 	// AND WHAT THE LOOP LAST CONCLUDED IS NOW OLD NEWS. Its cadence is for
 	// asking a third-party app again, not for asking this document again,
 	// and the answer just changed here. See [integration.Worker.MarkStale].

@@ -217,6 +217,11 @@ func (e *Engine) refreshParties(c *Company) {
 // group and a transport publishes onto this node's queue. The party registry
 // it registers identities into was built when the company was published (see
 // [Engine.Registry]), not here.
+//
+// A node that boots with no company starts nothing here, and must not: the
+// group is fleet-wide, so a service with no parsers would take deliveries
+// meant for peers that can route them and acknowledge each one as unparsed.
+// Its first company starts the edge instead, through [Engine.startInbound].
 func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	if c == nil {
 		return nil
@@ -339,8 +344,17 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 		Valve:    e.notifyValve(),
 		// Read live off the epoch rather than captured: an apply that
 		// changes the cap must take effect on the next notification,
-		// not on the next restart.
-		RateLimit: func() int { return e.Company().Config.NotificationRateLimit },
+		// not on the next restart. The company this edge was started for
+		// answers until an epoch is current, because a node's first
+		// company starts the edge BEFORE publishing the epoch that
+		// carries it (see [Engine.startInbound]), and a delivery can
+		// arrive in between.
+		RateLimit: func() int {
+			if live := e.Company(); live != nil {
+				return live.Config.NotificationRateLimit
+			}
+			return c.Config.NotificationRateLimit
+		},
 		// The config posture, supplied by whoever holds the control
 		// plane. A shedding node PARKS inbound deliveries rather than
 		// routing them against a company it is not sure of — and nil
@@ -358,6 +372,37 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	e.notify.mu.Lock()
 	e.notify.service = svc
 	e.notify.mu.Unlock()
+	return nil
+}
+
+// inboundStarted reports whether this node's inbound edge is running.
+func (e *Engine) inboundStarted() bool {
+	e.notify.mu.Lock()
+	defer e.notify.mu.Unlock()
+	return e.notify.service != nil
+}
+
+// startInbound starts the inbound edge for the first company a node that
+// booted with none is handed.
+//
+// THROUGH THE FUNCTION BOOT RUNS, so the edge a company gets does not depend
+// on whether the node met it at boot or at its first apply. Every reconciler
+// only rebuilds a surface on a running service, and a node that booted
+// unconfigured has none, so before this a company created on a fresh node
+// verified and stored every webhook, chat message and alert and routed none of
+// them to a seat until the process restarted.
+//
+// Called at the integrations stage, BEFORE the epoch is published, so a start
+// that fails can refuse the apply with nothing served. What a failed start
+// brought up is taken down again: a chat transport left running would hold
+// every seat's socket beside the one the retry opens.
+func (e *Engine) startInbound(ctx context.Context, c *Company) error {
+	if err := e.startNotifications(ctx, c); err != nil {
+		e.stopNotifications(ctx)
+		return fmt.Errorf("start the inbound edge: %w", err)
+	}
+	log.InfoContext(ctx, "inbound_started", "company", c.Config.Name,
+		"sources", e.RoutedSources())
 	return nil
 }
 

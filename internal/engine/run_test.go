@@ -41,6 +41,22 @@ func newEngine(t *testing.T, opts engine.Options) *engine.Engine {
 	return e
 }
 
+// unconfiguredEngine is [newEngine] for a node that boots with no company at
+// all, which newEngine cannot build: it hands a nil company the ordinary one.
+func unconfiguredEngine(t *testing.T) *engine.Engine {
+	t.Helper()
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		}),
+	})
+	if err != nil {
+		t.Fatalf("an engine with no company was refused: %v", err)
+	}
+	t.Cleanup(func() { e.Stop(context.Background()) })
+	return e
+}
+
 func TestAnEngineBuildsEverySeam(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{})
@@ -479,15 +495,7 @@ func TestThePostureGateReachesTriggerAdmission(t *testing.T) {
 // the epoch, and Start read the company's name to log that it had started.
 func TestAnEngineRunsUnconfigured(t *testing.T) {
 	t.Parallel()
-	e, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		}),
-	})
-	if err != nil {
-		t.Fatalf("an engine with no company was refused: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	e := unconfiguredEngine(t)
 	if e.Company() != nil {
 		t.Error("an unconfigured engine reports an epoch")
 	}
@@ -506,15 +514,7 @@ func TestAnEngineRunsUnconfigured(t *testing.T) {
 // to bootstrap a fleet through PUT /config.
 func TestAnUnconfiguredEngineTakesItsFirstEpoch(t *testing.T) {
 	t.Parallel()
-	e, err := engine.New(t.Context(), engine.Options{
-		Bootstrap: bootstrap(t, func(b *config.Bootstrap) {
-			b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
-		}),
-	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
+	e := unconfiguredEngine(t)
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, companyDoc)); err != nil {
 		t.Fatalf("the first apply onto an unconfigured node failed: %v", err)
 	}
