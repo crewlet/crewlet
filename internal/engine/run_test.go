@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
@@ -365,6 +366,106 @@ func TestStopLetsAnInFlightTurnFinish(t *testing.T) {
 	if !finishedBeforeStopReturned.Load() {
 		t.Error("Stop returned while a turn was still running: the shutdown " +
 			"abandoned work that was already under way")
+	}
+}
+
+// THE DRAIN IS ITS OWN HALF, and the HTTP surface lives in the gap after it.
+//
+// A process serves /health and /ready through the drain and closes its
+// listener between Drain and Stop, which only works if the drain says so from
+// its first moment, leaves every backend the probes read open when it
+// returns, and happens once however many callers ask. Each of those is
+// checked against a turn held in flight, because a drain with nothing to wait
+// for finishes before anything could observe it.
+func TestADrainSaysSoAtOnceAndLeavesTheBackendsOpen(t *testing.T) {
+	t.Parallel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	d := &engine.Dispatcher{
+		Turn: func(context.Context, engine.Request) (turn.Result, error) {
+			once.Do(func() { close(entered) })
+			<-release
+			return turn.Result{}, nil
+		},
+	}
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+	})
+	e, err := engine.New(t.Context(), engine.Options{
+		Bootstrap: b, Company: parsedCompany(t, companyDoc), Dispatch: d,
+	})
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	// Released on every path, so a failed assertion below cannot leave the
+	// cleanup's Stop waiting on a turn nobody will let go.
+	var released sync.Once
+	letGo := func() { released.Do(func() { close(release) }) }
+	t.Cleanup(func() { letGo(); e.Stop(context.Background()) })
+
+	var stops atomic.Int32
+	e.Backends().Queue.AddPublishListener(func(_ context.Context, _ string, ev *events.Event) {
+		if ev.Type == (types.OrgStopped{}).EventType() {
+			stops.Add(1)
+		}
+	})
+	if err := e.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if e.ShuttingDown() {
+		t.Fatal("a running engine reports that it is shutting down")
+	}
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(e.Node().Host().Held(), "ceo")
+	})
+	if err := e.Backends().Queue.Publish(t.Context(), topics.AgentInbox("ceo"),
+		ev("external_notification")); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the turn never started")
+	}
+
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		e.Drain(context.Background())
+	}()
+	// FROM THE FIRST MOMENT, while the turn it waits for is still running:
+	// this is the flag the HTTP surface refuses new work on, and a flag set
+	// once the drain was over would refuse nothing.
+	waitFor(t, "the engine to say it is shutting down", e.ShuttingDown)
+	select {
+	case <-drained:
+		t.Fatal("the drain returned while a turn was still running")
+	default:
+	}
+
+	letGo()
+	select {
+	case <-drained:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the drain did not return once the turn finished")
+	}
+	// DRAINED, NOT STOPPED: the probes a process serves in this gap read
+	// the broker, and a drain that closed it would leave them nothing.
+	if err := e.Backends().Queue.Publish(context.Background(), "t.after",
+		ev("external_notification")); err != nil {
+		t.Errorf("the broker was closed by the drain rather than by Stop: %v", err)
+	}
+	if held := e.Node().Host().Held(); len(held) != 0 {
+		t.Errorf("a drained engine still holds %v", held)
+	}
+
+	e.Stop(context.Background())
+	if err := e.Backends().Queue.Publish(context.Background(), "t.after",
+		ev("external_notification")); err == nil {
+		t.Error("Stop after a drain left the engine's own broker running")
+	}
+	if got := stops.Load(); got != 1 {
+		t.Errorf("the stop was announced %d times for one shutdown, want once", got)
 	}
 }
 
