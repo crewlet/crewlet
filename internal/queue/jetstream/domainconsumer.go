@@ -256,8 +256,6 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	}
 	// THE DELETE HAS LANDED, so from here the broker has no consumer and
 	// the handle must not go on naming one.
-	// THE DELETE HAS LANDED, so from here the broker has no consumer and
-	// the handle must not go on naming one.
 	c.cons = nil
 	cons, err := c.q.js.CreateConsumer(ctx, c.stream, config)
 	if err != nil {
