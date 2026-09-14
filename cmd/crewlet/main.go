@@ -1542,6 +1542,29 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 
+	// AND THE HISTORY BEHIND IT, or every screen the projection feeds starts
+	// at this process's boot: the activity feed, the spend rollup and the
+	// per-agent rows folded from it. A restart, a deploy or a node joining a
+	// fleet showed an operator a company that had apparently done nothing.
+	//
+	// After the subscription above, so an event published between the read
+	// and the subscribe cannot fall into the gap; the projection counts one
+	// that arrives both ways once. Before the bind, so the first socket to
+	// open sees the seeded snapshot rather than an empty one it will never
+	// be sent a correction for.
+	seedCtx, cancelSeed := context.WithTimeout(ctx, projectionSeedBudget)
+	err = observe.Seed(seedCtx, e.Backends().Store.Events(), app.Stream().State())
+	cancelSeed()
+	if err != nil {
+		// NOT FATAL, and said out loud rather than swallowed: what a
+		// failed seed costs is a feed and a spend window that start now,
+		// which is invisible on the screen itself.
+		log.WarnContext(ctx, "live_projection_not_seeded", "error", err,
+			"hint", "the activity feed and the spend rollup start at this "+
+				"process's boot; older history is still answered by the "+
+				"events and tokens queries, which read the store directly")
+	}
+
 	addr := net.JoinHostPort(boot.API.Host, strconv.Itoa(boot.API.Port))
 	// Through a ListenConfig so a shutdown signal arriving while the bind
 	// is in flight aborts it, rather than leaving a listener nobody will
@@ -1612,6 +1635,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 // that a connection opened and left silent — the cheapest denial there is
 // against a listener — costs one slot for ten seconds rather than for ever.
 const apiReadHeaderTimeout = 10 * time.Second
+
+// projectionSeedBudget bounds the store read that seeds the live projection.
+//
+// The read is two indexed range scans of this node's own file: the newest 400
+// event rows without their payloads, and one day of phase spend from promoted
+// columns. Both are milliseconds on a healthy node, so five seconds is three
+// orders of magnitude of headroom and is a ceiling on the one case that
+// matters: a store that will not answer must not hold the listener shut, since
+// nothing else can accept a webhook while the bind is waiting. A seed that
+// times out costs history on a screen, never a delivery.
+const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
 // requests.

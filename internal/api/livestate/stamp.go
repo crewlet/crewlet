@@ -65,3 +65,26 @@ func (s stamp) olderThan(now time.Time, d time.Duration) bool {
 	}
 	return now.Sub(s.t) > d
 }
+
+// chronological orders two stamps for a SORT: every undateable stamp before
+// every dated one, undateable ones by their text, dated ones by instant.
+//
+// A separate order from [stamp.compare], which a guard uses one pair at a
+// time and which may mix the two rules within one comparison. A sort needs a
+// consistent order across every pair it looks at, and "by instant when both
+// parse, by text otherwise" is not one: a dated stamp can sort before an
+// undateable one by text, and after another dated stamp that sorts after the
+// undateable one by instant. Undateable stamps go FIRST because a count cap
+// trims from the front, and a record that cannot be aged out on time is the
+// one that cap is there to bound.
+func (s stamp) chronological(o stamp) int {
+	switch {
+	case s.valid && o.valid:
+		return s.t.Compare(o.t)
+	case s.valid:
+		return 1
+	case o.valid:
+		return -1
+	}
+	return strings.Compare(s.raw, o.raw)
+}
