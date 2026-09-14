@@ -25,9 +25,9 @@ Three figures per domain, and no others:
 | `headroom_fraction` | how much of the ceiling is unused |
 
 `max_bytes` is read from the stream's own configuration and never from the
-Tier A field, because Tier A is per node and takes effect at restart: between
-an edit and a restart the field names a ceiling nothing is applying, and this
-is the number you divide by.
+Tier A field, because Tier A is per node and is only the value a stream is
+created with: once the stream exists, an edit to the field names a ceiling
+nothing is applying, restart or not, and this is the number you divide by.
 
 There is deliberately **no growth rate and no projected-full date.** A
 24-hour rate false-pages on the one excursion this system is designed for — a
@@ -286,7 +286,12 @@ make.
 
 ## Changing a log's ceiling
 
-`stream.max_bytes` is not a live setting. Raising it is a **fleet-wide
+A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
+`stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`) is not a live
+setting: it is the value the log's stream is created with, sized with the
+other logs inside what the broker can grant (see
+[Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
+running log's ceiling, raising it or lowering it, is a **fleet-wide
 maintenance window**, and the reason is not caution:
 
 - A resize is decided against the usage the log is at, and a publisher makes

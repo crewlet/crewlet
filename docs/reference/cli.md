@@ -20,7 +20,7 @@ subcommand below is served by it.
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
 | `crewlet retention evict <node> -confirm <node>` | Stop a node's records applying anywhere in the fleet, so the trim can pass a floor an absent machine is pinning. Prints the watermark before and after |
 | `crewlet retention readmit <node> -confirm <node>` | The inverse commit. Can be refused when the node's own position is below the current trim floor, and the refusal prints both |
-| `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling. Runs inside a fleet-wide maintenance window and costs three restarts — `stream.max_bytes` is not a live setting |
+| `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
 | `crewlet retention reanchor -stream NAME -confirm <created_at>` | Adopt a recreated stream: declare every position below the next generation comparable and safely stale |
 | `crewlet retention verify --restore -dir DIR` | Restore the newest artefact and open the copy. **Exits non-zero past its cadence** — the cron hook that turns a lapsed restore test into a failing check. Talks to no node |
@@ -735,10 +735,12 @@ the reason.
 crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
 ```
 
-Changes a log's byte ceiling. `stream.max_bytes` is not a live setting: a
-resize is decided against the usage the log is at, and a publisher makes that a
-moving quantity — so this runs with the whole fleet in a maintenance mode and
-costs **three fleet-wide restarts**, two more per retry. The
+Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
+(`stream.tracker_log_max_bytes`, `stream.tracker_vectors_max_bytes`,
+`stream.pages_log_max_bytes`) is not a live setting, only the value its stream
+is created with. A resize is decided against the usage the log is at, and a
+publisher makes that a moving quantity, so this runs with the whole fleet in a
+maintenance mode and costs **three fleet-wide restarts**, two more per retry. The
 [procedure is documented once](../guides/retention.md#changing-a-logs-ceiling),
 in the retention guide; this command's help prints the five steps.
 
