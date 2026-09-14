@@ -759,9 +759,10 @@ func (s *Service) nudge(ctx context.Context, revisionID, summary, operator strin
 // is named in the answer.
 func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, active store.Revision, found bool) bool {
 	// IF-NONE-MATCH FIRST, because `*` on a write is the create-only
-	// precondition (RFC 9110 §13.1.2) — "store this only if the company
-	// has not been configured yet" — and it is the standard spelling of
-	// what this surface documented as `If-Match: none`.
+	// precondition (RFC 9110 §13.1.2): "store this only if the company has
+	// not been configured yet". It is the only spelling of that condition
+	// this surface takes. `If-Match: none` is not an alias for it: `none`
+	// is read as the entity-tag it looks like, and matches nothing.
 	if none := r.Header.Get("If-None-Match"); none != "" {
 		if !found {
 			return true
@@ -783,23 +784,6 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 		// Unconditional, and permitted: a first import has nothing to
 		// match against, and a script that owns the config outright has
 		// no race to lose.
-		return true
-	case expected == "none":
-		// THE PRE-TAG SPELLING of If-None-Match: *, documented and
-		// shipped before this surface had entity-tags, and never
-		// implemented — it fell into the branch below and answered 412
-		// on exactly the unconfigured node it was meant to permit.
-		// Honoured rather than dropped, because the documentation
-		// promised it and a script written against that promise is not
-		// wrong.
-		if found {
-			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
-				"error": "already_configured", "current_revision_id": active.ID,
-				"hint": "If-Match: none asked for this write to land only on an " +
-					"unconfigured node; a revision is active",
-			})
-			return false
-		}
 		return true
 	case !found:
 		writeJSON(w, http.StatusPreconditionFailed, map[string]string{

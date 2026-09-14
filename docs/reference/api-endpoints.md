@@ -226,7 +226,7 @@ curl -X PATCH https://engine.example.com/config \
 | `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
 | `If-None-Match: *` | writes | Proceed only if **nothing** is active — the create-only precondition; `412 already_configured` otherwise |
 
-The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-Match: none` is the pre-tag spelling of `If-None-Match: *` and still works; prefer the standard one.
+The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition: `If-Match: none` is not a second spelling of it, so `none` is read as an entity tag like any other and matches no revision.
 
 Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
 

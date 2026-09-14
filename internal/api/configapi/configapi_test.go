@@ -1145,23 +1145,23 @@ func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 // `If-Match: *` answered 409 — it was compared to the revision id as a
 // literal, so the wildcard could never equal it — when the spec makes it
 // "any current representation", the ordinary way to say "only if something is
-// there". `If-Match: none` is the reverse: this surface DOCUMENTED it as the
-// unconfigured case and never implemented it, so it fell through to the
-// no-revision branch and answered 412 on exactly the node it was meant to
-// permit.
+// there". `If-None-Match: *` is the reverse, and the only create-only
+// precondition: `If-Match: none` is not a second spelling of it, so `none` is
+// an entity-tag like any other and matches nothing, configured or not.
 func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name, header, value string
 		configured          bool
 		want                int
+		code                string
 	}{
-		{"a wildcard matches a configured node", "If-Match", "*", true, http.StatusCreated},
-		{"a wildcard refuses an unconfigured one", "If-Match", "*", false, http.StatusPreconditionFailed},
-		{"none is the unconfigured case", "If-Match", "none", false, http.StatusCreated},
-		{"none refuses a configured node", "If-Match", "none", true, http.StatusPreconditionFailed},
-		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated},
-		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed},
+		{"a wildcard matches a configured node", "If-Match", "*", true, http.StatusCreated, ""},
+		{"a wildcard refuses an unconfigured one", "If-Match", "*", false, http.StatusPreconditionFailed, "no_active_revision"},
+		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated, ""},
+		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed, "already_configured"},
+		{"none is no create-only alias on an unconfigured node", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
+		{"none is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1176,6 +1176,11 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 			if res.Code != tc.want {
 				t.Fatalf("%s: %s = %d, want %d: %s",
 					tc.name, tc.header+": "+tc.value, res.Code, tc.want, res.Body.String())
+			}
+			if tc.code != "" {
+				if got := decode(t, res)["error"]; got != tc.code {
+					t.Errorf("%s: error = %v, want %s", tc.name, got, tc.code)
+				}
 			}
 		})
 	}

@@ -234,6 +234,6 @@ curl -X POST $CREWLET_URL/config/revisions/$REV/revert \
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
 | `409` | `revision_advanced` | Stale `If-Match` or concurrent writer won the race |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
-| `412` | `already_configured` | `If-None-Match: *` (or the older `If-Match: none`) sent while a revision is active |
+| `412` | `already_configured` | `If-None-Match: *` sent while a revision is active |
 
 The full reference is in [API endpoints](../reference/api-endpoints.md).
