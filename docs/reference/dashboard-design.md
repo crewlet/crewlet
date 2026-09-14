@@ -1125,10 +1125,14 @@ to.
   walk the tree, Enter edits, Delete or Backspace deletes, and the ContextMenu
   key or Shift+F10 opens the node's menu. The buttons a pointer uses (expand,
   Add, More and the lead chip) sit beside the treeitem, hidden from assistive
-  technology and out of the tab order, and open the same menus. Focus moves
-  with `preventScroll` and the canvas then pans to reveal the node, opening a
-  collapsed unit on the way. The Builder decides which node is focused after
-  an add, a delete, a move, an undo or a redo; the mounted view performs it.
+  technology and out of the tab order, and open the same menus. **Nothing in a
+  hidden strip ever holds focus**: a press on one of those buttons focuses the
+  node instead, so a screen reader always has something to announce and a menu
+  closing hands focus back to a card rather than to a button nobody can reach.
+  Focus moves with `preventScroll` and the canvas then pans to reveal the node,
+  opening a collapsed unit on the way. The Builder decides which node is
+  focused after an add, a delete, a move, an undo or a redo; the mounted view
+  performs it.
 - **Colour stays state.** A card is neutral whatever it holds. A human seat
   has the dashed edge every human seat on the dashboard has, a problem count
   takes the critical tone, a reference that names nothing takes the caution
@@ -1142,10 +1146,14 @@ to.
   and the row's actions. A row's keys are a card's keys; Right opens a row or
   steps into its cells, Left steps back out, Up and Down keep the column, and
   a cell holding a control (the lead choice, the actions menu, an add button)
-  focuses the control, which becomes the grid's one tab stop. Navigation keys
-  are the grid's before they are the control's, so ArrowDown on a menu button
-  moves to the next row rather than opening the menu. An inline add row
-  closes each unit's rows and the company's while the draft can change.
+  focuses the control, which becomes the grid's one tab stop. A press that
+  opens such a control moves that tab stop too, because the control keeps the
+  focus and hands it back when its menu closes; the row's chevron, which is
+  hidden from assistive technology, takes no focus at all and hands the press
+  to the row. Navigation keys are the grid's before they are the control's, so
+  ArrowDown on a menu button moves to the next row rather than opening the
+  menu. An inline add row closes each unit's rows and the company's while the
+  draft can change.
   Alt+Up and Alt+Down move a row among its siblings of the same kind, and
   because the engine's primary manager is the first seat that lists a seat,
   the reporting lines the next check reports are compared with the ones
