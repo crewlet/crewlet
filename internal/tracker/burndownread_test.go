@@ -1,11 +1,14 @@
 package tracker_test
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/statelog/statelogtest"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -159,5 +162,87 @@ func TestABurndownDistinguishesAnUnknownProjectFromAnUnknownSprint(t *testing.T)
 	if !errors.Is(err, tracker.ErrNoSprint) {
 		t.Errorf("an unminted sprint answered %v, want ErrNoSprint — an empty "+
 			"series would read as a sprint in which nothing happened", err)
+	}
+}
+
+// retryOnce is a read seam that runs the closure TWICE, as the store does when
+// a read transaction loses its snapshot to a writer and is retried on a fresh
+// one ([store.txAttempts] is eight, so twice is the mildest real case).
+//
+// It exists because the hazard it exercises is invisible to every other test
+// in this package: the rows, the window and the arithmetic are all correct on
+// each attempt, and what goes wrong is only what the closure carried OUT of
+// the attempt before.
+type retryOnce struct{ inner statelogtest.DB }
+
+func (d retryOnce) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	if err := d.inner.Read(ctx, fn); err != nil {
+		return err
+	}
+	return d.inner.Read(ctx, fn)
+}
+
+// A RETRIED READ ANSWERS WHAT ONE ATTEMPT WOULD.
+//
+// The read closure is not run once. `Unestimated` was COUNTED into a value
+// captured from outside it — `out.Unestimated++` — so a sprint with two
+// unestimated tasks reported four after one retry and six after two, while
+// every other figure stayed correct. That is the worst shape this answer can
+// fail in: `Unestimated` is the number a reader consults to decide how much of
+// the series to believe, so an inflated one discredits a series that is right.
+//
+// `Ideal` is the same hazard in the other direction — assigned only when the
+// series has points, so an attempt finding none kept the previous attempt's
+// height — which is why the fix builds a whole answer per attempt rather than
+// guarding the one counter.
+func TestARetriedBurndownReadCountsEachTaskOnce(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	seedSprintWindow(t, r, 1, tracker.SprintActive, base.Add(-2*time.Hour),
+		base.Add(12*24*time.Hour), nil)
+	one := 1
+	// ONE ESTIMATED MEMBER AND TWO WITHOUT, so the count is a number a
+	// second attempt can visibly double rather than a zero it cannot.
+	pointedTask(t, r, "a", 3, &one, "ada")
+	pointedTask(t, r, "b", 0, &one, "bo")
+	pointedTask(t, r, "c", 0, &one, "cy")
+
+	// READ AT THE PRESENT INSTANT, not at `base`: the series stops at the
+	// caller's clock, and `base` was taken before these records existed.
+	now := time.Now().UTC()
+	once := r.burndown(tracker.BurndownQuery{Project: "ENG", Sprint: 1}, now)
+
+	// The same rows, read through a seam that retries exactly once.
+	retried, err := statelogtest.LocalReader(tracker.Domain{},
+		retryOnce{inner: r.db.Replicated()},
+		statelog.Position{Stream: tracker.Domain{}.Stream().Name, Generation: 1})
+	if err != nil {
+		t.Fatalf("local read authority: %v", err)
+	}
+	reader, err := tracker.NewReader(r.db, retried)
+	if err != nil {
+		t.Fatalf("tracker reader: %v", err)
+	}
+	got, err := reader.Burndown(t.Context(),
+		tracker.BurndownQuery{Project: "ENG", Sprint: 1, Level: statelog.ReadStale}, now)
+	if err != nil {
+		t.Fatalf("Burndown through a retry: %v", err)
+	}
+
+	if once.Unestimated != 2 {
+		t.Fatalf("a single attempt counted %d unestimated, want 2 — the "+
+			"fixture is wrong, so this case proves nothing", once.Unestimated)
+	}
+	if got.Unestimated != once.Unestimated {
+		t.Errorf("unestimated = %d through one retry, want %d: the closure "+
+			"counted into a value captured from outside it, so every retry "+
+			"added the whole sprint again", got.Unestimated, once.Unestimated)
+	}
+	if got.Tasks != once.Tasks {
+		t.Errorf("tasks = %d through one retry, want %d", got.Tasks, once.Tasks)
+	}
+	if got.Ideal != once.Ideal {
+		t.Errorf("ideal = %v through one retry, want %v", got.Ideal, once.Ideal)
 	}
 }
