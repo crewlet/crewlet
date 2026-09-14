@@ -67,13 +67,17 @@ func Declaration(c Candidate) []error {
 	// a kind publishing expectations that is NOT declared is a writer
 	// forming an expectation the applier never advances, which wedges that
 	// subject the first time a gate drops a record on it.
-	if len(c.Kinds) > 0 {
-		for _, kind := range spec.ArbitratedKinds {
-			if !slices.Contains(c.Kinds, kind) {
-				add("%s arbitrates %q and publishes no record of that kind — the "+
-					"anchor for it is a row nothing ever writes and nothing ever "+
-					"reads", name, kind)
-			}
+	// NOT GUARDED ON len(c.Kinds) > 0. It was, which meant a candidate
+	// declaring no kinds skipped this check entirely rather than failing it —
+	// the same hollowing-out the three t.Skips in cases_apply.go did, in the
+	// one place that would otherwise have caught a kindless candidate. A
+	// domain that declares no kinds is not certifiable (see [requireKinds]),
+	// so reporting every arbitrated kind as unpublished is the right answer.
+	for _, kind := range spec.ArbitratedKinds {
+		if !slices.Contains(c.Kinds, kind) {
+			add("%s arbitrates %q and publishes no record of that kind — the "+
+				"anchor for it is a row nothing ever writes and nothing ever "+
+				"reads", name, kind)
 		}
 	}
 

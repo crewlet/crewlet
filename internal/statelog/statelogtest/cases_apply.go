@@ -27,9 +27,7 @@ func runEnvelope(t *testing.T, new Factory) {
 	// what it is missing.
 	t.Run("a version above this build still yields an envelope", func(t *testing.T) {
 		c := new(t)
-		if len(c.Kinds) == 0 {
-			t.Skip("the candidate declares no kinds for the suite to publish")
-		}
+		requireKinds(t, c)
 		future := c.Domain.RecordVersion() + 7
 		body, err := c.Encode(c.Kinds[0], "suite-object", "suite-op", future)
 		if err != nil {
@@ -61,9 +59,7 @@ func runEnvelope(t *testing.T, new Factory) {
 	// A RECORD THIS BUILD DOES KNOW decodes to what it was encoded as.
 	t.Run("a record at this build's version round-trips", func(t *testing.T) {
 		c := new(t)
-		if len(c.Kinds) == 0 {
-			t.Skip("the candidate declares no kinds for the suite to publish")
-		}
+		requireKinds(t, c)
 		body, err := c.Encode(c.Kinds[0], "suite-object", "suite-op", c.Domain.RecordVersion())
 		if err != nil {
 			t.Fatalf("encode: %v", err)
@@ -157,9 +153,7 @@ type suiteRecord struct {
 func suiteRecords(t *testing.T, new Factory) []suiteRecord {
 	t.Helper()
 	c := new(t)
-	if len(c.Kinds) == 0 {
-		t.Skip("the candidate declares no kinds for the suite to publish")
-	}
+	requireKinds(t, c)
 	var out []suiteRecord
 	for i, kind := range c.Kinds {
 		out = append(out,
@@ -231,4 +225,21 @@ func applyOne(ctx context.Context, c Candidate, tx *sql.Tx, rec statelog.Record,
 	}
 	_, err := c.Applier.Apply(ctx, tx, rec, opts)
 	return err
+}
+
+// requireKinds refuses a candidate the apply cases cannot exercise.
+//
+// FATAL, NOT A SKIP. Kinds is what this suite publishes records of, so a
+// candidate declaring none is one it cannot certify at all — and certifying
+// nothing while reporting a pass is the outcome a conformance suite exists to
+// make impossible. It was three copies of a t.Skip, which never fired (every
+// shipped domain derives Kinds from an enum, and the meta-test hardcodes one)
+// and would have silently hollowed out the apply cases the day one did not.
+func requireKinds(t *testing.T, c Candidate) {
+	t.Helper()
+	if len(c.Kinds) == 0 {
+		t.Fatalf("the candidate declares no kinds, so this suite has nothing " +
+			"to publish and cannot certify its apply path; Kinds is what a " +
+			"domain states it writes")
+	}
 }
