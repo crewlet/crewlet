@@ -460,6 +460,19 @@ describe("menus", () => {
       screen.getByRole("button", { name: "Lead after the check", hidden: true }),
     ).toBeDefined();
   });
+
+  test("choosing the answer already chosen records nothing and is refused nowhere", () => {
+    const { probe, spies } = mount();
+    // Engineering declares VP Engineering; Sales declares no lead.
+    fireEvent.click(screen.getByRole("button", { name: "VP Engineering", hidden: true }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    const sales = within(item("Sales").closest<HTMLElement>(".bchart-card")!);
+    fireEvent.click(sales.getByRole("button", { name: "No lead", hidden: true }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
+    expect(spies.dispatched).toEqual([]);
+    expect(probe.state.refusal).toBeNull();
+  });
 });
 
 describe("the reporting chart", () => {

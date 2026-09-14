@@ -215,39 +215,46 @@ export function leadSentence(unit: UnitView): string {
  * the unit then inherits), then each seat drawn in the unit, then the lead it
  * declares when that seat is elsewhere. A lead may name any seat, so the last
  * entry sends the operator to the editor to choose one outside the unit.
+ *
+ * CHOOSING THE CURRENT ANSWER CHANGES NOTHING AND SAYS NOTHING. The checked
+ * answer only closes the menu, as a radio button already on does nothing:
+ * recording it would be refused ("The lead is unchanged.") and the refusal
+ * announced, for a choice that is exactly what the operator sees.
  */
 export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView): MenuEntry[] {
   const declared = unit.lead && !unit.lead.inherited ? unit.lead.name : null;
-  const set = (lead: string | undefined) =>
-    api.dispatch({ type: "record", intent: { type: "setLead", target: unit.key, lead } });
+  const answer = (key: string, label: string, lead: string | null): MenuEntry => {
+    const checked = declared === lead;
+    return {
+      key,
+      label,
+      checked,
+      disabled: api.readOnly,
+      onSelect: checked
+        ? () => {}
+        : () =>
+            api.dispatch({
+              type: "record",
+              intent: { type: "setLead", target: unit.key, lead: lead ?? undefined },
+            }),
+    };
+  };
   const members = unit.seats
     .map((key) => structure.nodes.get(key))
     .filter((v): v is SeatView => v?.type === "seat");
   const names = [...new Set(members.map((m) => m.name))];
   const entries: MenuEntry[] = [
-    {
-      key: "none",
-      label: unit.inheritable ? `No lead (inherits ${unit.inheritable.name})` : "No lead",
-      checked: declared === null,
-      disabled: api.readOnly,
-      onSelect: () => set(undefined),
-    },
-    ...names.map((name): MenuEntry => ({
-      key: `seat:${name}`,
-      label: name,
-      checked: declared === name,
-      disabled: api.readOnly,
-      onSelect: () => set(name),
-    })),
+    answer(
+      "none",
+      unit.inheritable ? `No lead (inherits ${unit.inheritable.name})` : "No lead",
+      null,
+    ),
+    ...names.map((name) => answer(`seat:${name}`, name, name)),
   ];
+  // A declared lead drawn nowhere in the unit (a seat elsewhere, or a name
+  // no seat holds) is still the current answer, and says so.
   if (declared !== null && !names.includes(declared)) {
-    entries.push({
-      key: "declared",
-      label: declared,
-      checked: true,
-      disabled: api.readOnly,
-      onSelect: () => {},
-    });
+    entries.push(answer("declared", declared, declared));
   }
   entries.push(
     { kind: "separator", key: "sep" },
