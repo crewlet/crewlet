@@ -387,6 +387,123 @@ function LiveTabs() {
 // panel is not displayed without noticeable latency should not be selected by
 // focus alone. Seat's strip is `useParam(…, "section")`, so each of its tabs
 // is a query and a history entry.
+// A TAB LIST WITHOUT A PANEL IS A ROW OF BUTTONS WEARING THE ROLE.
+//
+// The role was declared and the relationship was not: nothing carried
+// `role="tabpanel"`, nothing was referenced by `aria-controls`, and the
+// switched content was an ordinary run of siblings after the strip. A screen
+// reader could find the tabs and had no way to reach what the selected one
+// controlled — pressing Tab from a freshly chosen tab left the widget
+// entirely, so choosing a tab moved the reader further from the content they
+// had chosen.
+test("a tab list points at the panel it controls", () => {
+  function WithPanel() {
+    const [value, setValue] = useState<Tab>("overview");
+    return (
+      <Tabs<Tab>
+        ariaLabel="Seat sections"
+        value={value}
+        onChange={setValue}
+        options={[
+          { value: "overview", label: "Overview" },
+          { value: "model", label: "Model activity" },
+          { value: "cost", label: "Cost" },
+        ]}
+      >
+        <p>the {value} content</p>
+      </Tabs>
+    );
+  }
+  render(<WithPanel />);
+
+  const panel = screen.getByRole("tabpanel");
+  const [overview, model] = screen.getAllByRole("tab");
+
+  // The selected tab CONTROLS it, and the panel names that tab back.
+  expect(overview!.getAttribute("aria-controls")).toBe(panel.getAttribute("id"));
+  expect(panel.getAttribute("aria-labelledby")).toBe(overview!.getAttribute("id"));
+  expect(panel.textContent).toContain("overview");
+
+  // AND IT IS REACHABLE. Without a stop here, Tab from the selected tab
+  // leaves the widget and lands on whatever follows in the DOM.
+  expect(panel.getAttribute("tabindex")).toBe("0");
+
+  // An unselected tab controls NOTHING, because only the selected panel is
+  // rendered — an `aria-controls` pointing at an absent id offers a reader a
+  // jump that goes nowhere, which is worse than not offering one.
+  expect(model!.hasAttribute("aria-controls")).toBe(false);
+
+  // The relationship follows the selection.
+  fireEvent.click(model!);
+  const after = screen.getByRole("tabpanel");
+  expect(model!.getAttribute("aria-controls")).toBe(after.getAttribute("id"));
+  expect(after.textContent).toContain("model");
+  expect(overview!.hasAttribute("aria-controls")).toBe(false);
+});
+
+// TWO STRIPS ON ONE PAGE MUST NOT SHARE IDS. The ids are minted per instance
+// rather than from a constant, because a duplicated id makes `aria-controls`
+// ambiguous and a reader lands in the wrong panel.
+test("two tab lists mint their own ids", () => {
+  const strip = (label: string) => (
+    <Tabs<Tab>
+      ariaLabel={label}
+      value="overview"
+      onChange={() => {}}
+      options={[{ value: "overview", label: "Overview" }]}
+    >
+      <p>{label} content</p>
+    </Tabs>
+  );
+  render(
+    <>
+      {strip("First")}
+      {strip("Second")}
+    </>,
+  );
+  const [a, b] = screen.getAllByRole("tabpanel");
+  expect(a!.getAttribute("id")).not.toBe(b!.getAttribute("id"));
+  expect(a!.getAttribute("id")).toBeTruthy();
+});
+
+// A STRIP WITH NO CONTENT RENDERS NO PANEL, rather than an empty one claiming
+// to hold something.
+test("a tab list with no children exposes no panel", () => {
+  render(<LiveTabs />);
+  expect(screen.queryByRole("tabpanel")).toBeNull();
+  for (const tab of screen.getAllByRole("tab")) {
+    expect(tab.hasAttribute("aria-controls")).toBe(false);
+  }
+});
+
+// MANUAL ACTIVATION OWES THE READER A SENTENCE.
+//
+// A radio group's learned contract is that the arrows choose. This one moves
+// focus instead, for reasons measured elsewhere, and every announcement along
+// the way is honest — a reader arrowing onto an option hears it is not
+// checked. What they were never told is which key would check it, so silence
+// read as a control that ignored them.
+test("a manual group says how to choose", () => {
+  render(<LiveSegmented />);
+  const group = screen.getByRole("radiogroup");
+  const describedBy = group.getAttribute("aria-describedby");
+  expect(describedBy).toBeTruthy();
+
+  const hint = document.getElementById(describedBy!);
+  expect(hint).not.toBeNull();
+  expect(hint!.textContent).toMatch(/enter or space/i);
+  // Announced, not drawn: it is for a reader who cannot see the control.
+  expect(hint!.className).toContain("sr-only");
+});
+
+// …AND NOT WHERE THE ARROWS ALREADY CHOOSE. The two automatic groups keep the
+// contract a radio group promises, so a note explaining a deviation would
+// describe behaviour they do not have.
+test("an automatic group carries no such note", () => {
+  render(<LiveSegmented activate="automatic" />);
+  expect(screen.getByRole("radiogroup").hasAttribute("aria-describedby")).toBe(false);
+});
+
 test("a tab list keeps its role and selects only on activation", () => {
   render(<LiveTabs />);
   const list = screen.getByRole("tablist", { name: "Seat sections" });

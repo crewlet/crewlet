@@ -575,6 +575,40 @@ not, which is the class of defect that never shows up in a screenshot:
   URL — retires whatever the arrows were pointing at and takes the stop back,
   and so does an option disappearing from `options`, which would otherwise
   leave the group carrying no tab stop at all and reachable by no key.
+- **A tab list without a panel is a row of buttons wearing the role.** `Tabs`
+  declared `role="tablist"` and `role="tab"` and stopped there: no rendered
+  element carried `role="tabpanel"`, nothing was referenced by
+  `aria-controls`, and the switched content was an ordinary run of siblings
+  after the strip. A screen reader could find the tabs and then had no way to
+  reach what the selected one controlled — pressing Tab from a freshly chosen
+  tab left the widget and landed on whatever came next in the DOM, so choosing
+  a tab moved the reader *further* from the content they had just chosen. The
+  panel is part of the component now: pass the content as `children` and both
+  ids, the `aria-controls` and the `aria-labelledby` back-reference are minted
+  with `useId` here. A documented id convention would have been a convention
+  each caller could follow halfway, and a half-wired widget looks exactly like
+  a whole one. `aria-controls` sits on the *selected* tab only, because only
+  its panel is rendered — an id that resolves to nothing offers a reader a
+  jump that goes nowhere. The panel takes a tab stop for reach rather than for
+  interaction, so its focus ring is suppressed while it stays reachable, and
+  `.tabpanel` carries its own flex column and gap: the sections it now wraps
+  used to take their spacing from the screen's own column, and that is the one
+  part of this change no rendered test can see.
+- **A manual group owes the reader a sentence.** A radio group's learned
+  contract is that the arrows choose — native radios do, and the authoring
+  practices describe no manual variant of the pattern. The deviation here is
+  deliberate and every announcement along the way is honest: a reader arrowing
+  onto an option hears it is not checked, which is true. What they were never
+  told is *which key would check it*, so a reader who pressed Right, heard
+  "not checked" and moved on took the silence for a control that ignored them.
+  The group carries an `aria-describedby` note saying the arrows move and
+  Enter or Space chooses, announced on entry, and only where the arrows do not
+  already choose. A description rather than a different role: the alternatives
+  that would make the arrows conform — a toolbar of `aria-pressed` buttons, a
+  plain group with `aria-current` — each drop either the mutual exclusivity
+  that says these are one choice or the "2 of 3" that says how many there are.
+  Losing a true semantic to gain a convention is the wrong trade when a
+  sentence closes the gap.
 - **A meter needs a name, and a value inside its own range.** `role="meter"`
   with no accessible name announces as a bare number on screens that render
   several, and the visible legend is not the name: two call sites pass none

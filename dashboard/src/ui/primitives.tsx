@@ -12,6 +12,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -379,14 +380,39 @@ export function Segmented<T extends string>({
     onChange,
     activate,
   );
+  // THE ONE THING MANUAL ACTIVATION OWES A READER: saying so.
+  //
+  // A radio group's learned contract is that the arrows CHOOSE — native radios
+  // do, and the authoring practices describe no manual variant of the pattern.
+  // The deviation is deliberate and measured (see [useRovingGroup]), and every
+  // announcement along the way is honest: a reader arrowing onto an option
+  // hears it is not checked, which is true. What they were never told is which
+  // key would check it, so a reader who pressed Right, heard "not checked" and
+  // moved on took the group's silence for a control that ignored them.
+  //
+  // A description rather than a different role: the alternatives that would
+  // make the arrows conform — a toolbar of pressed buttons, a plain group with
+  // `aria-current` — each drop either the mutual exclusivity that says these
+  // are one choice or the "2 of 3" that says how many there are. Losing a true
+  // semantic to gain a convention is the wrong trade when a sentence closes
+  // the gap. Announced on entry to the group, and only where the arrows do not
+  // already choose.
+  const hintID = useId();
+  const manual = activate !== "automatic";
   return (
     <div
       ref={box}
       className={cx("segmented", size === "sm" && "sm")}
       role="radiogroup"
       aria-label={ariaLabel}
+      aria-describedby={manual ? hintID : undefined}
       onKeyDown={onKeyDown}
     >
+      {manual && (
+        <span id={hintID} className="sr-only">
+          Arrow keys move between options; press Enter or Space to choose one.
+        </span>
+      )}
       {options.map((o) => (
         <button
           key={o.value}
@@ -415,6 +441,22 @@ export function Segmented<T extends string>({
 /**
  * A tab list, and the one control here that genuinely is one: its options sit
  * directly above the panel each of them shows.
+ *
+ * WHICH IS ONLY TRUE IF THE PANEL SAYS SO. The role was declared and the
+ * relationship was not: no rendered element carried `role="tabpanel"`, nothing
+ * was referenced by `aria-controls`, and the switched content was an ordinary
+ * run of siblings after the strip. A screen reader could find the tabs and
+ * then had no way to reach what the selected one controlled — pressing Tab
+ * from a freshly chosen tab left the widget and landed on whatever came next
+ * in the DOM, so choosing a tab moved the reader FURTHER from the content they
+ * had just chosen.
+ *
+ * So the panel is part of this component rather than the caller's problem:
+ * pass the content as `children` and both ids, the `aria-controls` and the
+ * `aria-labelledby` back-reference are minted here. The alternative — a
+ * documented id convention each caller follows — is a convention each caller
+ * can follow halfway, and a half-wired widget is indistinguishable from a
+ * whole one at a glance.
  */
 export function Tabs<T extends string>({
   value,
@@ -422,6 +464,7 @@ export function Tabs<T extends string>({
   onChange,
   ariaLabel,
   activate = "manual",
+  children,
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; count?: number | null }[];
@@ -429,6 +472,13 @@ export function Tabs<T extends string>({
   ariaLabel: string;
   /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
   activate?: "manual" | "automatic";
+  /**
+   * What the selected tab shows. Passing it is what makes this a tab WIDGET
+   * rather than a row of buttons wearing the tab role — see the note on the
+   * component. Omit it only for a strip whose content genuinely cannot be one
+   * element.
+   */
+  children?: ReactNode;
 }) {
   const { box, onKeyDown, stop } = useRovingGroup(
     options.map((o) => o.value),
@@ -436,24 +486,54 @@ export function Tabs<T extends string>({
     onChange,
     activate,
   );
+  // THE COMPONENT MINTS BOTH IDS, rather than taking a base from the caller.
+  // The relationship is the half that was missing, and a caller asked to
+  // supply ids is a caller who can wire one end and forget the other — which
+  // reads exactly like a complete widget and is not one.
+  const base = useId();
+  const tabID = `${base}-tab`;
+  const panelID = `${base}-panel`;
   return (
-    <div ref={box} className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          data-roving
-          role="tab"
-          aria-selected={o.value === value}
-          tabIndex={o.value === stop ? 0 : -1}
-          onClick={() => onChange(o.value)}
-        >
-          {o.icon && <Icon name={o.icon} size="sm" />}
-          {o.label}
-          {o.count != null && <span className="count-chip">{o.count}</span>}
-        </button>
-      ))}
-    </div>
+    <>
+      <div ref={box} className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            data-roving
+            role="tab"
+            id={o.value === value ? tabID : undefined}
+            // ONLY ON THE SELECTED TAB, because only its panel is rendered.
+            // The others control nothing that exists, and an `aria-controls`
+            // pointing at an absent id is worse than an absent one: a reader
+            // is offered a jump that goes nowhere.
+            aria-controls={o.value === value && children !== undefined ? panelID : undefined}
+            aria-selected={o.value === value}
+            tabIndex={o.value === stop ? 0 : -1}
+            onClick={() => onChange(o.value)}
+          >
+            {o.icon && <Icon name={o.icon} size="sm" />}
+            {o.label}
+            {o.count != null && <span className="count-chip">{o.count}</span>}
+          </button>
+        ))}
+      </div>
+      {children !== undefined && (
+        // A SIBLING OF THE STRIP, not a child of it. Both are flex children of
+        // the screen's own column, which is where their spacing comes from —
+        // nesting the panel inside the strip's box would inherit the strip's
+        // row layout instead.
+        //
+        // FOCUSABLE, which is the point of the relationship rather than a
+        // detail of it: a reader who selects a tab presses Tab next, and
+        // without a stop here focus leaves the widget entirely and lands on
+        // whatever follows in the DOM — so selecting a tab moved them further
+        // from the content they selected.
+        <div className="tabpanel" role="tabpanel" id={panelID} aria-labelledby={tabID} tabIndex={0}>
+          {children}
+        </div>
+      )}
+    </>
   );
 }
 
