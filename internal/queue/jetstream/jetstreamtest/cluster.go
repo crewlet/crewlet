@@ -265,7 +265,7 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	// can, short of never letting the port go — but it shortens the window
 	// from seconds to microseconds, and it turns the loss from a
 	// two-minute readiness timeout into an immediate retry.
-	if !portFree(t.Context(), cfg.ClusterPort) {
+	if !PortFree(t.Context(), cfg.ClusterPort) {
 		return fmt.Errorf("cluster member %d: route port %d was taken between "+
 			"this harness reserving it and the member starting", i, cfg.ClusterPort)
 	}
@@ -291,22 +291,24 @@ func routeURL(port int) string { return "nats://" + hostPort(port) }
 // hostPort is a loopback address for a port on this host.
 func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 
-// portFree reports whether a port can still be bound right now.
+// PortFree reports whether a port can still be bound right now.
 //
 // It is a probe rather than a reservation: what it buys is finding a lost race
 // in microseconds instead of two minutes. A clustered member whose route
 // listener cannot bind does not fail fast — it starts, serves clients, never
 // forms a route, and is only reported when its readiness budget expires.
-func portFree(ctx context.Context, port int) bool {
-	// The same ListenConfig form freePorts uses, and for the same reason:
-	// a probe that outlived the test asking it would be holding a port the
-	// next case is about to reserve.
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", hostPort(port))
-	if err != nil {
-		return false
-	}
-	return l.Close() == nil
+//
+// EXPORTED because the members are not always this package's to start. A fleet
+// of ENGINES embeds its own servers and builds them from Tier A (see [Relays]),
+// so the harness that stands one up cannot call [Cluster.start] and would
+// otherwise have no way to make the same check — which is exactly the gap it
+// had.
+func PortFree(ctx context.Context, port int) bool {
+	// THE ENGINE'S OWN PROBE, not a second one: [js.PortAvailable] is what
+	// a clustered member runs against its configured route port before it
+	// starts, and a harness asking the same question a different way is how
+	// one answer stops matching the other.
+	return js.PortAvailable(ctx, "127.0.0.1", port)
 }
 
 // freePorts reserves n ports the OS is not using.

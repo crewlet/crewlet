@@ -116,6 +116,20 @@ company's whole event history. Set it to the private address, or keep the port
 off the public interface with a firewall; the engine cannot tell which of a
 host's addresses is the private one, so it does not guess.
 
+**A route port something else already holds is refused at startup, by name.**
+This is the one clustering failure with no other symptom: NATS does not fail
+when its route listener cannot bind — it logs the error and carries on serving
+clients, so the node comes up, answers `/health`, and simply never forms a
+route to a peer. Left to report itself, that surfaced two minutes later as a
+readiness timeout blaming peer reachability, which is a network path that is
+fine. The engine now probes the port before it starts the server and refuses:
+
+```
+stream.cluster.port 6222 is already in use on 10.0.0.11, so this member's
+route listener cannot bind and it could never form a route to a peer — free
+that port or give this node a different one
+```
+
 **`cluster.advertise` is for when what a member binds is not what its peers can
 dial.** Members learn about each other from the members they already have: when
 node 1 accepts a route from node 2 it tells node 3 where to find node 2, and

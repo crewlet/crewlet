@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -366,6 +368,31 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	}
 	clustered := opts.Cluster.Name != "" || len(opts.Routes) > 0 || opts.Cluster.Port != 0
 
+	// THE ROUTE PORT IS PROBED BEFORE THE SERVER IS ASKED FOR IT, because
+	// nats-server does not report this failure in any way an operator can
+	// act on.
+	//
+	// A member whose configured route port is held by something else does
+	// not fail: the listener error goes to the log and the server carries
+	// on. It then never becomes READY either — ReadyForConnections waits
+	// for the cluster listener as well as the client one — so the boot
+	// spends its whole clustered accept budget and fails with a message
+	// about peers being unreachable. Measured: two minutes, and it sends
+	// whoever reads it to debug a network path that is fine.
+	//
+	// The probe cannot close the race and does not try; what it buys is the
+	// common case, named, in microseconds. The accept-timeout message below
+	// covers the rest.
+	if clustered && opts.Cluster.Port != 0 &&
+		!PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port) {
+
+		removeScratch(scratch)
+		return nil, fmt.Errorf("stream.cluster.port %d is already in use on %s, "+
+			"so this member's route listener cannot bind and it could never form "+
+			"a route to a peer — free that port or give this node a different one",
+			opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
+	}
+
 	ns, err := server.NewServer(opts)
 	if err != nil {
 		removeScratch(scratch)
@@ -392,6 +419,19 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		if !ok {
 			ns.Shutdown()
 			removeScratch(scratch)
+			// THE ROUTE LISTENER FIRST, because when it is the cause
+			// every other word here is a wrong lead. The probe above
+			// catches the ordinary case; this catches the port lost in
+			// the window between that probe and the bind, and it is the
+			// only evidence of it — the listener error went to the log
+			// and the server carried on serving clients.
+			if clustered && opts.Cluster.Port != 0 && ns.ClusterAddr() == nil {
+				return nil, fmt.Errorf(
+					"embedded nats server bound no route listener within %v: "+
+						"stream.cluster.port %d on %s was taken while this member "+
+						"was starting, so it can never form a route to a peer",
+					budget, opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
+			}
 			// THE BUDGET IS IN THE MESSAGE, and whether this member was
 			// waiting on peers: "did not become ready" alone sends an
 			// operator to the disk when a route was the problem.
@@ -681,4 +721,39 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 		}
 	}()
 	h(ctx, subject, ev)
+}
+
+// PortAvailable reports whether a port can still be bound on host right now.
+//
+// A PROBE, NOT A RESERVATION: it binds, reads the answer and lets go, so the
+// port is free again — and available to somebody else — the instant it
+// returns. Nothing can close that window short of never releasing the port,
+// and closing it is not what this is for. What it buys is the difference
+// between a named failure in microseconds and a two-minute readiness timeout
+// blaming the network, on the one condition that has no other symptom: a
+// clustered member whose route listener cannot bind starts anyway, serves
+// clients, answers health checks and silently never routes.
+//
+// host empty means every interface, which is what an unset stream.cluster.host
+// binds.
+//
+// EXPORTED because the test harness needs the identical check against members
+// it does not start itself (see jetstreamtest.PortFree), and two spellings of
+// "is this port free" is how one stops matching the other.
+func PortAvailable(ctx context.Context, host string, port int) bool {
+	var lc net.ListenConfig
+	l, err := lc.Listen(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return false
+	}
+	return l.Close() == nil
+}
+
+// routeHostLabel renders a cluster host for a message, naming the default
+// rather than leaving a blank where an address should be.
+func routeHostLabel(host string) string {
+	if host == "" {
+		return "every interface"
+	}
+	return host
 }
