@@ -57,8 +57,10 @@ never below 1 GiB each, so:
   the broker had left, and the Tier A field that sets the ceiling.
 - **More room buys longer logs, up to a point.** Unset, the mutation log asks
   for a quarter of the free space (4..64 GiB), the knowledge base's log for a
-  quarter of that, and the vector changelog for 16 GiB; they are scaled down
-  together only when the broker cannot give them all of it.
+  quarter of that, and the vector changelog for 16 GiB capped by the same
+  quarter. They are scaled down together whenever they ask for more than that
+  half, which on a first boot is every volume with less than 256 GiB free;
+  from there up each log gets what it asked for.
 - **The ceilings are fixed when the streams are created.** Moving the node to
   a bigger volume, or setting `stream.tracker_log_max_bytes`,
   `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,
