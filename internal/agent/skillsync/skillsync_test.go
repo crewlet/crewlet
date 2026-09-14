@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -594,6 +595,98 @@ func TestASourceThatBecomesReadableAgainIsWalked(t *testing.T) {
 
 	w.put("1", "TS", skillText("deploy", "tag, sign and announce the release"))
 	serves(t, r, "deploy", "tag, sign and announce the release")
+}
+
+// --- what an unchanged read costs ----------------------------------------- //
+
+// counting is a tune that counts the loop's registry changes, which is what
+// runs the engine's trigger audit.
+func counting(changes *atomic.Int32) func(*Syncer) {
+	return func(s *Syncer) { s.onChange = func() { changes.Add(1) } }
+}
+
+// walksReach waits until the wiki has been walked at least n times in all.
+func walksReach(t *testing.T, w *wiki, n int) {
+	t.Helper()
+	eventually(t, fmt.Sprintf("%d walks", n), func() (bool, string) {
+		walks, _ := w.counts()
+		return walks >= n, fmt.Sprintf("%d walks", walks)
+	})
+}
+
+// A WALK THAT FINDS NOTHING NEW CHANGES NOTHING. Every node walks its
+// container every interval, and a walk that re-admitted, replaced and
+// re-audited an unchanged container would repeat every warning those raise (a
+// duplicated key, an unresolved variable, a page that does not parse, a
+// trigger naming a tool nobody has) once per interval on every node. A walk
+// that does find a change installs it, once.
+func TestAWalkThatFindsNothingNewChangesNothing(t *testing.T) {
+	t.Parallel()
+	w := newWiki()
+	w.put("1", "TS", skillText("deploy", "tag the release"))
+	w.put("2", "TS", "An ordinary page beside the skills.")
+
+	var changes atomic.Int32
+	s, r := syncer(t, nil, "", func(s *Syncer) {
+		s.interval = 5 * time.Millisecond
+		counting(&changes)(s)
+	})
+	s.SetSource(w.source("TS"))
+	serves(t, r, "deploy", "tag the release")
+	walks, _ := w.counts()
+	walksReach(t, w, walks+3)
+	if got := changes.Load(); got != 1 {
+		t.Fatalf("a container that did not change was installed %d times, want once", got)
+	}
+
+	w.put("1", "TS", skillText("deploy", "tag and sign the release"))
+	serves(t, r, "deploy", "tag and sign the release")
+	walks, _ = w.counts()
+	walksReach(t, w, walks+3)
+	if got := changes.Load(); got != 2 {
+		t.Fatalf("one edit was installed as %d registry changes in all, want 2", got-1)
+	}
+}
+
+// A PAGE READ THAT FINDS NOTHING NEW CHANGES NOTHING either, and a walk after a
+// read that did change something has nothing left to do: a node that already
+// read an edit must not install it again on its next walk.
+func TestAReadThatFindsNothingNewChangesNothing(t *testing.T) {
+	t.Parallel()
+	w := newWiki()
+	w.put("1", "TS", skillText("deploy", "tag the release"))
+
+	var changes atomic.Int32
+	s, r := syncer(t, nil, "", counting(&changes))
+	s.SetSource(w.source("TS"))
+	serves(t, r, "deploy", "tag the release")
+
+	edit := Change{Backend: "confluence", Container: "TS", PageID: "1"}
+	w.put("1", "TS", skillText("deploy", "tag and sign the release"))
+	if err := s.PageChanged(t.Context(), edit); err != nil {
+		t.Fatalf("PageChanged: %v", err)
+	}
+	serves(t, r, "deploy", "tag and sign the release")
+	eventually(t, "the edit to be installed", func() (bool, string) {
+		return changes.Load() == 2, fmt.Sprintf("%d changes", changes.Load())
+	})
+
+	// THE SAME DELIVERY AGAIN, as a redelivery or a second nudge brings it.
+	if err := s.PageChanged(t.Context(), edit); err != nil {
+		t.Fatalf("PageChanged: %v", err)
+	}
+	eventually(t, "the second read", func() (bool, string) {
+		_, reads := w.counts()
+		return reads == 2, fmt.Sprintf("%d reads", reads)
+	})
+	// AND A WALK of the container the read already brought up to date.
+	s.Refresh("confluence")
+	walksReach(t, w, 2)
+	settle()
+	if got := changes.Load(); got != 2 {
+		t.Fatalf("reading an edit the registry already held changed it again "+
+			"(%d changes in all, want 2)", got)
+	}
 }
 
 // --- the fleet ------------------------------------------------------------- //

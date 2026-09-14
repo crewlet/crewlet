@@ -41,10 +41,23 @@
 // walk of the whole container would. That is what lets the periodic walk run
 // behind the event path without moving guidance under a seat that already
 // read it.
+//
+// # A read that finds nothing new changes nothing, and says nothing
+//
+// Every node walks its container every interval, and almost every one of those
+// walks finds exactly what the last one did. Re-admitting it, replacing the
+// registry and re-running the trigger audit would repeat every warning those
+// raise (a duplicated key, an unresolved variable, a page that does not parse,
+// a trigger naming a tool nobody has) once per interval on every node, burying
+// the one line that is new. So the loop remembers what every page in the
+// container looked like when the registry was built from it, and a walk or a
+// page read that finds the same is logged at debug and goes no further.
 package skillsync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"maps"
@@ -249,6 +262,15 @@ type Syncer struct {
 	synced   bool
 	failures int
 
+	// seen is what every page in the container looked like when the
+	// registry was last built from it: a successful walk replaces it and a
+	// page read updates its one entry, so it always describes the pages the
+	// registry holds the answer for, ordinary ones included. A read that
+	// finds the same has nothing to install. Nil until this generation's
+	// first walk succeeds, and never nil while synced is true, which is the
+	// only state in which a page read runs.
+	seen map[string]pageMark
+
 	// cancelRead ends the read in flight, which a source change does.
 	cancelRead context.CancelFunc
 
@@ -378,7 +400,7 @@ func (s *Syncer) SetSource(src Source) {
 			s.cancelRead()
 			s.cancelRead = nil
 		}
-		s.synced, s.failures = false, 0
+		s.synced, s.failures, s.seen = false, 0, nil
 		clear(s.pending)
 		if s.registry.Len() > 0 {
 			s.registry.Replace(nil)
@@ -639,16 +661,35 @@ func (s *Syncer) walked(ctx context.Context, generation uint64, src Source,
 	// UNDER THE LOCK, so a source change cannot land between the generation
 	// check above and the replace: it would empty the registry and then
 	// watch this walk put the retired source's skills back.
-	admitted, report := skills.Admit(pages)
-	s.registry.Replace(admitted)
 	recovered := s.failures > 0
 	s.synced, s.failures = true, 0
+	marks := marksOf(pages)
+	if s.seen != nil && maps.Equal(marks, s.seen) {
+		// NOTHING NEW, which is what almost every periodic walk finds: see
+		// the package doc for what installing it again would cost. A walk
+		// that recovers from failures still says so, because the failures
+		// were logged loudly and their end is news.
+		s.mu.Unlock()
+		if recovered {
+			log.InfoContext(ctx, "tool_skills_synced", "backend", src.Backend,
+				"container", src.Container, "pages", len(pages),
+				"changed", false, "recovered", true)
+		} else {
+			log.DebugContext(ctx, "tool_skills_unchanged", "backend", src.Backend,
+				"container", src.Container, "pages", len(pages))
+		}
+		return backoff.Jitter(s.interval, jitterFraction), true
+	}
+	admitted, report := skills.Admit(pages)
+	s.registry.Replace(admitted)
+	s.seen = marks
 	s.mu.Unlock()
 
 	log.InfoContext(ctx, "tool_skills_synced", "backend", src.Backend,
 		"container", src.Container, "skills", len(admitted),
 		"pages", report.Pages, "not_skills", report.Ordinary,
-		"undecodable", len(report.Undecodable), "recovered", recovered)
+		"undecodable", len(report.Undecodable), "changed", true,
+		"recovered", recovered)
 	s.changed()
 	return backoff.Jitter(s.interval, jitterFraction), true
 }
@@ -683,9 +724,23 @@ func (s *Syncer) applyChange(ctx context.Context, generation uint64, src Source,
 		s.mu.Unlock()
 		return
 	}
+	read.Page.ID = change.PageID
+	inContainer := read.Exists && strings.EqualFold(read.Container, src.Container)
+	mark := markOf(read.Page)
+	held, known := s.seen[change.PageID]
+	if (inContainer && known && held == mark) || (!inContainer && !known) {
+		// NOTHING NEW: the registry was already built from this page as
+		// it reads now, or the page is not in the container and never
+		// was. A duplicate delivery, a nudge for an edit this node's own
+		// walk already read, an edit elsewhere that named a held page.
+		s.mu.Unlock()
+		log.DebugContext(ctx, "tool_skill_page_unchanged", "backend", src.Backend,
+			"container", src.Container, "page", change.PageID)
+		return
+	}
 	var result skills.PageChange
-	if read.Exists && strings.EqualFold(read.Container, src.Container) {
-		read.Page.ID = change.PageID
+	if inContainer {
+		s.seen[change.PageID] = mark
 		if skill, verdict := skills.AdmitPage(read.Page); verdict == skills.PageAdmitted {
 			var err error
 			if result, err = s.registry.PutPage(skill); err != nil {
@@ -705,6 +760,7 @@ func (s *Syncer) applyChange(ctx context.Context, generation uint64, src Source,
 			result = s.registry.DropPage(change.PageID)
 		}
 	} else {
+		delete(s.seen, change.PageID)
 		result = s.registry.DropPage(change.PageID)
 	}
 	s.mu.Unlock()
@@ -724,6 +780,46 @@ func (s *Syncer) walkInstead(generation uint64) {
 		s.walkDue = true
 	}
 	s.mu.Unlock()
+}
+
+// pageMark is what one page looked like when the registry was built from it:
+// enough to tell a later read of the page apart, and nothing a model reads.
+//
+// The VERSION alone is not enough, because the [Source] contract lets a
+// backend with no version concept stamp zero on every page; the title and text
+// are hashed rather than kept, because the container's text is already held
+// once, parsed, by the registry. SHA-256 rather than a cheaper checksum so that
+// no page can be written to collide with the one it replaces: a collision
+// would read as nothing new, and the registry would keep the old skill until
+// the page changed again.
+type pageMark struct {
+	version int
+	digest  [sha256.Size]byte
+}
+
+// markOf is one page's mark.
+func markOf(page skills.Page) pageMark {
+	h := sha256.New()
+	// LENGTH-PREFIXED, so a title and a text cannot trade bytes and hash
+	// the same: no backend promises a byte its titles can never contain.
+	var titleLen [8]byte
+	binary.BigEndian.PutUint64(titleLen[:], uint64(len(page.Title)))
+	h.Write(titleLen[:])
+	h.Write([]byte(page.Title))
+	h.Write([]byte(page.Text))
+	mark := pageMark{version: page.Version}
+	h.Sum(mark.digest[:0])
+	return mark
+}
+
+// marksOf is every page's mark, keyed by page id. Never nil, so a walk of an
+// empty container is remembered as one.
+func marksOf(pages []skills.Page) map[string]pageMark {
+	out := make(map[string]pageMark, len(pages))
+	for _, page := range pages {
+		out[page.ID] = markOf(page)
+	}
+	return out
 }
 
 // changed runs the caller's hook after the registry moved.

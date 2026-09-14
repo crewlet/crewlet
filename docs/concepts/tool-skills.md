@@ -76,6 +76,8 @@ The registry is per node and its content is a wiki's, so each node runs one sync
 
 A single-page update and a walk cannot disagree about a page, so the periodic walk never moves guidance under a seat that already read it; it only catches up what the event path missed.
 
+A walk or a page read that finds the container as the registry was already built from it changes nothing and logs nothing above debug (`tool_skills_unchanged`, `tool_skill_page_unchanged`). Almost every periodic walk finds exactly that, and installing it again would repeat every warning a registry change raises (`skill_key_duplicated`, `skill_variable_unresolved`, `skill_page_undecodable`, and the trigger audit's `skill_trigger_*` lines) once per interval on every node. Those are logged when a walk or a read changes something; the trigger audit and the variable check also run on every config apply. A walk that recovers after failures still logs `tool_skills_synced` with `recovered`, because the failures before it were logged as errors.
+
 ---
 
 ## Skill file format
