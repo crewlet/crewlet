@@ -1,0 +1,156 @@
+// @vitest-environment node
+/**
+ * What the editor and the dialogs read about a node.
+ *
+ * What these protect: a handle comes from the engine or the document, never a
+ * derivation of the name; the provider an unpinned seat runs on follows the
+ * engine's own fallback; a credential reaches a screen only as the name of a
+ * sealed entry; and a seat counts as working while a turn or a coding run is
+ * in flight.
+ */
+
+import { describe, expect, test } from "vitest";
+import type { AgentRow, CompanyDocument, SandboxEntry } from "~/protocol/index.ts";
+import { builderReducer } from "./model/reducer.ts";
+import { fixtureCompany } from "./model/testkit.ts";
+import {
+  datadogFallback,
+  gitLabAccessLevel,
+  handleOf,
+  hasGitLabProvisioning,
+  isConnected,
+  isWorking,
+  nameOfHandle,
+  providerOrder,
+  referenceNames,
+  toolCredentialNames,
+  unitsLedBy,
+  unpinnedProvider,
+} from "./nodeFacts.ts";
+import { keyedState, recheck } from "./testState.ts";
+
+describe("handles", () => {
+  test("a seat of the base carries its handle in its key, and a new seat has one only once a check reports it", () => {
+    const state = keyedState(fixtureCompany());
+    expect(handleOf(state, "seat:dev")).toBe("dev");
+    const added = builderReducer(state, {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "Quality Lead" },
+      },
+    });
+    expect(handleOf(added, "new:qa")).toBeUndefined();
+    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa-engine" } } });
+    expect(handleOf(checked, "new:qa")).toBe("qa-engine");
+    expect(nameOfHandle(checked, "qa-engine")).toBe("Quality Lead");
+    expect(nameOfHandle(checked, "nobody")).toBe("nobody");
+  });
+
+  test("a declared handle is the seat's own even before a check", () => {
+    const state = keyedState(fixtureCompany());
+    const added = builderReducer(state, {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:ops",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "Ops", handle: "ops-lead" },
+      },
+    });
+    expect(handleOf(added, "new:ops")).toBe("ops-lead");
+  });
+
+  test("the units a seat leads are the ones that declare it", () => {
+    const state = keyedState(fixtureCompany());
+    expect(unitsLedBy(state.draft, "VP Engineering").map((u) => u.data.name)).toEqual([
+      "Engineering",
+    ]);
+    expect(unitsLedBy(state.draft, "SRE")).toEqual([]);
+  });
+});
+
+describe("integrations", () => {
+  test("a tool is connected when its block is present, whatever it holds", () => {
+    const company = fixtureCompany();
+    expect(isConnected(company, "datadog")).toBe(true);
+    expect(isConnected(company, "slack")).toBe(false);
+    expect(isConnected({ integrations: { jira: { enabled: false } } }, "jira")).toBe(true);
+    expect(hasGitLabProvisioning(company)).toBe(true);
+    expect(hasGitLabProvisioning({ integrations: { gitlab: {} } })).toBe(false);
+    expect(gitLabAccessLevel(company, "sre")).toBe("maintainer");
+    expect(gitLabAccessLevel(company, "ceo")).toBe("");
+    expect(gitLabAccessLevel(company, undefined)).toBe("");
+    expect(datadogFallback(company)).toBe("sre");
+  });
+});
+
+describe("models", () => {
+  const company = (llm: Record<string, unknown>, order?: string[]): CompanyDocument => ({
+    providers: { llm, ...(order ? { llm_order: order } : {}) },
+  });
+
+  test("providers are offered in the engine's order: the declared order, then the rest sorted", () => {
+    expect(
+      providerOrder(company({ zeta: {}, alpha: {}, beta: {} }, ["beta", "gone", "beta"])),
+    ).toEqual(["beta", "alpha", "zeta"]);
+    expect(providerOrder({})).toEqual([]);
+  });
+
+  test("a seat that names no model runs on the provider keyed default, else the first in order", () => {
+    expect(unpinnedProvider(company({ fast: {}, default: {} }, ["fast", "default"]))).toBe(
+      "default",
+    );
+    expect(unpinnedProvider(company({ fast: {}, smart: {} }, ["smart", "fast"]))).toBe("smart");
+    expect(unpinnedProvider({})).toBeUndefined();
+  });
+});
+
+describe("credentials", () => {
+  test("only a whole reference is a name; a mask and a partial reference are not", () => {
+    expect(
+      referenceNames({
+        bot_token: "${SLACK_BOT}",
+        signing_secret: "__redacted__",
+        header: "Bearer ${PARTIAL}",
+        nested: [{ key: " ${PADDED} " }, "${SLACK_BOT}"],
+      }),
+    ).toEqual(["PADDED", "SLACK_BOT"]);
+  });
+
+  test("tool credentials are server and variable names only", () => {
+    expect(
+      toolCredentialNames({
+        name: "Dev",
+        mcp_env: { tracker: { TOKEN: "__redacted__", URL: "${TRACKER_URL}" } },
+      }),
+    ).toEqual([{ server: "tracker", variables: ["TOKEN", "URL"] }]);
+  });
+});
+
+describe("live state", () => {
+  const agent = (state: string): AgentRow => ({ id: "1", role: "Dev", handle: "dev", state });
+  const run: SandboxEntry = {
+    turn_id: "t",
+    role: "Dev",
+    agent_handle: "dev",
+    agent_id: "a",
+    coding_agent: "claude",
+    sandbox_id: "s",
+    task: "Fix",
+    status: "running",
+    started_at: "2026-09-13T00:00:00Z",
+  };
+
+  test("a seat is working while a turn runs or a coding run waits, and not while idle", () => {
+    expect(isWorking("dev", [agent("working")], [])).toBe(true);
+    expect(isWorking("dev", [agent("idle")], [run])).toBe(true);
+    // A coding run is work in flight even when no live row names the seat.
+    expect(isWorking("dev", [], [run])).toBe(true);
+    expect(isWorking("dev", [agent("idle")], [])).toBe(false);
+    expect(isWorking("sre", [agent("working")], [])).toBe(false);
+    expect(isWorking(undefined, [agent("working")], [run])).toBe(false);
+  });
+});
