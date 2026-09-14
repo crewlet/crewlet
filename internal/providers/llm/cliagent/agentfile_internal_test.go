@@ -289,9 +289,9 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+dir, "KIMI_CODE_HOME="+filepath.Join(dir, ".kimi-code"))
+	cmd.Env = vendorCLIEnv(dir, map[string]string{"KIMI_CODE_HOME": filepath.Join(dir, ".kimi-code")})
 	combined, _ := cmd.CombinedOutput()
-	assertNoArgumentRefusal(t, string(combined), args)
+	assertArgvReachedAuth(t, args, string(combined))
 }
 
 // THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.
@@ -410,28 +410,4 @@ func fileArgAfter(argv, flag string) string {
 		}
 	}
 	return ""
-}
-
-// assertNoArgumentRefusal fails when a real CLI stopped at argument parsing.
-//
-// Shared by the argv-shape probes, which all ask the same question of
-// different binaries: did the profile's flags parse? Each stops at its own
-// authentication failure afterwards, which is exactly far enough.
-func assertNoArgumentRefusal(t *testing.T, got string, args []string) {
-	t.Helper()
-	for _, refusal := range []string{
-		"a value is required",
-		"unexpected argument",
-		"unknown option",
-		"unknown flag",
-		"invalid value",
-		"unrecognized",
-		"Unknown argument",
-		"error: unknown",
-	} {
-		if strings.Contains(got, refusal) {
-			t.Fatalf("the profile's argv does not parse (%q):\nargs: %v\n%s",
-				refusal, args, got)
-		}
-	}
 }

@@ -76,6 +76,11 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 // one, so on any machine with a vendor key in the environment this case
 // signed in and `say hello` became a real, billed completion — on a test whose
 // own comment promises it asserts "on ARGUMENT PARSING alone".
+//
+// Callers also set cmd.Dir to that same fresh directory. A vendor CLI reads
+// AGENTS.md / CLAUDE.md from its working directory, and this repository has
+// both — so a probe left in the checkout is answering with whatever the tree
+// happens to contain rather than about the shipped profile.
 func vendorCLIEnv(home string, extra map[string]string) []string {
 	env := map[string]string{}
 	for _, name := range hostAllowlist {
@@ -125,7 +130,7 @@ func assertArgvReachedAuth(t *testing.T, args []string, got string) {
 	for _, refusal := range []string{
 		"a value is required", "unexpected argument",
 		"invalid value", "unrecognized", "unknown option",
-		"unknown flag", "error: unknown",
+		"unknown flag", "unknown argument", "error: unknown",
 	} {
 		if strings.Contains(lower, refusal) {
 			t.Fatalf("the profile's argv does not parse (%q):\nargs: %v\n%s",

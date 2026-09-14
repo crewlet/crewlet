@@ -154,9 +154,9 @@ func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+dir, "PI_CODING_AGENT_DIR="+dir+"/.pi/agent", "PI_OFFLINE=1")
+	cmd.Env = vendorCLIEnv(dir, map[string]string{"PI_CODING_AGENT_DIR": dir + "/.pi/agent", "PI_OFFLINE": "1"})
 	combined, _ := cmd.CombinedOutput()
-	assertNoArgumentRefusal(t, string(combined), args)
+	assertArgvReachedAuth(t, args, string(combined))
 }
 
 // allowsAfterFlag reports whether every want follows flag before the next

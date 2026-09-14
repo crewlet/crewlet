@@ -168,6 +168,26 @@ var allowed = []Allowance{
 	},
 	{
 		Package: "internal/providers/llm/cliagent",
+		Test:    "TestTheKimiProfileArgvParsesAgainstTheRealCLI",
+		When:    Environment,
+		Why: "Needs MoonshotAI's own `kimi` on PATH. Same reasoning as grok and muse: " +
+			"only the real binary can refuse a profile's argv, and the fake accepts any.",
+	},
+	{
+		Package: "internal/providers/llm/cliagent",
+		Test:    "TestThePiProfileArgvParsesAgainstTheRealCLI",
+		When:    Environment,
+		Why: "Needs `pi` on PATH. Same reasoning as the other real-CLI argv cases; the " +
+			"profile's isolation flags are what it proves and the fake cannot refuse them.",
+	},
+	{
+		Package: "internal/providers/llm/cliagent",
+		Test:    "TestTheHermesProfileArgvParsesAgainstTheRealCLI",
+		When:    Environment,
+		Why:     "Needs `hermes` on PATH. Same reasoning as the other real-CLI argv cases.",
+	},
+	{
+		Package: "internal/providers/llm/cliagent",
 		Test:    "TestTheMuseProfileArgvParsesAgainstTheRealCLI",
 		When:    Environment,
 		Why: "Needs `muse` on PATH. Same reasoning as the grok case, and the flags it " +
