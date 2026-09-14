@@ -297,7 +297,7 @@ minute.
 
 ## When the loop runs
 
-The engine arms the tick loop when three things hold, and re-checks all three
+The engine arms the tick loop when four things hold, and re-checks all four
 on **every config apply**:
 
 1. `scheduling.enabled` is not `false`,
@@ -307,11 +307,21 @@ on **every config apply**:
    are two nodes, and then every company gets two standups. The node's own
    store is **not** a condition; without one the node only loses its local
    dispatch history,
-3. the company actually declares at least one role or unit schedule.
+3. the company actually declares at least one role or unit schedule,
+4. the company configures at least one model provider under `providers.llm`.
+   A company with none is valid, but its seats hold every delivery on their
+   inboxes until a provider exists
+   ([A Company With No Model Provider](configuration.md#a-company-with-no-model-provider)),
+   so a loop firing through that wait would stack every missed standup
+   behind the hold and run the whole backlog when the provider arrived. Each
+   node logs `schedules_waiting_for_a_model` instead.
 
-Because the third condition is re-evaluated live, adding the **first** schedule
-to a running company arms the loop on that apply, and removing the last one
-disarms it and releases its fleet duty — neither needs a restart. The tick
+Because these conditions are re-evaluated live, adding the **first** schedule
+to a running company, or the first provider to a company that has schedules,
+arms the loop on that apply, and removing the last one disarms it and releases
+its fleet duty — neither needs a restart. A freshly armed loop starts with the
+missed-tick catchup described above, so a company whose provider arrives late
+catches up at most its most recent missed fire, never the whole wait. The tick
 *knobs* (`tick_seconds`, the catchup clamps) are read when the loop is armed,
 so changing those lands at the next arm, like the retention sweep's horizons.
 
@@ -338,7 +348,7 @@ holds the `scheduler` fleet duty.
 - The coordination store's `fires` slot is the at-most-once claim; the
   node's `scheduled_runs` table is its own dispatch history.
 - Structured logs: `scheduler_armed`, `scheduler_disarmed`,
-  `schedule_fired`, `schedule_catchup_skipped`, `schedule_no_runners`,
+  `schedules_waiting_for_a_model`, `schedule_fired`, `schedule_catchup_skipped`, `schedule_no_runners`,
   `schedule_parse_failed`, `schedule_claim_failed` and
   `schedule_publish_failed` (a claimed fire whose publish failed is not
   retried, because the broker may already hold it).

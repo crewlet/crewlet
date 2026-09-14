@@ -244,6 +244,13 @@ What no seat can do is take a turn, and each node handles that the same way:
   (`seat_inbox_resumed`), and the held work runs on the new provider. Nothing
   sent to a seat in the meantime is lost.
 
+Schedules do not fire while the company has no provider: a fire is work on a
+seat's inbox, so firing through the wait would stack every missed standup
+behind the hold and run the backlog all at once. The scheduler stays disarmed
+and each node logs `schedules_waiting_for_a_model`; the apply that adds a
+provider arms it, and its first tick catches up at most the most recent missed
+fire ([Scheduling](scheduling.md#when-the-loop-runs)).
+
 The learning workers that call a model (the persist decider, the skill
 synthesizer and refiner, and the counterparty profiler) are not built for such
 a company; the apply that adds a provider builds them.

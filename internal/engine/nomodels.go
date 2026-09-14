@@ -30,6 +30,11 @@ import (
 // `seat_inbox_paused` for every seat whose work it holds, both naming
 // providers.llm.
 //
+// SCHEDULED WORK IS NOT HELD, because it is not sent: the scheduler stays
+// disarmed while the company has no model ([Engine.schedulerRuns]). A fire
+// parked behind the pause is a standup that runs days late, and a week of
+// them would all run the moment a provider arrived.
+//
 // THE PAUSE IS RELEASED WHEN THE CONDITION CLEARS, and that half is what used
 // to be missing: nothing lifted the hold, so a seat paused here stayed deaf
 // until the process restarted, however long ago its provider had been added.
