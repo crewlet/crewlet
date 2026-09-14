@@ -217,3 +217,55 @@ func TestNoServiceabilityGateKeepsTheSeats(t *testing.T) {
 	h.Sweep(f.ctx)
 	wantInt(t, len(h.Held()), 2, "seats held with no gate wired")
 }
+
+// countingHints is a backend that records how often the placement hints were
+// read, and delegates everything else.
+type countingHints struct {
+	coord.Backend
+	reads int
+}
+
+func (c *countingHints) PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error) {
+	c.reads++
+	return c.Backend.PreferredResources(ctx, prefix, nodeID)
+}
+
+// THE HINT READ IS PAID FOR AN ORDERING, so a pass with no ordering to make
+// does not pay it.
+//
+// Placement hints live in the epochs bucket, which has NO TTL and is never
+// pruned — it holds a record for every resource the deployment has ever
+// leased, so it is the largest thing a node reads and it grows for the life
+// of the deployment. The sweep runs every five seconds. Reading all of it to
+// sort a list of fewer than two elements — which has exactly one order — is
+// the whole of that cost for none of its benefit, and it lands hardest on a
+// node whose remaining candidates are all in acquire backoff, which is the
+// state the backoff exists to calm.
+func TestTheSweepReadsNoHintsWhenThereIsNothingToOrder(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	counting := &countingHints{Backend: f.store}
+
+	h := f.newHost("node-a", Config{Backend: counting, Seats: seatsNamed("ceo", "eng")})
+
+	// Two candidates: an ordering exists, so the hints are worth reading.
+	if got := h.claimOrder(f.ctx, []string{"ceo", "eng"}); len(got) != 2 {
+		t.Fatalf("claimOrder over two = %v", got)
+	}
+	if counting.reads != 1 {
+		t.Fatalf("two candidates read the hints %d times, want 1", counting.reads)
+	}
+
+	// One, and none: each has exactly one ordering, so neither reads.
+	if got := h.claimOrder(f.ctx, []string{"ceo"}); len(got) != 1 {
+		t.Fatalf("claimOrder over one = %v", got)
+	}
+	if got := h.claimOrder(f.ctx, nil); len(got) != 0 {
+		t.Fatalf("claimOrder over none = %v", got)
+	}
+	if counting.reads != 1 {
+		t.Errorf("a pass with nothing to order read the hints; reads = %d, want 1. "+
+			"That walk is the never-pruned epochs bucket, on the five-second sweep, "+
+			"for an ordering that has one possible answer", counting.reads)
+	}
+}

@@ -454,6 +454,19 @@ func (h *Host) claimOrder(ctx context.Context, seats []string) []string {
 	h.mu.Unlock()
 	slices.Sort(candidates)
 
+	// NOTHING TO ORDER, so nothing to read. Fewer than two candidates has
+	// exactly one ordering, and the hint read below is a walk of the epochs
+	// bucket — which has no TTL and is never pruned, so it holds a record
+	// for every resource the deployment has ever leased. Paying that on the
+	// five-second sweep to sort a list that cannot be sorted is waste in the
+	// one state it is most likely to be in: a node one seat short of
+	// capacity, or one whose every remaining candidate is in acquire
+	// backoff. The second is the case the backoff exists to calm, so
+	// spending a full-bucket read there works directly against it.
+	if len(candidates) < 2 {
+		return candidates
+	}
+
 	hinted, err := h.backend.PreferredResources(ctx, coord.SeatPrefix, h.nodeID)
 	if err != nil || len(hinted) == 0 {
 		return candidates
