@@ -63,7 +63,14 @@ import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { deriveChanges } from "./model/changes.ts";
 import { locate, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { leadLabel, leadMenu, nodeKeyAction, nodeMenu, type OpenScreen } from "./nodeActions.tsx";
+import {
+  isDeletable,
+  leadLabel,
+  leadMenu,
+  nodeKeyAction,
+  nodeMenu,
+  type OpenScreen,
+} from "./nodeActions.tsx";
 import {
   LiveState,
   ProblemCount,
@@ -305,7 +312,7 @@ export function OutlineView() {
         return;
       }
       if (action === "delete") {
-        if (view?.type !== "company" && !api.readOnly) {
+        if (view && isDeletable(view) && !api.readOnly) {
           handled();
           api.openDelete(id);
         }

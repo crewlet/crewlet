@@ -88,6 +88,7 @@ import {
 import { COMPANY_KEY } from "./model/keys.ts";
 import {
   addMenu,
+  isDeletable,
   leadLabel,
   leadMenu,
   nodeKeyAction,
@@ -172,7 +173,7 @@ function StructureChart({
       if (!view) return false;
       if (action === "edit") api.openEditor(id);
       else if (action === "delete") {
-        if (view.type === "company" || api.readOnly) return false;
+        if (!isDeletable(view) || api.readOnly) return false;
         api.openDelete(id);
       }
       return true;
