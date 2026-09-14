@@ -214,6 +214,96 @@ func TestAKnownFieldAWriteLeavesOutIsRemoved(t *testing.T) {
 	}
 }
 
+// A PATCH NAMING A KEY THIS BUILD CANNOT REPRESENT IS REFUSED, WHATEVER IT
+// SETS IT TO, `null` INCLUDED.
+//
+// `null` in a merge patch deletes the key it names, so a patch naming an
+// unknown key with one leaves no trace of it in the merged document: it is
+// the one spelling the merged document cannot show. Answered 201 it was the
+// worst outcome this route has, and the one its own hint rules out: the key
+// is carried straight back, so the caller is told their deletion landed and
+// nothing changed. A field only a newer build knows is removed from a node
+// that knows it.
+func TestAPatchNamingAKeyThisBuildCannotRepresentIsRefused(t *testing.T) {
+	t.Parallel()
+	// EXACTLY ONE UNKNOWN KEY PER CASE, written where the patch names it.
+	// With a second one anywhere in the stored document the merged document
+	// would carry that one and be refused for it, and every case here would
+	// pass without the rule it is about ever running.
+	//
+	// The two array cases are the shape where the merged document DOES show
+	// the key: a merge patch replaces a list wholesale, so a `null` inside a
+	// replacing member is an ordinary key of that member rather than a
+	// deletion. They are here because the rule is about the patch and not
+	// about where the key sits.
+	for name, tc := range map[string]struct {
+		seed  func(map[string]any)
+		patch string
+	}{
+		"deleting one at the root": {
+			func(d map[string]any) { d["root_setting"] = "from-a-newer-build" },
+			`{"root_setting": null}`,
+		},
+		"setting one at the root": {
+			func(d map[string]any) { d["root_setting"] = "from-a-newer-build" },
+			`{"root_setting": "mine now"}`,
+		},
+		"deleting one on a seat": {
+			func(d map[string]any) {
+				d["roles"].([]any)[1].(map[string]any)["seat_setting"] = "cto"
+			},
+			`{"roles": [{"name": "CEO", "handle": "ceo", "llm": "zulu"},
+			            {"name": "CTO", "handle": "cto", "llm": "zulu", "seat_setting": null}]}`,
+		},
+		"deleting one inside a known block": {
+			func(d map[string]any) {
+				providers := d["providers"].(map[string]any)
+				providers["llm"].(map[string]any)["zulu"].(map[string]any)["provider_setting"] = true
+			},
+			`{"providers": {"llm": {"zulu": {"provider_setting": null}}}}`,
+		},
+		"deleting one on an mcp server": {
+			func(d map[string]any) {
+				d["mcp_servers"].([]any)[0].(map[string]any)["server_setting"] = "tracker"
+			},
+			`{"mcp_servers": [{"name": "tracker", "command": "tracker-mcp", "server_setting": null}]}`,
+		},
+		// A typo is the same shape: the key is in no build, so deleting it
+		// removes nothing and the merged document is clean either way.
+		"deleting one it invented": {func(map[string]any) {}, `{"missionn": null}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t, nil)
+			s.seedStored(t, newerPeerDoc, tc.seed)
+			before := s.activeDocument(t)
+
+			res := s.do(t, http.MethodPatch, "/config", tc.patch, summaryHeader)
+			if res.Code != http.StatusBadRequest || decode(t, res)["error"] != "invalid_patch" {
+				t.Fatalf("%s = %d, want 400 invalid_patch: %s", name, res.Code, res.Body)
+			}
+			if after := s.activeDocument(t); after != before {
+				t.Errorf("a refused patch changed the stored document:\n%s\n%s", before, after)
+			}
+		})
+	}
+
+	// THE CONTRAST, or the rule above would read as "a patch cannot delete":
+	// `null` still removes a section this build knows, which is what RFC
+	// 7396's null is for and the only way to remove one through this route.
+	t.Run("a key this build knows is deleted by the same gesture", func(t *testing.T) {
+		t.Parallel()
+		s := newSurface(t, nil)
+		seedNewerPeer(t, s)
+		patchOnly(t, s, `{"integrations": {"gitlab": null}}`, summaryHeader)
+		integrations, _ := storedTree(t, s)["integrations"].(map[string]any)
+		if _, still := integrations["gitlab"]; still {
+			t.Errorf("the section the patch deleted is still stored: %v", integrations)
+		}
+		assertNewerKeysKept(t, s, "a patch deleting a known section")
+	})
+}
+
 // EVERY ENTITY WRITE KEEPS THEM, on the entity it replaced and everywhere
 // else. It used to store this build's whole struct, so a per-seat edit from
 // /setup, which is the engine's own most frequent write, erased every newer

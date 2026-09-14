@@ -473,30 +473,36 @@ func replaceDraft(incoming *config.Company, built string) draft {
 // been. Only [config.ErrUnknownField] is a fact about the patch alone.
 func readPatched(patch, merged []byte) (*config.Company, error) {
 	cfg, err := parseDocument(merged)
-	switch {
-	case err == nil:
-		return cfg, nil
-	case !errors.Is(err, config.ErrUnknownField):
+	if err != nil && !errors.Is(err, config.ErrUnknownField) {
 		// Every other refusal the authored reader makes is about the
 		// merged document itself and is unchanged by any of this. It names
 		// no line: the text a line would count is the engine's own merge,
 		// which the caller never saw, rather than anything they sent.
 		return nil, withoutLines(err)
 	}
-	// The strict reader found a key it does not know. Whose is it? Ask the
-	// patch alone, and ONLY about its keys: it is a fragment, so nothing
-	// else the authored reader decides about it is meaningful yet — a
-	// redaction marker is restored after the merge, and a shape is judged
-	// by Validate once it has been.
+	// ASKED WHETHER OR NOT THE MERGE PRODUCED A CLEAN DOCUMENT, because a
+	// `null` in a merge patch DELETES the key it names (RFC 7396): a patch
+	// naming a key this build does not know leaves no trace of it in the
+	// merged document, so the merged document cannot be what decides. Asked
+	// only when the merged document already showed the key, the null form
+	// answered 201 and changed nothing, since the write carries back every
+	// key it cannot represent that the write does not name — the one silent
+	// no-op on a surface whose whole rule is that an unknown key in a patch
+	// is refused rather than ignored.
 	if patchErr := onlyUnknownField(parseDocument(patch)); patchErr != nil {
 		return nil, patchErr
 	}
-	// The stored-form reader, which holds the merged document to NO rule.
-	// Validation happens exactly once, in prepare, after the masks are
-	// restored. This line used to validate here as well, before the
-	// restore, so on a document a newer peer had extended every PATCH that
-	// carried a masked credential (any roles or units array read from GET
-	// /config) was refused as an invalid patch naming the masks.
+	if err == nil {
+		return cfg, nil
+	}
+	// The strict reader found a key it does not know and the patch did not
+	// name it, so it is a PEER's. The stored-form reader holds the merged
+	// document to NO rule. Validation happens exactly once, in prepare,
+	// after the masks are restored. This line used to validate here as
+	// well, before the restore, so on a document a newer peer had extended
+	// every PATCH that carried a masked credential (any roles or units
+	// array read from GET /config) was refused as an invalid patch naming
+	// the masks.
 	return config.DecodeCompany(merged)
 }
 
