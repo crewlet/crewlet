@@ -456,6 +456,13 @@ export interface ApplyReport {
  * credentials marked: a credential a kind change strips was masked in the
  * document the builder holds, so it cannot be re-entered here and is gone for
  * good once the change is saved.
+ *
+ * `integrations.github` comes last because a different rule refuses it: the
+ * org model carries no code-host identity for a seat, so the config layer's
+ * admission rule (`config.Company.validateHumanSeatApps`) is what refuses a
+ * seat's own GitHub App on a human seat. A kind change that kept the block
+ * would record cleanly and then be refused by the very next check, over a
+ * field the change itself made wrong.
  */
 export const HUMAN_FORBIDDEN: readonly {
   readonly path: readonly string[];
@@ -478,6 +485,7 @@ export const HUMAN_FORBIDDEN: readonly {
   { path: ["integrations", "confluence"], credential: false },
   { path: ["mcp_env"], credential: true },
   { path: ["behavioral_guidelines"], credential: false },
+  { path: ["integrations", "github"], credential: true },
 ];
 
 /** The fields an agent seat must not carry (`org.Role.Validate`). */

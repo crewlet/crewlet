@@ -21,6 +21,7 @@ import {
   describeOperation,
   evaluate,
   intentOf,
+  isCredentialField,
   malformedReason,
   record,
   touchedKeys,
@@ -741,17 +742,43 @@ describe("changing kind", () => {
       "integrations.jira",
       "mcp_env",
       "behavioral_guidelines",
+      "integrations.github",
     ]);
     expect(seat(draft, "seat:dev")).toEqual({
       name: "Dev",
       kind: "human",
       contact: { github_login: "dev" },
-      integrations: { github: { tier: "developer" } },
       goal: "Build",
     });
     expect(
       op.type === "changeKind" && op.stripped.find((f) => f.path.join(".") === "mcp_env")?.before,
     ).toEqual({ git: { TOKEN: "__redacted__" } });
+  });
+
+  // The engine refuses a seat's own GitHub App on a human seat on admission
+  // (`config.Company.validateHumanSeatApps`): a person acts on GitHub as
+  // `contact.github_login`, never as an app. A kind change that kept the block
+  // would produce a draft the next check refuses over a field nobody touched,
+  // and the app's key is a credential the builder can never re-enter.
+  test("becoming human strips the seat's own GitHub App, marked as a credential", () => {
+    const base = fixtureCompany();
+    base.units![0]!.roles![1] = {
+      name: "Dev",
+      integrations: {
+        github: { tier: "review", app_slug: "acme-dev", private_key: "${DEV_GITHUB_KEY}" },
+      },
+    };
+    const { op, draft } = run(fixture(base), {
+      type: "changeKind",
+      target: "seat:dev",
+      kind: "human",
+      contact: { github_login: "dev" },
+    });
+    expect(getPath(seat(draft, "seat:dev"), ["integrations", "github"])).toBeUndefined();
+    expect(isCredentialField(["integrations", "github"])).toBe(true);
+    expect(op.type === "changeKind" && op.stripped.map((f) => f.path.join("."))).toEqual([
+      "integrations.github",
+    ]);
   });
 
   test("becoming an agent strips contact and availability", () => {
