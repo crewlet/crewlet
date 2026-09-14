@@ -59,7 +59,8 @@ func BuildIdentitySection(s Seat) []string {
 //
 // Both carry what they are about in the user message (for review, the round's
 // own account and the executor's artifact), so the full reporting line and
-// unit context are not needed. One sentence is enough to ground the model in "who is writing this".
+// unit context are not needed. One sentence is enough to ground the model in
+// "who is writing this".
 func BuildIdentityLine(s Seat) string {
 	if !s.ok() {
 		return ""

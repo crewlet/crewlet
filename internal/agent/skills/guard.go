@@ -24,10 +24,10 @@ import (
 // that is what determines whether the body is actually in the model's
 // context. Onboarding, the executor, the reviewer and each worker run on
 // separate histories, so a body loaded during onboarding is genuinely not in
-// front of the executor. A
-// round-cap extension continues the same history and the same surface, so
-// the loaded set carries across it; a self_iterate starts a fresh session
-// and therefore a fresh guard, which is correct rather than annoying.
+// front of the executor. A round-cap extension continues the same history and
+// the same surface, so the loaded set carries across it; a self_iterate starts
+// a fresh session and therefore a fresh guard, which is correct rather than
+// annoying.
 
 // ExemptTools are never blocked, whatever a trigger says.
 //

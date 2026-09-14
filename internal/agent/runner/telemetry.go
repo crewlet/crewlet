@@ -625,7 +625,7 @@ func (e emitter) subagentCompleted(ctx context.Context, res subagent.Result) {
 		Iteration: e.hostIteration,
 		// NESTED under the phase that spawned it, so a dashboard groups
 		// it beneath that Execute round rather than rendering it as a
-		// standalone sibling of the turn's own three phases.
+		// standalone sibling of the turn's own phases.
 		HostPhase:     types.PhaseExecute,
 		HostIteration: e.hostIteration,
 		// WHICH task and WHICH template. A call of eight otherwise

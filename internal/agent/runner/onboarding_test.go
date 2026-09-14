@@ -282,7 +282,7 @@ func TestAZeroBudgetDisablesThePass(t *testing.T) {
 	}
 }
 
-func TestTheOnboardingSurfaceCannotSubmitAPlan(t *testing.T) {
+func TestTheOnboardingSurfaceCannotSubmitWork(t *testing.T) {
 	t.Parallel()
 	// The pass has its OWN budget precisely so it never competes with the
 	// turn's own work; a surface that could submit work would make it a

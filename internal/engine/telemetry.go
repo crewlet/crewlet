@@ -184,7 +184,8 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		// The model that answered the LAST phase to run, which is what a
 		// one-line row names. The per-phase models are carried beside it
 		// rather than collapsed, because a seat with a fallback chain can
-		// legitimately have run three phases on three models.
+		// legitimately have run the executor and the reviewer on two
+		// different models.
 		Model:          lastModel(spend),
 		Trigger:        t.trigger,
 		Prompt:         t.trigger.Summary,

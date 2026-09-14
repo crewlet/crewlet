@@ -684,7 +684,7 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 }
 
 // NO FALLBACK TO RECENCY. Recall's whole claim is "this resembles what you
-// are doing now"; the three most recent turns carry no such claim, and a
+// are doing now"; the three most recent turns carry no such claim, and an
 // executor told they are similar work will treat them as precedent.
 func TestRecallWithNoEmbeddingSurfacesNothing(t *testing.T) {
 	t.Parallel()

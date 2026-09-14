@@ -296,7 +296,7 @@ type Queue struct {
 
 	// Everything below is guarded by broker.mu. Node state, not broker
 	// state: every gate here describes THIS process's consumer, and a
-	// subscription-level answer would let one node's sandbox pause, or one
+	// subscription-level answer would let one node's pause hold, or one
 	// node's shutdown, stop a peer from serving the seat it owns.
 	running   bool
 	paused    bool
@@ -654,8 +654,9 @@ func (q *Queue) Quiesce(_ context.Context, topic, group string) (bool, error) {
 // reporting whether it was quiesced.
 //
 // It deliberately does NOT touch pause holds: a seat resuming from a
-// stale-renew window may still be legitimately paused for a running sandbox,
-// and clearing that would deliver into a suspended turn.
+// stale-renew window may still be legitimately held by another subsystem (the
+// engine's own is the park of a node with no turn engine), and clearing that
+// would restart the requeue loop the hold exists to stop.
 func (q *Queue) Unquiesce(ctx context.Context, topic, group string) (bool, error) {
 	key := subKey{topic, group}
 	q.broker.mu.Lock()
