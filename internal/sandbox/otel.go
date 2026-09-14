@@ -221,17 +221,17 @@ func ParseOtelHeaders(raw string) map[string]string {
 // on: the check runs on the request path of an endpoint that is deliberately
 // reachable without other credentials.
 //
-// With no keyring the key is RANDOM PER PROCESS. A single-process deployment
-// is unaffected, because the process that mints also verifies. A split one
-// gets a loud warning rather than a deterministic key invented from
-// non-secret material, which would let anyone who can reach the endpoint
-// forge one.
+// With no keyring the key is RANDOM PER PROCESS. A single node is unaffected,
+// because the node that mints also verifies. A fleet gets a loud warning
+// rather than a deterministic key invented from non-secret material, which
+// would let anyone who can reach the endpoint forge one.
 func OtelSigningKey(material []string) []byte {
 	if len(material) == 0 {
 		log.Warn("sandbox_otel_signing_key_ephemeral",
 			"detail", "no Tier A secrets.keys, so OTLP tokens are signed with "+
-				"a per-process key — a split deployment cannot verify tokens "+
-				"the other process minted. `crewlet secrets keygen` fixes it")
+				"a per-process key: on a fleet, a box that exports to any node "+
+				"but the one that minted its token is refused. `crewlet secrets "+
+				"keygen` fixes it")
 		return nil
 	}
 	return runtoken.KeyFrom(OtelKeyDomain, material)

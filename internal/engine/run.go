@@ -528,9 +528,9 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 		otel = built
 	}
 	// SAME KEY MATERIAL, DIFFERENT DOMAIN, and for the same reason the
-	// receiver above is built here: a split deployment mints in this
-	// process and verifies in another, so both derive their key from the
-	// fleet's keyring rather than from a per-process random.
+	// receiver above is built here: a fleet mints on one node and may
+	// verify on another, so every node derives its key from the fleet's
+	// keyring rather than from a per-process random.
 	bridge := opts.Bridge
 	if bridge == nil {
 		bridge = mcpbridge.Build(os.Getenv, keyMaterial(opts.Bootstrap))
@@ -1667,8 +1667,8 @@ func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 //
 // THE REFERENCES ARE NOT RESOLVED HERE, and must not be: this runs before the
 // secret store is open, and the store's own key is what would resolve them.
-// Two processes reading the same document derive the same key either way —
-// what matters is that they agree, not that the material is the plaintext.
+// Two nodes reading the same document derive the same key either way: what
+// matters is that they agree, not that the material is the plaintext.
 func keyMaterial(boot *config.Bootstrap) []string {
 	if boot == nil {
 		return nil

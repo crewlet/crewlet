@@ -16,9 +16,9 @@ import (
 // serves the API, which on a split-role fleet is never the same host. See
 // [coord.Integrations] for the whole argument.
 //
-// A single-node company is not a special case here. It runs the in-memory
-// coordination twin, which is a real implementation of the same contract
-// certified by the same suite, rather than a stub.
+// A single-node company is not a special case here. Its fleet store is the
+// same KV, on the node's own embedded broker, whatever `coordination.type`
+// says about its leases (see engine.attachCoordination).
 type CoordStore struct{ statuses coord.Integrations }
 
 // NewCoordStore wraps the fleet's integration statuses.

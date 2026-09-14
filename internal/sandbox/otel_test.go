@@ -23,10 +23,10 @@ import (
 // A TOKEN MINTED IN ONE PROCESS VERIFIES IN ANOTHER.
 //
 // This is the property the whole design turns on. Minting and verifying
-// happen in different processes whenever the API runs on its own host, and an
-// in-memory store makes them the same process by assumption — so the
-// documented split deployment answers 401 to every trace from every coding
-// run, visible only as exporter retry noise inside a sandbox nobody watches.
+// happen on different nodes of a fleet, since a box exports to whichever node
+// it can reach, and an in-memory store makes them the same process by
+// assumption: every trace that reached another node would be answered 401,
+// visible only as exporter retry noise inside a sandbox nobody watches.
 func TestAnOtelTokenVerifiesInAnotherProcess(t *testing.T) {
 	t.Parallel()
 	key := sandbox.OtelSigningKey([]string{"k1:material-one", "k2:material-two"})
