@@ -152,56 +152,146 @@ share does not move.
 
 ## Information architecture
 
-The sidebar is grouped by **what the reader is looking at**, in the order the
-product's own story runs: the company, the work it is doing, the thinking behind
-that work, what it costs, and the machine underneath. A founder opening this
-meets their company first and the engine last.
+**Two levels, because this product has six unrelated trees.** A **workspace**
+is a noun with a tree of its own — Work has projects, Company has units,
+Knowledge has containers, Activity has kinds of run, Cost has scopes, Admin has
+estates. The 80 px **rail** shows the workspaces and nothing else; the 236 px
+**workspace sidebar** shows one workspace's tree and nothing else.
 
-| Group | Screen | Route | Answers, from |
-|---|---|---|---|
-| — | **Overview** | `#/` | what needs a person · what the company is doing · what it has cost. The snapshot's `agents` / `events` / `sandboxes` / `org` / `tokens` / `budget`, plus the `stream` query |
-| **Company** | People | `#/people?group=&q=` | every seat and what it is doing — grouped by state, by unit, or flat |
-| | Org chart | `#/org?lens=chart\|directory\|charter` | the hierarchy, the directory, and the company's own mission, vision and policies |
-| | *a seat* | `#/seats/{handle}?tab=` | overview · model activity · memory · cost · access |
-| **Work** | Tracker | `#/work?project=&view=&item=&…` | `work_items` — the company's own tracker, derived on this node from the fleet's own ordered log. A WORKSPACE rather than a table: a project rail, a head of facts, and five views over one answer — **List**, **Board**, **Calendar**, **Sprint** and **Backlog** — which differ only in how the rows are shaped and never in what was asked for. Read-only: work is filed and moved by the seats themselves. The answer's coverage half is rendered, not swallowed — `read_level` as a badge, and `complete: false` as a banner above the rows naming what the node could not account for |
-| | *a view* | `#/work?project=ENG&view=board&group_by=assignee` | the same `work_items` answer, grouped by the server on the axis the screen names. `view` and `item` are SECTIONS (they push history); every filter REPLACES, so a back gesture leaves a filter run rather than stepping back through each keystroke |
-| | *a peek* | `#/work?project=ENG&item=ENG-2` | `work_item` beside the rows, so reading one item never loses the board it was found on. A plain click peeks; ⌘-click and middle-click follow the anchor to the item's own page, because a card that cannot be opened in a tab is not a link |
-| | *an item* | `#/work/{key\|id}` | `work_item` — description, thread, history, links, sub-items, and every property the task carries: a custom field renders under its declared NAME with its option's own word, never the stored uuid |
-| | *the project rail* | `#/work?project=ENG` | `work_projects` — the COMPANY's projects, so the rail offers every one rather than only those on the page — plus `work_project` for the chosen one: its counts as a census bar, its lead resolved to the NAME that seat is called, the unit that owns it and the sprint that is running as a meter — and where none is, whether the project is BETWEEN sprints or does not run them at all, which are two different facts one sentence used to cover. A unit the chart no longer has is a BANNER rather than a blank, because it is what leaves a project's work routed to nobody |
-| | *the feed* | `#/work?project=ENG` | `work_activity` — what HAPPENED in the container, which is a different question from what is on the board: the feed is ordered by the log rather than by anything the rows sort on, so a change that moved nothing on screen is still visible. A change is rendered from its DELTAS (`status: todo → in_progress`), falling back to its excerpt and then to its kind — a row with neither is still a real commit, and rendering it blank would read as a bug |
-| | My work | `#/work/me` | `work_my_work` — one person's seven claims, each block drawn with the SAME row the tracker uses — plus `work_inbox`, what REACHED them and the one reason of twenty it reached them under, which is a different question from what is on them. Whose day it is comes from `viewer`, not from the roster: it fell back to the ALPHABETICALLY FIRST SEAT, so a screen called "My work" showed everybody a stranger's. A reader with no credential, a reader whose credential no seat claims, and a reader who simply has not chosen somebody are three states and take three sentences. NOT a nav entry, because route dispatch is a switch on the first path segment and `work` already owns it; it is reached from the tracker's own header |
-| **Sprints** | Sprint report | `#/sprints?project=` | `work_sprints` — what each sprint took on, what arrived after it started, what was pulled out and what shipped inside its own window, per sprint and per person in the project's own measure, plus a **velocity** bar list in sprint order and a **burndown** (`work_burndown`) over the running one. An undeclared capacity renders as an em-dash rather than a zero, which would put every assignee permanently over; a velocity with no closed sprint behind it renders as "—" for the same reason |
-| | Coding runs | `#/runs?run=` | the live `sandboxes` plus the durable `sandbox_runs` — including runs whose box has been reclaimed |
-| | Agent-to-agent | `#/conversations` | `a2a_channels` — who asked whom, how many messages, and when |
-| | Schedules | `#/schedules` | `schedules` — what fires, when it next fires, how it last went |
-| **Intelligence** | Model activity | `#/model?role=&phase=&failed=` | `phases` — one row per phase across the fleet; the transcript is on the seat |
-| | Event log | `#/activity?category=&actor=&q=&failed=` | the live feed, then `events` for older pages |
-| | Knowledge | `#/knowledge?q=` | `knowledge` — search, ranked, through the same seam a seat's own `search_knowledge` uses |
-| | Pages | `#/pages?container=&title=&kind=` | `pages` + `containers` — the same knowledge base BROWSED rather than searched. Two screens because they answer different questions: "show me what the platform team wrote down" should not be a search for a word somebody has to guess |
-| | *a page* | `#/pages/{id}` | `page` — body, breadcrumb, children, comments and revision metadata |
-| **Cost** | Spend & budgets | `#/spend?window=` | the pushed spend rollup, the `tokens` query for other windows, and `budgets` |
-| **Operations** | Fleet | `#/fleet` | `fleet` — the lease table |
-| | Integrations | `#/integrations` | `integrations`, plus `/setup/integrations` over REST *(operator-gated)* |
-| | Tools | `#/tools?q=&origin=` | the pushed tool catalogue |
-| | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
-| | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
-| — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` and `Download turn` in the header assemble the record, the phases and the rest as one JSON object — the same bytes, for pasting into a thread and for attaching to a bug report — and the Turn record panel copies itself and owns ⌘A |
-| — | Event | `#/events/{id}` | `event` |
-| — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
+A single sidebar works when there is one tree. With six it either hides every
+tree behind disclosure — three clicks to a project — or grows to sixty rows and
+stops being scannable. The tracker had already grown a second rail inside its
+own screen, which is the same conclusion reached one screen at a time.
 
-**Old routes redirect, with their query strings intact.** `#/agents`,
-`#/agents/{id}`, `#/tokens`, `#/events`, `#/company`, `#/audit` and
-`#/org?lens=seats` all resolve to their new homes. Those links are in bookmarks
-and in chat threads; a redirect costs one navigation, a dead link costs the
-reader the thing they were looking for.
+### The grammar, stated once and asserted
 
-**A redirect is removed the moment a live screen takes its path.** `#/work`
-redirected to the coding runs back when "work" meant a coding run; the tracker
-then took the name, and the entry would have sent every reader of a live
-route somewhere else, permanently, with the address bar agreeing with them.
-That is strictly worse than the dead link a redirect exists to avoid, because
-a dead link is visible. `router.test.ts` holds the rule against the nav.
+- A **rail row** is a workspace.
+- A **sidebar row** is a destination with its **own path**.
+- A **tab** is a `tab=` or `view=` query on the path you are already on.
+
+Nothing is two of those. A tab never appears as a sidebar row, a sidebar row
+never appears as a tab, and a filter — a reason, a scope, a status — lives in
+the page's own filter bar rather than in the sidebar. This is the boundary
+every tool of this shape loses first, and it is lost one pull request at a time:
+"just one more row under a project" is what turns two levels into three.
+
+`router.test.ts` holds it against the definitions rather than against this
+paragraph: every destination has a path of its own, no two share one, each
+resolves to the workspace it declares, no two workspaces own a first segment,
+and no reserved segment has the shape of a key the engine mints.
+
+**Reserved segments cannot collide with keys.** Project and container keys are
+uppercase (`ENG`), item keys are `KEY-n`, everything else the engine mints is a
+uuid — and every reserved segment (`views`, `sprints`, `people`, `units`,
+`turns`, `runs`, `schedules`, `a2a`, `events`, `servers`, `revisions`, `fleet`,
+`config`, `credentials`, `me`) is lowercase. That is what lets `#/work/views`
+resolve before any answer arrives.
+
+### The rail
+
+The order is the product's story: you, the work, the people, what they know,
+what they did, what it cost, the machine.
+
+| Row | Route prefix | Badge |
+|---|---|---|
+| **Inbox** | `#/inbox` | unread notices on the first page, `caution` hue — the only badge in the chrome allowed a status colour |
+| **My work** | `#/me` | — |
+| **Work** | `#/work`, `#/goals` | — |
+| **Company** | `#/company` | — |
+| **Knowledge** | `#/knowledge` | — |
+| **Activity** | `#/activity` | seats working now, neutral |
+| **Cost** | `#/cost` | — |
+| **Admin** | `#/admin` | a lock when no operator credential is presented |
+
+**Admin's row is never hidden.** A section that vanishes without a credential is
+indistinguishable from one that does not exist, so an operator on a fresh
+browser would conclude the product has no configuration screen.
+
+`g` then a letter jumps to a workspace (`g i`, `g m`, `g w`, `g c`, `g k`,
+`g a`, `g o`, `g d`); `[` collapses the rail. A chord rather than a modifier,
+because every single-modifier combination worth having is already the browser's.
+
+### The routes
+
+| Route | Page | Tabs / views |
+|---|---|---|
+| `#/` → `#/inbox` | **Inbox** — the landing screen | `band=decisions\|notices` · `state=unread\|all\|snoozed` · `reason=` |
+| `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
+| `#/work` | **All work** | `view=list\|board\|calendar` + the filter grammar |
+| `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
+| `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
+| `#/work/{KEY}/sprints` · `#/work/{KEY}/sprints/{n}` | **Sprints** — figures, velocity, burndown | |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | |
+| `#/goals` · `#/goals/{id}` | **Goals** | |
+| `#/company` | **Company** — the charter and the chart | `lens=chart\|charter` |
+| `#/company/people` | **People** — the one directory | `group=state\|unit\|flat` · `q=` |
+| `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · model · memory · cost · access; human: overview · access |
+| `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
+| `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
+| `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
+| `#/knowledge/{CONTAINER}/{Title}` | **Page** | |
+| `#/activity` | **Live now** — what the company is doing at this moment | |
+| `#/activity/turns` · `#/activity/turns/{id}` | **Turns** — every phase, round by round | |
+| `#/activity/runs` · `#/activity/runs/{turn_id}` | **Coding runs** — live and durable | |
+| `#/activity/schedules` | **Schedules** | |
+| `#/activity/a2a` | **Agent-to-agent** | |
+| `#/activity/events` · `#/activity/events/{id}` | **Event log** | `category=` · `actor=` · `q=` |
+| `#/cost` | **Spend** — by phase, model, seat and turn | |
+| `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
+| `#/admin/fleet` · `#/admin/fleet/{node}` | **Infrastructure** — nodes, leases, duties, replication *(operator)* | |
+| `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** *(operator)* | |
+| `#/admin/tools` | **Tools** *(operator)* | `q=` · `origin=` |
+| `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|history\|diff` |
+| `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |
+
+**There is no redirect table.** There was one, and it was always a liability: a
+redirect whose old path is now a live route sends every reader of that route
+somewhere else, permanently, with the address bar agreeing with them — which is
+strictly worse than the dead link it exists to avoid, because a dead link is
+visible. It happened once, when `#/work` still meant a coding run. No `v*` tag
+has ever shipped a route from this tree, so there is nobody holding an old link;
+`NotFound` names the screen and offers the palette.
+
+### The four frame-level keys
+
+| Key | Kind | Meaning |
+|---|---|---|
+| `peek={kind}:{id}` | section | the detail rail is open on that object |
+| `tab=` | section | the object page's tab |
+| `view=` | section | a list container's view |
+| `sort=` `cols=` | filter | the grid's order and its visible columns |
+
+**`peek` is one key, one component, one rule.** A plain click peeks; ⌘-click,
+middle-click and the rail's `Open ↗` go to the page. Inside a peek `[` and `]`
+step through the list it was opened from and `esc` closes it. Opening the rail
+**pushes** — Back closes it, which is what a reader means by Back with a panel
+open — and moving it **replaces**, because four objects walked through one open
+rail are one place the reader has been, exactly as four ticked chips are one
+screen.
+
+The id is split on its FIRST colon only, so `sprint:ENG/3` and
+`page:ENG/Deploy runbook` survive being carried in a query value.
+
+### The frame
+
+`dashboard/src/app/frame/` owns everything a screen wears, and a screen renders
+none of it:
+
+| Piece | What it is |
+|---|---|
+| `AppRail` | the workspaces, the badges, the engine pill, theme and density |
+| `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
+| `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link |
+| `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
+| `ObjectHeader` + `TabStrip` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek; the strip takes the tabs the object HAS |
+| `DetailRail` | the peek, resizable, a drawer under 1180 px |
+| `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells |
+| `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation |
+
+**A screen publishes what the chrome needs and renders none of it.** The labels
+the route cannot supply (`usePageLabels`), the coverage of the answer it drew
+from (`usePageCoverage`), and its own controls. Twenty screens each drawing
+their own header is how five of them came to drop the coverage badge.
 
 ### Moving, and going back
 
@@ -212,12 +302,11 @@ the URL, is what the Back button reads.
 
 | Move | Stack | Why |
 |---|---|---|
-| a **moved** path | replaces | the entry names a route that no longer exists; leaving it means Back lands on it, it redirects forward, and you arrive where you started |
-| a **section** — a lens, a tab | pushes | the reader called these screens; Back after three of them should walk out through them |
-| a **filter** — chips, sort, a search box | replaces | four ticked chips are ONE screen; Back means "off this list", not "untick one" |
+| a **section** — a tab, a view, opening a peek | pushes | the reader called these screens; Back after three of them should walk out through them |
+| a **filter** — chips, sort, a search box, moving a peek | replaces | four ticked chips are ONE screen; Back means "off this list", not "untick one" |
 
-The line between the last two is whether the reader would call it a different
-screen, and it is the only judgement call in the router.
+The line between them is whether the reader would call it a different screen,
+and it is the only judgement call in the router.
 
 **Scroll is a property of a history entry, not of a URL.** The same screen
 reached twice is two places the reader has been, and keying a position by URL
@@ -228,13 +317,37 @@ position is re-applied for a short window while the rows arrive — a scroll is
 clamped to the height that exists, so one attempt lands short — and abandoned
 the moment the reader touches the page.
 
-All three of these shipped wrong once, and none of them is visible in a URL.
+Both of these shipped wrong once, and neither is visible in a URL.
+
+### The Inbox is the landing screen
+
+A dashboard's home used to be a summary of the company. What a person opening
+this actually wants to know is whether anything is waiting on them.
+
+**Two bands, and the split is the engine's.** `work_inbox` reports the
+`primary_reasons` that were APPLIED — defaulted from the person's own record —
+so a company that has re-decided what counts as primary gets its own split
+without the client knowing anything about it. **Decisions** is what is waiting
+on somebody; **Notices** is what merely reached them.
+
+**The wake reason opens every row.** The applier records, per change and per
+recipient, the ONE reason of twenty under which that person heard about it.
+Nothing drew it before, and it is the fact no commercial tracker keeps: Linear,
+Jira and ClickUp can all tell you that you were notified, and none can tell you
+why. The client carries no copy of the split — that is a property of the person,
+and the answer states which one it applied.
+
+**Three viewer states, three sentences.** A reader with no credential, a reader
+whose credential no seat claims, and a bound reader. Only the first is anybody's
+fault; an unbound token is an ordinary state whose remedy is a line of company
+configuration, so the screen names the id to bind rather than reporting a fault.
 
 ### The attention queue
 
 `dashboard/src/lib/attention.ts` is one list because it is one question, and it
-is the question an operator opens the page with. Every one of these conditions
-was already known to the dashboard and each lived in a different screen:
+is the question an operator opens the page with. It renders in the Inbox, above
+the notices. Every one of these conditions was already known to the dashboard
+and each lived in a different screen:
 
 | Condition | Where it used to live |
 |---|---|
