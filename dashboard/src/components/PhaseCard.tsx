@@ -544,7 +544,7 @@ export function PhaseCard({
             {record.eventId && !onOwnEventPage && (
               <a
                 className="t-link"
-                href={href(["events", record.eventId])}
+                href={href(["activity", "events", record.eventId])}
                 title="this phase's own event, in the log"
               >
                 event →

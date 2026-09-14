@@ -1370,8 +1370,8 @@ test("the secrets recommendation appears only on a form with a credential", () =
   // The one line a reader skims, with the reasoning behind the icon's hover.
   expect(screen.getByText(/keep credentials in/)).toBeTruthy();
   expect(screen.getByTitle(/rotating it is one edit in one place/)).toBeTruthy();
-  expect((screen.getByText("Secrets") as HTMLAnchorElement).getAttribute("href")).toContain(
-    "secrets",
+  expect((screen.getByText("Credentials") as HTMLAnchorElement).getAttribute("href")).toContain(
+    "credentials",
   );
 });
 

@@ -331,15 +331,15 @@ export function LiveNow() {
           {[
             {
               icon: "brain" as const,
-              title: "Model activity",
+              title: "Turns",
               body: "Every phase the models ran, round by round, with the tools each round called and the prompts they saw.",
-              path: ["model"],
+              path: ["activity", "turns"],
             },
             {
               icon: "link" as const,
               title: "Agent-to-agent",
               body: "The private channels seats opened with each other: one ask, one answer, then closed.",
-              path: ["conversations"],
+              path: ["activity", "a2a"],
             },
             {
               icon: "book" as const,
