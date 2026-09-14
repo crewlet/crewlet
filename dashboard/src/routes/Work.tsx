@@ -808,6 +808,7 @@ export function ProjectHead({
               <Meter
                 used={sprint.figures.done}
                 max={Math.max(1, committed)}
+                ariaLabel={`Sprint ${sprint.number} — delivered`}
                 right={`${sprint.figures.done} of ${committed} ${measure} · ${sprint.days_remaining}d left`}
                 fullMeans="achieved"
               />

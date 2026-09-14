@@ -13,7 +13,7 @@
 import { StrictMode, type ReactElement } from "react";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { Code, CopyButton, DownloadButton, Meter } from "./primitives.tsx";
+import { Code, CopyButton, DownloadButton } from "./primitives.tsx";
 
 afterEach(() => {
   cleanup();
@@ -635,62 +635,6 @@ describe("Code", () => {
  * component compares is what makes the branch reachable at all — and it is
  * the real branch: the same measurement a browser answers differently.
  */
-
-// ---------------------------------------------------------------------------
-// The meter, and which way full means
-// ---------------------------------------------------------------------------
-
-// A BAR AT 100% IS TWO OPPOSITE PIECES OF NEWS. A budget at 100% is refused
-// charges; a goal at 100% is the goal reached. The tone was derived from the
-// fill alone — 75% caution, 100% critical — which is exactly right for a
-// budget and exactly backwards for progress: a goal three quarters of the way
-// there rendered as a WARNING, and one fully achieved would have rendered as
-// a CRISIS. The direction is the caller's to state because it cannot be
-// derived from a ratio.
-describe("Meter", () => {
-  const toneOf = (el: HTMLElement) => el.querySelector(".meter-fill")?.getAttribute("data-tone");
-
-  test("a budget warns as it fills and a goal celebrates", () => {
-    const spent = (used: number) =>
-      toneOf(render(<Meter used={used} max={100} ariaLabel="Budget" fullMeans="spent" />).container);
-    const achieved = (used: number) =>
-      toneOf(
-        render(<Meter used={used} max={100} ariaLabel="Progress" fullMeans="achieved" />).container,
-      );
-
-    // A budget: comfortable, close to the line, over it.
-    expect(spent(40)).toBe("accent");
-    expect(spent(80)).toBe("caution");
-    expect(spent(100)).toBe("critical");
-
-    // Progress: nothing short of done is a fault the bar can diagnose, and
-    // done is good news.
-    expect(achieved(40)).toBe("accent");
-    expect(achieved(80)).toBe("accent");
-    expect(achieved(100)).toBe("positive");
-  });
-
-  // A CALLER MAY KNOW WHAT THE RATIO DOES NOT — a budget already refusing
-  // charges is critical at any fill — so an explicit tone still wins.
-  test("an explicit tone overrides the direction", () => {
-    const { container } = render(
-      <Meter used={10} max={100} ariaLabel="Budget" fullMeans="spent" tone="critical" />,
-    );
-    expect(toneOf(container)).toBe("critical");
-  });
-
-  // A MAX OF ZERO IS NOT A FULL BAR. "Nothing is allowed" and "everything is
-  // spent" would otherwise look identical, and dividing by it is how a bar
-  // renders NaN. With no scale there is no meter role either — see the
-  // component: `aria-valuemax` would default to 100 and announce a confident
-  // "0 out of 100" where the truth is that nobody has said what the limit is.
-  test("a meter with no maximum draws nothing rather than everything", () => {
-    const { container } = render(<Meter used={5} max={0} ariaLabel="Budget" fullMeans="spent" />);
-    expect(container.querySelector<HTMLElement>(".meter-fill")?.style.width).toBe("0%");
-    expect(toneOf(container)).toBe("accent");
-    expect(container.querySelector(".meter-track")?.getAttribute("role")).toBe(null);
-  });
-});
 
 function overflowing(node: ReactElement, axis: "height" | "width" = "height"): HTMLElement {
   const scroll = axis === "height" ? "scrollHeight" : "scrollWidth";

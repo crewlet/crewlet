@@ -411,6 +411,7 @@ export function SprintPanel({
         <Meter
           used={f.done}
           max={committed}
+          ariaLabel={`Sprint ${sprint.number} — delivered`}
           label="Delivered"
           right={`${f.done} of ${committed} ${measure}`}
           fullMeans="achieved"
@@ -459,6 +460,7 @@ export function SprintPanel({
                     <Meter
                       used={a.total}
                       max={a.capacity}
+                      ariaLabel={`${a.handle} — committed against capacity`}
                       right={`${a.total} / ${a.capacity}`}
                       fullMeans="spent"
                       {...(a.over_capacity ? { tone: "critical" as const } : {})}
