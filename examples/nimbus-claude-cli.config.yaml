@@ -82,10 +82,13 @@ logging:
 # socket at all, so the broker cannot be reached from outside the
 # process.
 #
-# store_dir is NOT optional for a real company.  Leaving it empty selects
-# an in-memory server — right for a test, and a company that expects to
-# survive a restart must not leave it unset, because nothing published
-# outlives the process.
+# store_dir is NOT optional, and not merely inadvisable: leaving it empty
+# selects an in-memory server, and this company runs the engine's own
+# tracker and knowledge base (see tracker.backend and knowledge.backend in
+# the company document), whose logs live on that stream.  A restart would
+# recreate them empty and this node would stop serving for good, so the
+# engine refuses the pairing outright rather than losing the records —
+# `crewlet validate` refuses it too, naming stream.store_dir.
 #
 # `type: nats` dials an external NATS server or cluster instead, and takes
 # `url` (plus `credentials` / `token` / `tls` where the estate demands

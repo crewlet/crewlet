@@ -50,8 +50,13 @@ stream:
   type: embedded          # a JetStream server inside this process: no
                           #   listener, no port, no service to operate
   store_dir: "./acme-data/stream"   # leave empty and the stream is
-                          #   in-memory — right for a test, and nothing
-                          #   published survives a restart
+                          #   in-memory, and nothing published survives a
+                          #   restart. This company is on the engine's own
+                          #   tracker and knowledge base — the defaults — so
+                          #   every item and every page lives there too, and
+                          #   the engine REFUSES to boot on an in-memory
+                          #   stream rather than lose them at the first
+                          #   restart. Name a directory
 
 store:
   path: "./acme-data/acme.db"   # this node's own database, owned

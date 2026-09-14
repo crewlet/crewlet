@@ -391,14 +391,13 @@ stream:
                                     #   code either way, so it is a connection
                                     #   choice rather than a second backend
   store_dir: "./crewlet-data/stream"  # empty = in-memory: right for a test,
-                                    #   and nothing published survives a restart
-                                    #   — which on the default native tracker
-                                    #   and knowledge base means every item and
-                                    #   every page, not just queued events. The
-                                    #   engine logs that at error level on each
-                                    #   boot rather than refusing it, because a
-                                    #   test and an ingress-only node run this
-                                    #   way on purpose
+                                    #   and nothing published survives a
+                                    #   restart. A company on the engine's own
+                                    #   tracker or knowledge base (the
+                                    #   defaults) keeps every item and every
+                                    #   page there, so the engine refuses to
+                                    #   boot it on an in-memory stream rather
+                                    #   than lose them at the first restart
   # url: "nats://nats.internal:4222"  # required for `nats`, REFUSED for
                                     #   embedded — an embedded server has no
                                     #   address, so a url there is read by
@@ -1049,7 +1048,7 @@ tracker:
 
 Everything else a tracker could be told is either a fact about the **operator** — how they back up, how long their disk holds a replay window — which lives in Tier A under [`stream.tracker_retention`](#stream), or a decision the engine makes once for everybody.
 
-**A native tracker needs a stream that survives a restart.** Its write-ahead log lives on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory — so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve the tracker permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. A company on a vendor tracker starts no log at all and is unaffected, which is why the rule needs both files to see.
+**A native tracker or knowledge base needs a stream that survives a restart.** Their write-ahead logs live on the stream, and an embedded stream with no `stream.store_dir` keeps its streams in memory, so a restart recreates them empty, and a node whose durable tables are ahead of a stream that restarted from nothing refuses to serve permanently, with no snapshot that helps. `crewlet validate` refuses that pair when it is given both documents, and so does the engine at boot. Either backend starts the log: a company on Jira whose knowledge base is the engine's own, the default without Confluence, is refused the same way. Only a company whose tracker and knowledge base are both a vendor's (or `none`) starts no log at all and is unaffected, which is why the rule needs both files to see.
 
 ---
 

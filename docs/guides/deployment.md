@@ -239,23 +239,24 @@ Ctrl-C returns immediately. Every other error is returned at once: a bad subject
 a conflicting retention does not clear by waiting, and retrying would turn a
 config mistake into a half-minute hang with the same message at the end.
 
-**Set `store_dir`, or the fleet forgets.** Empty selects an in-memory member,
-which is right for a test and for a stateless ingress-only node and wrong for
-anything else: a restart loses that member's replicas, and the same server
-holds the KV buckets carrying the fleet's shared records — the token counter,
-the completion ledger, open agent-to-agent asks, claimed scheduled fires,
-detached (and billed) sandbox runs.
+**Set `store_dir`, or the fleet forgets.** Empty selects an in-memory member:
+a restart loses that member's replicas, and the same server holds the KV
+buckets carrying the fleet's shared records — the token counter, the
+completion ledger, open agent-to-agent asks, claimed scheduled fires, detached
+(and billed) sandbox runs. That is tolerable only for a company whose tracker
+and knowledge base are both a vendor's; on either native backend the engine
+refuses it outright, as the next paragraph describes.
 
-**On the native backends it is the company's own record.** With
-`tracker.backend: native` or `knowledge.backend: native` — the defaults — every
-work item and every page lives in those same buckets. An unset `store_dir`
-then means the whole tracker and the whole wiki are gone on the next restart,
-and nothing reports a loss: the company simply appears to have no work. The
-engine logs `native_backend_on_an_ephemeral_stream` at error level on every
-boot that is in that state, and it is the one startup line worth grepping for.
-It is not refused, because a test and an ingress-only node legitimately run
-this way and nothing here can tell them from a deployment somebody forgot to
-finish.
+**On the native backends it is the company's own record, and it is
+refused.** With `tracker.backend: native` or `knowledge.backend: native` (the
+defaults), every work item and every page lives in a log on that stream. An
+unset `store_dir` would mean the first restart recreates those logs empty, and
+a node whose rows are ahead of a log that restarted from nothing stops serving
+for good. So the engine refuses to boot that pairing, and `crewlet validate`
+refuses it when given both documents, naming `stream.store_dir`. Either
+backend is enough: a company on Jira whose knowledge base is the engine's own,
+which is the default without Confluence, is refused the same way. Only a
+company on vendors for both can run an in-memory member.
 
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**

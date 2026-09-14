@@ -911,6 +911,17 @@ func (c *Company) TrackerBackendFor() TrackerBackend {
 	return TrackerNative
 }
 
+// RunsStateLog reports whether this company keeps any of its own records on
+// the stream: the engine's own tracker or its own knowledge base.
+//
+// EITHER ONE, because either starts a node's state log and the log runs every
+// registered domain or none. So the question is not which native backend a
+// company chose but whether it chose one at all, and the node that starts the
+// log and the rule that refuses an in-memory stream for it both ask it here.
+func (c *Company) RunsStateLog() bool {
+	return c.TrackerBackendFor() == TrackerNative || c.KnowledgeBackendFor() == KnowledgeNative
+}
+
 // VectorsEnabled reports whether knowledge search fuses semantic recall.
 func (c *Company) VectorsEnabled() bool {
 	if c.Knowledge.Vectors != nil {
