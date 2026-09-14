@@ -1049,26 +1049,6 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// refusal is live from the first delivery this node could take.
 	e.SetAdmits(reconciler.Admits)
 
-	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
-	// and it is the only shape an API is served in. The API half is what
-	// makes the node reachable at all (every inbound webhook arrives
-	// through it), so an engine that ran without it would hold seats and
-	// hear nothing.
-	//
-	// BOUND BEFORE THE ENGINE STARTS, and the order is a fix rather than a
-	// preference. Starting the engine first means claiming seats first, and
-	// a seat is not claimed until its per-role MCP children are up — one
-	// subprocess per server per seat, each a spawn and a handshake and a
-	// tools/list. On the Nimbus example that is 21 children, and the whole
-	// inbound edge (dashboard, REST, every third-party app's webhook) was
-	// dark for as long as they took. Measured at 37 seconds with four seats
-	// and every vendor failing FAST; a company whose vendors actually answer
-	// takes minutes, and it scales with seats times servers.
-	//
-	// Nothing here needs a started engine: the node exists, /health and
-	// /ready report honestly that it holds no seats yet, and a webhook that
-	// arrives in the window is retained rather than dropped because the
-	// mailboxes are created before any claiming — see Node.Start.
 	// THE CONFIG SURFACE IS BUILT HERE, NOT INSIDE serveAPI, and the
 	// difference is a node with `api.port: 0`.
 	//
@@ -1110,6 +1090,26 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// the third-party app and leaving the block behind.
 	e.UseConfigWriter(engineConfigWriter{surface: configSurface})
 
+	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
+	// and it is the only shape an API is served in. The API half is what
+	// makes the node reachable at all (every inbound webhook arrives
+	// through it), so an engine that ran without it would hold seats and
+	// hear nothing.
+	//
+	// BOUND BEFORE THE ENGINE STARTS, and the order is a fix rather than a
+	// preference. Starting the engine first means claiming seats first, and
+	// a seat is not claimed until its per-role MCP children are up (one
+	// subprocess per server per seat, each a spawn and a handshake and a
+	// tools/list). On the Nimbus example that is 21 children, and the whole
+	// inbound edge (dashboard, REST, every third-party app's webhook) was
+	// dark for as long as they took. Measured at 37 seconds with four seats
+	// and every vendor failing FAST; a company whose vendors actually answer
+	// takes minutes, and it scales with seats times servers.
+	//
+	// Nothing here needs a started engine: the node exists, /health and
+	// /ready report honestly that it holds no seats yet, and a webhook that
+	// arrives in the window is retained rather than dropped because the
+	// mailboxes are created before any claiming (see Node.Start).
 	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface, log)
 	if err != nil {
 		e.Stop(context.WithoutCancel(ctx))
