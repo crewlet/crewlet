@@ -77,6 +77,14 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 // refusal that names `include` rather than a truncation a model would read as
 // the whole. What must hold is the case above: every part a caller can narrow
 // TO fits, so the advice works.
+//
+// IT FAILS WHEN THE ITEM FITS, which is the opposite arm of the same assertion
+// and the reason this is a test rather than a note. It was written with a
+// t.Skipf on that arm and a t.Logf on the other, so NO INPUT could turn it red:
+// a ceiling raised past the maximal shape would have made the refusal path dead
+// code and this would have reported a pass either way. The shape to copy is
+// internal/store/capability_test.go, which fails when its measurement moves in
+// EITHER direction.
 func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 	t.Parallel()
 	encoded, err := json.MarshalIndent(maximalDetail(), "", "  ")
@@ -84,9 +92,12 @@ func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 		t.Fatalf("encode: %v", err)
 	}
 	if len(encoded) <= builtin.ToolAnswerBytes {
-		t.Skipf("a maximal item now fits (%d KiB of %d), so this case has "+
-			"nothing to guard — the ceiling holds by construction",
-			len(encoded)>>10, builtin.ToolAnswerBytes>>10)
+		t.Fatalf("a maximal item now FITS (%d KiB of %d B), so the refusal that "+
+			"names `include` is unreachable and the paragraph above it describes "+
+			"a path nothing takes. Either the ceiling moved or the maximal shape "+
+			"shrank: reconcile builtin.ToolAnswerBytes with maximalDetail() and "+
+			"rewrite this case to state whichever is now true.",
+			len(encoded)>>10, builtin.ToolAnswerBytes)
 	}
 	t.Logf("a maximal item is %d KiB against a %d KiB ceiling, and the refusal "+
 		"is what names `include`", len(encoded)>>10, builtin.ToolAnswerBytes>>10)

@@ -22,15 +22,39 @@ import (
 // The fake is this binary rather than a shell script because the engine ships
 // for Windows too, and a suite that proved the exec path only on Unix would
 // leave the platform where process handling differs most untested.
+// helperEnv is what makes this binary the fake CLI instead of the suite. See
+// [TestMain], which reads it before the framework starts.
+//
+// The `-test.run=TestCLIAgentFakeCLI` the fixtures still pass now names no
+// test, and is kept deliberately as a FORK-BOMB GUARD rather than a selector:
+// TestMain dispatches on the variable alone, so if a fixture ever forgets it,
+// the child falls through to the suite — and a filter matching nothing makes
+// that child exit immediately instead of re-running every test in this package,
+// recursively, once per case.
 const helperEnv = "CREWLET_CLIAGENT_FAKE"
 
-// TestCLIAgentFakeCLI is not a test: it is the fake CLI the exec tests drive.
-// It exits before the testing framework prints anything, so the parent reads
-// exactly the bytes the case asked for.
-func TestCLIAgentFakeCLI(t *testing.T) {
-	if os.Getenv(helperEnv) != "1" {
-		t.Skip("this is the fake CLI, driven by the exec tests")
+// TestMain runs the fake CLI when this binary was re-executed as one, and the
+// suite otherwise.
+//
+// THE DISPATCH IS HERE rather than in a test function, and that is what stops
+// the fake being REPORTED as a skipped test. It was `TestCLIAgentFakeCLI` with
+// a t.Skip on the parent path, so every ordinary run of this package logged a
+// skip for something that is not a test and never had an assertion in it —
+// noise in exactly the place a skip is supposed to mean "this went unchecked".
+// Same shape as internal/mcp/helper_process_test.go.
+//
+// It also exits before the framework parses flags, so the fake's output is
+// exactly the bytes the case asked for with nothing of testing's around them.
+func TestMain(m *testing.M) {
+	if os.Getenv(helperEnv) == "1" {
+		runFakeCLI()
+		os.Exit(0)
 	}
+	os.Exit(m.Run())
+}
+
+// runFakeCLI is the fake CLI the exec tests drive.
+func runFakeCLI() {
 	if ms := os.Getenv("FAKE_SLEEP_MS"); ms != "" {
 		delay, _ := strconv.Atoi(ms)
 		time.Sleep(time.Duration(delay) * time.Millisecond)
@@ -49,6 +73,35 @@ func TestCLIAgentFakeCLI(t *testing.T) {
 		fakeStubborn()
 	case os.Getenv("FAKE_GRANDCHILD") == "1":
 		fakeGrandchild()
+	case os.Getenv("FAKE_DUMP_CWD") == "1":
+		// THE CHILD'S OWN ANSWER, because nothing else can give one, and it
+		// reports what it FINDS rather than only where it is.
+		//
+		// Two reasons, and the case that reads this fell down both. PWD is a
+		// SHELL variable: os/exec sets it nowhere, and buildEnv's host
+		// allowlist would not carry it if a shell had, so reading it out of
+		// the dumped environment returned empty on every platform — including
+		// the one CI runs — while the skip blamed "not every platform". And
+		// the per-call directory is REMOVED when the call releases, so a
+		// parent handed only the path has nothing left to list by the time it
+		// looks. Same reason the system-prompt case below reads its file from
+		// in here.
+		dir, err := os.Getwd()
+		if err != nil {
+			fmt.Printf("CWD_ERR=%v", err)
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			fmt.Printf("CWD=%s\nCWD_ERR=%v", dir, err)
+			return
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		slices.Sort(names)
+		fmt.Printf("CWD=%s\nCWD_ENTRIES=%s", dir, strings.Join(names, ","))
 	case os.Getenv("FAKE_DUMP_ENV") == "1":
 		env := os.Environ()
 		slices.Sort(env)
@@ -413,21 +466,33 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 
 // Each call runs in an EMPTY per-call directory, so a CLI that reads
 // AGENTS.md or CLAUDE.md from cwd finds nothing from anyone else.
+//
+// IT ASKS THE CHILD, and that is the whole repair. It read PWD out of the
+// dumped environment and skipped when it was absent, with a comment blaming
+// "not every platform". PWD is a SHELL variable — os/exec sets it nowhere,
+// and buildEnv's host allowlist does not carry it — so it was absent on EVERY
+// platform including the one CI runs, and this assertion had never once been
+// made. os.Getwd() in the child is the only honest source, and it cannot be
+// unavailable.
 func TestTheWorkingDirectoryIsEmptyAndPerCall(t *testing.T) {
-	p := fakeProvider(t, map[string]string{"FAKE_DUMP_ENV": "1"}, nil)
+	p := fakeProvider(t, map[string]string{"FAKE_DUMP_CWD": "1"}, nil)
 	comp, err := ask(t, p, llm.Request{})
 	if err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
-	dir := envValue(comp.Content, "PWD")
+	dir := envValue(comp.Content, "CWD")
 	if dir == "" {
-		// Not every platform exports PWD to a child; the directory is
-		// asserted through the workspace suite instead.
-		t.Skip("this platform does not export PWD to a child process")
+		t.Fatalf("the child did not report a working directory:\n%s", comp.Content)
 	}
-	entries, err := os.ReadDir(dir)
-	if err == nil && len(entries) != 0 {
-		t.Errorf("the working directory %q was not empty: %v", dir, entries)
+	if err := envValue(comp.Content, "CWD_ERR"); err != "" {
+		t.Fatalf("the child could not read its own working directory: %s", err)
+	}
+	// The child listed its own directory, because the parent cannot: the
+	// per-call directory is removed when the call releases.
+	if entries := envValue(comp.Content, "CWD_ENTRIES"); entries != "" {
+		t.Errorf("the call's working directory %q was not empty: %s — a CLI "+
+			"reading AGENTS.md or CLAUDE.md from cwd would find somebody "+
+			"else's", dir, entries)
 	}
 }
 

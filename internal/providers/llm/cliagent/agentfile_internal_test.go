@@ -258,7 +258,17 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	out, _ := exec.Command(binary, "--version").Output()
+	// THE SAME FILTERED ENVIRONMENT AND DIRECTORY as the invocation below.
+	// A bare exec.Command leaves cmd.Env nil, which hands the child this
+	// process's WHOLE environment — so the step that decides whether the
+	// binary on PATH is even the right program would give an unidentified
+	// executable every key the environment carries, before any identity check
+	// has run. Same repair as the grok case.
+	probeDir := t.TempDir()
+	probe := exec.CommandContext(t.Context(), binary, "--version")
+	probe.Dir = probeDir
+	probe.Env = vendorCLIEnv(p, probeDir, nil)
+	out, _ := probe.Output()
 	version := strings.TrimSpace(string(out))
 	if strings.HasPrefix(version, "1.") {
 		// The unscoped `kimi-code` package on npm is a Claude Code
@@ -289,9 +299,12 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+dir, "KIMI_CODE_HOME="+filepath.Join(dir, ".kimi-code"))
+	// No KIMI_CODE_HOME here: the profile declares it in config_env and
+	// vendorCLIEnv derives it, which is the point of deriving rather than
+	// re-stating what profiles.yaml already says.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
-	assertNoArgumentRefusal(t, string(combined), args)
+	assertArgvReachedAuth(t, args, string(combined))
 }
 
 // THE KIMI PROFILE READS ONE ANSWER OUT OF ITS MESSAGE STREAM.
@@ -410,28 +423,4 @@ func fileArgAfter(argv, flag string) string {
 		}
 	}
 	return ""
-}
-
-// assertNoArgumentRefusal fails when a real CLI stopped at argument parsing.
-//
-// Shared by the argv-shape probes, which all ask the same question of
-// different binaries: did the profile's flags parse? Each stops at its own
-// authentication failure afterwards, which is exactly far enough.
-func assertNoArgumentRefusal(t *testing.T, got string, args []string) {
-	t.Helper()
-	for _, refusal := range []string{
-		"a value is required",
-		"unexpected argument",
-		"unknown option",
-		"unknown flag",
-		"invalid value",
-		"unrecognized",
-		"Unknown argument",
-		"error: unknown",
-	} {
-		if strings.Contains(got, refusal) {
-			t.Fatalf("the profile's argv does not parse (%q):\nargs: %v\n%s",
-				refusal, args, got)
-		}
-	}
 }

@@ -390,9 +390,37 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 		w.mu.Lock()
 		advance := w.advance
 		w.mu.Unlock()
-		if advance != nil {
-			advance()
+		if advance == nil {
+			// NOTHING CAN EVER ADVANCE THIS, so do not spend the budget
+			// discovering it. This harness drives the applier BY HAND — see
+			// the note on [roundTrip.applyWhileWriting] — and `advance` is the
+			// only thing that moves the position while a write is blocked
+			// here. With none set, the position is frozen for the duration of
+			// this call, and the loop below is the resolve budget's worth of
+			// one-millisecond sleeps ending in exactly the answer the caller
+			// gets from returning now: the write did not resolve, so it is
+			// reported pending, and the case drains it afterwards.
+			//
+			// It cost more than every other thing this package does. Measured:
+			// newRoundTrip was 2.26s, of which 1.97s was the single seeded
+			// project waiting out a 2s ResolveBudget here — about 2000 sleeps
+			// achieving nothing. Across 241 callers that is most of the 869s
+			// this package took under -race, and eight representative cases
+			// went from 22.5s to 4.2s with this returning early.
+			//
+			// DeadlineExceeded rather than a sentinel of its own, so the
+			// publisher takes the identical path it took before: this is the
+			// same outcome, reached without the wait.
+			// THE CALLER'S OWN ERROR FIRST. A context already cancelled is
+			// a cancellation, not a timeout, and reporting DeadlineExceeded
+			// for one would hand the publisher the wrong reason — the
+			// pending/timeout path after an explicit cancel.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return context.DeadlineExceeded
 		}
+		advance()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

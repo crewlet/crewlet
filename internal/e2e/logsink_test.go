@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/solo"
 )
 
 // The process-wide log sink for this package's tests.
@@ -18,9 +19,14 @@ import (
 // a data race, and one test's lines in another's output. Tests here DO run in
 // parallel, so the sink is installed exactly once, here, and the recorder below
 // is safe to write from many goroutines.
+//
+// It also runs through [solo.Run], which declares that this package needs the
+// test runner to itself: cluster_test.go stands up a fleet of engines, each
+// embedding its own NATS server, in this one process. See
+// `go doc ./internal/solo`.
 func TestMain(m *testing.M) {
 	logging.Configure(slog.LevelDebug, logging.FormatJSON, logs)
-	os.Exit(m.Run())
+	os.Exit(solo.Run(m))
 }
 
 // logs indexes what a test can assert on, and passes on what a PERSON needs.

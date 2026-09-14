@@ -1,7 +1,6 @@
 package cliagent
 
 import (
-	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -311,7 +310,8 @@ func TestTheHermesProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+dir, "HERMES_HOME="+dir+"/.hermes")
+	// HERMES_HOME is the profile's config_env; see vendorCLIEnv.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
-	assertNoArgumentRefusal(t, string(combined), args)
+	assertArgvReachedAuth(t, args, string(combined))
 }

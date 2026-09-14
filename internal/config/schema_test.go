@@ -3,8 +3,6 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -564,10 +562,7 @@ func TestShippedExamplesValidateAgainstTheSchema(t *testing.T) {
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			data, err := os.ReadFile(filepath.Join(repoRoot, "examples", name))
-			if err != nil {
-				t.Skipf("the example tree is not in this checkout: %v", err)
-			}
+			data := readRepoFile(t, "examples", name)
 			if err := schema.Validate(asJSON(t, string(data))); err != nil {
 				t.Fatalf("examples/%s does not satisfy its own schema:\n%v", name, err)
 			}

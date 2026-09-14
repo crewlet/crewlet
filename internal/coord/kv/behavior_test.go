@@ -267,9 +267,22 @@ func TestBrokerBehavior(t *testing.T) {
 			LimitMarkerTTL: time.Minute,
 		})
 
+		// FATAL, NOT A SKIP, and the skip it replaces said so itself
+		// ("skipping is not passing") while skipping anyway.
+		//
+		// The broker is not an environment here. nats-server is pinned in
+		// go.mod and embedded in this process, so per-key TTL is a property of
+		// a PINNED DEPENDENCY — the same situation internal/store's
+		// capability_test.go is in, and it is the model: measure the surface,
+		// and fail when the measurement moves in either direction. Skipping
+		// here would mean a bump that dropped KeyTTL silently retires the one
+		// case standing between a renewed lease and an immortal one, on the
+		// very run that should have caught it.
 		if _, err := marked.Create(ctx, "untouched", []byte("v"), jetstream.KeyTTL(behaviorTTL)); err != nil {
-			t.Skipf("this broker does not support per-key TTL (%v); the trap cannot be "+
-				"measured here, and skipping is not passing", err)
+			t.Fatalf("the pinned broker refused jetstream.KeyTTL (%v). If a bump "+
+				"removed per-key TTL, the coordination design that rests on this "+
+				"trap needs re-deciding — see this case's comment — rather than "+
+				"this case going quiet", err)
 		}
 		waitReaped(ctx, t, marked, "untouched")
 		out.record("per-key TTL (KeyTTL), never renewed", "expires")

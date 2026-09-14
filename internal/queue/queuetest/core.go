@@ -571,49 +571,6 @@ func (s *suite) runCore(t *testing.T) {
 		j.awaitLabels(t, "a restarted queue to deliver again", "resumed")
 	})
 
-	t.Run("a_hold_taken_while_stopped_does_not_survive_a_restart", func(t *testing.T) {
-		t.Parallel()
-		if !s.caps.Restartable {
-			t.Skip("backend treats Stop as terminal; a restart needs a fresh queue")
-		}
-		// stop_clears_pause covers a hold taken BEFORE the stop. This covers
-		// the window the suite never visited: a hold taken while the queue is
-		// stopped, by a sandbox gate or a config shed racing a drain.
-		//
-		// Found by asking at which points in the queue's own lifecycle each
-		// verb is sent — a different axis from what the suite sends. After a
-		// Stop this suite sent exactly two things, Start and Publish, and
-		// never the other nine verbs. Measured on the twin before the fix:
-		// the hold survived, and the restarted seat was silently deaf while
-		// reporting itself running, which is the incident Stop's own doc
-		// exists to prevent, reached from the other side.
-		q := s.start(ctx, t)
-		if err := q.Stop(ctx); err != nil {
-			t.Fatalf("Stop: %v", err)
-		}
-		if err := q.PauseTopic(ctx, "seat.restart", "grp", "sandbox"); err != nil {
-			// Refusing while stopped is a legitimate answer and closes the
-			// window just as well: the contract does not say what the verbs
-			// other than Start and Stop do on a stopped queue, and both
-			// readings are real — on JetStream, Open establishes the
-			// connection and the streams, so Start is a no-op, while on the
-			// twin Start is what makes the client live. What a backend may
-			// NOT do is answer differently per verb, which is how this window
-			// opened: the twin refuses Publish and Subscribe while
-			// EnsureSubscription, DeleteSubscription and PauseTopic still
-			// mutate broker state on a stopped client.
-			t.Skipf("backend refuses PauseTopic while stopped: %v", err)
-		}
-		if err := q.Start(ctx); err != nil {
-			t.Fatalf("restart: %v", err)
-		}
-
-		j := newJournal()
-		subscribe(ctx, t, q, "seat.restart", "grp", recordingHandler(j))
-		publish(ctx, t, q, "seat.restart", newEvent("work"))
-		j.awaitLabels(t, "a restarted queue to serve rather than stay gated", "work")
-	})
-
 	t.Run("wait_for_handlers_no_op_when_idle", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -790,6 +747,33 @@ func (s *suite) runCore(t *testing.T) {
 	})
 
 	// AFTER STOP there is no choice: a closed client mutates nothing.
+	//
+	// THIS IS ALSO WHAT CLOSES THE RESTART WINDOW, and the case that used to
+	// state that separately is gone. `a_hold_taken_while_stopped_does_not_
+	// survive_a_restart` asked whether a hold TAKEN on a stopped queue
+	// outlived a Start, and it was written for a real defect: the twin refused
+	// Publish and Subscribe while EnsureSubscription, DeleteSubscription and
+	// PauseTopic still mutated broker state on a stopped client, so a hold
+	// survived and the restarted seat was silently deaf while reporting itself
+	// running — the incident Stop's own doc exists to prevent, reached from the
+	// other side. It was found by asking at which point in the LIFECYCLE each
+	// verb is sent, rather than what the suite happens to send: after a Stop
+	// the suite sent exactly Start and Publish, and never the other eleven.
+	//
+	// That case then RAN ON NO BACKEND AT ALL — measured from a -json log, a
+	// `skip` record under internal/queue/jetstream (not Restartable) and under
+	// internal/queue/memory (which refuses PauseTopic while stopped, its own
+	// t.Skipf), and a `pass` under neither. Two per-backend skips that are each
+	// defensible alone multiplied into total coverage loss, which is a failure
+	// mode no single-backend review can see.
+	//
+	// Deleting it costs nothing, because this case is the GENERAL form of the
+	// same fix and is strictly stronger: it is ungated, it runs on both
+	// backends, and it requires all thirteen verbs — PauseTopic among them — to
+	// refuse with queue.ErrNotLive. A hold that cannot be TAKEN cannot survive
+	// anything, so the window is closed by construction rather than by
+	// observation, and it is closed for every verb rather than for the one
+	// somebody thought to try.
 	t.Run("a_stopped_queue_refuses_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -816,6 +800,32 @@ func (s *suite) runCore(t *testing.T) {
 					verb.name, verb.err)
 			}
 		}
+
+		// AND THE REFUSAL LEFT NOTHING BEHIND, which the error alone does not
+		// say. A backend can refuse with ErrNotLive and still have mutated
+		// broker state on the way — that is the shape of the defect the
+		// deleted restart case was written for, where the twin refused
+		// Publish and Subscribe while EnsureSubscription, DeleteSubscription
+		// and PauseTopic went through on a stopped client. Checking only the
+		// error would let a hold survive and call it a pass.
+		//
+		// The TAIL is capability-gated rather than the whole case, so this
+		// still runs everywhere the verbs above do and the backend that
+		// cannot restart simply does not reach the second half. Gating the
+		// case would have made it a skip — and a skip on the one backend that
+		// can observe the property is how the deleted case came to run
+		// nowhere at all.
+		if !s.caps.Restartable {
+			return
+		}
+		if err := q.Start(ctx); err != nil {
+			t.Fatalf("restart after the refusals: %v", err)
+		}
+		j := newJournal()
+		subscribe(ctx, t, q, "stopped.t", "g", recordingHandler(j))
+		publish(ctx, t, q, "stopped.t", newEvent("after"))
+		j.awaitLabels(t, "a restarted queue to deliver rather than stay gated "+
+			"by a hold a refused call left behind", "after")
 	})
 
 	t.Run("start_stop_lifecycle", func(t *testing.T) {

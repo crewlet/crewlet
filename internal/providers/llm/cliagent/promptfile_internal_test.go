@@ -161,25 +161,18 @@ func TestTheMuseProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...) //nolint:gosec // args come from the shipped profile
 	cmd.Dir = dir
-	// The launcher's own environment, minus anything that would sign this
-	// in: the point is to reach authentication, not to spend a plan.
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "MUSE_NO_AUTO_UPDATE=1"}
+	// Production's own environment, minus anything that would sign this in:
+	// the point is to reach authentication, not to spend a plan.
+	// MUSE_NO_AUTO_UPDATE is the profile's, so vendorCLIEnv carries it here;
+	// that it is DECLARED is asserted on its own below.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
-	got := string(combined)
 
-	// clap reports an argument problem before it reaches authentication.
-	for _, refusal := range []string{
-		"unexpected argument",
-		"unrecognized",
-		"a value is required",
-		"invalid value",
-		"error: unknown",
-	} {
-		if strings.Contains(got, refusal) {
-			t.Fatalf("the profile's argv does not parse (%q):\nargs: %v\n%s",
-				refusal, args, got)
-		}
-	}
+	// REACHING AUTHENTICATION IS THE PROOF. This was a list of five strings
+	// that had to be absent — and all five are clap's vocabulary, while muse's
+	// own `exec` parser is not clap, so the case could not fail against the
+	// CLI it names. See [assertArgvReachedAuth].
+	assertArgvReachedAuth(t, args, string(combined))
 }
 
 // THE LAUNCHER'S AUTO-UPDATER MUST BE OFF.
