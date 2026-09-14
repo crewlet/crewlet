@@ -42,16 +42,30 @@ const (
 	KindChanged = "changed"
 )
 
-// MaxChanges bounds one diff.
+// MaxChanges bounds the diff ONE ANSWER carries — never the comparison.
 //
-// A first import against an empty document, or a wholesale rewrite, produces
-// one change per leaf of a large config — thousands of them, none of which a
-// person reads. The cap keeps a response a page rather than a download, and
-// the truncation is REPORTED rather than silent: a diff that quietly stopped
-// would be read as "that is all that changed".
+// The budget being spent is the transport's rather than the differ's, so the
+// cut belongs to whoever is rendering: [Service.Diff] answers over an HTTP
+// body and a socket frame, so it cuts to this and reports `changes_total`
+// beside the listing; `crewlet config diff` writes to a terminal, which has
+// no such budget and a pager, so it prints every change [Changes] found.
+//
+// 500 sits above a whole-document rewrite of a real company. The example
+// company in examples/ has 401 leaves and serializes to 40 KB of JSON, so a
+// diff that changed every one of them is ~110 KB and still arrives complete.
+// What the cap is for is the document several times that size, where one
+// change per leaf makes an answer a download — and it is REPORTED rather
+// than silent, because a diff that quietly stopped would be read as "that is
+// all that changed".
 const MaxChanges = 500
 
 // Changes compares two documents, oldest first.
+//
+// COMPLETE: every difference it found, however many that is. What to do about
+// a diff longer than anybody reads is a property of where the answer is going
+// rather than of the comparison — see [MaxChanges] — and the walk builds the
+// whole list before it can sort it anyway, so cutting in here bought no work
+// and cost the one caller with no size limit its answer.
 //
 // Both sides are expected REDACTED. Comparing raw documents would put the old
 // and the new value of a rotated credential in one response — strictly worse
@@ -68,12 +82,6 @@ func Changes(from, to *config.Company) ([]Change, error) {
 	var out []Change
 	compare("", before, after, &out)
 	slices.SortFunc(out, func(a, b Change) int { return strings.Compare(a.Path, b.Path) })
-	if len(out) > MaxChanges {
-		out = append(out[:MaxChanges:MaxChanges], Change{
-			Path: "", Kind: KindChanged,
-			To: fmt.Sprintf("%d further changes not listed", len(out)-MaxChanges),
-		})
-	}
 	return out, nil
 }
 

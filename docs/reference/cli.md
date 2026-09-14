@@ -259,8 +259,12 @@ shape [Design Decisions](design-decisions.md#the-config-diff-is-paths-and-values
 records. A string value is quoted and other values are not, because `"true"`
 and `true` are different settings and a renderer that printed both bare would
 show a type change as no change at all.
-A diff longer than the cap reports its own truncation rather than stopping
-silently.
+**Every change, however many there are.** `GET /config/revisions/{id}/diff`
+cuts its listing at 500 entries because a response body and a dashboard socket
+frame have a size budget — it reports `changes_total` beside the listing, so a
+reader knows what was left out. A terminal has no such budget and does have a
+pager, so this command prints the whole comparison: the reader best equipped
+to read a long diff was the one a shared cap kept it from.
 
 **Both sides are always redacted, and there is no flag to turn that off.** A diff is what an operator pastes into a ticket or a chat thread to ask a colleague whether a change looks right, which is the single most likely way a credential leaves the machine. `crewlet config export -revision <UUID>` is there for the rare case that needs the real values, and it takes a deliberate act.
 

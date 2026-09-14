@@ -1749,6 +1749,11 @@ export interface ConfigDiff {
   from: string;
   to: string;
   changes: ConfigChange[];
+  /** How many differences there ARE, which is not how many `changes`
+   *  carries: the answer is cut at the server's response budget, and this is
+   *  what says so. `crewlet config diff` has no such budget and prints every
+   *  one. Render this as the count and say what the listing left out. */
+  changes_total?: number;
 }
 
 // ---------------------------------------------------------------------------

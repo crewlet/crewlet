@@ -383,6 +383,44 @@ Response (`200 OK`):
 
 Payloads are NOT included — fetch a specific revision via `GET /config/revisions/{id}` for the full JSON.
 
+### `GET /config/revisions/{id}/diff`
+
+A **structural** diff of two revisions — one entry per path that moved, with
+the value on each side. `?against=` names the other side and defaults to the
+active revision; the direction reads as "what `against` became", so a bare
+call answers "what would reverting to this change". The same answer serves the
+dashboard as the `config_diff` query.
+
+```json
+{
+  "from": "00000000-0000-0000-0000-000000000000",
+  "to": "11111111-1111-1111-1111-111111111111",
+  "changes": [
+    { "path": "providers.llm.main.model", "kind": "changed",
+      "from": "claude-sonnet-5", "to": "claude-opus-5" },
+    { "path": "roles[3].handle", "kind": "added", "to": "qa" }
+  ],
+  "changes_total": 2
+}
+```
+
+`kind` is `added`, `removed` or `changed`, and `from`/`to` are absent on the
+side where the path does not exist — which is what makes the first two
+readable without consulting `kind`. **Both sides are redacted**, always: a
+rotated credential shows as a changed mask and never as either value.
+
+**`changes_total` is how many differences there are; `changes` is how many
+this answer carries.** The listing is cut at 500 entries because a response
+body and a socket frame have a size budget, so render the total and say what
+was left out — a short listing read as the whole comparison is a caller
+believing nothing else moved. The two differ only on a document several times
+the size of the example company, whose 401 leaves all changing at once still
+fits. `crewlet config diff` writes to a terminal, which has no such budget,
+and prints every change.
+
+`changes` is always a list: two identical revisions answer `[]` with a
+`changes_total` of `0`, never `null`.
+
 ---
 
 
@@ -1379,7 +1417,7 @@ that renders `read_level` and swallows `complete` looks confidently right.
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |
-| `config_diff` | `{revision_id}` | `GET /config/revisions/{id}/diff` *(operator token required)* |
+| `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(operator token required)* |
 | `config_entities` | `{kind, id}` | One addressable collection of the active revision: its ids, or one entity out of it. The read half of the Configuration screen, whose write half is `PUT /config/{kind}/{id}` *(operator token required)* |
 
 ### Wiring
