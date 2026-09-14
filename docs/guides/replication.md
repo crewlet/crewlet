@@ -275,13 +275,21 @@ three quarters of the free space on the volume holding stream.store_dir
 (/var/lib/crewlet/stream), counting what the broker's streams already hold
 there. stream.pages_log_max_bytes is unset, so the ceiling was derived and
 scaled into the state logs' share of the broker, and it goes no lower than
-1073741824 bytes. …
+1073741824 bytes. Give the broker more room; the state logs that already exist
+keep the ceilings they were created with, and no Tier A setting changes them: …
 ```
 
-The remedies are the ones it lists: give the broker more room (on the embedded
-topology, free space on that volume; a first boot needs at least 4 GiB free
-there, three quarters of which is the three 1 GiB floors), lower a ceiling you
-set, or shrink a log that already exists.
+The remedies are the ones it lists. Give the broker more room: on the embedded
+topology, free space on that volume (a first boot needs at least 4 GiB free
+there, three quarters of which is the three 1 GiB floors), which the broker
+measures again when the node next starts. Or, when the refused log's ceiling is
+above the 1 GiB floor, set its field to a smaller ceiling, and the refusal says
+so when that applies.
+
+A log that already exists cannot be shrunk to make room from here. Its ceiling
+changes only through `crewlet retention set-capacity`, which runs on a node
+whose state logs are up, and every mode starts them, `maintenance` and `seal`
+included: a node refused here cannot run it.
 
 ## Three things CI cannot prove
 
