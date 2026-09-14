@@ -79,21 +79,28 @@ var contentEvents = map[string]bool{
 	"comment_updated": true,
 }
 
-// pageChanges are the events that can change what a page SAYS, mapped to
-// whether the page is gone afterwards.
+// pageChanges are the events that can change what a page SAYS, or whether it
+// is there at all.
 //
 // The skill index's own set, narrower than [contentEvents]: a comment or a
 // blog post never changes a page's text, and reading the page again for one
 // would spend a request on every comment in the wiki to learn nothing.
 var pageChanges = map[string]bool{
-	"page_created": false,
-	"page_updated": false,
+	"page_created": true,
+	"page_updated": true,
 	"page_trashed": true,
 	"page_removed": true,
 }
 
 // PageChange is one page whose content may have moved, as the skill index
 // hears about it.
+//
+// IT DOES NOT SAY WHETHER THE PAGE IS GONE, although a trash or a delete
+// arrives under its own event name. The index reads the page back whatever
+// the event was, and the wiki's answer (a 404 for a page in the trash) is what
+// drops it: a delivery is a report of what happened at some moment, and a
+// removal acted on without that read would drop a skill the wiki serves again
+// after a restore, which no subscribed event announces.
 type PageChange struct {
 	// PageID is the page's own id.
 	PageID string
@@ -101,9 +108,6 @@ type PageChange struct {
 	// that just moved is the space it moved TO. Empty when the payload did
 	// not say.
 	Space string
-	// Removed is true for a page that was trashed or deleted, which cannot
-	// be read back.
-	Removed bool
 }
 
 // edits are the events that constitute a claim on a page, as opposed to a
@@ -250,8 +254,8 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 	// registry is read from page content and cares about every page change,
 	// including one in the space routing excludes and one a seat made
 	// itself, so indexing must never be a casualty of a routing rule.
-	if removed, ok := pageChanges[event]; ok && p.onPage != nil && pageID != "" {
-		if err := p.onPage(ctx, PageChange{PageID: pageID, Space: space, Removed: removed}); err != nil {
+	if pageChanges[event] && p.onPage != nil && pageID != "" {
+		if err := p.onPage(ctx, PageChange{PageID: pageID, Space: space}); err != nil {
 			log.WarnContext(ctx, "confluence_page_index_failed", "page", pageID,
 				"event_type", event, "error", err.Error())
 		}

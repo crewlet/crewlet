@@ -367,9 +367,10 @@ func TestAPageChangeReadsOnlyThatPage(t *testing.T) {
 	}
 }
 
-// A REMOVED PAGE IS DROPPED WITHOUT A READ: the page is gone, so there is
-// nothing to ask the backend for.
-func TestARemovedPageIsDroppedWithoutARead(t *testing.T) {
+// A PAGE THE BACKEND NO LONGER SERVES IS DROPPED, on the backend's own answer:
+// the change is read back like any other, and a page in the trash reads as
+// gone.
+func TestAPageTheBackendNoLongerServesIsDropped(t *testing.T) {
 	t.Parallel()
 	w := newWiki()
 	w.put("1", "TS", skillText("deploy", "tag the release"))
@@ -380,14 +381,43 @@ func TestARemovedPageIsDroppedWithoutARead(t *testing.T) {
 
 	w.remove("1")
 	if err := s.PageChanged(t.Context(), Change{
-		Backend: "confluence", Container: "TS", PageID: "1", Removed: true,
+		Backend: "confluence", Container: "TS", PageID: "1",
 	}); err != nil {
 		t.Fatalf("PageChanged: %v", err)
 	}
 	absent(t, r, "deploy")
-	if _, reads := w.counts(); reads != 0 {
-		t.Fatalf("dropping a removed page read the backend %d times", reads)
+	if walks, reads := w.counts(); walks != 1 || reads != 1 {
+		t.Fatalf("dropping a page that is gone cost %d walks and %d reads, "+
+			"want the boot walk and one read", walks, reads)
 	}
+}
+
+// A CHANGE NEVER REMOVES A PAGE THE BACKEND STILL SERVES. A trash delivery
+// can reach a node after the page was restored (a restore announces nothing),
+// and a nudge can arrive late; acting on either without asking the backend
+// would drop a skill that exists, and only the next periodic walk would bring
+// it back.
+func TestAChangeNeverRemovesAPageTheBackendStillServes(t *testing.T) {
+	t.Parallel()
+	w := newWiki()
+	w.put("1", "TS", skillText("deploy", "tag the release"))
+
+	s, r := syncer(t, nil, "", nil)
+	s.SetSource(w.source("TS"))
+	serves(t, r, "deploy", "tag the release")
+
+	// The page was trashed and restored before this node heard the trash.
+	if err := s.PageChanged(t.Context(), Change{
+		Backend: "confluence", Container: "TS", PageID: "1",
+	}); err != nil {
+		t.Fatalf("PageChanged: %v", err)
+	}
+	eventually(t, "the page to be read back", func() (bool, string) {
+		_, reads := w.counts()
+		return reads == 1, fmt.Sprintf("%d reads", reads)
+	})
+	settle()
+	serves(t, r, "deploy", "tag the release")
 }
 
 // A PAGE THAT LEFT THE CONTAINER IS DROPPED, although the delivery names the
@@ -606,15 +636,20 @@ func TestTwoNodesConvergeOnAChangeOnlyOneHeard(t *testing.T) {
 			"want the two boot walks and one read per node", walks, reads)
 	}
 
-	// AND A REMOVAL travels the same way.
+	// AND A REMOVAL travels the same way, each node reading the page back
+	// and dropping it on the wiki's own answer.
 	w.remove("1")
 	if err := won.PageChanged(t.Context(), Change{
-		Backend: "confluence", Container: "TS", PageID: "1", Removed: true,
+		Backend: "confluence", Container: "TS", PageID: "1",
 	}); err != nil {
 		t.Fatalf("PageChanged: %v", err)
 	}
 	absent(t, wonRegistry, "deploy")
 	absent(t, peerRegistry, "deploy")
+	if _, reads := w.counts(); reads != 4 {
+		t.Fatalf("a removal on a two-node fleet brought the reads to %d, "+
+			"want one more per node (4)", reads)
+	}
 }
 
 // A NUDGE A NODE NEVER HEARD CONVERGES ON THE PERIODIC WALK. The nudge is best
