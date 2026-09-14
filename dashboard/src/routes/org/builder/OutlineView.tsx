@@ -298,10 +298,12 @@ export function OutlineView() {
   // ---- keys ------------------------------------------------------------------
   // CAPTURED, so a navigation key reaches the grid before the control that
   // holds focus in a cell: ArrowDown on a menu button would otherwise open
-  // the menu instead of moving to the next row. An open menu keeps its keys.
+  // the menu instead of moving to the next row. An open menu keeps its keys
+  // because it is in no row: it renders in the layer over the grid (see
+  // below), and React carries its keys up through this handler with a target
+  // no row contains.
   function onKeyDownCapture(e: KeyboardEvent<HTMLDivElement>) {
     const target = e.target as HTMLElement;
-    if (target.closest("[role='menu']")) return;
     const row = target.closest<HTMLElement>("[data-row-id]");
     if (!row) return;
     const id = row.getAttribute("data-row-id")!;

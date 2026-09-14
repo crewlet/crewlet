@@ -247,6 +247,25 @@ describe("keys", () => {
     expect(tabStops()).toEqual([document.activeElement]);
   });
 
+  test("an open menu keeps its own keys: the grid's navigation never reaches into it", () => {
+    mount();
+    const lead = within(rowOf(unitKey("Engineering"))).getByRole("button", {
+      name: "VP Engineering",
+    });
+    fireEvent.click(lead);
+    const menu = screen.getByRole("menu", { name: "Lead of Engineering" });
+    const answers = within(menu).getAllByRole("menuitemradio");
+    expect(document.activeElement).toBe(answers[0]);
+    press("ArrowDown");
+    expect(document.activeElement).toBe(answers[1]);
+    press("End");
+    expect(within(menu).getByRole("menuitem", { name: /Choose another seat/ })).toBe(
+      document.activeElement,
+    );
+    // The grid moved nowhere, and the menu is still open.
+    expect(screen.getByRole("menu", { name: "Lead of Engineering" })).toBe(menu);
+  });
+
   test("a row's menus open over the grid, outside the box that scrolls, and follow its scroll", () => {
     mount();
     const wrap = document.querySelector<HTMLElement>(".boutline-wrap")!;
