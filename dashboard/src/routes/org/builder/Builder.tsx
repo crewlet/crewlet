@@ -257,9 +257,19 @@ function statusLook(status: CheckStatus, problems: number): StatusLook {
   }
 }
 
-/** The conflict the last check of the current draft reported, or `null`. */
+/**
+ * The conflict the check stands on, or `null`. Called only while the status
+ * is `conflict`.
+ *
+ * THE LAST ANSWER, WHATEVER GENERATION IT WAS FOR. A conflict halts the check:
+ * a draft that changes afterwards (a kept draft restored into it) sends
+ * nothing more, so no answer for the new generation ever arrives, and the
+ * engine still holds the newer revision the last answer named. Read only for
+ * the current generation, that answer vanished and took the Update my draft
+ * banner with it, leaving a lens paused with no way forward.
+ */
 function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "conflict" }> | null {
-  const outcome = state.check.generation === state.generation ? state.check.outcome : null;
+  const outcome = state.check.outcome;
   return outcome?.status === "conflict" ? outcome : null;
 }
 

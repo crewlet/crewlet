@@ -93,6 +93,38 @@ test("a kept draft of the same revision waits for Keep or Discard, and Keep rest
   expect(kept()).not.toBeNull();
 });
 
+// A NEWER REVISION WHILE THE OFFER STANDS. The offer was made against the
+// base on screen, so the base is not moved under it, and keeping the draft
+// then leads into the update flow rather than a lens that is paused with no
+// way forward.
+test("a kept draft offered as a colleague saves is kept, then offered as an update", async () => {
+  keep({});
+  const engine = new Engine(company());
+  const { store } = mountBuilder({ engine });
+  await screen.findByText(/This tab kept a draft with 1 change/);
+  await waitFor(() => expect(engine.checks()).toHaveLength(1));
+  const next = company();
+  next.roles![1]!.goal = "Design things";
+  engine.document = next;
+  engine.revision = "r2";
+  const reads = engine.sent("GET").length;
+  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+  expect(await screen.findByText("The configuration changed")).toBeDefined();
+  // The base under the offer is not read again: a Keep pressed while a newer
+  // base waited for its first check would be refused, and the kept draft
+  // cleared with the refusal.
+  await new Promise((r) => setTimeout(r, 100));
+  expect(engine.sent("GET")).toHaveLength(reads);
+
+  fireEvent.click(screen.getByRole("button", { name: "Keep the draft" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Update my draft" }));
+  const dialog = await screen.findByRole("dialog", { name: "Update my draft and review" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Update my draft" }));
+  await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
+  expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+  await waitFor(() => expect(JSON.parse(kept()!).baseRevision).toBe("r2"));
+});
+
 test("discarding a kept draft removes it and starts from the saved configuration", async () => {
   keep({});
   const engine = new Engine(company());
