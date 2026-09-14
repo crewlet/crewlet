@@ -232,9 +232,12 @@ func secondsPtr(v *float64) *time.Duration {
 
 // sandboxAccountant charges a collected coding run against the shared counter.
 //
-// The charge happens AFTER the spend, which is why it cannot refuse: a
-// refusal cannot un-spend a run that already ran, and recording it anyway is
-// the only way the meter stays true when the cap is binding.
+// The SAME charge a round makes, against the same two caps: a cap that
+// refuses it leaves the seat's counter and the company's where they were, and
+// the refusal is reported rather than raised, because the run has already
+// spent the tokens and its turn continues either way. Charging it once per
+// launch, however often its completion is retried, is the coordinator's side:
+// see [sandbox.PendingRun.Charged].
 type sandboxAccountant struct {
 	budgets coord.Budgets
 	caps    func(agentID string) (org, seat int)

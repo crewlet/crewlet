@@ -247,6 +247,22 @@ type PendingRun struct {
 	// skips is a log that lies about what the run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
+	// Charged is whether this launch's collected tokens are on the fleet's
+	// token counter.
+	//
+	// ON THE ROW, not in the coordinator's memory, because the charge sits
+	// inside the part of the tail that is RETRIED. A resume that fails
+	// reverts the claim and the completion comes back, to this node or to
+	// the seat's next owner, and the retry collects the same finished job
+	// again. With nothing recording the first charge, every retry charged
+	// the run again, against the seat's budget and the company's, for as
+	// long as the resume kept failing.
+	//
+	// Launch-scoped, like the suspension: a second run_sandbox call in one
+	// turn is a second job with spend of its own, so [PendingStore.BeginLaunch]
+	// clears it.
+	Charged bool `json:"charged,omitempty"`
+
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
 
 	// PausedAt is when this run's box was paused, zero when it is not.
@@ -281,8 +297,9 @@ func (r PendingRun) HasBox() bool { return r.SandboxID != "" }
 type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —
-	// clearing the previous job's suspended conversation and the question
-	// it was parked on, while keeping the row's identity and its box.
+	// clearing the previous job's suspended conversation, the question
+	// it was parked on and the record of its charge, while keeping the
+	// row's identity and its box.
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
 	// run_sandbox call in one turn presents the same turn id as the first
@@ -301,6 +318,29 @@ type PendingStore interface {
 	// The returned row carries ClaimedFrom, so a failed dispatch can put
 	// it back exactly where it was.
 	ClaimForResume(ctx context.Context, turnID string) (PendingRun, bool, error)
+
+	// MarkCharged records that a claimed run's collected tokens are on
+	// the token counter, reporting whether THIS call recorded it.
+	//
+	// The durable half of charging a run once. The coordinator charges
+	// while it holds the claim and records it here before anything can
+	// open the run to another claim, so the retry a failed resume opens
+	// reads [PendingRun.Charged] and charges nothing. See the coordinator's
+	// charge for the one window the ordering cannot close.
+	//
+	// ONLY A CLAIMED RUN, because a charge is only ever made under a claim:
+	// a record written anywhere else names a charge nothing made, and on a
+	// row a second launch has already opened it would let that job's own
+	// spend go uncounted.
+	//
+	// NO FENCE, for the reason [PendingStore.AppendBridgeCall] gives: the
+	// counter has already moved, and refusing to record that because the
+	// seat's lease moved would hand the next owner's retry the same spend
+	// to charge again.
+	//
+	// FALSE IS NOT AN ERROR: it is a charge already recorded, a run that is
+	// not claimed, or a row that is gone.
+	MarkCharged(ctx context.Context, turnID string) (bool, error)
 
 	// MarkAwaiting parks a run on a question, freeing the seat.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error

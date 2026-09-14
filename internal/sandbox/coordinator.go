@@ -100,12 +100,14 @@ type ResumeRequest struct {
 
 // Accountant post-charges a collected run's tokens.
 //
-// The charge happens AFTER the spend, which is why it cannot refuse: a
-// refusal cannot un-spend a collected run, and recording it anyway is the only
-// way the meter stays true when the cap is binding. It reports whether the
-// charge went over so the caller can say so.
+// The charge happens AFTER the spend, so it cannot stop anything: the tokens
+// are spent and the turn continues whatever the answer. It is checked against
+// the caps like any round's charge, and a cap that refuses it leaves both
+// counters where they were, which is the answer the shared counter gives every
+// charge it refuses. It reports the refusal so the caller can say the run went
+// over.
 type Accountant interface {
-	Charge(ctx context.Context, agentID, handle string, tokens int) (over bool, err error)
+	Charge(ctx context.Context, agentID, handle string, tokens int) (refused bool, err error)
 }
 
 // CoordinatorOptions configures a [Coordinator].
@@ -148,8 +150,9 @@ type CoordinatorOptions struct {
 //     seat is marked busy, so no queued event slips a turn in beside a run
 //     that is still going.
 //   - COMPLETION → RESUME. A completion is claimed AT MOST ONCE, the result
-//     collected with the box paused for reuse, tokens post-accounted, and the
-//     suspended loop re-entered with the result spliced in. The seat stays
+//     collected with the box paused for reuse, tokens post-accounted once per
+//     launch however often the tail is retried, and the suspended loop
+//     re-entered with the result spliced in. The seat stays
 //     busy through all of it and is freed only at the last moment before the
 //     resume, because freeing it earlier lets a queued event take the slot,
 //     the resume fail, and the redelivery find the claim already flipped —
@@ -383,20 +386,51 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 	return result, nil
 }
 
-// charge post-accounts a collected run's tokens.
+// charge post-accounts a collected run's tokens, ONCE per launch.
+//
+// The charge sits inside the part of the tail that is retried: a resume that
+// fails reverts the claim, the completion comes back to this node or to the
+// seat's next owner, and the retry collects the same finished job again. So
+// the run's own row records the charge, and a retry that finds it there
+// charges nothing. In memory it would be lost to exactly the two retries that
+// matter, the one on another node and the one after a restart.
+//
+// THE RECORD IS WRITTEN BEFORE ANYTHING CAN REOPEN THE RUN. The claim is held
+// from the flip until the revert or the park, and only those let another
+// completion win it; a process that dies in between leaves the row resumed,
+// which no completion claims and the seat's next owner reaps. What the order
+// cannot cover is a store that refuses this write and accepts the revert right
+// after it: the retry then charges the run again. That over-states the
+// counter, which trips a cap early rather than late, and it is logged.
+//
+// A REFUSED CHARGE IS NOT RECORDED, and neither is one the counter never
+// answered: neither moved it, so the retry offers the spend again rather than
+// inheriting an answer about a counter that may have room by then.
 func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) {
 	tokens := result.InputTokens + result.OutputTokens
 	if c.account == nil || tokens == 0 {
 		return
 	}
-	over, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
+	if run.Charged {
+		log.InfoContext(ctx, "sandbox_charge_already_recorded",
+			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
+		return
+	}
+	refused, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
 		return
 	}
-	if over {
+	if refused {
 		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
+		return
+	}
+	if _, err := c.pending.MarkCharged(ctx, run.TurnID); err != nil {
+		log.ErrorContext(ctx, "sandbox_charge_record_failed",
+			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens, "error", err.Error(),
+			"detail", "the run's tokens are on the counter but its row does not say so, "+
+				"so a retry of this completion will charge them again")
 	}
 }
 

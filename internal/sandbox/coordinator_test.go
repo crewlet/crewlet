@@ -49,27 +49,55 @@ func (s *resumeSpy) calls() []ResumeRequest {
 }
 
 // ledgerSpy records post-charges.
+//
+// A refusal moves nothing, which is what the engine's accountant does: it is
+// coord.Budgets.Charge underneath, and a charge a cap refuses leaves both
+// counters where they were.
 type ledgerSpy struct {
 	mu      sync.Mutex
 	charged int
-	over    bool
+	calls   int
+	refuse  bool
 	err     error
 }
 
 func (l *ledgerSpy) Charge(_ context.Context, _, _ string, tokens int) (bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.calls++
 	if l.err != nil {
 		return false, l.err
 	}
+	if l.refuse {
+		return true, nil
+	}
 	l.charged += tokens
-	return l.over, nil
+	return false, nil
 }
 
 func (l *ledgerSpy) total() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.charged
+}
+
+func (l *ledgerSpy) set(refuse bool, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.refuse, l.err = refuse, err
+}
+
+func (l *ledgerSpy) asked() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.calls
+}
+
+// failWith sets the error every later Resume returns, nil to let them through.
+func (s *resumeSpy) failWith(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
 }
 
 type coordRig struct {
@@ -645,23 +673,178 @@ func TestAFailedCollectStillFreesTheSeat(t *testing.T) {
 // accounting
 // ---------------------------------------------------------------------
 
-// A refusal cannot un-spend a collected run, so the charge is recorded whatever
-// the cap says — that is the only way the meter stays true when it is binding.
-func TestACollectedRunIsChargedEvenOverBudget(t *testing.T) {
+// A cap cannot un-spend a collected run, so a charge it refuses does not stop
+// the turn: the tokens are spent and the work they bought continues. The
+// refusal itself moves no counter, which is the shared counter's answer to
+// every charge it refuses; this case used to assert the opposite of a spy
+// that recorded refused charges, which the real accountant never did.
+func TestAnOverBudgetChargeDoesNotStopTheResume(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
-	rig.accountant.over = true
+	rig.accountant.set(true, nil)
 	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 4000, OutputTokens: 1000})
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
 		t.Fatalf("OnCompleted: %v", err)
 	}
-	if got := rig.accountant.total(); got != 5000 {
-		t.Fatalf("charged %d, want 5000", got)
+	if got := rig.accountant.asked(); got != 1 {
+		t.Fatalf("offered the run's spend %d times, want once", got)
 	}
 	if len(rig.resumer.calls()) != 1 {
 		t.Fatal("an over-budget charge stopped the turn from continuing")
+	}
+}
+
+// THE RETRY IS NOT A SECOND RUN. A resume that fails reverts the claim and the
+// completion comes back, and the retry collects the same finished job again.
+// Charging on every pass billed the seat and the company once per retry, for
+// as long as the resume kept failing: every poll tick, on a node that had lost
+// the seat.
+func TestARetriedResumeChargesTheRunOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	for attempt := range 3 {
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+			t.Fatalf("attempt %d: a failed resume was acked", attempt+1)
+		}
+	}
+	rig.resumer.failWith(nil)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry that resumes: %v", err)
+	}
+
+	if got := len(rig.resumer.calls()); got != 1 {
+		t.Fatalf("resumed %d times, want the last retry to resume once", got)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens over four deliveries of one run, want its 1000 once", got)
+	}
+}
+
+// THE RECORD IS THE FLEET'S, NOT THE COORDINATOR'S. A failed resume's retry
+// goes wherever the seat is, which after a lease move or a restart is a
+// coordinator that never saw the first charge. Only the run's own row can tell
+// it the spend is already counted.
+func TestARetryOnAnotherNodeChargesTheRunOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+	rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a failed resume was acked")
+	}
+
+	// The seat's next owner: a coordinator of its own over the same store,
+	// charging the same fleet counter.
+	successor := &ledgerSpy{}
+	next, err := NewCoordinator(CoordinatorOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.manager,
+		Resume: &resumeSpy{}, Account: successor,
+	})
+	if err != nil {
+		t.Fatalf("NewCoordinator: %v", err)
+	}
+	if err := next.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the successor's retry: %v", err)
+	}
+	if got := rig.accountant.total() + successor.total(); got != 1000 {
+		t.Fatalf("charged %d tokens across two nodes, want the run's 1000 once", got)
+	}
+}
+
+// A duplicate completion of a run that parked on a question is the other way
+// one job reaches the charge twice.
+func TestADuplicateCompletionOfAParkedRunChargesItOnce(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.runner.Finish(Result{
+		NeedsInput: true, Question: "which branch?", AskTo: "requester",
+		InputTokens: 700, OutputTokens: 300,
+	})
+
+	payload, ev := rig.completion("t1")
+	for range 2 {
+		if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+			t.Fatalf("OnCompleted: %v", err)
+		}
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for one parked run, want its 1000 once", got)
+	}
+}
+
+// A SECOND RUN IN ONE TURN IS A SECOND SPEND. The record is the launch's, so a
+// resumed executor that calls run_sandbox again is charged for that job too.
+func TestASecondRunInOneTurnIsChargedToo(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.resumer.relaunch = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass", InputTokens: 400, OutputTokens: 100})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the first run's completion: %v", err)
+	}
+
+	rig.resumer.mu.Lock()
+	rig.resumer.relaunch = nil
+	rig.resumer.mu.Unlock()
+	rig.suspend("t1")
+	rig.runner.Finish(Result{Success: true, Text: "second pass", InputTokens: 200, OutputTokens: 300})
+	payload, ev = rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the second run's completion: %v", err)
+	}
+	if got := rig.accountant.total(); got != 1000 {
+		t.Fatalf("charged %d tokens for two runs of 500, want both", got)
+	}
+}
+
+// ONLY A CHARGE THAT MOVED THE COUNTER IS RECORDED. A refusal and an
+// unanswered counter both left it where it was, so the retry offers the spend
+// again rather than inheriting an answer about a counter that may have room,
+// or be reachable, by then.
+func TestAnUnrecordedChargeIsOfferedAgainOnTheRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refused bool
+		err     error
+	}{
+		{"refused by a cap", true, nil},
+		{"the counter did not answer", false, errors.New("counter unreachable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := newCoordRig(t)
+			rig.launch("t1")
+			rig.runner.Finish(Result{Success: true, Text: "done", InputTokens: 900, OutputTokens: 100})
+			rig.accountant.set(tc.refused, tc.err)
+			rig.resumer.failWith(fmt.Errorf("%w: the seat moved", ErrResumeUnavailable))
+
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+				t.Fatal("a failed resume was acked")
+			}
+			rig.accountant.set(false, nil)
+			rig.resumer.failWith(nil)
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+				t.Fatalf("the retry: %v", err)
+			}
+			if got := rig.accountant.total(); got != 1000 {
+				t.Fatalf("charged %d, want the retry to count the spend the first pass did not", got)
+			}
+		})
 	}
 }
 
