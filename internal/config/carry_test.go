@@ -85,6 +85,17 @@ func TestAWriteKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 		written: `{"roles": [{"name": "CEO"}], "providers": {"llm": {}}}`,
 		want:    `{"roles": [{"name": "CEO"}], "providers": {"llm": {}}}`,
 	}, {
+		// A SEAT THE WRITE DELETED STAYS DELETED, whatever it was carrying.
+		// Deleting a seat is the builder's most consequential operation, and
+		// a carry that walked the STORED document rather than the written
+		// one would put it back, unknown keys and all, with the write
+		// answering 201. The seat that remains still keeps its own.
+		name: "never a list member the write removed",
+		stored: `{"roles": [{"name": "CEO", "future": "ceo"}, {"name": "CTO", "future": "cto"}],
+		          "units": [{"name": "Eng", "future": "eng", "roles": [{"name": "SRE", "future": "sre"}]}]}`,
+		written: `{"roles": [{"name": "CEO"}]}`,
+		want:    `{"roles": [{"name": "CEO", "future": "ceo"}]}`,
+	}, {
 		// A renamed seat is a different identity, so nothing of the old
 		// one reaches it.
 		name:    "never onto a different identity",
