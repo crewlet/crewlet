@@ -506,7 +506,7 @@ func TestAReviewerThatAnswersWithProseIsRePromptedRatherThanRescued(t *testing.T
 	}}
 	pub := newCapture()
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}},
-		buildOpts{reply: turn.ReplyNone, pub: pub})
+		buildOpts{reply: turn.NoReply(), pub: pub})
 
 	got, err := r.Review(context.Background(), 1, turn.Work{
 		Outcome: turn.OutcomeDelivered, Summary: "posted it",

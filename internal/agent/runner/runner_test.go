@@ -15,9 +15,9 @@ import (
 // judges against.
 func deliverySurface() turn.Surface {
 	return turn.Surface{
-		Catalogue:    []string{"slack_post", "slack_history", "lookup_colleague"},
-		Deliverables: []string{"slack_post"},
-		KnownReads:   []string{"slack_history"},
+		Catalogue:  []string{"slack_post", "slack_history", "lookup_colleague"},
+		Deliveries: map[string]string{"slack_post": "test"},
+		KnownReads: []string{"slack_history"},
 	}
 }
 
@@ -46,7 +46,7 @@ func TestASubmissionCapturesThePhasesAnswer(t *testing.T) {
 	// The tool does not DO anything: the phase's answer IS the arguments it
 	// was called with, so the loop's ordinary tool machinery carries it out
 	// and nothing needs a side channel.
-	tool := workTool(turn.ReplyTool, ledger.Call{Name: "slack_post"})
+	tool := workTool(turn.ToolReply(""), ledger.Call{Name: "slack_post"})
 	if _, called := tool.Value(); called {
 		t.Fatal("a fresh tool reports a submission")
 	}
@@ -75,7 +75,7 @@ func TestAnInvalidSubmissionGoesBackToTheModel(t *testing.T) {
 	// It is the one tool failure a model can reliably fix, and refusing the
 	// turn over a malformed submission throws away everything the phase
 	// already did.
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	res, err := tool.Call(context.Background(), args(t, `{"outcome":"wat","summary":"s"}`))
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
@@ -95,7 +95,7 @@ func TestTheLastSubmissionWins(t *testing.T) {
 	t.Parallel()
 	// A model that submits twice has corrected itself. Rejecting the second
 	// leaves the engine acting on the draft the model just replaced.
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	ctx := context.Background()
 	if _, err := tool.Call(ctx, args(t, `{"outcome":"blocked","summary":"a","evidence":"e"}`)); err != nil {
 		t.Fatalf("Call: %v", err)
@@ -119,7 +119,7 @@ func TestAnAbsentOutcomeTakesTheCommonCase(t *testing.T) {
 	// the unremarkable review. Refusing the most predictable omission would
 	// throw away a round of real work — and the engine checks the delivery
 	// claim against the record either way.
-	decode := decodeWork(turn.ReplyTool,
+	decode := decodeWork(turn.ToolReply(""),
 		func() []ledger.Call { return []ledger.Call{{Name: "slack_post"}} },
 		deliverySurface)
 	w, err := decode(args(t, `{"summary":"posted it","deliveries":["slack_post"]}`))
@@ -142,7 +142,7 @@ func TestAnAbsentOutcomeTakesTheCommonCase(t *testing.T) {
 // all, and it is the one field every outcome needs.
 func TestASubmissionWithNoSummaryIsRefused(t *testing.T) {
 	t.Parallel()
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	for _, blob := range []string{`{"outcome":"no_action"}`, `{"outcome":"no_action","summary":"  "}`} {
 		res, _ := tool.Call(context.Background(), args(t, blob))
 		if !res.Failed {
@@ -156,7 +156,7 @@ func TestASubmissionWithNoSummaryIsRefused(t *testing.T) {
 // model can still act on it rather than corrected a phase later.
 func TestNoActionIsRefusedOnAnAwaitedTurn(t *testing.T) {
 	t.Parallel()
-	for _, reply := range []turn.Reply{turn.ReplyTool, turn.ReplyEngine} {
+	for _, reply := range []turn.Reply{turn.ToolReply(""), turn.EngineReply()} {
 		tool := workTool(reply)
 		res, _ := tool.Call(context.Background(),
 			args(t, `{"outcome":"no_action","summary":"not for me"}`))
@@ -170,7 +170,7 @@ func TestNoActionIsRefusedOnAnAwaitedTurn(t *testing.T) {
 	// The counterfactual: nobody asking makes it the right answer, and
 	// without this the assertion above passes for a decoder that refuses
 	// no_action outright.
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	if res, _ := tool.Call(context.Background(),
 		args(t, `{"outcome":"no_action","summary":"a broadcast"}`)); res.Failed {
 		t.Errorf("no_action was refused on an unaddressed turn: %s", res.Output)
@@ -181,7 +181,7 @@ func TestNoActionIsRefusedOnAnAwaitedTurn(t *testing.T) {
 // send back blind.
 func TestBlockedNeedsEvidence(t *testing.T) {
 	t.Parallel()
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	res, _ := tool.Call(context.Background(), args(t, `{"outcome":"blocked","summary":"stuck"}`))
 	if !res.Failed {
 		t.Fatal("blocked was accepted with no evidence")
@@ -201,7 +201,7 @@ func TestBlockedNeedsEvidence(t *testing.T) {
 func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
 	t.Parallel()
 	called := []ledger.Call{{Name: "slack_post"}, {Name: "slack_history"}}
-	decode := decodeWork(turn.ReplyTool, func() []ledger.Call { return called }, deliverySurface)
+	decode := decodeWork(turn.ToolReply(""), func() []ledger.Call { return called }, deliverySurface)
 
 	if _, err := decode(args(t, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)); err != nil {
 		t.Errorf("a real delivery was refused: %v", err)
@@ -215,7 +215,7 @@ func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
 	// A read is not a delivery, however successfully it ran.
 	mustErr(t, decode, `{"outcome":"delivered","summary":"s","deliveries":["slack_history"]}`)
 	// And a failed call did not deliver.
-	failed := decodeWork(turn.ReplyTool,
+	failed := decodeWork(turn.ToolReply(""),
 		func() []ledger.Call { return []ledger.Call{{Name: "slack_post", Failed: true}} },
 		deliverySurface)
 	mustErr(t, failed, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)
@@ -225,7 +225,7 @@ func TestADeliveryClaimMustNameACallThatHappened(t *testing.T) {
 // outward tool yet, and telling it to pick from an empty list is useless.
 func TestNothingDeliveredYetSaysSoRatherThanListingNothing(t *testing.T) {
 	t.Parallel()
-	decode := decodeWork(turn.ReplyTool,
+	decode := decodeWork(turn.ToolReply(""),
 		func() []ledger.Call { return []ledger.Call{{Name: "slack_history"}} }, deliverySurface)
 	err := mustErr(t, decode, `{"outcome":"delivered","summary":"s","deliveries":["slack_post"]}`)
 	if !strings.Contains(err.Error(), "nothing has been delivered yet") {
@@ -241,7 +241,7 @@ func TestNothingDeliveredYetSaysSoRatherThanListingNothing(t *testing.T) {
 // either case would loop a turn that did exactly the right thing.
 func TestOnlyAToolAwaitedTurnMustCiteACall(t *testing.T) {
 	t.Parallel()
-	for _, reply := range []turn.Reply{turn.ReplyNone, turn.ReplyEngine} {
+	for _, reply := range []turn.Reply{turn.NoReply(), turn.EngineReply()} {
 		decode := decodeWork(reply, func() []ledger.Call { return nil }, deliverySurface)
 		if _, err := decode(args(t, `{"outcome":"delivered","summary":"answered in prose"}`)); err != nil {
 			t.Errorf("%s: a delivery with no tool call was refused: %v", reply, err)
@@ -286,7 +286,7 @@ func TestASchemaShapedSubmissionDecodesIntoItsStruct(t *testing.T) {
 	// which means the tags and the schema can drift. This is what says they
 	// have not: every property the schema publishes is a field the struct
 	// accepts.
-	decodeAWork := decodeWork(turn.ReplyNone, func() []ledger.Call { return nil }, deliverySurface)
+	decodeAWork := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
 	for name, pair := range map[string]struct {
 		schema map[string]any
 		decode func(map[string]any) error
@@ -346,7 +346,7 @@ func TestArgumentsThatCannotBeReEncodedFailTheSubmissionNotTheTurn(t *testing.T)
 	// A model cannot produce this through the wire, but a builtin caller
 	// could. It must come back as a failed tool result the phase can retry,
 	// not as a Go error that ends the turn.
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	res, err := tool.Call(context.Background(), map[string]any{"summary": make(chan int)})
 	if err != nil {
 		t.Fatalf("Call returned a Go error: %v", err)
@@ -372,7 +372,7 @@ func TestATypeMismatchIsReportedAsOne(t *testing.T) {
 	// fix something it got right.
 	//
 	// Found by mutation — asserting only that it failed passed either way.
-	tool := workTool(turn.ReplyNone)
+	tool := workTool(turn.NoReply())
 	res, err := tool.Call(context.Background(),
 		args(t, `{"outcome":"delivered","summary":"s","deliveries":"slack_post"}`))
 	if err != nil {
@@ -398,7 +398,7 @@ func TestALargeIDInASubmissionSurvivesTheStructRoundTrip(t *testing.T) {
 	if err := dec.Decode(&m); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	decode := decodeWork(turn.ReplyNone, func() []ledger.Call { return nil }, deliverySurface)
+	decode := decodeWork(turn.NoReply(), func() []ledger.Call { return nil }, deliverySurface)
 	w, err := decode(m)
 	if err != nil {
 		t.Fatalf("decodeWork: %v", err)

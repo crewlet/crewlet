@@ -462,17 +462,22 @@ func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	trk := newFakeTracker()
 	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as, Merges: trk.merges})
 
-	deliverables := reg.Deliverables()
+	deliveries := reg.Deliveries()
 	for _, name := range builtin.WorkWrites() {
-		if !slices.Contains(deliverables, name) {
-			t.Errorf("%s does not count as a delivery, so a turn that answered "+
-				"with it would be corrected for having done nothing", name)
+		// AND ON THE TRACKER. The name alone says the turn reached
+		// somebody; the surface says whom, and without it a tracker write
+		// discharged an obligation owed to a founder waiting in chat.
+		if deliveries[name] != tracker.Source {
+			t.Errorf("%s delivers to %q, want %q — a turn that answered with it "+
+				"would otherwise be corrected for having done nothing, or credited "+
+				"for answering somebody it never reached",
+				name, deliveries[name], tracker.Source)
 		}
 	}
 	// READING IS NOT DELIVERING. A turn that only read is exactly the turn
 	// the gate exists to catch.
 	for _, name := range []string{builtin.ListWorkItemsTool, builtin.GetWorkItemTool} {
-		if slices.Contains(deliverables, name) {
+		if _, ok := deliveries[name]; ok {
 			t.Errorf("%s counts as a delivery, so a turn that only read would "+
 				"pass the gate", name)
 		}

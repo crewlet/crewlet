@@ -166,6 +166,19 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 	if reg == nil {
 		reg = c.Tools
 	}
+	// REFUSED HERE TOO, for the reason [turn.Run] refuses it: this field
+	// arms submit_work's own citation check, and a caller that omits it
+	// does not get a weaker check, it gets none — `no_action` accepted on a
+	// turn somebody is waiting on, and a citation naming any surface at all.
+	// The resume path omitted it while the dispatch path did not, so the two
+	// halves of one contract disagreed with nothing to say so.
+	if !in.Reply.Valid() {
+		return nil, fmt.Errorf(
+			"engine: RunnerInput.Reply is %q for %q, which is not one of %q, %q "+
+				"or %q — derive it from the trigger (ReplyFor) or carry it off the "+
+				"pending run's row, because the submission check reads it",
+			in.Reply.Kind, handle, turn.ReplyNone, turn.ReplyTool, turn.ReplyEngine)
+	}
 	te := c.Config.TurnEngine
 	del := te.Delegation
 	return runner.New(runner.Config{

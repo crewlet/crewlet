@@ -112,13 +112,22 @@ func decodeWork(reply turn.Reply, called func() []ledger.Call, surface func() tu
 // The refusal lists what IS citable, because the failure this catches is
 // usually a model naming the tool it meant to call rather than one it did, and
 // a bare "no" sends it round the same loop.
+//
+// ELIGIBILITY IS SURFACE-SCOPED, by the same rule [turn.DeliveredTo] applies
+// and for the same reason the two must agree: what the engine refuses here it
+// must also refuse after the review, or a model is told one thing at
+// submission and judged by another. A flat list is how this told a seat to
+// "cite one of create_work_item" while a founder waited in a chat thread —
+// which would have produced a clean `delivered`, a clean `done`, and the same
+// silence.
 func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Surface) error {
-	if reply != turn.ReplyTool {
+	if reply.Kind != turn.ReplyTool {
 		return nil
 	}
+	countable := turn.DeliverersFor(s, reply)
 	var eligible []string
 	for _, c := range calls {
-		if !c.Failed && turn.Deliverable(c.Name, s) && !slices.Contains(eligible, c.Name) {
+		if !c.Failed && slices.Contains(countable, c.Name) && !slices.Contains(eligible, c.Name) {
 			eligible = append(eligible, c.Name)
 		}
 	}
@@ -129,6 +138,17 @@ func citations(cited []string, reply turn.Reply, calls []ledger.Call, s turn.Sur
 	}
 	slices.Sort(eligible)
 	if len(eligible) == 0 {
+		// NAMED WHEN IT IS KNOWN. "No tool that acts outside the engine was
+		// called" reads as plainly false to a model looking at its own
+		// successful write to another surface, and a refusal a model does
+		// not believe is one it argues with rather than acts on.
+		if on := reply.Surface; on != "" && s.Reaches(on) {
+			return fmt.Errorf("nothing has been delivered on %s yet, which is where "+
+				"this was asked — a call that reached somewhere else does not answer "+
+				"the person waiting. Call the tool that delivers on %s — "+
+				"`list_mcp_server_tools` and `activate_tool` will find it — before "+
+				"reporting the work delivered", on, on)
+		}
 		return fmt.Errorf("nothing has been delivered yet: no tool that acts outside the " +
 			"engine has been called successfully in this turn. Call the one that delivers " +
 			"on the surface this arrived from — `list_mcp_server_tools` and " +
