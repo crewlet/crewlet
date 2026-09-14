@@ -1163,7 +1163,10 @@ to.
   ArrowDown on a menu button moves to the next row rather than opening the
   menu. An inline add row closes each unit's rows and the company's while the
   draft can change.
-  Alt+Up and Alt+Down move a row among its siblings of the same kind, and
+  Alt+Up and Alt+Down move a row among its siblings of the same kind, past
+  the row drawn beside it (a root seat the engine placed in a unit by its
+  reference is drawn in that unit, so the root seats step over it rather than
+  making a move nobody can see), and
   because the engine's primary manager is the first seat that lists a seat,
   the reporting lines the next check reports are compared with the ones
   before and a changed primary manager is announced.

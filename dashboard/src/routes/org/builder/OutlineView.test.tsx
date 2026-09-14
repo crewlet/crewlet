@@ -405,6 +405,44 @@ describe("reorder", () => {
     expect(spies.announce).not.toHaveBeenCalled();
   });
 
+  test("a root seat moves past the root seat drawn beside it, never one drawn inside a unit", () => {
+    // Designer is a root seat the engine placed in Platform: the company's
+    // list holds it between CEO and Advisor, the outline draws it in Platform.
+    const withAdvisor = fixtureCompany();
+    withAdvisor.roles!.push({ name: "Advisor" });
+    const rootNames = (p: HarnessProbe) => p.state.draft.roles.map((r) => r.data.name);
+
+    const down = mount(checkedEdit(withAdvisor));
+    rowOf(seatKey("ceo")).focus();
+    press("ArrowDown", { altKey: true });
+    expect(rootNames(down.probe)).toEqual(["Designer", "Advisor", "CEO"]);
+    cleanup();
+
+    const up = mount(checkedEdit(withAdvisor));
+    rowOf(seatKey("advisor")).focus();
+    press("ArrowUp", { altKey: true });
+    expect(rootNames(up.probe)).toEqual(["Advisor", "CEO", "Designer"]);
+    cleanup();
+
+    // Up past a row with a sibling before it lands straight before that row.
+    const withBoard = fixtureCompany();
+    withBoard.roles!.push({ name: "Advisor" }, { name: "Board" });
+    const board = mount(checkedEdit(withBoard));
+    rowOf(seatKey("board")).focus();
+    press("ArrowUp", { altKey: true });
+    expect(rootNames(board.probe)).toEqual(["CEO", "Designer", "Board", "Advisor"]);
+    cleanup();
+
+    // With nothing drawn below it at the root, CEO is already last there.
+    const alone = mount();
+    rowOf(seatKey("ceo")).focus();
+    press("ArrowDown", { altKey: true });
+    expect(alone.probe.state.log.ops).toEqual([]);
+    expect(alone.spies.announce).toHaveBeenLastCalledWith(
+      "CEO is already the last seat in the company.",
+    );
+  });
+
   test("read-only, Alt+Down reorders nothing", () => {
     const { probe } = mount(checkedEdit(doc, primary("alpha")), { readOnly: true });
     rowOf(seatKey("alpha")).focus();

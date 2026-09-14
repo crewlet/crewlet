@@ -30,7 +30,9 @@
  * with the ones before the reorder (`model/changes.ts`) and any change is
  * announced. A root seat drawn in a unit by its unit reference lives in the
  * company's list, not the unit's, so it is not reordered here and the
- * operator is told how to place it.
+ * operator is told how to place it. A row moves past the row drawn beside it,
+ * so a root seat steps over the root seats drawn inside units rather than
+ * making a move nobody can see.
  */
 
 import {
@@ -249,8 +251,19 @@ export function OutlineView() {
     }
     const found = locate(state.draft, id);
     if (!found) return;
-    const to = found.index + direction;
-    if (to < 0 || to >= found.siblings.length) {
+    // A ROW MOVES PAST THE ROW THE OPERATOR SEES BESIDE IT. The company's list
+    // of root seats also holds the ones the engine placed in units by
+    // reference, drawn inside those units, so counting in the document's list
+    // would step over an invisible sibling: a keypress that changes nothing
+    // on screen. The step is counted among the siblings as drawn and written
+    // as a place in the document's list.
+    const parentView = structure.nodes.get(found.parent);
+    const drawn: readonly NodeKey[] =
+      found.kind === "seat" && parentView?.type === "company"
+        ? parentView.seats
+        : found.siblings.map((s) => s.key);
+    const past = drawn[drawn.indexOf(id) + direction];
+    if (past === undefined) {
       const kind = found.kind === "seat" ? "seat" : "unit";
       const where = found.parent === COMPANY_KEY ? "the company" : nameOf(structure, found.parent);
       announce(
@@ -258,8 +271,10 @@ export function OutlineView() {
       );
       return;
     }
-    const after =
-      direction < 0 ? (to === 0 ? null : found.siblings[to - 1]!.key) : found.siblings[to]!.key;
+    // Down: straight after the row it passes. Up: straight before it, which
+    // the document writes as after whatever precedes that row there.
+    const before = found.siblings.findIndex((s) => s.key === past) - 1;
+    const after = direction > 0 ? past : before < 0 ? null : found.siblings[before]!.key;
     const current = state.check.generation === state.generation ? state.check.derived : null;
     reordering.current = current
       ? { from: state.generation, target: id, before: { draft: state.draft, derived: current } }
