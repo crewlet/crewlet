@@ -44,6 +44,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   restore();
+  location.hash = "";
 });
 
 interface Mounted {
@@ -104,6 +105,32 @@ const focused = () => document.activeElement?.getAttribute("data-tree-id");
 const label = (el: HTMLElement) => el.querySelector(".menu-item-label")!.textContent;
 /** A treeitem's node name. */
 const nameOf = (el: HTMLElement) => el.querySelector(".bchart-name")!.textContent;
+
+describe("which chart", () => {
+  /** The lens mounts the view as a surface with no props, so the URL decides. */
+  const mountBare = () => {
+    const spies = builderSpies();
+    const probe = harnessProbe();
+    render(
+      <BuilderHarness initial={checkedEdit(fixtureCompany())} spies={spies} probe={probe}>
+        <CanvasView />
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle();
+  };
+
+  test("with no chart given, the view draws the one the URL names", () => {
+    location.hash = "#/org?lens=builder&view=canvas&chart=reporting";
+    mountBare();
+    expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
+  });
+
+  test("with no chart in the URL either, it draws the structure", () => {
+    location.hash = "#/org?lens=builder&view=canvas";
+    mountBare();
+    expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
+  });
+});
 
 describe("the tree", () => {
   test("every node is a treeitem saying its level, position and expansion", () => {

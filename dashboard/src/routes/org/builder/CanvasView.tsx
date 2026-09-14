@@ -58,6 +58,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { useParam } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { Canvas, useCanvasOverlay, type CanvasHandle } from "~/ui/Canvas.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -108,11 +109,21 @@ import { treeStep, useOpenScreen, useReporting, useStructure, useTreeState } fro
 /** Which arrangement of the draft the canvas draws. */
 export type ChartKind = "structure" | "reporting";
 
-export function CanvasView({ chart }: { chart: ChartKind }) {
+/**
+ * The canvas of the Builder lens.
+ *
+ * WHICH CHART IS THE URL'S. The lens mounts its view as a surface that takes
+ * no props (`BuilderSurfaces` in `Builder.tsx`), so the chart is read here
+ * from the `chart` section param the lens's own control writes. A caller that
+ * already holds the value passes it and nothing is read.
+ */
+export function CanvasView({ chart }: { chart?: ChartKind }) {
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
-  if (chart === "reporting") {
+  const [param] = useParam("chart", "structure", "section");
+  const kind = chart ?? (param === "reporting" ? "reporting" : "structure");
+  if (kind === "reporting") {
     return <ReportingChart api={api} structure={structure} open={open} />;
   }
   return <StructureChart api={api} structure={structure} open={open} />;
