@@ -140,7 +140,8 @@ Choose **Edit** on the company, a unit or a seat to open its editor at the side
 of the chart. The editor holds your changes in its own form until you press
 **Apply**, which adds them to the draft as **one step**: one Undo takes the
 whole edit back. Closing an editor that holds changes (Cancel, Close, Escape or
-a click outside it) asks before discarding them.
+a click outside it), or following one of its links to another screen, asks
+before discarding them.
 
 If the engine refused something about the node at the last check, the problem
 is shown beside the field it names. Problems that name no field in the editor

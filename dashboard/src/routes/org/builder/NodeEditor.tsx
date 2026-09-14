@@ -6,8 +6,9 @@
  * `editorForm.ts`): nothing reaches the draft while a sentence is half
  * typed, a refusal keeps the form open with the engine's reason on screen,
  * and Undo takes back the whole of what Apply did. Closing a form with
- * changes in it, by Cancel, Close, Escape or the veil, asks first, because a
- * form's changes exist nowhere else.
+ * changes in it, by Cancel, Close, Escape or the veil, or following one of
+ * its links to another screen, asks first, because a form's changes exist
+ * nowhere else.
  *
  * WHAT IS EDITABLE IS DECIDED FIELD BY FIELD (the field coverage of the
  * builder's spec). A field the builder can write is a field. A field it shows
@@ -67,6 +68,7 @@ import {
 } from "./editorForm.ts";
 import {
   EditorSection,
+  LeaveGuardProvider,
   NodeProblems,
   NotConnected,
   ReadOnlyFact,
@@ -195,11 +197,23 @@ function EditorShell({
   onClose: () => void;
   children: ReactNode;
 }) {
-  const [confirming, setConfirming] = useState(false);
-  const requestClose = () => (dirty ? setConfirming(true) : onClose());
+  // `leaving` is where a link in the form was going when it asked, so the
+  // same question serves a close and a link, and discarding then follows it.
+  const [confirming, setConfirming] = useState<{ leaving: string | null } | null>(null);
+  const requestClose = () => (dirty ? setConfirming({ leaving: null }) : onClose());
+  const guardLeaving = (target: string) => {
+    if (!dirty) return false;
+    setConfirming({ leaving: target });
+    return true;
+  };
+  const discard = () => {
+    const leaving = confirming?.leaving ?? null;
+    onClose();
+    if (leaving !== null) window.location.hash = leaving;
+  };
   const disabled = readOnly || blocked !== null;
   return (
-    <>
+    <LeaveGuardProvider value={guardLeaving}>
       <Drawer
         title={title}
         icon="pencil"
@@ -236,25 +250,26 @@ function EditorShell({
         <Dialog
           title="Discard your changes?"
           icon="alert"
-          onClose={() => setConfirming(false)}
+          onClose={() => setConfirming(null)}
           footer={
             <>
-              <Button variant="ghost" onClick={() => setConfirming(false)}>
+              <Button variant="ghost" onClick={() => setConfirming(null)}>
                 Keep editing
               </Button>
-              <Button variant="danger" onClick={onClose}>
+              <Button variant="danger" onClick={discard}>
                 Discard changes
               </Button>
             </>
           }
         >
           <p className="t-body">
-            The changes to {name} have not been applied to the draft. Discarding them leaves the
-            draft as it was.
+            {confirming.leaving === null
+              ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
+              : `The changes to ${name} have not been applied to the draft, and the link opens another screen. Discarding them leaves the draft as it was and follows the link.`}
           </p>
         </Dialog>
       )}
-    </>
+    </LeaveGuardProvider>
   );
 }
 

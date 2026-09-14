@@ -209,6 +209,36 @@ describe("the unsaved-changes prompt", () => {
     expect(view.state().log.ops).toHaveLength(0);
   });
 
+  // A link in the form replaces the screen, and the form with it, so a changed
+  // form asks first, and discarding then follows the link. A click meant for
+  // another tab leaves the form where it is.
+  test("a link to another screen asks before it leaves a changed form", () => {
+    const hash = window.location.hash;
+    try {
+      const view = edit(keyedState(fixtureCompany()), "seat:dev");
+      const link = () =>
+        within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
+      // Untouched: the link simply goes.
+      expect(fireEvent.click(link())).toBe(true);
+      expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+
+      window.location.hash = "#/org";
+      type("Goal", "Ship");
+      expect(fireEvent.click(link(), { ctrlKey: true })).toBe(true);
+      expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+
+      expect(fireEvent.click(link())).toBe(false);
+      const prompt = screen.getByRole("dialog", { name: "Discard your changes?" });
+      expect(prompt.textContent).toContain("follows the link");
+      expect(window.location.hash).toBe("#/org");
+      fireEvent.click(within(prompt).getByRole("button", { name: "Discard changes" }));
+      expect(view.onClose).toHaveBeenCalledTimes(1);
+      expect(window.location.hash).toBe("#/integrations");
+    } finally {
+      window.location.hash = hash;
+    }
+  });
+
   test("a schedule toggle is a change too", () => {
     const view = edit(keyedState(fixtureCompany()), "unit:Engineering");
     fireEvent.click(screen.getByRole("checkbox", { name: "Enabled: standup" }));
