@@ -719,20 +719,20 @@ func TestAnIngressOnlyNodeClaimsNothingButIsStillPresent(t *testing.T) {
 	// worker duties if it has that role) while never appearing in the seat
 	// denominator.
 	f := newFleet(t)
-	api := f.newHost("api", Config{
+	ingress := f.newHost("ingress", Config{
 		Seats:   seatsNamed("ceo", "eng"),
 		Profile: placement.NodeProfile{Roles: placement.Roles(placement.RoleIngress)},
 	})
-	api.renewNodePresence(f.ctx)
-	result := api.Sweep(f.ctx)
-	wantHeld(t, api)
+	ingress.renewNodePresence(f.ctx)
+	result := ingress.Sweep(f.ctx)
+	wantHeld(t, ingress)
 	wantInt(t, result.Capacity, 0, "capacity of a node that runs no seats")
 
 	worker := f.newHost("node-b", Config{Seats: seatsNamed("ceo", "eng")})
 	worker.renewNodePresence(f.ctx)
 	result = worker.Sweep(f.ctx)
 	// Two live nodes, but only one runs seats — so the share is both seats,
-	// not one. Counting the API node would strand the other.
+	// not one. Counting the ingress node would strand the other.
 	wantInt(t, result.Capacity, 2, "capacity")
 	wantHeld(t, worker, "ceo", "eng")
 }

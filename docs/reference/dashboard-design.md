@@ -934,8 +934,8 @@ trusted when it IS blank. Three distinctions the product makes everywhere:
   engine understood the question and refused it, so retrying sends the same bad
   request again.
 - **Zero** vs **unknown.** The integrations answer's counts are three-valued,
-  and a node not serving ingress reports `unknown`, not `0`. The budgets answer
-  says `durable: false` when the counter could not be READ.
+  and a count this node could not read comes back `null`, never `0`. The
+  budgets answer says `durable: false` when the counter could not be READ.
 - **Not configured** vs **empty.** A knowledge search with no backend says so;
   a company with no seats says roles come from the configuration.
 
