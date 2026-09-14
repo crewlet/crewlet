@@ -794,6 +794,21 @@ function Lens({
     if (conflict?.reason === "already_configured") setCompanyExists(true);
   }, [conflict]);
 
+  // A DRAFT WITH NO WORK STANDS ON THE NEWER REVISION. The conflict flow
+  // exists to protect the operator's changes; with none (a lens somebody is
+  // only reading when a colleague saves, which the org push reports at
+  // once) it would pause editing behind a banner offering to update nothing.
+  // Reading the configuration again adopts the newer revision, because a
+  // read adopts whatever is newer whenever the log is empty. A kept draft
+  // still waiting for its decision is left alone: it was offered against
+  // this base, and moving the base under the offer would refuse its Keep.
+  const draftIsEmpty = state.log.ops.length === 0 && state.log.undone.length === 0;
+  const keptPending = keeping.pending || keeping.offer !== null;
+  useEffect(() => {
+    if (!conflict || !draftIsEmpty || keptPending) return;
+    if (conflict.reason === "revision_advanced" || conflict.reason === "base_moved") load();
+  }, [conflict, draftIsEmpty, keptPending, load]);
+
   // ---- Saving -------------------------------------------------------------------
 
   const savedRevision = useSavedRevision();

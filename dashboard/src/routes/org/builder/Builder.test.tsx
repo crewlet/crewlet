@@ -343,6 +343,44 @@ describe("the selection in the URL", () => {
   });
 });
 
+describe("a revision saved by somebody else", () => {
+  // NOTHING TO PROTECT, SO NOTHING TO ASK. A lens with no changes on it is
+  // stood on the newer revision; the conflict banner, and the pause that
+  // comes with it, are for a draft that holds work.
+  test("an untouched draft is stood on the newer revision the org push reports", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine });
+    await screen.findByText("No problems");
+    const next = company();
+    next.roles![1]!.goal = "Design things";
+    engine.document = next;
+    engine.revision = "r2";
+    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+
+    await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r2"'));
+    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(screen.queryByText("The configuration changed since you started editing.")).toBeNull();
+    expect(screen.getByText("editable")).toBeDefined();
+  });
+
+  test("a draft with work is not moved: the change is offered as an update", async () => {
+    const engine = new Engine(company());
+    const { store } = mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await screen.findByText("No problems");
+    engine.document = company();
+    engine.revision = "r2";
+    const reads = engine.sent("GET").length;
+    act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+
+    expect(await screen.findByText("The configuration changed")).toBeDefined();
+    expect(engine.sent("GET")).toHaveLength(reads);
+    expect(JSON.stringify(engine.checks().at(-1)!.body)).toContain("Lead and more");
+  });
+});
+
 describe("a token change mid-edit", () => {
   test("keeps the draft, reads the configuration again and checks under the new token", async () => {
     storeToken("first");

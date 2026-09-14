@@ -1033,7 +1033,8 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   the builder except a text field, and never under a modal.
 - **A newer revision is an update, never an overwrite.** A check answering
   `409` (or a dry run validated against another base) halts checking and
-  offers Update my draft. The update is read only from a node serving the
+  offers Update my draft; a draft holding no work reads the newer revision
+  instead, since there is nothing to update. The update is read only from a node serving the
   conflict's revision or a descendant of it, and `UpdateDraftDialog.tsx` shows
   what still applies, what is dropped and every conflict with its three values;
   confirming waits for a choice on each.
