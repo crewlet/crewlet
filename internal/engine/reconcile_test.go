@@ -316,6 +316,92 @@ func TestAnAlreadyAppliedEpochIsNotReapplied(t *testing.T) {
 	}
 }
 
+// THE FLEET'S REVISION IS THIS NODE'S ACTIVE ONE ONCE THE NODE RUNS IT.
+//
+// A node's active revision is what its GET /config serves, what it boots on,
+// and what it offers the whole fleet at its next start whenever it is newer
+// than the pointer. One that is not the fleet's, left there after the node
+// applied the fleet's epoch, is a node serving a company the fleet is not
+// running, and republishing it one restart later over the one that is.
+func TestTheNodesActiveRevisionFollowsTheFleetOnceApplied(t *testing.T) {
+	t.Parallel()
+	activeID := func(t *testing.T, p *plane) string {
+		t.Helper()
+		active, found, err := p.store.Configs().Active(t.Context())
+		if err != nil || !found {
+			t.Fatalf("this node has no active revision (found=%v err=%v)", found, err)
+		}
+		return active.ID
+	}
+
+	// A revision marked active on this node AFTER it applied the fleet's:
+	// a write that lost a race and marked itself anyway, or one whose
+	// local activation landed after this node adopted a newer revision.
+	t.Run("a stray revision marked active after the apply", func(t *testing.T) {
+		t.Parallel()
+		p := newPlane(t)
+		p.activate(t.Context(), t, grownCompanyDoc)
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		target, _, err := p.fleet.Target(t.Context())
+		if err != nil {
+			t.Fatalf("Target: %v", err)
+		}
+		stray, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+			Source: "test", CreatedBy: "operator", Summary: "stray",
+			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow.Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatalf("store the stray revision: %v", err)
+		}
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if got := activeID(t, p); got != target.RevisionID {
+			t.Errorf("this node's active revision is %s, want the fleet's %s rather than the stray %s",
+				got, target.RevisionID, stray)
+		}
+		// Realigned, not re-applied: the epoch was already this node's.
+		if len(p.applies) != 1 {
+			t.Errorf("%d applies, want the one", len(p.applies))
+		}
+	})
+
+	// A fleet revision this node HOLDS and never marked active: an API write
+	// whose own local activation failed after the fleet took it.
+	t.Run("a held revision the fleet took and this node never marked", func(t *testing.T) {
+		t.Parallel()
+		p := newPlane(t)
+		previous, err := p.store.Configs().InsertActive(t.Context(), store.Revision{
+			Source: "test", CreatedBy: "operator", Summary: "before",
+			Payload: yamlToJSON(t, companyDoc), CreatedAt: pinnedNow,
+		})
+		if err != nil {
+			t.Fatalf("store the previous revision: %v", err)
+		}
+		document := yamlToJSON(t, grownCompanyDoc)
+		held, err := p.store.Configs().Insert(t.Context(), store.Revision{
+			ParentID: previous, Source: "api", CreatedBy: "operator", Summary: "written",
+			Payload: document, CreatedAt: pinnedNow,
+		})
+		if err != nil {
+			t.Fatalf("store the written revision: %v", err)
+		}
+		if _, err := p.fleet.Activate(t.Context(), coord.ActivationRequest{
+			RevisionID: held, Summary: "written", Payload: document, At: pinnedNow,
+		}); err != nil {
+			t.Fatalf("activate: %v", err)
+		}
+		if err := p.recon.Tick(t.Context()); err != nil {
+			t.Fatalf("tick: %v", err)
+		}
+		if got := activeID(t, p); got != held {
+			t.Errorf("this node's active revision is %s, want the one the fleet took, %s", got, held)
+		}
+	})
+}
+
 func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	t.Parallel()
 	// error, not degraded: the build touches nothing, so this node still

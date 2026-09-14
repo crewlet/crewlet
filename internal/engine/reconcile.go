@@ -398,6 +398,7 @@ func (r *Reconciler) Tick(ctx context.Context) error {
 		r.publish(progress)
 	}
 	if progress.applied == target.Epoch {
+		r.holdLocalCopy(ctx, target)
 		return nil
 	}
 	if progress.attempts >= configplane.MaxApplyAttempts {
@@ -420,11 +421,71 @@ func (r *Reconciler) apply(ctx context.Context, target coord.Activation) error {
 		progress := r.snapshot()
 		progress.applied, progress.attempts = target.Epoch, 0
 		r.publish(progress)
+		r.holdLocalCopy(ctx, target)
 	}
 	if r.onApply != nil {
 		r.onApply(target.Epoch, status)
 	}
 	return err
+}
+
+// holdLocalCopy makes the revision the fleet is on this node's active one,
+// once this node serves it.
+//
+// This node's active revision is what its GET /config answers, what it boots
+// on, and what it offers the whole fleet at its next start whenever that
+// revision is newer than the pointer. So once the node runs the fleet's epoch
+// it has to be the fleet's revision, and three ordinary paths leave it
+// otherwise: an API write whose own local activation failed after the fleet
+// took it, a write that marked itself active a moment after this node had
+// adopted a newer one, and an offline import the fleet had already superseded
+// when the node started. Each is corrected here, every tick, rather than
+// trusted to the path that caused it, and each left alone was a node serving,
+// and one restart later republishing, a company the fleet is not running.
+//
+// Best effort, like every local copy: the epoch is applied either way, and
+// the next tick tries again.
+func (r *Reconciler) holdLocalCopy(ctx context.Context, target coord.Activation) {
+	active, found, err := r.configs.Active(ctx)
+	if err != nil {
+		r.log.WarnContext(ctx, "local_revision_unread", "revision", target.RevisionID,
+			"error", err, "detail", "this node's own active revision could not be "+
+				"read, so whether it is the fleet's is unknown; the next tick checks again")
+		return
+	}
+	if found && active.ID == target.RevisionID {
+		return
+	}
+	_, held, err := r.configs.Get(ctx, target.RevisionID)
+	switch {
+	case err != nil:
+		r.log.WarnContext(ctx, "local_revision_unread", "revision", target.RevisionID,
+			"error", err, "detail", "this node could not look up its copy of the "+
+				"fleet's revision; the next tick checks again")
+		return
+	case !held:
+		// Applied without a copy: the best-effort adopt failed. Fetched
+		// and adopted again, which is what makes it active; fetchRevision
+		// reports a copy it cannot keep.
+		if _, err := r.fetchRevision(ctx, target); err != nil {
+			r.log.WarnContext(ctx, "revision_not_cached", "revision", target.RevisionID,
+				"error", err, "detail", "the revision is applied; this node's config "+
+					"history will not show it until a later tick can fetch it")
+		}
+		return
+	}
+	if _, err := r.configs.Activate(ctx, target.RevisionID, target.At); err != nil {
+		r.log.WarnContext(ctx, "local_revision_not_marked_active", "revision", target.RevisionID,
+			"error", err, "detail", "the fleet's revision is applied, and this node's "+
+				"own active revision is still another; the next tick tries again")
+		return
+	}
+	previous := ""
+	if found {
+		previous = active.ID
+	}
+	r.log.InfoContext(ctx, "local_revision_realigned", "revision", target.RevisionID,
+		"previous", previous, "epoch", target.Epoch)
 }
 
 // applyRevision is the part that can fail, separated so every exit records.
