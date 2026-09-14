@@ -1043,9 +1043,9 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 // doing exactly what it should. Not after the teardown: both probes read the
 // broker and the coordination store the teardown closes.
 //
-// ONCE. A second call, and the drain Stop runs for a caller that did not drain
-// first, wait for the first to finish and do nothing more: one shutdown is
-// announced once, and by then nothing is left to wait for.
+// ONCE. A second call, and the drain [Engine.Stop] runs for a caller that did
+// not drain first, both wait for the first to finish and then do nothing more,
+// so one shutdown is announced once and no seat is handed back twice.
 //
 // Bounded only by ctx, for the reason [node.Node.Drain] gives.
 func (e *Engine) Drain(ctx context.Context) {
@@ -1066,10 +1066,12 @@ func (e *Engine) Drain(ctx context.Context) {
 		if e.watchdog != nil {
 			e.watchdog.Stop()
 		}
-		// BEFORE THE DRAIN, because the teardown after it is what closes
-		// the broker connection this publishes over: announced
-		// afterwards, the line would be written on a queue that is
-		// already gone, every time.
+		// WHERE THE STOP IS DECIDED, rather than where it completes. The
+		// broker stays open until the teardown, so the drain's far end
+		// would carry this line just as well; what that end does not
+		// survive is a second interrupt or a supervisor's kill grace
+		// running out mid-drain, and the one thing the audit log must not
+		// lose is that this node was told to stop.
 		if company := e.Company(); company != nil {
 			e.publishLifecycle(ctx, events.New(
 				types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
