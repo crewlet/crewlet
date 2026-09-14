@@ -6,10 +6,16 @@
 // makes the assets and the server that answers their queries the same artifact
 // by construction.
 //
-// The tree is the zero-build ES-module app itself — no bundler, no transpile
-// step, no build output. What is embedded is what a browser receives, which is
-// also what makes the dashboard's own test suite meaningful: it runs against
-// these files, unchanged.
+// The tree IS BUILD OUTPUT — Vite's, from the React + TypeScript source in
+// dashboard/ — and it is committed, which is what lets `go build ./...` and
+// `go install …@latest` work on a clean checkout with no node on the machine:
+// an embed directive cannot run a bundler. So nothing here is hand-edited and
+// nothing here is the thing under test; `make dashboard` regenerates it,
+// `make dashboard-check` fails when it has drifted from its source, and the
+// dashboard's own suites run against dashboard/src under Vitest rather than
+// against these files. The one exception is dashboard/protocol.js, the second
+// build target, which internal/e2e replays a real company's socket frames
+// through.
 package static
 
 import (

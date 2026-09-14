@@ -41,12 +41,22 @@ function Screen() {
   const route = useRoute();
   const [head, id] = route.path;
   switch (head) {
+    // KEYED ON THE SUBJECT, every screen that has one.
+    //
+    // A hash change re-renders this switch rather than remounting it, so
+    // `#/turns/A` → `#/turns/B` reconciles: React keeps the same component
+    // instance and every piece of per-SUBJECT state in it outlives the subject
+    // it describes. The Turn header's controls are where that shows — a
+    // refusal holds until the next click now, so a "Download failed" left over
+    // from turn A greeted the reader of turn B — but the hazard is the shape,
+    // not the control: a disclosure left open, a tab left selected and a filter
+    // left set are all the same bug waiting for someone to notice.
     case undefined:
       return <Overview />;
     case "people":
       return <People />;
     case "seats":
-      return id ? <SeatScreen handle={id} /> : <People />;
+      return id ? <SeatScreen key={id} handle={id} /> : <People />;
     case "org":
       return <OrgScreen />;
     case "runs":
@@ -60,7 +70,7 @@ function Screen() {
       // neither can collide with it — and `#/work/me` is the address this
       // screen has had since it was designed.
       if (id === "me") return <MyWork />;
-      return id ? <WorkItem id={id} /> : <Work />;
+      return id ? <WorkItem key={id} id={id} /> : <Work />;
     case "goals":
       return <Goals />;
     // ITS OWN SCREEN rather than a tab of the board, for the reason the view
@@ -69,7 +79,7 @@ function Screen() {
     case "sprints":
       return <Sprints />;
     case "pages":
-      return id ? <PageView id={id} /> : <Pages />;
+      return id ? <PageView key={id} id={id} /> : <Pages />;
     case "conversations":
       return <Conversations />;
     case "schedules":
@@ -93,11 +103,11 @@ function Screen() {
     case "secrets":
       return <Secrets />;
     case "traces":
-      return id ? <TraceScreen traceId={id} /> : <NotFound what="a trace id" />;
+      return id ? <TraceScreen key={id} traceId={id} /> : <NotFound what="a trace id" />;
     case "events":
-      return id ? <EventScreen eventId={id} /> : <Activity />;
+      return id ? <EventScreen key={id} eventId={id} /> : <Activity />;
     case "turns":
-      return id ? <TurnScreen turnId={id} /> : <NotFound what="a turn id" />;
+      return id ? <TurnScreen key={id} turnId={id} /> : <NotFound what="a turn id" />;
     default:
       return <NotFound what={`the screen “${head}”`} />;
   }

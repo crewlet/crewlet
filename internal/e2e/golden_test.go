@@ -178,6 +178,33 @@ func (c *capture) eventTypes(t *testing.T) []string {
 	return out
 }
 
+// phaseRecords returns the payload of every `agent_phase_completed` frame.
+//
+// The PAYLOAD, which is what separates this from [capture.eventTypes]: a phase
+// record without one has no prompts, no tool calls, no decision and no
+// duration, and the payload is exactly what the socket carries and a listing
+// does not.
+func (c *capture) phaseRecords(t *testing.T) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, raw := range c.all() {
+		var env struct {
+			Kind string `json:"kind"`
+			Data struct {
+				Type    string         `json:"type"`
+				Payload map[string]any `json:"payload"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(raw, &env) != nil || env.Kind != "event" {
+			continue
+		}
+		if env.Data.Type == "agent_phase_completed" && env.Data.Payload != nil {
+			out = append(out, env.Data.Payload)
+		}
+	}
+	return out
+}
+
 // read pumps the socket into a capture until the context ends.
 func read(ctx context.Context, conn *websocket.Conn, into *capture) {
 	for {
@@ -388,6 +415,34 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	}
 	if kept["agent_turn_progress"] {
 		t.Error("agent_turn_progress was persisted; it is live-only")
+	}
+
+	// --- and how long each phase took --------------------------------- //
+	// A PHASE MEASURES ITSELF. The duration used to be derivable only by
+	// pairing this record with the `agent_phase_started` that shares its
+	// key, and the reader that needs it most — a dashboard deep-linked into
+	// a turn WHILE IT RUNS — never has both events: its query was answered
+	// before the phase started, and afterwards it buffers only completed
+	// envelopes. So the measurement travels on the record, and this is the
+	// only place in the suite that proves it survives the publisher, the
+	// broker, the broadcast and the JSON round trip rather than existing in
+	// a struct literal.
+	records := frames.phaseRecords(t)
+	if len(records) == 0 {
+		t.Fatal("no phase record reached the socket with its payload")
+	}
+	for _, rec := range records {
+		ms, ok := rec["duration_ms"].(float64)
+		if !ok {
+			t.Errorf("the %v phase record carries no duration_ms at all; the "+
+				"field is not on the wire", rec["phase"])
+			continue
+		}
+		if ms <= 0 {
+			t.Errorf("the %v phase reports %v ms — a phase that ran three model "+
+				"rounds against a live provider took longer than nothing",
+				rec["phase"], ms)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/structured"
@@ -241,6 +242,18 @@ type Result struct {
 	Rounds       int
 	InputTokens  int
 	OutputTokens int
+
+	// Elapsed is this task's own wall clock, from the moment the worker
+	// started to whatever ended it — a submission, an exhausted round
+	// budget, a deadline, or a panic the runner contained.
+	//
+	// A property of the RESULT rather than of the caller's own timing,
+	// because the tasks of one call run in PARALLEL: a caller bracketing
+	// [Run] measures the whole fan-out, which is the slowest task and says
+	// nothing about the other seven. "Which worker was slow" is the
+	// question a delegate call raises, and this is the only place the
+	// answer exists.
+	Elapsed time.Duration
 
 	// Model is what actually served the calls; ProviderKey is the config
 	// key its chain was resolved under.

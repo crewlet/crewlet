@@ -81,9 +81,15 @@ function ToolRow({
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
-          <Code plain>{args || "{}"}</Code>
+          {/* NAMED WITH THE TOOL. A screen reader landing on a scrollable
+              block announces the name and nothing around it, and half a
+              dozen regions called "Arguments" on one round is the same as
+              none. */}
+          <Code plain label={`${name} — arguments`}>
+            {args || "{}"}
+          </Code>
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <Code>{result || "(empty)"}</Code>
+          <Code label={`${name} — ${failed ? "error" : "result"}`}>{result || "(empty)"}</Code>
         </div>
       </Disclosure>
     </div>
@@ -327,14 +333,14 @@ export function PhaseCard({
         <span className="phase-meta t-num" title="total tokens">
           {record.totalTokens ? fmtCount(record.totalTokens) : "—"}
         </span>
-        {/* HOW LONG THIS PHASE TOOK. Only derivable since the phase's own
-            `agent_phase_started` is folded onto its record (see `withStarts`)
-            — `agent_phase_completed` carries the instant it landed and
-            nothing else, so a finished phase had no duration anywhere on this
-            dashboard. On a self-iterating turn that is the number that says
-            WHICH round was expensive, which is the question the token total
-            makes a reader ask and could not answer. Absent on a nested call,
-            which publishes no start. */}
+        {/* HOW LONG THIS PHASE TOOK, straight off `duration_ms` — the
+            engine measures the phase where the clock is and puts the answer
+            on the record. On a self-iterating turn that is the number that
+            says WHICH round was expensive, which is the question the token
+            total makes a reader ask and could not answer. Present on a
+            NESTED call too, now: a worker and the round-cap judge publish no
+            start event, so the pairing this replaced could never give one a
+            duration and "which worker was slow" had no answer anywhere. */}
         {took != null && (
           <span className="phase-meta t-num" title="how long this phase took">
             {fmtDuration(took)}
@@ -440,13 +446,20 @@ export function PhaseCard({
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
-                    <Code>{record.systemPrompt}</Code>
+                    {/* The tallest block on the page by a wide margin — a
+                        seat's system prompt runs to tens of kilobytes — so
+                        this is the one that most needed to be reachable. */}
+                    <Code label={`The ${record.phase} phase's system prompt`}>
+                      {record.systemPrompt}
+                    </Code>
                   </div>
                 )}
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <Code>{record.userPrompt}</Code>
+                    <Code label={`The ${record.phase} phase's user message`}>
+                      {record.userPrompt}
+                    </Code>
                   </div>
                 )}
               </div>

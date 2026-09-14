@@ -251,6 +251,12 @@
   flex-wrap: wrap;
   min-width: 0;
 }
+/* A HEAD'S CONTROLS WRAP, and a wrapped row stays where the reader left it.
+   The block is right-aligned by the title's `flex: 1`, so a second line that
+   packed from the left would sit under nothing. */
+.screen-actions {
+  justify-content: flex-end;
+}
 .screen-head .screen-title {
   font-size: var(--fs-xl);
   font-weight: var(--fw-semibold);
