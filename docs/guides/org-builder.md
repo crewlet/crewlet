@@ -261,6 +261,45 @@ the save until the schedule is disabled or has a runner, and says when a seat
 being moved is working: its current turn continues on the previous
 configuration until the engine applies the change.
 
+## Deleting a node
+
+**Delete** removes a seat, or a unit with every unit and seat inside it, from
+the draft. Undo brings it back until the draft is saved. The dialog lists what
+the removal clears inside the chart (a unit's lead, a `manages` entry, a root
+seat's unit reference), the unit schedules it would leave with no runner, and
+the seats that are working now.
+
+Root seats declared at the top level with a `unit:` reference to the unit being
+deleted are drawn inside it, so the dialog asks whether to delete them too or
+keep them at the top level with the reference cleared.
+
+Removing more than half of the saved company's seats asks for an
+acknowledgement first.
+
+### Outside the chart
+
+Some of what a seat has is not in the chart, and the dialog says so before the
+seat goes:
+
+- **The Datadog fallback.** An alert whose tags name no seat wakes the fallback
+  seat, and the engine refuses a Datadog block whose `route_to` names no agent
+  seat. Deleting the fallback seat therefore asks for the agent seat that takes
+  over, and writes it with the removal.
+- **A GitLab access level.** The per-handle override is removed with the seat,
+  because an entry left behind would grant its level to the next seat that
+  derives the same handle.
+- **Vendor identities and sealed credentials.** The GitHub App, Slack app,
+  Mattermost bot, GitLab service account and Atlassian account the engine made
+  for the seat, and the secret store entries its config references, stay until
+  you decommission them. They are listed by name, never by value, with links to
+  **Integrations** and **Secrets**.
+- **The mailbox, coding runs and memory.** A removed agent seat's mailbox, and
+  the mail still addressed to it, is kept for 24 hours after the engine applies
+  the change and then retired, together with any coding runs it still has. Its
+  memory (diary, episodes, counterparty profiles, onboarding markers) is kept,
+  and a seat added later under the same handle reattaches to it. See
+  [Seat Ownership](../concepts/seat-ownership.md#the-removed-seat).
+
 ## Reviewing and saving
 
 **Review and save** opens once the draft has changes, and says what the save
