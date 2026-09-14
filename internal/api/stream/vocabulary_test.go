@@ -114,14 +114,16 @@ func dashboardCodes(t *testing.T) []string {
 	if start < 0 {
 		t.Fatalf("%s declares no QueryErrorCode union", dashboardProtocol)
 	}
-	body := text[start+len(head):]
+	// The members' doc comments are prose: they quote words ("there is
+	// nothing") and may carry a semicolon of their own. They go BEFORE the
+	// union's terminating semicolon is looked for, or a comment could end the
+	// union early or add a quoted word as a member.
+	body := regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`).ReplaceAllString(text[start+len(head):], "")
 	end := strings.Index(body, ";")
 	if end < 0 {
 		t.Fatalf("the QueryErrorCode union in %s never ends", dashboardProtocol)
 	}
-	// The members' doc comments quote prose ("there is nothing"), so they go
-	// before the literals are read.
-	body = regexp.MustCompile(`(?s)/\*.*?\*/|//[^\n]*`).ReplaceAllString(body[:end], "")
+	body = body[:end]
 	var codes []string
 	for _, m := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(body, -1) {
 		codes = append(codes, m[1])
