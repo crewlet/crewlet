@@ -1020,6 +1020,12 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
   handle (`useBuilderView`).
 - **Undo and redo are Ctrl or Command with Z**, and Shift with it, anywhere in
   the builder except a text field, and never under a modal.
+- **A newer revision is an update, never an overwrite.** A check answering
+  `409` (or a dry run validated against another base) halts checking and
+  offers Update my draft. The update is read only from a node serving the
+  conflict's revision or a descendant of it, and `UpdateDraftDialog.tsx` shows
+  what still applies, what is dropped and every conflict with its three values;
+  confirming waits for a choice on each.
 - **A read-only lens records nothing.** The guarded and read-only postures, a
   conflict and a base the engine has not keyed yet all refuse operations at
   the one door every view goes through, and say why in the live region.

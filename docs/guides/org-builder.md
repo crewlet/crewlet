@@ -70,6 +70,36 @@ agent seat can run without one, and the dashboard does not write providers.
 Add one with `crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
 
+## When somebody else saves first
+
+Every check is conditional on the revision the draft was started from, so a
+revision saved by somebody else (another operator, `crewlet config import`, a
+setup flow on the Integrations screen) is found at the next check, not at the
+save. The status reads "The configuration changed", editing pauses, and a
+banner offers **Show what changed** (the revision history's diff) and **Update
+my draft**.
+
+Updating replays each change of the draft onto the revision the engine holds
+now, and sorts every change into one of three outcomes:
+
+- **Still applies:** replayed as it was made.
+- **Dropped:** what it changed no longer exists (the seat was removed, the unit
+  it moved into is gone), with the reason.
+- **Changed by somebody else as well:** a value it recorded was changed in the
+  newer revision. The dialog shows the value when you started, the value saved
+  now and yours, and you choose **Keep mine** or **Keep theirs** for each. A
+  change is never replayed over somebody else's value without that choice.
+
+A seat or unit that was removed and created again under the same name is a
+different entity to the builder, so a change made to the original is dropped
+rather than applied to the new one.
+
+If this node still serves the older revision (it has not applied the newer one
+yet, or a load balancer sent the read to a node that has not), the update
+waits: "This node has not caught up with the newer revision yet." Try again in
+a moment. If the configuration the draft edits is no longer active at all, the
+banner offers **Discard and reload**.
+
 ## Undo, redo and the keyboard
 
 Every change is an operation in the draft's log. **Undo** and **Redo** in the

@@ -595,10 +595,24 @@
     display: inline-flex;
   }
 }
-.org-builder-problems ul {
+.org-builder-problems ul,
+.org-builder-list {
   margin: 0;
   padding: 0;
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* A sentence that follows the one before it in a banner, on its own line. */
+.org-builder-note {
+  display: block;
+  margin-top: var(--space-1);
+}
+.org-builder-conflict {
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
 }
 
 /* ---- Feed --------------------------------------------------------------- */

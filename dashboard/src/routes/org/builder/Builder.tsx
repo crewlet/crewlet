@@ -62,6 +62,7 @@ import {
   Badge,
   Banner,
   Button,
+  ButtonLink,
   Empty,
   Segmented,
   Skeleton,
@@ -89,7 +90,10 @@ import {
   type BuilderAction,
   type BuilderState,
 } from "./model/reducer.ts";
-import type { CheckStatus } from "./model/scheduler.ts";
+import { describeOperation } from "./model/operations.ts";
+import type { CheckOutcome, CheckStatus } from "./model/scheduler.ts";
+import { readyToUpdate } from "./model/writes.ts";
+import { UpdateDraftDialog } from "./UpdateDraftDialog.tsx";
 import { isRecord } from "./model/json.ts";
 import {
   revisionOfEtag,
@@ -230,6 +234,12 @@ function statusLook(status: CheckStatus, problems: number): StatusLook {
     case "guarded":
       return { label: "The engine refused the token", tone: "critical", icon: "key" };
   }
+}
+
+/** The conflict the last check of the current draft reported, or `null`. */
+function conflictOf(state: BuilderState): Extract<CheckOutcome, { status: "conflict" }> | null {
+  const outcome = state.check.generation === state.generation ? state.check.outcome : null;
+  return outcome?.status === "conflict" ? outcome : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +624,60 @@ function Lens({
     requestToken();
   }, [exitFullscreen]);
 
+  // ---- Updating onto a newer revision -------------------------------------------
+
+  const [updateNote, setUpdateNote] = useState<{ busy: boolean; message: string | null }>({
+    busy: false,
+    message: null,
+  });
+  const updateRead = useRef<AbortController | null>(null);
+  useEffect(() => () => updateRead.current?.abort(), []);
+
+  // Reads the revision the engine holds now, and hands the reducer the update
+  // only once this node serves that revision or a later one: a node behind a
+  // load balancer can still answer with the draft's own base, and rebasing
+  // onto that would lose the change the conflict was about.
+  const beginUpdate = useCallback(
+    async (conflictRevisionId: string | null) => {
+      const base = stateRef.current.base.revision;
+      if (base === null) return;
+      updateRead.current?.abort();
+      const controller = new AbortController();
+      updateRead.current = controller;
+      setUpdateNote({ busy: true, message: null });
+      try {
+        const ready = await readyToUpdate(
+          transport,
+          { baseRevision: base, conflictRevisionId },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        if (ready.kind === "ready") {
+          dispatchRaw({
+            type: "updateBegin",
+            document: ready.document,
+            revision: ready.revisionId,
+            derived: ready.derived,
+          });
+          setUpdateNote({ busy: false, message: null });
+        } else {
+          setUpdateNote({
+            busy: false,
+            message:
+              ready.kind === "behind"
+                ? "This node has not caught up with the newer revision yet. Try again in a moment."
+                : ready.detail,
+          });
+        }
+      } catch {
+        // Aborted: the Builder went away, or a newer attempt replaced this one.
+      }
+    },
+    [transport],
+  );
+
+  const conflict = status === "conflict" ? conflictOf(state) : null;
+
   // ---- The context --------------------------------------------------------------
 
   const api = useMemo((): BuilderApi => {
@@ -837,17 +901,54 @@ function Lens({
             This process cannot write the configuration because it has no coordination store.
           </Banner>
         )}
-        {status === "conflict" && (
-          <Banner tone="caution" icon="alert">
-            The configuration changed since you started editing.{" "}
-            {state.base.revision && (
-              <a
-                className="t-link"
-                href={href(["config"], { lens: "diff", revision: state.base.revision })}
+        {conflict && conflict.reason === "no_active_revision" && (
+          <Banner
+            tone="caution"
+            icon="alert"
+            action={
+              <Button
+                size="sm"
+                onClick={() => {
+                  dispatchRaw({ type: "discard" });
+                  load(true);
+                }}
               >
-                Show what changed
-              </a>
-            )}
+                Discard and reload
+              </Button>
+            }
+          >
+            The configuration this draft edits is no longer active on this engine, so the draft
+            cannot be saved.
+          </Banner>
+        )}
+        {conflict && state.mode === "edit" && conflict.reason !== "no_active_revision" && (
+          <Banner
+            tone="caution"
+            icon="alert"
+            action={
+              <span className="row gap-1 wrap">
+                {state.base.revision && (
+                  <ButtonLink
+                    size="sm"
+                    variant="ghost"
+                    href={href(["config"], { lens: "diff", revision: state.base.revision })}
+                  >
+                    Show what changed
+                  </ButtonLink>
+                )}
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={updateNote.busy}
+                  onClick={() => void beginUpdate(conflict.currentRevisionId)}
+                >
+                  Update my draft
+                </Button>
+              </span>
+            }
+          >
+            The configuration changed since you started editing.
+            {updateNote.message && <span className="org-builder-note">{updateNote.message}</span>}
           </Banner>
         )}
         {loaded && !isBaseKeyed(state) && status === "unreachable" && (
@@ -886,6 +987,18 @@ function Lens({
             <Surface component={viewSurface} name="The outline" />
           )}
         </TabPanel>
+
+        {state.update && (
+          <UpdateDraftDialog
+            update={state.update}
+            describe={(op) =>
+              describeOperation(op, state.update?.restoring ? state.update.baseDraft : state.draft)
+            }
+            onChoose={(index, choice) => dispatchRaw({ type: "updateChoose", index, choice })}
+            onConfirm={() => dispatchRaw({ type: "updateConfirm" })}
+            onCancel={() => dispatchRaw({ type: "updateCancel" })}
+          />
+        )}
 
         {dialog && (
           <DialogHost
