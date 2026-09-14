@@ -547,16 +547,24 @@ rendered as the stat strip and as a raw JSON dump.
 
 Four rules replace it, and each one names what it fixes.
 
-1. **A duplicate is a fact with a missing half.** `agent_phase_started` and
-   `agent_phase_completed` are the same phase — same `turn_id|phase|iteration`,
-   which *is* the phase key. Read apart, the start says nothing new. Read
-   together they are the one thing the finished record cannot say alone: the
-   completed event carries only the instant the phase **landed**, so no
-   completed phase had a duration anywhere on this dashboard. The start is
-   folded onto its own card now (`withStarts`), and every phase reports how
-   long it took — which is what answers "why did this turn cost 290k tokens"
-   on exactly the self-iterating turns where the question gets asked. A nested
-   call publishes no start and reports no duration rather than a wrong one.
+1. **A duplicate is a row whose fact belongs somewhere else.**
+   `agent_phase_started` and `agent_phase_completed` are the same phase — same
+   `turn_id|phase|iteration`, which *is* the phase key — and the start says
+   nothing the finished card does not. It used to say one thing: paired with
+   the completion instant it gave the phase a duration, which no completed
+   record carried. That pairing is gone, because it needed **both** events in
+   one reader's hands and the reader who needs the number most never has them:
+   a turn deep-linked *while it runs* asked its query before the phase started,
+   and the only envelopes it buffers afterwards are completed ones. So the
+   engine measures the phase where the clock is and publishes `duration_ms` on
+   `agent_phase_completed` itself. Every phase reports how long it took —
+   which is what answers "why did this turn cost 290k tokens" on exactly the
+   self-iterating turns where the question gets asked — and so does every
+   **nested** call, a delegate's worker and the round-cap judge included, which
+   publish no start and so could never have been given one. Zero means *not
+   measured*, never *took no time*: an agent-mode executor's rounds ran inside
+   a coding CLI's own loop in another process, and that run's wall clock is on
+   `sandbox_run_started` / `sandbox_run_completed` instead.
 
 2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
    payload doc says it deliberately carries no outcome; a guard breach is a

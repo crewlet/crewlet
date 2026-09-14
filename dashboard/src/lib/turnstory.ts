@@ -12,9 +12,9 @@
  *     says EXECUTE, iter 2, its model, its rounds, its tokens and its outcome.
  *     A seventh was `agent_turn_completed`, which the same screen also renders
  *     as the stat strip AND as a JSON dump. The list read as a duplicate
- *     because it largely was one. Those rows are not dropped — a phase start
- *     is folded onto its own phase card (see `withStarts` in ./phases.ts),
- *     where it is the missing half of that phase's duration.
+ *     because it largely was one — a phase start says which phase opened, and
+ *     its own completed record says that, its duration included (see
+ *     `phaseDuration` in ./phases.ts).
  *
  *  2. **Everything left had the same weight.** `reflection_completed` is a
  *     sentinel whose own payload doc says it carries no per-worker outcome

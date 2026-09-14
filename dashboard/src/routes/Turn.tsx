@@ -19,13 +19,14 @@
  *     stat strip and as a raw JSON dump. The reader who called it "kinda a
  *     duplicate of the phases" was reading it correctly.
  *
- *     Those rows are not dropped. A phase start is folded onto its own phase
- *     card (`withStarts`), where it stops being a duplicate and becomes the
- *     missing half of a fact: `agent_phase_completed` carries only the instant
- *     the phase LANDED, so until now no completed phase had a duration
- *     anywhere on this dashboard — on a turn that self-iterated three times
- *     and cost 290k tokens, "which round took ninety seconds" was derivable
- *     from two events in the same query answer and shown by neither.
+ *     Those rows are not dropped — they are REDUNDANT. A phase start says
+ *     which phase opened, and its own completed record says that and
+ *     everything else, its duration included: `agent_phase_completed` carries
+ *     `duration_ms`, measured where the clock is. The pairing this screen
+ *     used to do instead — fold the start onto the finish, subtract — needed
+ *     both events in one reader's hands, which is exactly what a turn
+ *     deep-linked WHILE IT RUNS does not have, and it is the screen this
+ *     panel exists for. See `phaseDuration` in ./lib/phases.ts.
  *
  *  2. **Everything left had the same weight.** `reflection_completed` is a
  *     sentinel whose own payload doc says it deliberately carries no outcome.
@@ -81,10 +82,10 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
-  phaseStarts,
+  phaseStart,
   streamedPhases,
-  withStarts,
   type PhaseRecord,
+  type Timed,
 } from "~/lib/phases.ts";
 import { prefetchBlocks, tellStory, TURN_STOP, type PrefetchBlock } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
@@ -196,20 +197,24 @@ export function problemCount(wentWrong: readonly EventRecord[], failed: boolean)
  * made the window open at the first worker's start and "Took" under-report
  * the whole stretch before the fan-out.
  *
+ * Each phase's start comes from [phaseStart], which is the live record's own
+ * instant or the finished record's landing less what the engine measured.
+ * Reading `startedAt` off a finished record put its END into the minimum.
+ *
  * A zero is dropped rather than taken as a minimum: `tsKey` answers 0 for a
  * timestamp it cannot parse, and 0 is the epoch — one unreadable instant
  * would report a turn that has been running since 1970.
  */
 export function turnSpan(
   events: readonly { timestamp: string }[],
-  phases: readonly { at: string; startedAt: string }[],
+  phases: readonly Timed[],
 ): { from: number; to: number } {
   const live = (instants: number[]) => instants.filter((t) => t > 0);
   // EVERY instant on both sides, never the first and last of either. Indexing
   // would make the caller's sort order a precondition this function cannot
   // state or check, and it is the precondition the phase list already broke.
   const stamps = events.map((e) => tsKey(e.timestamp));
-  const starts = live([...stamps, ...phases.map((p) => tsKey(p.startedAt))]);
+  const starts = live([...stamps, ...phases.map(phaseStart)]);
   const ends = live([...stamps, ...phases.map((p) => tsKey(p.at))]);
   // Both or neither: a start with no end would render a duration measured
   // against nothing, which is worse than the em dash the caller falls back to.
@@ -458,12 +463,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
       .map((a) => fromLiveCall(a.live_call!, a.role));
     // Within a turn, oldest first: a turn is read forwards. `mergePhases`
     // orders newest first, which is right for a feed and wrong here.
-    const merged = mergePhases([...streamed, ...answered], live).sort(
-      (a, b) => tsKey(a.at) - tsKey(b.at),
-    );
-    // The starts come from BOTH halves for the same reason the phases do: a
-    // turn opened while it runs has no query answer to read them off.
-    return withStarts(merged, phaseStarts([...events, ...phaseEvents]));
+    return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
   }, [events, phaseEvents, agents, turnId]);
 
   // A NESTED call belongs UNDER the phase that made it. `host_phase` and

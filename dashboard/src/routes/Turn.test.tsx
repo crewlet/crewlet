@@ -12,6 +12,7 @@
 
 import { describe, expect, test } from "vitest";
 import { outcomeOf, problemCount, turnSpan } from "./Turn.tsx";
+import type { Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
 function record(payload: Record<string, unknown>): EventRecord {
@@ -63,7 +64,21 @@ describe("problemCount", () => {
 });
 
 describe("turnSpan", () => {
-  const phase = (startedAt: string, at: string) => ({ startedAt, at });
+  // A FINISHED phase, which is what the query answers with: its landing
+  // instant plus what the engine measured. There is no second timestamp to
+  // read a start off — see `phaseDuration` in ~/lib/phases.ts.
+  const phase = (at: string, durationMs: number): Timed => ({
+    live: false,
+    startedAt: at,
+    at,
+    durationMs,
+  });
+  const running = (startedAt: string, at: string): Timed => ({
+    live: true,
+    startedAt,
+    at,
+    durationMs: 0,
+  });
   const event = (timestamp: string) => ({ timestamp });
 
   test("opens at the earliest START, not at the earliest phase to land", () => {
@@ -75,11 +90,22 @@ describe("turnSpan", () => {
     const span = turnSpan(
       [],
       [
-        phase("2026-09-13T10:00:20Z", "2026-09-13T10:00:30Z"),
-        phase("2026-09-13T10:00:00Z", "2026-09-13T10:01:30Z"),
+        phase("2026-09-13T10:00:30Z", 10_000), // the worker: T+20 → T+30
+        phase("2026-09-13T10:01:30Z", 90_000), // its host round: T+0 → T+90
       ],
     );
     expect(span.to - span.from).toBe(90_000);
+  });
+
+  test("a finished phase contributes when it BEGAN, not when it landed", () => {
+    // The regression the derivation exists to stop. `startedAt` on a
+    // completed record equals `at`, so reading it put the phase's own END
+    // into the minimum — and on a turn whose opening rounds have landed and
+    // whose newest one is live, that reported the turn as beginning where its
+    // first phase finished.
+    const span = turnSpan([], [phase("2026-09-13T10:01:00Z", 60_000)]);
+    expect(span.from).toBe(Date.parse("2026-09-13T10:00:00Z"));
+    expect(span.to).toBe(Date.parse("2026-09-13T10:01:00Z"));
   });
 
   test("spans the query answer and the stream together", () => {
@@ -87,7 +113,7 @@ describe("turnSpan", () => {
     // query with its opening rows and streams the rest.
     const span = turnSpan(
       [event("2026-09-13T10:00:00Z"), event("2026-09-13T10:00:05Z")],
-      [phase("2026-09-13T10:00:10Z", "2026-09-13T10:02:00Z")],
+      [running("2026-09-13T10:00:10Z", "2026-09-13T10:02:00Z")],
     );
     expect(span.from).toBe(Date.parse("2026-09-13T10:00:00Z"));
     expect(span.to).toBe(Date.parse("2026-09-13T10:02:00Z"));
@@ -99,7 +125,10 @@ describe("turnSpan", () => {
     // 1970.
     const span = turnSpan(
       [],
-      [phase("not a timestamp", "2026-09-13T10:00:30Z"), phase("2026-09-13T10:00:00Z", "also not")],
+      [
+        running("not a timestamp", "2026-09-13T10:00:30Z"),
+        running("2026-09-13T10:00:00Z", "also not"),
+      ],
     );
     expect(span.from).toBe(Date.parse("2026-09-13T10:00:00Z"));
     expect(span.to).toBe(Date.parse("2026-09-13T10:00:30Z"));
@@ -118,7 +147,7 @@ describe("turnSpan", () => {
     expect(turnSpan([], [])).toEqual({ from: 0, to: 0 });
     // Ends but no starts: a duration measured against nothing is worse than
     // the em dash the caller falls back to.
-    expect(turnSpan([], [phase("", "2026-09-13T10:00:30Z")])).toEqual({ from: 0, to: 0 });
+    expect(turnSpan([], [running("", "2026-09-13T10:00:30Z")])).toEqual({ from: 0, to: 0 });
   });
 });
 
