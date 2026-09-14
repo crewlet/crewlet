@@ -1553,14 +1553,21 @@ kbd {
   }
 }
 /* Untransformed, over the viewport. Empty space passes presses through to
-   the viewport beneath; a popup inside takes its own. */
-.canvas-overlay {
+   the viewport beneath; a popup inside takes its own. `.popup-layer` is the
+   same layer for any other surface whose content scrolls or clips, such as a
+   grid that scrolls sideways: a menu given it (`Menu`'s `layer`) is placed
+   from its trigger's rectangle rather than inside the box that would clip it,
+   and follows the trigger when the surface tells the layer it moved
+   (`VIEW_CHANGE_EVENT`). */
+.canvas-overlay,
+.popup-layer {
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
 }
-.canvas-overlay > * {
+.canvas-overlay > *,
+.popup-layer > * {
   pointer-events: auto;
 }
 .canvas-controls {

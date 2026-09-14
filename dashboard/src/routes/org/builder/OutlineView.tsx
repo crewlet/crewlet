@@ -51,6 +51,7 @@ import type { Derived } from "~/protocol/index.ts";
 import { Icon } from "~/ui/Icon.tsx";
 import { Menu } from "~/ui/Menu.tsx";
 import { Avatar, Button } from "~/ui/primitives.tsx";
+import { VIEW_CHANGE_EVENT } from "~/ui/viewport.ts";
 import {
   isExpandable,
   level,
@@ -433,129 +434,142 @@ export function OutlineView() {
     setColumn(col);
   };
 
+  // THE MENUS OPEN OVER THE GRID, NOT INSIDE IT. The grid scrolls sideways
+  // at narrow widths, and a box that scrolls on one axis clips on both, so a
+  // menu drawn under its trigger in the last rows would be cut off and would
+  // scroll the grid down instead of opening. They render in a layer over the
+  // frame instead, placed from the trigger's rectangle, and a sideways scroll
+  // tells the layer so an open menu follows its trigger or closes with it.
+  const [layer, setLayer] = useState<HTMLElement | null>(null);
+  const onScroll = () => layer?.dispatchEvent(new CustomEvent(VIEW_CHANGE_EVENT));
+
   return (
-    <div className="boutline-wrap">
-      <div
-        role="treegrid"
-        aria-label="Organization outline"
-        aria-colcount={COLUMNS.length}
-        aria-readonly={api.readOnly || undefined}
-        className="boutline"
-        onKeyDownCapture={onKeyDownCapture}
-      >
-        <div role="rowgroup" className="boutline-head">
-          <div role="row" className="boutline-row">
-            {COLUMNS.map((title, i) => (
-              <div role="columnheader" aria-colindex={i + 1} key={title}>
-                {i === COLUMNS.length - 1 ? <span className="sr-only">{title}</span> : title}
-              </div>
-            ))}
+    <div className="boutline-frame">
+      <div className="boutline-wrap" onScroll={onScroll}>
+        <div
+          role="treegrid"
+          aria-label="Organization outline"
+          aria-colcount={COLUMNS.length}
+          aria-readonly={api.readOnly || undefined}
+          className="boutline"
+          onKeyDownCapture={onKeyDownCapture}
+        >
+          <div role="rowgroup" className="boutline-head">
+            <div role="row" className="boutline-row">
+              {COLUMNS.map((title, i) => (
+                <div role="columnheader" aria-colindex={i + 1} key={title}>
+                  {i === COLUMNS.length - 1 ? <span className="sr-only">{title}</span> : title}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-        <div role="rowgroup">
-          {rows.map((id) => {
-            const parent = addParentOf(id);
-            if (parent !== null) {
-              const where = parent === COMPANY_KEY ? "the company" : nameOf(structure, parent);
+          <div role="rowgroup">
+            {rows.map((id) => {
+              const parent = addParentOf(id);
+              if (parent !== null) {
+                const where = parent === COMPANY_KEY ? "the company" : nameOf(structure, parent);
+                return (
+                  <div
+                    key={id}
+                    className="boutline-row add"
+                    {...rowProps(id, { label: `Add to ${where}` })}
+                  >
+                    {ADD_BUTTONS.map((b, i) => (
+                      <div
+                        role="gridcell"
+                        aria-colindex={i + 1}
+                        key={b.kind}
+                        className="boutline-add-cell"
+                      >
+                        <span data-cell-widget="">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            icon={b.kind === "unit" ? "folderPlus" : "userPlus"}
+                            tabIndex={stop(id, i + 1) ? 0 : -1}
+                            onClick={() =>
+                              api.openAdd(parent === COMPANY_KEY ? null : parent, b.kind)
+                            }
+                          >
+                            {b.label}
+                          </Button>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              }
+              const view = structure.nodes.get(id);
+              if (!view) return null;
               return (
                 <div
                   key={id}
-                  className="boutline-row add"
-                  {...rowProps(id, { label: `Add to ${where}` })}
+                  className="boutline-row"
+                  {...rowProps(id, { selected: api.selection.key === id })}
                 >
-                  {ADD_BUTTONS.map((b, i) => (
-                    <div
-                      role="gridcell"
-                      aria-colindex={i + 1}
-                      key={b.kind}
-                      className="boutline-add-cell"
-                    >
-                      <span data-cell-widget="">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          icon={b.kind === "unit" ? "folderPlus" : "userPlus"}
-                          tabIndex={stop(id, i + 1) ? 0 : -1}
-                          onClick={() =>
-                            api.openAdd(parent === COMPANY_KEY ? null : parent, b.kind)
-                          }
-                        >
-                          {b.label}
-                        </Button>
-                      </span>
-                    </div>
-                  ))}
+                  <NameCell
+                    api={api}
+                    view={view}
+                    expanded={expanded.has(id)}
+                    expandable={isExpandable(model, id)}
+                    tabStop={stop(id, 1)}
+                    onToggle={() => toggle(id)}
+                    onPress={() => focusAt(id, null)}
+                  />
+                  <Cell col={2} tabStop={stop(id, 2)}>
+                    {view.type === "seat" ? (
+                      <>
+                        <span className="truncate">{seatKindLabel(view)}</span>
+                        <LiveState api={api} view={view} />
+                      </>
+                    ) : view.type === "unit" ? (
+                      <span className="truncate">{view.unitType || "Unit"}</span>
+                    ) : (
+                      "Company"
+                    )}
+                  </Cell>
+                  <Cell col={3} tabStop={stop(id, 3)}>
+                    {view.type === "seat" && (
+                      <span className="mono truncate">{handleLabel(view.handle)}</span>
+                    )}
+                  </Cell>
+                  <Cell col={4} tabStop={stop(id, 4) && !leadWidget(api, view)}>
+                    <LeadOrManager
+                      api={api}
+                      structure={structure}
+                      view={view}
+                      layer={layer}
+                      tabStop={stop(id, 4)}
+                      onOpen={() => markCell(id, 4)}
+                    />
+                  </Cell>
+                  <Cell col={5} tabStop={stop(id, 5)}>
+                    <ProblemCount api={api} nodeKey={id} />
+                  </Cell>
+                  <Cell col={6} tabStop={false} className="boutline-actions">
+                    <span data-cell-widget="">
+                      <Menu
+                        label={`Actions for ${view.name || "the company"}`}
+                        items={nodeMenu(api, view, open)}
+                        layer={layer}
+                        triggerTabIndex={stop(id, 6) ? 0 : -1}
+                        open={menuFor === id}
+                        onOpenChange={(opened) => {
+                          // Only a press reports an opening: the ContextMenu key
+                          // sets `menuFor` itself, and focus goes back to the row.
+                          if (opened) markCell(id, 6);
+                          setMenuFor((was) => (opened ? id : was === id ? null : was));
+                        }}
+                      />
+                    </span>
+                  </Cell>
                 </div>
               );
-            }
-            const view = structure.nodes.get(id);
-            if (!view) return null;
-            return (
-              <div
-                key={id}
-                className="boutline-row"
-                {...rowProps(id, { selected: api.selection.key === id })}
-              >
-                <NameCell
-                  api={api}
-                  view={view}
-                  expanded={expanded.has(id)}
-                  expandable={isExpandable(model, id)}
-                  tabStop={stop(id, 1)}
-                  onToggle={() => toggle(id)}
-                  onPress={() => focusAt(id, null)}
-                />
-                <Cell col={2} tabStop={stop(id, 2)}>
-                  {view.type === "seat" ? (
-                    <>
-                      <span className="truncate">{seatKindLabel(view)}</span>
-                      <LiveState api={api} view={view} />
-                    </>
-                  ) : view.type === "unit" ? (
-                    <span className="truncate">{view.unitType || "Unit"}</span>
-                  ) : (
-                    "Company"
-                  )}
-                </Cell>
-                <Cell col={3} tabStop={stop(id, 3)}>
-                  {view.type === "seat" && (
-                    <span className="mono truncate">{handleLabel(view.handle)}</span>
-                  )}
-                </Cell>
-                <Cell col={4} tabStop={stop(id, 4) && !leadWidget(api, view)}>
-                  <LeadOrManager
-                    api={api}
-                    structure={structure}
-                    view={view}
-                    tabStop={stop(id, 4)}
-                    onOpen={() => markCell(id, 4)}
-                  />
-                </Cell>
-                <Cell col={5} tabStop={stop(id, 5)}>
-                  <ProblemCount api={api} nodeKey={id} />
-                </Cell>
-                <Cell col={6} tabStop={false} className="boutline-actions">
-                  <span data-cell-widget="">
-                    <Menu
-                      label={`Actions for ${view.name || "the company"}`}
-                      items={nodeMenu(api, view, open)}
-                      align="end"
-                      triggerTabIndex={stop(id, 6) ? 0 : -1}
-                      open={menuFor === id}
-                      onOpenChange={(opened) => {
-                        // Only a press reports an opening: the ContextMenu key
-                        // sets `menuFor` itself, and focus goes back to the row.
-                        if (opened) markCell(id, 6);
-                        setMenuFor((was) => (opened ? id : was === id ? null : was));
-                      }}
-                    />
-                  </span>
-                </Cell>
-              </div>
-            );
-          })}
+            })}
+          </div>
         </div>
       </div>
+      <div className="popup-layer" ref={setLayer} />
     </div>
   );
 }
@@ -653,12 +667,15 @@ function LeadOrManager({
   api,
   structure,
   view,
+  layer,
   tabStop,
   onOpen,
 }: {
   api: BuilderApi;
   structure: Structure;
   view: NodeView;
+  /** The layer the lead choice opens in (see `OutlineView`). */
+  layer: HTMLElement | null;
   tabStop: boolean;
   /** Says a press opened the lead choice, so the tab stop follows the focus into this cell. */
   onOpen: () => void;
@@ -673,6 +690,7 @@ function LeadOrManager({
         label={`Lead of ${unit.name}`}
         icon="crown"
         items={leadMenu(api, structure, unit)}
+        layer={layer}
         triggerTabIndex={tabStop ? 0 : -1}
         onOpenChange={(opened) => opened && onOpen()}
       >

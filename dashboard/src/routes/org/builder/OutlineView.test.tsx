@@ -247,6 +247,32 @@ describe("keys", () => {
     expect(tabStops()).toEqual([document.activeElement]);
   });
 
+  test("a row's menus open over the grid, outside the box that scrolls, and follow its scroll", () => {
+    mount();
+    const wrap = document.querySelector<HTMLElement>(".boutline-wrap")!;
+    // A box that scrolls sideways clips on both axes, so a menu drawn inside
+    // it under a trigger in the last rows would be cut off.
+    const actions = within(rowOf(unitKey("Sales"))).getByRole("button", {
+      name: "Actions for Sales",
+    });
+    fireEvent.click(actions);
+    const menu = screen.getByRole("menu", { name: "Actions for Sales" });
+    expect(wrap.contains(menu)).toBe(false);
+    expect(menu.closest(".popup-layer")).not.toBeNull();
+    // Scrolled sideways until its trigger has left the frame, the menu closes
+    // rather than float beside a row nobody can see.
+    actions.getBoundingClientRect = () =>
+      DOMRect.fromRect({ x: 5000, y: 0, width: 24, height: 24 });
+    fireEvent.scroll(wrap);
+    expect(screen.queryByRole("menu")).toBeNull();
+
+    fireEvent.click(
+      within(rowOf(unitKey("Engineering"))).getByRole("button", { name: "VP Engineering" }),
+    );
+    const lead = screen.getByRole("menu", { name: "Lead of Engineering" });
+    expect(wrap.contains(lead)).toBe(false);
+  });
+
   test("an add row's buttons ask for their kind under their parent", () => {
     const { spies } = mount();
     const add = rowOf(`add:${unitKey("Platform")}`);

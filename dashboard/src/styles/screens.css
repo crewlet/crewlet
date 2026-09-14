@@ -790,8 +790,14 @@
    a table (a table row cannot be a focusable treegrid row with a level). The
    grid is at least three chart cards wide and scrolls sideways in its own
    box below that, so a phone-width screen keeps every column readable and
-   the page never scrolls sideways. */
+   the page never scrolls sideways. A box that scrolls on one axis clips on
+   both, so the rows' menus open in a `.popup-layer` over the frame rather
+   than under their triggers, where the last rows' menus would be cut off
+   and scroll the grid down. */
 
+.boutline-frame {
+  position: relative;
+}
 .boutline-wrap {
   overflow-x: auto;
   overscroll-behavior-x: contain;

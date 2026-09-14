@@ -1161,8 +1161,12 @@ to.
   hidden from assistive technology, takes no focus at all and hands the press
   to the row. Navigation keys are the grid's before they are the control's, so
   ArrowDown on a menu button moves to the next row rather than opening the
-  menu. An inline add row closes each unit's rows and the company's while the
-  draft can change.
+  menu. The grid scrolls sideways in its own box at narrow widths, and a box
+  that scrolls on one axis clips on both, so a row's menus open in a
+  `.popup-layer` over the grid, placed from their trigger, and follow a
+  sideways scroll (or close once their trigger has left the frame) rather than
+  being cut off under the last rows. An inline add row closes each unit's rows
+  and the company's while the draft can change.
   Alt+Up and Alt+Down move a row among its siblings of the same kind, past
   the row drawn beside it (a root seat the engine placed in a unit by its
   reference is drawn in that unit, so the root seats step over it rather than
