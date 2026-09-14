@@ -51,6 +51,8 @@ func Run(t *testing.T, newDB func(t *testing.T) *store.DB) {
 		{"FailureFlag", testFailureFlag},
 		{"TraceIsOldestFirst", testTrace},
 		{"TraceKeepsTheOldestRowsAtTheCap", testTraceCap},
+		{"TurnClosingAnswersTheEndAOneEndedReadLoses", testTurnClosing},
+		{"ListReadsAreNeverNil", testListReadsAreNeverNil},
 		{"ByID", testByID},
 		{"ReadFloor", testReadFloor},
 		{"RetentionSweep", testRetention},
@@ -491,6 +493,112 @@ func testTraceCap(t *testing.T, db *store.DB) {
 	}
 	if got[0].ID != "s"+fourDigits(0) {
 		t.Fatalf("trace starts at %q; the cap must keep the ROOT, not the tail", got[0].ID)
+	}
+}
+
+// testTurnClosing: a turn read is capped and ordered OLDEST first, so what a
+// long turn loses is its ending — and the ending is where the two records a
+// reader takes the outcome, the wall clock and the plan summary from live. A
+// view that shows the opening and cannot say how the turn ended looks exactly
+// like a turn that never finished, so the ending is readable on its own.
+func testTurnClosing(t *testing.T, db *store.DB) {
+	log := db.Events()
+	over := store.MaxTurnEvents + 10
+	for i := range over {
+		write(t, log, store.EventRecord{
+			ID:       "c" + fourDigits(i),
+			Type:     "agent_phase_completed",
+			Source:   "pm",
+			Time:     base.Add(time.Duration(i) * time.Millisecond),
+			Category: "lifecycle",
+			Payload:  []byte(`{"turn_id":"tn-long"}`),
+		})
+	}
+
+	// The head read keeps the OPENING, as its own doc says.
+	head, err := log.Turn(t.Context(), "tn-long")
+	if err != nil {
+		t.Fatalf("turn: %v", err)
+	}
+	if len(head) != store.MaxTurnEvents {
+		t.Fatalf("turn returned %d rows, want the cap %d", len(head), store.MaxTurnEvents)
+	}
+	if head[len(head)-1].ID == "c"+fourDigits(over-1) {
+		t.Fatal("the capped read reached the turn's last row; this case is " +
+			"not exercising a cut at all")
+	}
+
+	got, err := log.TurnClosing(t.Context(), "tn-long", 5)
+	if err != nil {
+		t.Fatalf("turn closing: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("closing returned %d rows, want 5", len(got))
+	}
+	// THE NEWEST rows, which is the whole point — and OLDEST FIRST among
+	// themselves, so a caller appends them after the head rather than
+	// reversing a list whose order it was not told about.
+	if got[len(got)-1].ID != "c"+fourDigits(over-1) {
+		t.Errorf("closing ends at %q, want the turn's own last row", got[len(got)-1].ID)
+	}
+	if got[0].ID != "c"+fourDigits(over-5) {
+		t.Errorf("closing starts at %q; the rows are not oldest-first among "+
+			"themselves", got[0].ID)
+	}
+	// THE PAYLOAD RIDES ALONG. Without it the recovered ending is a row with
+	// no outcome, no duration and no summary on it — which is every field the
+	// recovery exists for.
+	if len(got[len(got)-1].Payload) == 0 {
+		t.Error("the closing rows carry no payload, so the records a reader " +
+			"came for are empty")
+	}
+	// A limit of zero asks for nothing rather than for everything.
+	none, err := log.TurnClosing(t.Context(), "tn-long", 0)
+	if err != nil {
+		t.Fatalf("turn closing, no limit: %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("a limit of 0 returned %d rows", len(none))
+	}
+	// AND IT IS ALLOCATED, which `len` cannot tell you. [store.EventLog]
+	// states that every list read here answers a non-nil slice, naming one
+	// deliberate exception — nil marshals as `null` where empty marshals as
+	// `[]`, and a JSON surface forwarding this would hand a client the shape
+	// it crashes on. A second silent exception is how that contract stops
+	// being true.
+	if none == nil {
+		t.Error("a limit of 0 answered nil, which serializes as null rather than []")
+	}
+}
+
+// EVERY LIST READ ANSWERS AN ALLOCATED SLICE, on the empty case too.
+//
+// The distinction exists in exactly one place — the JSON — and that is the
+// place all of these end up. It is invisible to `len`, so nothing catches a
+// read that quietly goes back to `var out []T` except a case that asks.
+func testListReadsAreNeverNil(t *testing.T, db *store.DB) {
+	log := db.Events()
+	ctx := t.Context()
+
+	if got, err := log.PhaseTokens(ctx, store.PhaseTokenQuery{SinceDays: 1}); err != nil {
+		t.Fatalf("phase tokens: %v", err)
+	} else if got == nil {
+		t.Error("PhaseTokens answered nil on an empty window, which serializes as null")
+	}
+	if got, err := log.Turn(ctx, "tn-nothing-wrote-this"); err != nil {
+		t.Fatalf("turn: %v", err)
+	} else if got == nil {
+		t.Error("Turn answered nil for a turn with no rows, which serializes as null")
+	}
+	if got, err := log.Trace(ctx, "tr-nothing-shares-this"); err != nil {
+		t.Fatalf("trace: %v", err)
+	} else if got == nil {
+		t.Error("Trace answered nil for a trace with no rows, which serializes as null")
+	}
+	if got, err := log.TurnClosing(ctx, "tn-nothing-wrote-this", 5); err != nil {
+		t.Fatalf("turn closing: %v", err)
+	} else if got == nil {
+		t.Error("TurnClosing answered nil for a turn with no rows, which serializes as null")
 	}
 }
 

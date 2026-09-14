@@ -12,6 +12,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -209,26 +210,223 @@ export function PhaseTag({ phase, children }: { phase: string; children?: ReactN
   );
 }
 
+/**
+ * One tab stop for a whole group, and the arrow keys that move within it.
+ *
+ * BOTH `Segmented` and `Tabs` need it, and it is the half each of them was
+ * missing. A radio group and a tab list share one keyboard contract — the
+ * group is ONE stop in the page's tab order, arrows move within it, Home and
+ * End jump to the ends — and a group of plain buttons has the opposite
+ * behaviour: every option is its own tab stop, and arrow keys do nothing. On
+ * the density control in the shell that is three extra stops before a
+ * keyboard reader reaches the page content, on every screen.
+ *
+ * ARROWS MOVE FOCUS AND COMMIT NOTHING, which is what the pattern calls
+ * MANUAL activation, and it is the default here because of what these groups
+ * are wired to. Seven of the nine sites drive a `useParam`: five push a
+ * history entry and every one of them re-runs the screen's query, which
+ * `socket.query` mints fresh with no cache, no dedupe and no coalescing. So
+ * under selection-follows-focus, arrowing from the first option of Seat's tab
+ * strip to the last is four queries nobody asked for and four history entries
+ * a reader then has to press Back through — and the reader most likely to
+ * arrow through every option to hear what is there is the one using a screen
+ * reader. That is exactly the trade the pattern names: selection follows
+ * focus only while the result is displayed without noticeable latency and is
+ * not costly to undo, and neither clause holds for a query behind a push.
+ *
+ * `automatic` is for a group whose options cost nothing — the shell's theme
+ * and density, which write `localStorage` and a `data-` attribute — where
+ * selection following focus is the better control and there is nothing to
+ * undo.
+ *
+ * ENTER AND SPACE ARE NOT HANDLED HERE, and their absence is the design
+ * rather than the gap it looks like: every option is a real `<button>`, so
+ * the browser's own activation fires the click this already listens for. A
+ * second handler would commit the same option twice on one keypress.
+ */
+function useRovingGroup<T extends string>(
+  values: readonly T[],
+  value: T,
+  onChange: (value: T) => void,
+  activate: "manual" | "automatic",
+) {
+  const box = useRef<HTMLDivElement>(null);
+
+  // WHERE THE GROUP'S ONE TAB STOP IS, which stops being the same question as
+  // which option is selected the moment arrows stop selecting: under manual
+  // activation a reader stands on an option they have not chosen yet, and the
+  // tab stop has to be under their feet or tabbing out and back drops them
+  // somewhere else and loses the place they were holding.
+  //
+  // BOTH HALVES IN ONE STATE, the stop and the `value` it was seeded against.
+  // The second used to be a ref, and a ref is the one thing that must not
+  // hold it: React may DISCARD a render attempt and replay it, and a ref
+  // write survives that discard while the state update queued beside it does
+  // not. The pair then disagrees permanently — `seen` already says it has
+  // observed the new value, so the guard below never fires again, and the tab
+  // stop stays on an option nothing selected until `value` changes a second
+  // time. Kept together, a discarded attempt reverts both and the replay
+  // re-runs the guard.
+  const [held, setHeld] = useState<{ stop: T; seen: T }>({ stop: value, seen: value });
+
+  // An outside change to `value` retires whatever the arrows were pointing
+  // at — a click elsewhere, the browser's Back button, a pasted URL. Adjusted
+  // during render rather than from an effect, because an effect commits one
+  // render first, and that render is the one a reader tabs into. Setting a
+  // component's own state during its own render is what React documents for
+  // this, and it is not the impurity a ref write is.
+  if (held.seen !== value) setHeld({ stop: value, seen: value });
+
+  // WHERE THE STOP LANDS WHEN THE OBVIOUS ANSWER IS NOT IN THE GROUP. Both
+  // fallbacks are load-bearing and the second was missing: `held` leaves the
+  // set when a caller narrows `options`, and `value` is outside it whenever a
+  // URL carries a parameter this build does not know — `?lens=bogus` is a
+  // link from an older build, a typo, or a renamed option. With neither in
+  // `values`, every option rendered `tabIndex={-1}` and the group left the
+  // page's tab order altogether: unreachable by keyboard, which is worse than
+  // the plain buttons this replaced, since those were each a stop of their
+  // own. The first option is the honest landing place — nothing is checked,
+  // so nothing else has a claim.
+  const stop = values.includes(held.stop) ? held.stop : values.includes(value) ? value : values[0];
+
+  const step = (from: number, by: number) => {
+    // WRAPS, which is the pattern's own rule for both roles: a reader holding
+    // the arrow key gets the whole group rather than stopping at an end they
+    // cannot see.
+    const next = values[(from + by + values.length) % values.length];
+    if (next === undefined) return;
+    // `seen` is untouched: it means "the last `value` this group observed",
+    // and arrowing does not observe a new one.
+    setHeld((h) => ({ ...h, stop: next }));
+    if (activate === "automatic" && next !== value) onChange(next);
+    // Focus is MOVED rather than requested, because `tabIndex` decides where
+    // a LATER Tab lands and says nothing about where the browser's focus is
+    // now. Read from the DOM rather than a ref array: the buttons are this
+    // hook's own `[data-roving]` children and there is exactly one list of
+    // them, so a ref array would be a second copy to keep in step.
+    const buttons = box.current?.querySelectorAll<HTMLElement>("[data-roving]");
+    buttons?.[values.indexOf(next)]?.focus();
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // `stop` is undefined only for a group with no options at all, where
+    // `step` returns before it uses this.
+    const at = stop === undefined ? -1 : values.indexOf(stop);
+    // BOTH AXES. These render as a horizontal row today, but a group that
+    // wraps to two lines is the same control and a reader pressing Down on
+    // it is asking for the next option either way.
+    switch (e.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        step(at, 1);
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        step(at, -1);
+        break;
+      case "Home":
+        step(at, -at);
+        break;
+      case "End":
+        step(at, values.length - 1 - at);
+        break;
+      default:
+        // Everything else is the browser's — Tab above all, which is how a
+        // reader LEAVES the group, and Enter and Space, which are how the
+        // focused button commits.
+        return;
+    }
+    // Only for a key this handled: the arrows scroll the page otherwise, and
+    // swallowing a key without acting on it takes a gesture away and puts
+    // nothing in its place.
+    e.preventDefault();
+  };
+
+  return { box, onKeyDown, stop };
+}
+
+/**
+ * One of N choices, drawn as a joined row.
+ *
+ * A RADIO GROUP, not a tab list. It used to declare `role="tablist"` with
+ * `role="tab"` children, and not one of its call sites is a tab widget: they
+ * pick a theme, a density, a grouping, a scope, a window and a kind. A tab
+ * controls a `tabpanel` it is adjacent to and labels; these narrow, regroup or
+ * re-scope what is already on the screen, and several of them sit in a screen
+ * head with the content they affect hundreds of pixels below. Announcing them
+ * as tabs promises a reader a panel relationship that does not exist, which is
+ * a mis-role rather than a missing handler — and it would not have been fixed
+ * by adding the keyboard behaviour alone.
+ */
 export function Segmented<T extends string>({
   value,
   options,
   onChange,
   size,
   ariaLabel,
+  activate = "manual",
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; title?: string }[];
   onChange: (value: T) => void;
   size?: "sm";
   ariaLabel: string;
+  /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
+  activate?: "manual" | "automatic";
 }) {
+  const { box, onKeyDown, stop } = useRovingGroup(
+    options.map((o) => o.value),
+    value,
+    onChange,
+    activate,
+  );
+  // THE ONE THING MANUAL ACTIVATION OWES A READER: saying so.
+  //
+  // A radio group's learned contract is that the arrows CHOOSE — native radios
+  // do, and the authoring practices describe no manual variant of the pattern.
+  // The deviation is deliberate and measured (see [useRovingGroup]), and every
+  // announcement along the way is honest: a reader arrowing onto an option
+  // hears it is not checked, which is true. What they were never told is which
+  // key would check it, so a reader who pressed Right, heard "not checked" and
+  // moved on took the group's silence for a control that ignored them.
+  //
+  // A description rather than a different role: the alternatives that would
+  // make the arrows conform — a toolbar of pressed buttons, a plain group with
+  // `aria-current` — each drop either the mutual exclusivity that says these
+  // are one choice or the "2 of 3" that says how many there are. Losing a true
+  // semantic to gain a convention is the wrong trade when a sentence closes
+  // the gap. Announced on entry to the group, and only where the arrows do not
+  // already choose.
+  const hintID = useId();
+  const manual = activate !== "automatic";
   return (
-    <div className={cx("segmented", size === "sm" && "sm")} role="tablist" aria-label={ariaLabel}>
+    <div
+      ref={box}
+      className={cx("segmented", size === "sm" && "sm")}
+      role="radiogroup"
+      aria-label={ariaLabel}
+      aria-describedby={manual ? hintID : undefined}
+      onKeyDown={onKeyDown}
+    >
+      {manual && (
+        <span id={hintID} className="sr-only">
+          Arrow keys move between options; press Enter or Space to choose one.
+        </span>
+      )}
       {options.map((o) => (
         <button
           key={o.value}
-          role="tab"
-          aria-selected={o.value === value}
+          type="button"
+          data-roving
+          role="radio"
+          aria-checked={o.value === value}
+          // The GROUP is one tab stop. Without this every option is its own,
+          // and the shell's two controls alone put six of them in front of
+          // the page on every screen. It sits on the option the arrows are
+          // HOLDING rather than the one that is checked, because under manual
+          // activation those are different options for as long as a reader is
+          // still deciding.
+          tabIndex={o.value === stop ? 0 : -1}
           title={o.title}
           onClick={() => onChange(o.value)}
         >
@@ -240,32 +438,102 @@ export function Segmented<T extends string>({
   );
 }
 
+/**
+ * A tab list, and the one control here that genuinely is one: its options sit
+ * directly above the panel each of them shows.
+ *
+ * WHICH IS ONLY TRUE IF THE PANEL SAYS SO. The role was declared and the
+ * relationship was not: no rendered element carried `role="tabpanel"`, nothing
+ * was referenced by `aria-controls`, and the switched content was an ordinary
+ * run of siblings after the strip. A screen reader could find the tabs and
+ * then had no way to reach what the selected one controlled — pressing Tab
+ * from a freshly chosen tab left the widget and landed on whatever came next
+ * in the DOM, so choosing a tab moved the reader FURTHER from the content they
+ * had just chosen.
+ *
+ * So the panel is part of this component rather than the caller's problem:
+ * pass the content as `children` and both ids, the `aria-controls` and the
+ * `aria-labelledby` back-reference are minted here. The alternative — a
+ * documented id convention each caller follows — is a convention each caller
+ * can follow halfway, and a half-wired widget is indistinguishable from a
+ * whole one at a glance.
+ */
 export function Tabs<T extends string>({
   value,
   options,
   onChange,
   ariaLabel,
+  activate = "manual",
+  children,
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; count?: number | null }[];
   onChange: (value: T) => void;
   ariaLabel: string;
+  /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
+  activate?: "manual" | "automatic";
+  /**
+   * What the selected tab shows. Passing it is what makes this a tab WIDGET
+   * rather than a row of buttons wearing the tab role — see the note on the
+   * component. Omit it only for a strip whose content genuinely cannot be one
+   * element.
+   */
+  children?: ReactNode;
 }) {
+  const { box, onKeyDown, stop } = useRovingGroup(
+    options.map((o) => o.value),
+    value,
+    onChange,
+    activate,
+  );
+  // THE COMPONENT MINTS BOTH IDS, rather than taking a base from the caller.
+  // The relationship is the half that was missing, and a caller asked to
+  // supply ids is a caller who can wire one end and forget the other — which
+  // reads exactly like a complete widget and is not one.
+  const base = useId();
+  const tabID = `${base}-tab`;
+  const panelID = `${base}-panel`;
   return (
-    <div className="tabs" role="tablist" aria-label={ariaLabel}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          role="tab"
-          aria-selected={o.value === value}
-          onClick={() => onChange(o.value)}
-        >
-          {o.icon && <Icon name={o.icon} size="sm" />}
-          {o.label}
-          {o.count != null && <span className="count-chip">{o.count}</span>}
-        </button>
-      ))}
-    </div>
+    <>
+      <div ref={box} className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
+        {options.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            data-roving
+            role="tab"
+            id={o.value === value ? tabID : undefined}
+            // ONLY ON THE SELECTED TAB, because only its panel is rendered.
+            // The others control nothing that exists, and an `aria-controls`
+            // pointing at an absent id is worse than an absent one: a reader
+            // is offered a jump that goes nowhere.
+            aria-controls={o.value === value && children !== undefined ? panelID : undefined}
+            aria-selected={o.value === value}
+            tabIndex={o.value === stop ? 0 : -1}
+            onClick={() => onChange(o.value)}
+          >
+            {o.icon && <Icon name={o.icon} size="sm" />}
+            {o.label}
+            {o.count != null && <span className="count-chip">{o.count}</span>}
+          </button>
+        ))}
+      </div>
+      {children !== undefined && (
+        // A SIBLING OF THE STRIP, not a child of it. Both are flex children of
+        // the screen's own column, which is where their spacing comes from —
+        // nesting the panel inside the strip's box would inherit the strip's
+        // row layout instead.
+        //
+        // FOCUSABLE, which is the point of the relationship rather than a
+        // detail of it: a reader who selects a tab presses Tab next, and
+        // without a stop here focus leaves the widget entirely and lands on
+        // whatever follows in the DOM — so selecting a tab moved them further
+        // from the content they selected.
+        <div className="tabpanel" role="tabpanel" id={panelID} aria-labelledby={tabID} tabIndex={0}>
+          {children}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -397,20 +665,50 @@ export function Avatar({
 // Measure
 // ---------------------------------------------------------------------------
 
+/**
+ * How full something is, drawn as a bar.
+ *
+ * Two things about the ARIA here, both of which it got wrong.
+ *
+ * A `role="meter"` with no accessible name announces as "meter, 120000" and
+ * nothing else — a number with no subject, on a screen that has several. The
+ * visible legend is not the name: `label` is a ReactNode, several call sites
+ * pass a percentage sentence rather than a noun, and two sites pass none at
+ * all because the meter sits in a table cell whose column heading does the
+ * naming for a sighted reader. So the name is a required prop of its own,
+ * exactly as it is on [Segmented], [Tabs] and Select.
+ *
+ * And `aria-valuenow` may not exceed `aria-valuemax`. The fill is clamped —
+ * a bar cannot be 130% long — but the value was not, so a budget LOWERED
+ * under a counter that has already spent past it (which is the whole reason
+ * an operator opens this screen) published an out-of-range value that a
+ * screen reader is entitled to render as anything at all. The clamp goes on
+ * the value and the true figures go in `aria-valuetext`, so the overage is
+ * reported rather than hidden.
+ */
 export function Meter({
   used,
   max,
   label,
+  ariaLabel,
   right,
   tone,
 }: {
   used: number;
   max: number;
   label?: ReactNode;
+  /** What this meter measures, as a bare noun phrase — "Company budget", not
+      "94% used". The accessible name; see the note above. */
+  ariaLabel: string;
   right?: ReactNode;
   tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
 }) {
-  const pct = max > 0 ? Math.min(100, (used / max) * 100) : 0;
+  const scaled = max > 0;
+  // CLAMPED AT BOTH ENDS, like `aria-valuenow` below. Only the top used to
+  // be, so a negative reading rendered `width: -5%` — which CSSOM drops,
+  // leaving a bar that silently keeps its previous width rather than reading
+  // empty. The doc above promises clamping; this is the half that was not.
+  const pct = scaled ? Math.max(0, Math.min(100, (used / max) * 100)) : 0;
   // The tone is DERIVED from the fill unless the caller overrides it, so a bar
   // that is nearly full says so without every call site remembering to.
   const auto = pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
@@ -424,10 +722,21 @@ export function Meter({
       )}
       <div
         className="meter-track"
-        role="meter"
-        aria-valuenow={used}
-        aria-valuemin={0}
-        aria-valuemax={max}
+        // NO SCALE, NO METER. `aria-valuemax` defaults to 100 when it is
+        // absent or not greater than the minimum, so a meter with an
+        // unknown ceiling would announce "0 out of 100" — a confident claim
+        // that nothing has been spent, where the truth is that nobody has
+        // said what the limit is. Drawn as decoration instead; the legend
+        // beside it carries whatever is actually known.
+        role={scaled ? "meter" : undefined}
+        aria-label={scaled ? ariaLabel : undefined}
+        aria-valuenow={scaled ? Math.max(0, Math.min(used, max)) : undefined}
+        aria-valuemin={scaled ? 0 : undefined}
+        aria-valuemax={scaled ? max : undefined}
+        // THE TRUE FIGURES, past the clamp. A meter reading "100%" when the
+        // counter is at 130% of a budget somebody just lowered is the one
+        // state where the exact numbers are the whole message.
+        aria-valuetext={scaled ? `${used} of ${max}` : undefined}
       >
         <div className="meter-fill" data-tone={tone ?? auto} style={{ width: `${pct}%` }} />
       </div>
@@ -579,21 +888,27 @@ export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
  * mounted. Focus is the reader saying which one; everywhere else ⌘A keeps
  * meaning what it has always meant.
  */
-type CodeProps = { children: ReactNode; plain?: boolean } & (
-  | {
-      /** Take ⌘A / Ctrl+A while focused, and take focus. */
-      selectable: true;
-      /**
-       * What this block is. REQUIRED with `selectable`, not optional beside
-       * it: a focusable `role="region"` with no accessible name is a tab stop
-       * a screen reader announces as nothing, which is worse than the plain
-       * block it replaced. The union is what stops the two drifting apart —
-       * a typed prop cannot be forgotten.
-       */
-      label: string;
-    }
-  | { selectable?: false; label?: never }
-);
+interface CodeProps {
+  children: ReactNode;
+  plain?: boolean;
+  /** Take ⌘A / Ctrl+A while focused. */
+  selectable?: boolean;
+  /**
+   * What this block is.
+   *
+   * REQUIRED ON EVERY BLOCK, not only on a selectable one, and that is the
+   * defect this replaced. `.code` is `overflow: auto` with a `max-height`, so
+   * ANY block taller than 460px is a scroll container — and in Chrome and
+   * Safari a scroll container is only reachable by keyboard if something
+   * makes it focusable. The `selectable` ones were, because ⌘A needed it; the
+   * others were not, and they are the tall ones: a phase card's verbatim
+   * system prompt is tens of kilobytes, and a keyboard reader could not
+   * scroll it at all. Taking focus without a name is the other half of that
+   * trade — a tab stop a screen reader announces as nothing — so the two
+   * arrive together or neither does.
+   */
+  label: string;
+}
 
 /**
  * A labelled section the reader opens.
@@ -649,6 +964,36 @@ export function Disclosure({
 
 export function Code({ children, plain, selectable, label }: CodeProps) {
   const box = useRef<HTMLPreElement>(null);
+  // WHETHER THIS BLOCK ACTUALLY SCROLLS, measured rather than assumed.
+  //
+  // A tab stop on every code block would put one in front of each of a phase
+  // card's tool arguments — dozens on a long round — and most of them are
+  // three lines that never overflow. So the stop is given to the blocks that
+  // need it, which is a fact about the rendered box and not about any prop:
+  // the same content overflows or does not depending on the viewport. Firefox
+  // does this natively and Chrome and Safari do not, hence measuring.
+  const [scrolls, setScrolls] = useState(false);
+  useEffect(() => {
+    const node = box.current;
+    if (!node) return;
+    // BOTH AXES: `plain` sets `white-space: pre`, so a wide line scrolls
+    // sideways in a box that is not tall enough to scroll at all.
+    const measure = () =>
+      setScrolls(node.scrollHeight > node.clientHeight || node.scrollWidth > node.clientWidth);
+    measure();
+    // The box is resized by the window, by a Disclosure opening above it and
+    // by its own content arriving on a streamed frame, and none of those is
+    // a render of THIS component. ResizeObserver is the only one of the
+    // three it can see.
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(node);
+    return () => watch.disconnect();
+  }, [children, plain]);
+
+  // Focusable when it owns ⌘A, and when it is a scroll container a reader
+  // would otherwise be unable to reach.
+  const focusable = Boolean(selectable) || scrolls;
 
   const onKeyDown = (e: KeyboardEvent<HTMLPreElement>) => {
     // THE PHYSICAL KEY FIRST. Browsers resolve select-all from the key's
@@ -679,14 +1024,166 @@ export function Code({ children, plain, selectable, label }: CodeProps) {
     <pre
       ref={box}
       className={cx("code", plain && "plain", selectable && "selectable")}
-      tabIndex={selectable ? 0 : undefined}
-      role={selectable ? "region" : undefined}
-      aria-label={selectable ? label : undefined}
+      tabIndex={focusable ? 0 : undefined}
+      role={focusable ? "region" : undefined}
+      aria-label={focusable ? label : undefined}
       onKeyDown={selectable ? onKeyDown : undefined}
     >
       {children}
     </pre>
   );
+}
+
+/**
+ * How long a confirmation holds before the control offers its action again.
+ *
+ * Long enough to be read at a glance, short enough that a reader who wants it
+ * twice is not waiting on it. A REFUSAL is not on this clock — see the click
+ * handler below.
+ */
+const CONFIRMED_HOLD_MS = 2000;
+
+/**
+ * The half a Copy and a Download button are the same: do a thing that either
+ * lands or does not, say which, and settle back so the label is never a stale
+ * claim.
+ *
+ * Extracted rather than written twice. The two controls sit SIDE BY SIDE in
+ * the same header, so any difference between them — how long the
+ * confirmation holds, whether a refusal is announced at all, whether the
+ * status text leaks into the accessible name — is a visible inconsistency
+ * rather than a private detail, and a second copy is exactly how one of them
+ * acquires it. The engine has the same lesson written down twice, in
+ * `internal/textcut` and `internal/api/httpjson`.
+ *
+ * `run` returns whether it landed. It may be async — the Clipboard API is —
+ * and it must not throw: a refusal is a `false`, because the caller is the
+ * only frame that knows what a refusal MEANS to say about.
+ */
+function FeedbackButton({
+  run,
+  icon,
+  label,
+  doneLabel,
+  failedLabel,
+  doneSaid,
+  failedSaid,
+  title,
+  variant,
+  size = "sm",
+}: {
+  run: () => boolean | Promise<boolean>;
+  icon: IconName;
+  /** What the control offers, at rest. */
+  label: string;
+  /** The same control once it worked — short, because it is a button. */
+  doneLabel: string;
+  /** …and once it did not. */
+  failedLabel: string;
+  /** What a screen reader is told on success. Specific, because the icon
+   *  swap is the only signal a sighted reader gets and a screen reader gets
+   *  none of it. */
+  doneSaid: string;
+  /** What a screen reader is told on failure, and the button's `title` while
+   *  it is in that state: the reason replaces the offer, since the offer is
+   *  the thing that just did not happen. */
+  failedSaid: string;
+  title?: string;
+  variant?: "default" | "ghost";
+  size?: "md" | "sm";
+}) {
+  // THE ATTEMPT TRAVELS WITH THE STATE, because an identical outcome twice
+  // running is not a DOM change and a live region announces changes only. A
+  // second refusal left a reader who cannot see the button with silence — and
+  // a refusal now holds rather than settling back, so there is no reset to
+  // make the third one audible either. Keyed on the count, the status node is
+  // REPLACED rather than re-rendered, which is a change.
+  const [{ state, attempt }, setOutcome] = useState<{
+    state: "idle" | "done" | "failed";
+    attempt: number;
+  }>({ state: "idle", attempt: 0 });
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const live = useRef(true);
+
+  // The timeout outlives the component otherwise, and a screen left during
+  // the seconds after a click sets state on something unmounted. Set on the
+  // way IN as well as cleared on the way out, because StrictMode mounts,
+  // unmounts and mounts again, and a flag only ever cleared stays cleared.
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+      clearTimeout(timer.current);
+    };
+  }, []);
+
+  const onClick = useCallback(() => {
+    void Promise.resolve(run()).then((ok) => {
+      // The answer can arrive after the screen is gone: a clipboard write
+      // waits on a permission prompt the reader may never answer. The
+      // cleanup above has already run by then, so arming a timer here would
+      // arm the one thing nothing clears.
+      if (!live.current) return;
+      setOutcome((prior) => ({ state: ok ? "done" : "failed", attempt: prior.attempt + 1 }));
+      clearTimeout(timer.current);
+      // A CONFIRMATION SETTLES BACK. A REFUSAL DOES NOT.
+      //
+      // Both used to, on one constant, and that put the failure back into the
+      // state this control exists to leave: three seconds after a download
+      // the reader is looking at the browser's shelf and not at the button,
+      // and a button that has reverted to offering its action is
+      // indistinguishable from one that was never pressed. So a refusal holds
+      // until the next click — which is the gesture a reader who wants to
+      // retry makes anyway — and only the confirmation is on a clock.
+      if (ok) {
+        timer.current = setTimeout(
+          () => setOutcome((prior) => ({ ...prior, state: "idle" })),
+          CONFIRMED_HOLD_MS,
+        );
+      }
+    });
+  }, [run]);
+
+  const said = state === "done" ? doneSaid : state === "failed" ? failedSaid : "";
+
+  return (
+    <span className="row gap-1">
+      <Button
+        size={size}
+        variant={variant}
+        icon={state === "done" ? "check" : state === "failed" ? "alert" : icon}
+        onClick={onClick}
+        title={state === "failed" ? failedSaid : title}
+      >
+        {state === "done" ? doneLabel : state === "failed" ? failedLabel : label}
+      </Button>
+      {/* Announced, not just drawn: the icon swap is the only signal a
+          sighted reader gets, and a screen reader gets none of it.
+
+          A SIBLING of the button, never a child. A button's accessible name
+          is computed from its contents, so inside it this named the control
+          "Copied copied to the clipboard" — the status text becoming part of
+          what the button claims to be. */}
+      <span className="sr-only" role="status">
+        <span key={attempt}>{said}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The text, or a THUNK that produces it.
+ *
+ * The thunk is not a convenience: on a live turn the thing worth copying is
+ * assembled from every phase and every streamed frame, and `agents` is pushed
+ * twice per tool round — so a string prop means a full `JSON.stringify` of
+ * the whole turn on every push, for a button nobody has clicked. Resolved on
+ * click, it costs nothing until it is asked for.
+ */
+type Text = string | (() => string);
+
+function resolve(text: Text): string {
+  return typeof text === "function" ? text() : text;
 }
 
 /**
@@ -714,65 +1211,92 @@ export function CopyButton({
   variant,
   size = "sm",
 }: {
-  /**
-   * The text, or a THUNK that produces it.
-   *
-   * The thunk is not a convenience: on a live turn the thing worth copying is
-   * assembled from every phase and every streamed frame, and `agents` is
-   * pushed twice per tool round — so a string prop means a full
-   * `JSON.stringify` of the whole turn on every push, for a button nobody has
-   * clicked. Resolved on click, it costs nothing until it is asked for.
-   */
-  text: string | (() => string);
+  text: Text;
   label?: string;
   title?: string;
   variant?: "default" | "ghost";
   size?: "md" | "sm";
 }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  // The timeout outlives the component otherwise, and a screen left during
-  // the two seconds after a copy sets state on something unmounted.
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const onClick = useCallback(() => {
-    void copyToClipboard(typeof text === "function" ? text() : text).then((ok) => {
-      setState(ok ? "copied" : "failed");
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => setState("idle"), 2000);
-    });
-  }, [text]);
-
-  const said =
-    state === "copied"
-      ? "copied to the clipboard"
-      : state === "failed"
-        ? "the browser refused the clipboard"
-        : "";
-
+  const run = useCallback(() => copyToClipboard(resolve(text)), [text]);
   return (
-    <span className="row gap-1">
-      <Button
-        size={size}
-        variant={variant}
-        icon={state === "copied" ? "check" : state === "failed" ? "alert" : "copy"}
-        onClick={onClick}
-        title={state === "failed" ? "the browser refused the clipboard" : title}
-      >
-        {state === "copied" ? "Copied" : state === "failed" ? "Copy failed" : label}
-      </Button>
-      {/* Announced, not just drawn: the icon swap is the only signal a
-          sighted reader gets, and a screen reader gets none of it.
+    <FeedbackButton
+      run={run}
+      icon="copy"
+      label={label}
+      doneLabel="Copied"
+      failedLabel="Copy failed"
+      doneSaid="copied to the clipboard"
+      failedSaid="the browser refused the clipboard"
+      title={title}
+      variant={variant}
+      size={size}
+    />
+  );
+}
 
-          A SIBLING of the button, never a child. A button's accessible name
-          is computed from its contents, so inside it this named the control
-          "Copied copied to the clipboard" — the status text becoming part of
-          what the button claims to be. */}
-      <span className="sr-only" role="status">
-        {said}
-      </span>
-    </span>
+/**
+ * Hand the same text to the reader as a FILE, and say whether it landed.
+ *
+ * The sibling of [CopyButton], over the same bytes, because the two things an
+ * operator does with a turn are different: one is pasted into a message, the
+ * other is attached to a bug report or kept beside the incident. A clipboard
+ * also holds exactly one thing, so copying two turns to compare them is not a
+ * gesture that exists.
+ *
+ * Its failure modes are not the clipboard's, and one of them is worse than a
+ * dead button:
+ *
+ *  1. **No `URL.createObjectURL`** — nothing to point a saveable link at, and
+ *     nothing to fall back to. A `data:` URL is the usual answer and it is
+ *     the wrong one here: several engines cap it around two megabytes and a
+ *     self-iterating turn's JSON goes past that, so the fallback would work
+ *     on the small turns nobody needs it for and fail silently on the large
+ *     ones.
+ *  2. **No `download` attribute** — the click then NAVIGATES to the JSON
+ *     instead of saving it, which looks enough like something happening that
+ *     nobody checks. Refusing is the honest answer; both are checked up front
+ *     rather than assumed.
+ */
+export function DownloadButton({
+  text,
+  filename,
+  mime = "application/json;charset=utf-8",
+  label = "Download",
+  title,
+  variant,
+  size = "sm",
+}: {
+  text: Text;
+  /** The name to offer it under. Sanitised here — see [safeFilename]. */
+  filename: string;
+  mime?: string;
+  label?: string;
+  title?: string;
+  variant?: "default" | "ghost";
+  size?: "md" | "sm";
+}) {
+  const name = safeFilename(filename);
+  const run = useCallback(() => saveTextFile(resolve(text), name, mime), [text, name, mime]);
+  return (
+    <FeedbackButton
+      run={run}
+      icon="download"
+      label={label}
+      // WHAT WAS OBSERVED, which is a HAND-OFF. There is no completion event
+      // on an `<a download>`: `saveTextFile` returns true because the click
+      // did not throw, and Chrome's automatic-multiple-download gate can stop
+      // it silently after that. "Saved" claimed a file on a disk nothing here
+      // can see. The NAME is the half that is true and the half worth saying,
+      // since a reader who cannot see the download shelf has nothing else to
+      // tell them what to go and open.
+      doneLabel="Downloading"
+      failedLabel="Download failed"
+      doneSaid={`download started — ${name}`}
+      failedSaid="the browser refused the download"
+      title={title}
+      variant={variant}
+      size={size}
+    />
   );
 }
 
@@ -810,4 +1334,123 @@ function execCommandCopy(text: string): boolean {
   } finally {
     field.remove();
   }
+}
+
+/**
+ * Save `text` to the reader's machine as `filename`, and report whether the
+ * browser took it.
+ *
+ * The blob URL is revoked on the NEXT macrotask rather than here: the click
+ * only QUEUES the download, and freeing the entry inside the same task races
+ * the fetch that is about to read it. Not revoking at all is the other
+ * failure — the blob is a second copy of the whole turn, held for the life
+ * of the tab, and a reader comparing turns clicks this several times.
+ */
+function saveTextFile(text: string, filename: string, mime: string): boolean {
+  if (typeof URL.createObjectURL !== "function" || !("download" in HTMLAnchorElement.prototype)) {
+    return false;
+  }
+  let url = "";
+  try {
+    url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    // In the document for the one synchronous call: not every engine
+    // dispatches an activation behaviour on a node that is in no document,
+    // and there is no state to leave behind either way.
+    document.body.appendChild(link);
+    try {
+      link.click();
+    } finally {
+      link.remove();
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+/** Longer than any extension in use, so a `.` deep inside a name is not read
+ *  as one when a long name has to be cut. */
+const MAX_EXTENSION = 12;
+/**
+ * Every filesystem a reader of this dashboard is on allows at least 255
+ * BYTES, and the browser appends its own " (1)" to deduplicate against what
+ * is already in the folder; eCryptfs stops at 143. 120 clears all three with
+ * room to spare.
+ */
+const MAX_FILENAME = 120;
+
+/**
+ * A filename the reader will actually get, out of whatever the caller had.
+ *
+ * The name is composed from data — a turn id comes off the URL — and the
+ * `download` attribute is only a SUGGESTION: the browser sanitises it its own
+ * way, stripping path separators and whatever else each engine dislikes.
+ * Deciding it here means every caller gets one predictable answer rather than
+ * three, and a name that arrived as `../etc/passwd` or with a newline in it
+ * never reaches that guess.
+ */
+function safeFilename(name: string): string {
+  // UNICODE-AWARE, and that is not a nicety. `\w` is ASCII-only, so an
+  // ASCII-only class collapsed a whole non-Latin stem to a single `-` and the
+  // leading-strip below then took that hyphen AND the extension's own
+  // separator with it: `日本語.json` came out as a file called `json`, and
+  // `résumé.json` as `r-sum-.json`. What has to be excluded here is the
+  // separators and the invisibles — `/`, `\`, `:`, the fullwidth solidus, an
+  // RTL override — and not one of those is a letter, a mark or a number in
+  // any script.
+  const cleaned = name.replace(/[^\p{L}\p{M}\p{N}_.-]+/gu, "-").replace(/-{2,}/g, "-");
+  // An extension is a dot with SOMETHING after it and not much: a `.` deep
+  // inside a long name is part of the name, and a trailing one is not an
+  // extension at all — it is also illegal on Windows.
+  const dot = cleaned.lastIndexOf(".");
+  const tail = cleaned.length - dot;
+  const ext = dot >= 0 && tail >= 2 && tail <= MAX_EXTENSION ? cleaned.slice(dot) : "";
+  // THE STEM IS WHAT GETS STRIPPED AND WHAT GETS CUT, never the extension: a
+  // name that loses its `.json` opens in the wrong application on every
+  // desktop there is. Leading dots are what make `..` a traversal and `.turn`
+  // a hidden file, and they can only ever be in the stem.
+  const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
+  if (!stem) return `download${ext}`;
+  return cutToBytes(stem, MAX_FILENAME - bytes(ext)) + ext;
+}
+
+const encoder = new TextEncoder();
+
+/** How many BYTES a string takes on a filesystem, which is what limits it. */
+function bytes(s: string): number {
+  return encoder.encode(s).length;
+}
+
+/**
+ * Cut to a byte budget, on whole characters.
+ *
+ * `MAX_FILENAME` is a BYTE limit — every filesystem in the comment above
+ * counts bytes — and `slice` counts UTF-16 code units, which are the same
+ * thing only for ASCII. The sanitizer above deliberately keeps letters in
+ * every script (a name of `日本語.json` must not come out as `json`), so the
+ * gap is not hypothetical: 120 units of Japanese is 360 bytes, past ext4's 255
+ * and well past eCryptfs's 143 — and what the browser does with a name over
+ * the limit is its own business, which may include losing the extension.
+ *
+ * Iterated with `for…of`, which walks CODE POINTS rather than units: a cut
+ * that lands between the halves of a surrogate pair leaves a lone surrogate,
+ * which is not valid UTF-8 and reaches the disk as a replacement character.
+ */
+function cutToBytes(s: string, max: number): string {
+  if (max <= 0) return "";
+  if (bytes(s) <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = bytes(ch);
+    if (used + n > max) break;
+    out += ch;
+    used += n;
+  }
+  return out;
 }

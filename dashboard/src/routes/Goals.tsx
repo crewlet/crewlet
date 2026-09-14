@@ -198,6 +198,7 @@ function GoalPanel({
         <Meter
           used={Math.round(goal.progress * 100)}
           max={100}
+          ariaLabel={`${goal.name} — overall progress`}
           label="Overall"
           right={`${Math.round(goal.progress * 100)}%`}
         />
@@ -212,12 +213,22 @@ function GoalPanel({
 
 function TargetMeter({ target }: { target: WorkGoalTarget }) {
   if (target.progress === undefined) {
-    return <Meter used={0} max={100} label={target.name} right="—" tone="neutral" />;
+    return (
+      <Meter
+        used={0}
+        max={100}
+        ariaLabel={`${target.name} — progress`}
+        label={target.name}
+        right="—"
+        tone="neutral"
+      />
+    );
   }
   return (
     <Meter
       used={Math.round(target.progress * 100)}
       max={100}
+      ariaLabel={`${target.name} — progress`}
       label={target.name}
       right={targetRight(target)}
     />

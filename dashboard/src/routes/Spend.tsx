@@ -146,6 +146,10 @@ export function Spend() {
           <Meter
             used={org.used}
             max={org.max}
+            // A NOUN, not the legend beside it: "94% of the meter used" is
+            // the reading, and a name that changes with the value is not a
+            // name.
+            ariaLabel="Company token budget"
             label={`${fmtPct(org.used, org.max, 1)} of the meter used`}
             right={`${fmtExact(org.used)} / ${fmtExact(org.max)}`}
             tone={org.refused_at ? "critical" : undefined}
@@ -357,7 +361,13 @@ export function Spend() {
                   width: "160px",
                   cell: (s) =>
                     s.max_tokens ? (
-                      <Meter used={s.durable_used} max={s.max_tokens} />
+                      <Meter
+                        used={s.durable_used}
+                        max={s.max_tokens}
+                        // The column heading names it for a sighted reader;
+                        // a screen reader lands on the meter alone.
+                        ariaLabel={`${s.role} token budget`}
+                      />
                     ) : (
                       <span className="faint">—</span>
                     ),

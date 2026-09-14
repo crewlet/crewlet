@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/execstate"
 	"github.com/crewlet/crewlet/internal/agent/ledger"
@@ -102,6 +103,9 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 		// second time to continue in the same box.
 		allowSuspend: true,
 		prior:        priorRounds(state),
+		// What the pre-suspend half already spent, so this phase's record
+		// reports the whole of it.
+		priorElapsed: time.Duration(state.ElapsedMS) * time.Millisecond,
 	})
 	if err != nil {
 		// resumedCalls, not calls: a resumed phase's record has to carry
@@ -114,7 +118,7 @@ func (r *Runner) Resume(ctx context.Context, history []ledger.Iteration) (turn.W
 	}
 
 	if res.Suspended {
-		r.recordSuspension(state.Round, surface, res.Result, history)
+		r.recordSuspension(state.Round, surface, res.Result, history, res.Elapsed)
 		return turn.Work{
 			Text: res.Text, Calls: resumedCalls(surface, state), Suspended: true,
 		}, describe(surface), nil
@@ -249,7 +253,7 @@ func intField(v any) (int, bool) {
 // nothing can resume, and it must fail while the box is still in the engine's
 // hands rather than at a resume days later.
 func (r *Runner) recordSuspension(round int, surface *tools.Surface,
-	res toolloop.Result, history []ledger.Iteration,
+	res toolloop.Result, history []ledger.Iteration, elapsed time.Duration,
 ) {
 	state := execstate.State{
 		Version:         execstate.Version,
@@ -268,8 +272,13 @@ func (r *Runner) recordSuspension(round int, surface *tools.Surface,
 		// progress frames are stream-only.
 		RoundsUsed:     res.RoundsUsed,
 		RoundNarration: roundNarration(res.Narration),
-		Iterations:     history,
-		Task:           r.cfg.Task,
+		// THE CLOCK FOLDS TOO, like the rounds above and for the same
+		// reason: this phase publishes no completed event, so a resume that
+		// started its clock at zero would report a run that took minutes as
+		// however long it took to collect the answer.
+		ElapsedMS:  int(elapsed / time.Millisecond),
+		Iterations: history,
+		Task:       r.cfg.Task,
 		// THE SKILL-GUARD STATE, which the field declared and nothing ever
 		// wrote. With it empty, a resumed executor was told to load the
 		// skills it had already loaded — the bodies were in the very

@@ -1707,6 +1707,18 @@ export interface PhasesPage {
 export interface TurnAnswer {
   turn_id: string;
   events: EventRecord[];
+  /**
+   * True when the store stopped at its per-turn cap rather than at the end of
+   * the turn.
+   *
+   * A turn is read OLDEST FIRST, so the rows a cut loses are its ENDING — the
+   * two records the screen reads its outcome, its wall clock and its plan
+   * summary off. Without this, a truncated turn is indistinguishable from one
+   * that never finished: the header said "no turn record" directly above the
+   * rows it did get, and captioned an event span as the turn's own
+   * measurement.
+   */
+  truncated: boolean;
 }
 
 /** A seat's phase history, newest first, with a cursor. */

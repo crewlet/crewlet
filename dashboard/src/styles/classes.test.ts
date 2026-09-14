@@ -38,6 +38,15 @@ import { describe, expect, test } from "vitest";
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 
+/** Every stylesheet in the tree, concatenated. */
+function stylesheets(): string {
+  const dir = join(SRC, "styles");
+  return readdirSync(dir)
+    .filter((f) => f.endsWith(".css"))
+    .map((f) => readFileSync(join(dir, f), "utf8"))
+    .join("\n");
+}
+
 /** Class names any stylesheet declares, from every selector in the tree. */
 function declared(): Set<string> {
   const dir = join(SRC, "styles");
@@ -127,5 +136,27 @@ describe("every class the dashboard names", () => {
     // to nothing else: read as a vertical stack it swallows a whole screen.
     const strays = all.filter((u) => u.name === "stackbar" && !u.where.includes("charts.tsx"));
     expect(strays.map((u) => u.where)).toEqual([]);
+  });
+
+  // THE TAB PANEL CARRIES A COLUMN, and nothing else in the suite can see it.
+  //
+  // A screen's switched sections used to be direct children of `.screen-inner`
+  // — a flex column with a gap — and took their vertical rhythm from it.
+  // Giving the tab widget a real `role="tabpanel"` put one plain element
+  // between the column and them, so without these three declarations every
+  // panel on the Seat screen renders with its cards butted together.
+  //
+  // It fails in the one way nothing catches: the markup stays correct, the
+  // roles stay correct, every case in groups.test.tsx stays green, and jsdom
+  // computes no layout to assert against. A reader would find it by opening
+  // the screen. This is a properties assertion rather than a rendered one for
+  // exactly that reason — it is the only place the rule can be checked at all.
+  test("the tab panel keeps the column its children lost", () => {
+    const block = /\.tabpanel\s*\{([^}]*)\}/.exec(stylesheets());
+    expect(block, ".tabpanel is not declared at all").not.toBeNull();
+    const body = block![1]!;
+    expect(body).toMatch(/display:\s*flex/);
+    expect(body).toMatch(/flex-direction:\s*column/);
+    expect(body).toMatch(/gap:\s*var\(--space-\d+\)/);
   });
 });

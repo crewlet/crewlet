@@ -184,7 +184,7 @@ meets their company first and the engine last.
 | | Configuration | `#/config?lens=&revision=` | `config` / `config_audit` / `config_diff` *(operator-gated)* |
 | | Secrets | `#/secrets` | `/secrets` and `/config/references` over REST: the names the fleet holds, what reads each, and the writes that store, rotate and remove one — **never a value** *(operator-gated)* |
 | — | Trace | `#/traces/{id}` | `trace` — reached from a row or from search |
-| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` in the header assembles the record, the phases and the rest as one JSON object, and the Turn record panel copies itself and owns ⌘A |
+| — | Turn | `#/turns/{id}` | `turn` — everything one unit of work published; `Copy turn` and `Download turn` in the header assemble the record, the phases and the rest as one JSON object — the same bytes, for pasting into a thread and for attaching to a bug report — and the Turn record panel copies itself and owns ⌘A |
 | — | Event | `#/events/{id}` | `event` |
 | — | Engine | the pill in the sidebar footer | the `health` push plus the `stream` query |
 
@@ -473,7 +473,7 @@ What replaced it:
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
 
-Three more controls that looked like something they were not:
+Four more controls that looked like something they were not:
 
 - **A copy button says whether it copied.** The clipboard is invisible, so a
   control that writes to it and reports nothing is indistinguishable from a
@@ -484,6 +484,24 @@ Three more controls that looked like something they were not:
   `CopyButton` primitive falls back to the deprecated `execCommand` path,
   which is the only one that works there, and then says `Copied` or
   `Copy failed` — announced as well as drawn.
+- **A download button says whether it downloaded, and refuses rather than
+  navigating.** The same invisible outcome with a worse failure available to
+  it: an `<a>` whose `download` attribute the browser ignores does not save
+  the JSON, it OPENS it, and a tab full of text looks enough like something
+  happening that nobody checks. `DownloadButton` tests for both halves —
+  `URL.createObjectURL` and `download` — before it builds anything, says
+  `Download failed` when either is missing. What it says on success is
+  `Downloading`, not `Saved`: there is no completion event on an
+  `<a download>`, so the only thing observed is the hand-off, and a browser
+  can still stop it afterwards. It names the file
+  (`download started — turn-….json`) because a reader who cannot see the
+  download shelf has nothing else to tell them what to go and open. It shares
+  the confirmation machinery with `CopyButton` rather than reimplementing it:
+  the two sit side by side in the Turn header, so a difference in how long
+  either holds its answer is a visible inconsistency rather than a private
+  detail. A `data:` URL is deliberately NOT the fallback — several engines cap
+  one around two megabytes, so it would work on the small turns nobody needs
+  it for and fail silently on the large ones.
 - **A caption-sized link is still a link.** `.t-caption` on an `<a>` sets the
   muted colour, which wins over the anchor rule, so four real navigations —
   a phase's own event, a turn card's id, a seat's last error, the spend
@@ -497,6 +515,126 @@ Three more controls that looked like something they were not:
   chord while it holds focus; everywhere else the browser keeps it. The
   focus ring is not decoration: a keyboard verb that changes meaning on
   click is a secret without one.
+
+Three more that announced as something they were not. Each of these is a
+control a sighted reader could use and a keyboard or screen-reader one could
+not, which is the class of defect that never shows up in a screenshot:
+
+- **A segmented control is a radio group, not a tab list.** `Segmented`
+  declared `role="tablist"` with `role="tab"` children, and not one of its
+  eight call sites is a tab widget: they pick a theme, a density, a grouping,
+  a scope, a window and a lens. A tab controls a `tabpanel` it is adjacent to
+  and labels; these narrow or regroup what is already on screen, and several
+  sit in a screen head with the content they affect hundreds of pixels below.
+  It is `role="radiogroup"` with `aria-checked` options now. `Tabs` keeps the
+  tab role — it is the one control here whose options sit directly above the
+  panel each of them shows.
+- **A group of choices is ONE tab stop, with arrow keys inside it.** Both
+  controls rendered plain buttons under the old role, so the ARIA promised
+  one stop and arrow-key movement while the DOM delivered N stops and no
+  arrow keys — neither behaviour, rather than one or the other. The shell's
+  theme and density controls alone put six stops in front of the page on
+  every screen. One shared roving-focus hook gives both of them the contract
+  their role implies: arrows (both axes) and Home/End move within the group,
+  `tabIndex` 0 travels with them, and every other key — Tab above all — is
+  left to the browser.
+- **A group always keeps one tab stop, whatever the URL says.** `value` comes
+  off the query string at seven of the nine call sites, so a link from an
+  older build, a typo or a renamed option reaches the control as a value no
+  option carries. The roving stop fell back only when the *held* option left
+  the set, not when `value` was outside it — so `?lens=bogus` gave every
+  option `tabIndex="-1"` and the whole control dropped out of the page's tab
+  order, unreachable by keyboard and strictly worse than the plain buttons it
+  replaced. It falls back to the first option now; nothing is checked, so
+  nothing else has a claim to the stop.
+- **The arrows move focus; Enter and Space choose.** That is manual
+  activation, and it is the default on both controls because of what they are
+  wired to: seven of the nine groups on the dashboard drive a `useParam`,
+  five of those push a history entry, and every one of them re-runs its
+  screen's query — which the socket mints fresh, with no cache, no dedupe and
+  no coalescing behind it. Under selection-follows-focus, one reader arrowing
+  across the five options of a group to hear what is there is four queries
+  nobody asked for and four history entries they then have to press Back
+  through, and the reader most likely to arrow across every option is the one
+  using a screen reader. That is the trade the pattern names by its own
+  terms: selection follows focus only while the result is displayed without
+  noticeable latency and is not costly to undo, and a query behind a pushed
+  history entry satisfies neither clause. Two groups do satisfy both — the
+  shell's theme and density, which write `localStorage` and a `data-`
+  attribute — and those pass `activate="automatic"`, where selection
+  following focus is the better control and there is nothing to undo.
+  Nothing in the hook handles Enter or Space: every option is a real
+  `<button>`, so the browser's own activation fires the click the group
+  already listens for, and a second handler would commit one keypress twice.
+- **The tab stop is under the reader's feet, not on the selection.** The two
+  stop being the same question is what ends when arrows stop selecting: a
+  reader stands on an option they have not chosen for as long as they are
+  still deciding, and a stop left behind on the checked option means tabbing
+  out and back drops them somewhere they did not leave. A change from
+  outside the group — a click elsewhere, the browser's Back button, a pasted
+  URL — retires whatever the arrows were pointing at and takes the stop back,
+  and so does an option disappearing from `options`, which would otherwise
+  leave the group carrying no tab stop at all and reachable by no key.
+- **A tab list without a panel is a row of buttons wearing the role.** `Tabs`
+  declared `role="tablist"` and `role="tab"` and stopped there: no rendered
+  element carried `role="tabpanel"`, nothing was referenced by
+  `aria-controls`, and the switched content was an ordinary run of siblings
+  after the strip. A screen reader could find the tabs and then had no way to
+  reach what the selected one controlled — pressing Tab from a freshly chosen
+  tab left the widget and landed on whatever came next in the DOM, so choosing
+  a tab moved the reader *further* from the content they had just chosen. The
+  panel is part of the component now: pass the content as `children` and both
+  ids, the `aria-controls` and the `aria-labelledby` back-reference are minted
+  with `useId` here. A documented id convention would have been a convention
+  each caller could follow halfway, and a half-wired widget looks exactly like
+  a whole one. `aria-controls` sits on the *selected* tab only, because only
+  its panel is rendered — an id that resolves to nothing offers a reader a
+  jump that goes nowhere. The panel takes a tab stop for reach rather than for
+  interaction, so its focus ring is suppressed while it stays reachable, and
+  `.tabpanel` carries its own flex column and gap: the sections it now wraps
+  used to take their spacing from the screen's own column, and that is the one
+  part of this change no rendered test can see.
+- **A manual group owes the reader a sentence.** A radio group's learned
+  contract is that the arrows choose — native radios do, and the authoring
+  practices describe no manual variant of the pattern. The deviation here is
+  deliberate and every announcement along the way is honest: a reader arrowing
+  onto an option hears it is not checked, which is true. What they were never
+  told is *which key would check it*, so a reader who pressed Right, heard
+  "not checked" and moved on took the silence for a control that ignored them.
+  The group carries an `aria-describedby` note saying the arrows move and
+  Enter or Space chooses, announced on entry, and only where the arrows do not
+  already choose. A description rather than a different role: the alternatives
+  that would make the arrows conform — a toolbar of `aria-pressed` buttons, a
+  plain group with `aria-current` — each drop either the mutual exclusivity
+  that says these are one choice or the "2 of 3" that says how many there are.
+  Losing a true semantic to gain a convention is the wrong trade when a
+  sentence closes the gap.
+- **A meter needs a name, and a value inside its own range.** `role="meter"`
+  with no accessible name announces as a bare number on screens that render
+  several, and the visible legend is not the name: two call sites pass none
+  at all, and the ones that do pass a reading ("94% of the meter used")
+  rather than a noun. `ariaLabel` is a required prop for that reason, as it
+  already is on `Segmented`, `Tabs` and `Select`. The bar's fill was clamped
+  and `aria-valuenow` was not, so a budget *lowered* under a counter that has
+  already spent past it — the exact state an operator opens the screen in —
+  published a value above `aria-valuemax`; it is clamped now, with the true
+  figures in `aria-valuetext` so the overage is reported rather than hidden.
+  A meter with no ceiling drops the role entirely instead of announcing "0 of
+  100", which is a confident claim that nothing has been spent where the
+  truth is that nobody has said what the limit is.
+
+And one that was only reachable by mouse. `.code` is `overflow: auto` under a
+460px cap, so **any** block taller than that is a scroll container — and in
+Chrome and Safari a scroll container is reachable by keyboard only if
+something makes it focusable. The `selectable` blocks were, because ⌘A needed
+it; the rest were not, and they are the tall ones: a phase card's verbatim
+system prompt runs to tens of kilobytes and could not be scrolled from the
+keyboard at all. `Code` measures its own box — both axes, since `plain` sets
+`white-space: pre` and scrolls sideways — and the blocks that actually
+overflow become named `region`s with a tab stop. A stop on every block would
+put one in front of each of a round's tool arguments, so it is measured rather
+than assumed, and `label` is required on every block because taking focus
+without a name is the other half of the same trade.
 
 The header carries the same facts in the same order whether a phase is live or
 finished — phase, decision, model, rounds, tokens, age — so the row does not
@@ -529,16 +667,24 @@ rendered as the stat strip and as a raw JSON dump.
 
 Four rules replace it, and each one names what it fixes.
 
-1. **A duplicate is a fact with a missing half.** `agent_phase_started` and
-   `agent_phase_completed` are the same phase — same `turn_id|phase|iteration`,
-   which *is* the phase key. Read apart, the start says nothing new. Read
-   together they are the one thing the finished record cannot say alone: the
-   completed event carries only the instant the phase **landed**, so no
-   completed phase had a duration anywhere on this dashboard. The start is
-   folded onto its own card now (`withStarts`), and every phase reports how
-   long it took — which is what answers "why did this turn cost 290k tokens"
-   on exactly the self-iterating turns where the question gets asked. A nested
-   call publishes no start and reports no duration rather than a wrong one.
+1. **A duplicate is a row whose fact belongs somewhere else.**
+   `agent_phase_started` and `agent_phase_completed` are the same phase — same
+   `turn_id|phase|iteration`, which *is* the phase key — and the start says
+   nothing the finished card does not. It used to say one thing: paired with
+   the completion instant it gave the phase a duration, which no completed
+   record carried. That pairing is gone, because it needed **both** events in
+   one reader's hands and the reader who needs the number most never has them:
+   a turn deep-linked *while it runs* asked its query before the phase started,
+   and the only envelopes it buffers afterwards are completed ones. So the
+   engine measures the phase where the clock is and publishes `duration_ms` on
+   `agent_phase_completed` itself. Every phase reports how long it took —
+   which is what answers "why did this turn cost 290k tokens" on exactly the
+   self-iterating turns where the question gets asked — and so does every
+   **nested** call, a delegate's worker and the round-cap judge included, which
+   publish no start and so could never have been given one. Zero means *not
+   measured*, never *took no time*: an agent-mode executor's rounds ran inside
+   a coding CLI's own loop in another process, and that run's wall clock is on
+   `sandbox_run_started` / `sandbox_run_completed` instead.
 
 2. **Weight is meaning.** `reflection_completed` is a sentinel whose own
    payload doc says it deliberately carries no outcome; a guard breach is a
@@ -550,10 +696,37 @@ Four rules replace it, and each one names what it fixes.
    list rather than being dropped. The event registry is additive-only; a type
    a newer node publishes has to still render.
 
-3. **A healthy turn must be able to say so.** A set defined by subtraction
-   (`type !== …`) has no meaningful empty state, so "nothing went wrong here"
-   was not a state this screen could reach — and a section that is always full
-   is a section nobody reads.
+   A band is not a rendering, though, and *What the turn was given* was
+   rendering half of its own. `prompt.size` — six integers per phase, which
+   exist so prompt-slimming progress is measurable rather than argued about —
+   was banded here and then read by nobody: the panel took `prefetch_summary`
+   out of the band and dropped the rest, so the only route to a phase's prompt
+   size was the raw payload of a row in the residual list. The panel carries
+   both halves now, which is the pair that says whether a heavy prompt is
+   heavy *because* of what was prefetched or in spite of it. Per phase and per
+   round, never summed: a prompt is re-sent on every round of the tool loop,
+   so a total would be neither the turn's input bill — the tiles above already
+   report that — nor any single thing that was ever sent.
+
+3. **A healthy turn must be able to say so — and only when it can.** A set
+   defined by subtraction (`type !== …`) has no meaningful empty state, so
+   "nothing went wrong here" was not a state this screen could reach — and a
+   section that is always full is a section nobody reads. It is a badge in the
+   header now, beside the problem count it replaces. It is withheld on a
+   **cut** view for the same reason it is withheld on a running turn: the
+   `turn` answer carries a `truncated` flag (the `trace` answer always did;
+   this one did not), so a guard breach among the rows the read could not
+   reach is one this page cannot see.
+
+   Which rows those are changed too, because the original answer was the worse
+   half. A turn is read oldest first, so a head-only read dropped the
+   **ending** — including the two records the header reads its outcome, its
+   duration and its plan summary off — and the page said so out loud, printing
+   "no turn record" directly above the rows it did get and captioning a
+   partial event span as the turn's own measurement. Naming that would have
+   been honest and still useless: the outcome is the headline of this screen.
+   So the answer recovers the turn's last rows beside its first, and what the
+   flag names is a gap in the **middle**. The badge reads "middle not shown".
 
 4. **The feed's row is not this screen's row.** `EventRow` has four columns —
    time, actor, summary, source and category. On a page about ONE turn the
@@ -880,10 +1053,22 @@ rendered idle from the first phase to the last.
 12. **Numbers are tabular**, and an absent number is an em dash rather than a
     zero — zero is a measurement.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
-    a write, a revoke — if the reader cannot see the result, the control says
-    it, in text a screen reader reaches as well as an icon.
-14. **A link reads as a link at every size.** A text-register class on an `<a>`
+    a download, a write, a revoke — if the reader cannot see the result, the
+    control says it, in text a screen reader reaches as well as an icon. A
+    refusal is reported too, and it OUTLASTS the confirmation: a reader who
+    looked away for three seconds must still be able to learn it did not
+    land, so a failed state holds until the next click while a successful one
+    settles back.
+14. **Per-subject state is keyed on its subject.** A hash change re-renders
+    the route switch rather than remounting it, so `#/turns/A` → `#/turns/B`
+    reconciles and anything the screen remembers about A — a held refusal, an
+    open disclosure, a selected tab — describes B until something clears it.
+    Every id-bearing route carries `key={id}`.
+15. **A head's controls wrap.** `.row` does not on its own and every `.btn` is
+    `white-space: nowrap`, so a head with several controls overflows a phone's
+    line instead of taking a second one.
+16. **A link reads as a link at every size.** A text-register class on an `<a>`
     that overrides its colour makes a navigation into decoration; `.t-link` is
     the caption-sized register that keeps the accent.
-15. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
+17. **Run `make dashboard` and commit `static/dashboard` with the change.** CI
     diffs it; a bundle that has drifted from its source is a red build.

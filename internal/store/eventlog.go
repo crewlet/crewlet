@@ -195,6 +195,15 @@ type ListQuery struct {
 }
 
 // EventLog is the audit and observability event store.
+//
+// EVERY LIST READ HERE ANSWERS AN ALLOCATED SLICE, never nil, because every one
+// of them has a JSON surface above it and that is the only place the two
+// differ: nil marshals as `null` and empty as `[]`, so a client doing the
+// obvious thing with the answer crashes on "nothing matched" and works on
+// everything else. The one deliberate exception is [EventLog.AgentPhases],
+// which answers nil for a seat it cannot name at all — a question it did not
+// understand, rather than one whose answer is empty. A caller that needs to
+// know whether there are rows asks `len`, which is right either way.
 type EventLog struct{ db *DB }
 
 // Events returns the audit log backed by this database.
@@ -533,9 +542,11 @@ func (l *EventLog) Trace(ctx context.Context, traceID string) ([]EventRecord, er
 // after a restart can span several traces.
 //
 // A caller that gets exactly MaxTurnEvents rows should say the view is
-// truncated. The cap is the trace's, for the same reason: a turn that has
-// self-iterated many times is the one worth reading, and a bound low enough to
-// cut it short would hide exactly that.
+// truncated, and should read [EventLog.TurnClosing] beside it: because this
+// read is ordered forwards, what a cut loses is the turn's own ENDING, which
+// is where the records a reader came for live. The cap is the trace's, for the
+// same reason: a turn that has self-iterated many times is the one worth
+// reading, and a bound low enough to cut it short would hide exactly that.
 func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, error) {
 	return l.scanPayloads(ctx,
 		"SELECT "+listColumns+", payload FROM crewlet_events "+
@@ -546,6 +557,92 @@ func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, erro
 
 // MaxTurnEvents bounds one turn's read.
 const MaxTurnEvents = MaxTraceEvents
+
+// TurnEventCount is how many rows one turn has in the window, whatever a
+// capped read of it returned.
+//
+// Because "did the read reach the end" is NOT `len(rows) == cap`, and that
+// inference is wrong on the one boundary it is asked about most: a turn of
+// exactly MaxTurnEvents rows holds every row it has and would be reported
+// cut. A view that recovers the turn's ending beside its opening widens the
+// wrong answer rather than narrowing it — a turn a little past the cap ends
+// up whole on the page under a banner saying part of it is missing — so the
+// question is asked rather than guessed at, and only on the reads that
+// filled. It is a range scan of the same (turn_id, event_time, event_id)
+// index the read walked.
+func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, error) {
+	return l.countEvents(ctx, "turn_id", turnID)
+}
+
+// TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
+func (l *EventLog) TraceEventCount(ctx context.Context, traceID string) (int, error) {
+	return l.countEvents(ctx, "trace_id", traceID)
+}
+
+// countEvents counts one id's rows inside the history window.
+//
+// The COLUMN is chosen from this file's own two callers and never from a
+// parameter a request can reach: it is interpolated into the statement, which
+// is the one place in this package where that would be an injection rather
+// than a convenience.
+func (l *EventLog) countEvents(ctx context.Context, column, id string) (int, error) {
+	switch column {
+	case "turn_id", "trace_id":
+	default:
+		return 0, fmt.Errorf("store: count events: %q is not a countable column", column)
+	}
+	var n int
+	err := l.db.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM crewlet_events WHERE "+column+" = ? AND event_time >= ?",
+		id, EncodeTime(now().Add(-EventHistory))).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count events: %w", err)
+	}
+	return n, nil
+}
+
+// TurnClosing returns the NEWEST rows of one turn, oldest first among
+// themselves, with their payloads.
+//
+// For the one thing a capped [EventLog.Turn] read loses. That read is ordered
+// oldest first, because a turn is read forwards — so what a long turn loses is
+// its ENDING, and the ending is where `agent_turn_completed` and
+// `turn_completed` are: the two records a reader takes the outcome, the wall
+// clock and the plan summary from. A view that shows a turn's opening and
+// cannot say how it ended has lost the one thing somebody opened it for, and
+// it looks exactly like a turn that never finished.
+//
+// Deliberately NOT folded into Turn. Turn answers "this turn, forwards, up to
+// a bound", which is a log's own shape and what its other callers want; a
+// single method that silently returned a head and a tail would make every
+// caller's row count stop meaning what it says, and there would be no honest
+// place left to state the gap. This answers "and how did it end", which is a
+// question about the VIEW, so the view is what asks it and the view is what
+// merges the two.
+//
+// Oldest first among themselves, so a caller appends rather than reverses.
+// The rows may OVERLAP the head read on a turn that only just reached the cap
+// — they are the same rows from the other end — so a caller merges on the
+// event id rather than concatenating.
+func (l *EventLog) TurnClosing(ctx context.Context, turnID string, limit int) ([]EventRecord, error) {
+	if limit <= 0 {
+		// ALLOCATED, like every other list read here — asking for no rows is
+		// still a read that succeeded, and the contract on [EventLog] does
+		// not have a second exception. Reachable only from a caller passing
+		// a computed limit; today's one caller passes a constant.
+		return []EventRecord{}, nil
+	}
+	out, err := l.scanPayloads(ctx,
+		"SELECT "+listColumns+", payload FROM crewlet_events "+
+			"WHERE turn_id = ? AND event_time >= ? "+
+			"ORDER BY event_time DESC, event_id DESC LIMIT ?",
+		turnID, EncodeTime(now().Add(-EventHistory)), limit)
+	if err != nil {
+		return nil, err
+	}
+	slices.Reverse(out)
+	return out, nil
+}
 
 // ByID returns one event WITH its payload, or ErrNotFound.
 //
@@ -646,7 +743,16 @@ func (l *EventLog) scan(ctx context.Context, withPayload bool, query string, arg
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []EventRecord
+	// ALLOCATED EMPTY, never nil. Every one of these reads has a JSON surface
+	// above it, and that is the only place the two differ: a nil slice
+	// marshals as `null` and an empty one as `[]`, so a client doing the
+	// obvious thing with the answer — reading `.length`, iterating it — gets a
+	// crash for "nothing matched" and a working screen for everything else.
+	// The Trace screen answered "not found" for every empty trace on exactly
+	// that, and patching it at the one answer that noticed left the same nil
+	// reaching six other reads. There is nothing a caller can do with the
+	// distinction here that `len` does not already do.
+	out := []EventRecord{}
 	for rows.Next() {
 		var rec EventRecord
 		var micros int64
@@ -892,7 +998,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []tokens.Record
+	out := []tokens.Record{}
 	for rows.Next() {
 		var (
 			at  int64

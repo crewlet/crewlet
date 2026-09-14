@@ -99,6 +99,21 @@
   border-radius: var(--r-sm);
 }
 
+/* A FIGURE COLUMN, fixed width and right-aligned, so a header label and the
+   values under it line up.
+
+   `.row` is a flex line with a gap and nothing else, so a trailing figure
+   after a `.spacer` lands wherever its own text ends. That is right for ONE
+   figure — the spacer pushes both the header and the value to the same right
+   edge — and wrong the moment there is a second: three figures of differing
+   widths sit adjacent, and the labels above them sit adjacent at their own
+   widths, so nothing is a column. */
+.num-col {
+  flex: none;
+  width: 5.5rem;
+  text-align: right;
+}
+
 /* A count beside a section title. Neutral by design: a coloured count is a
    claim about severity that a number alone cannot support. */
 .count-chip {
@@ -788,7 +803,11 @@ a.brand:hover {
 .segmented > button:hover {
   color: var(--text);
 }
-.segmented > button[aria-selected="true"] {
+/* A RADIO GROUP, so the state attribute is aria-checked. The role moved from
+   `tab` to `radio` because not one call site controls a tabpanel — see
+   `Segmented` in ui/primitives.tsx — and a selector left on the old attribute
+   is how a correct role ships with the selected segment drawn as unselected. */
+.segmented > button[aria-checked="true"] {
   background: var(--surface-1);
   color: var(--text);
   box-shadow: var(--shadow-1);
@@ -837,6 +856,29 @@ a.brand:hover {
 }
 
 /* Tabs — the in-page navigation a section owns. */
+/* THE PANEL CARRIES THE COLUMN THE SCREEN WOULD HAVE GIVEN ITS CHILDREN.
+   Before the tab relationship existed, a screen's switched sections were
+   direct children of `.screen-inner` — a flex column with a gap — and they
+   took their vertical rhythm from it. Wrapping them in one panel element puts
+   a plain block between the column and them, so without this every panel on
+   the Seat screen renders with its cards butted together. Nothing in the test
+   suite can see that: the markup is correct either way.
+
+   The focus ring is suppressed because the panel takes a tab stop for reach
+   rather than for interaction — a reader lands here on their way INTO the
+   content, and a box drawn around 600px of page is noise rather than a cue.
+   It stays keyboard-reachable; only the outline goes. */
+.tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.tabpanel:focus {
+  outline: none;
+}
+
 .tabs {
   display: flex;
   align-items: center;

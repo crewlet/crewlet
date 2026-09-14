@@ -20,9 +20,9 @@ package api_test
 // module loader, and the page then fails with a MIME error rather than a
 // missing file, which sends a reader looking for the wrong problem.
 //
-// The dashboard's own ~200 assertions (its protocol, its router, its ordering
+// The dashboard's own assertions (its protocol, its router, its ordering
 // rules, and the measured contrast of every colour token in both themes) run
-// under Vitest — `npm test` in dashboard/, wired into `make test-dashboard` and
+// under Vitest — `npm test` in dashboard/, wired into `make dashboard-test` and
 // its own CI job. They are not driven from Go any more: they were, because
 // there was no package.json and no runner, and driving a real test runner from
 // a Go subprocess would be a second way to run one suite.

@@ -179,9 +179,14 @@ export function Shell({ children }: { children: ReactNode }) {
             )}
           </button>
           <div className="row" style={{ gap: 4 }}>
+            {/* AUTOMATIC, unlike every other group on the dashboard: theme and
+                density write `localStorage` and a `data-` attribute, so
+                arrowing across them costs one repaint and nothing else — no
+                query, no history entry, nothing a reader has to undo. */}
             <Segmented<ThemeChoice>
               size="sm"
               ariaLabel="Theme"
+              activate="automatic"
               value={theme}
               onChange={setTheme}
               options={[
@@ -194,6 +199,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <Segmented
               size="sm"
               ariaLabel="Density"
+              activate="automatic"
               value={density}
               onChange={setDensity}
               options={[
@@ -319,7 +325,12 @@ export function ScreenHead({
         </div>
         {sub && <span className="screen-sub">{sub}</span>}
       </div>
-      {actions && <div className="row gap-1">{actions}</div>}
+      {/* WRAPS. `.row` does not on its own, and every `.btn` is `white-space:
+          nowrap` with no `flex-shrink` of its own, so a head with several
+          controls — Turn has four — pushed past a phone's line rather than
+          taking a second one. `.screen-head`'s own wrap only moves the block
+          as a whole. */}
+      {actions && <div className="row gap-1 wrap screen-actions">{actions}</div>}
     </header>
   );
 }

@@ -995,6 +995,19 @@ renderer, so each history row carries the same fields a live one does —
 `turn_id`, `phase`, `iteration`, `model`, `response`, `tool_executions`,
 `round_narration`, `partial_round`,
 `total_tokens`, `cost_usd` — plus the envelope's `timestamp` and `failed`.
+A finished row also carries `duration_ms`, which a live one cannot: it is the
+engine's own measurement of the phase, published on the record rather than
+reconstructed by pairing it with the `agent_phase_started` that shares its key.
+Zero means *not measured* — an agent-mode executor's rounds ran inside a coding
+CLI's own loop, in another process — never *took no time*. A phase that failed
+before it reached a provider also truncates to zero at this resolution;
+`failed` is what separates the two.
+
+It measures the **whole** phase, including a suspend. A detached coding run
+parks the executor mid-loop and the phase is re-entered later — after a
+restart, possibly on another node — and the parked row carries the clock
+across with the rounds and the tokens, so the one record the phase publishes
+reports the run rather than the seconds spent collecting its answer.
 
 An unreadable or absent event log costs the history and nothing else: the
 answer still carries the seat and its live state.
@@ -1327,8 +1340,8 @@ REST route calls, so the two surfaces cannot diverge:
 | `agent_memory` | `{id}` | `GET /agents/{id}/memory` |
 | `event` | `{id}` | `GET /events/{id}` — one event with its full payload |
 | `events` | `{limit, type, source, category, trace_id, actor, related_agent, before, before_id}` | `GET /events` |
-| `trace` | `{trace_id}` | `GET /events/trace/{trace_id}` |
-| `turn` | `{turn_id}` | Every event of ONE unit of agent work, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this |
+| `trace` | `{trace_id}` | `GET /events/trace/{trace_id}`. Answers `{trace_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-trace cap (500) rather than at the end of the trace, which the caller must say — a trace shown short with no note reads as a complete causal chain that simply ends. It is **counted, not inferred** from the row count: a trace of exactly the cap holds every row it has, and `len(rows) == cap` would put a truncation warning on a complete one |
+| `turn` | `{turn_id}` | Every event of ONE unit of agent work, oldest first, payloads included — each phase, the turn's own completion, and the fallbacks and guard breaches that happened inside it. Not a slice of the trace: one trace can span several turns and one turn several traces. Rows written before migration `0014` carry no `turn_id` and do not answer this. Answers `{turn_id, events, truncated}`; `truncated` is true when the read stopped at the store's per-turn cap (500) rather than at the end of the turn. A cut answer is the turn's **opening and its ending**, not its opening alone: a turn is read oldest first, so a head-only read would drop `agent_turn_completed` and `turn_completed` — the two records a reader takes the outcome, the duration and the plan summary from — and a turn cut at the cap would be indistinguishable from one that never finished. The last rows are recovered beside the first (up to 20 more, merged on the store's own identity, `(event_time, event_id)`, so the two reads cannot overlap into duplicates — the id alone is not unique, and a narrower key would drop a row the two reads legitimately both carry and then report a gap over a page holding the whole turn), so what `truncated` names is a gap in the **middle** — and it is **counted, not inferred** from the row count, because a turn between the cap and the cap plus twenty ends up whole on the page and must not carry a truncation warning |
 | `phases` | `{role, limit, before_time, before_id}` | The company's `agent_phase_completed` records, newest first, **payloads included**, keyset-paged. `events?type=agent_phase_completed` is not a substitute: the event listing deliberately never selects the payload, and a phase record without one has no prompts, no response, no tool calls and no decision |
 | `tokens` | `{since_days, agent_role, recent_turns}` | `GET /tokens/breakdown` — for a window other than the live one |
 | `schedules` | — | `GET /schedules` |

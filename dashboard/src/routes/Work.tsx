@@ -247,13 +247,24 @@ export function Work() {
         </StatRow>
       )}
 
-      {/* THE TAB STRIP. Every container has three of these without anybody
+      {/* THE VIEW STRIP. Every container has three of these without anybody
           saving one, so it is never empty and never needs a setup gesture —
           which is also why a failure to read it leaves the board alone
           rather than blocking it: the filters below are the real control,
-          and a strip is a shortcut to a set of them. */}
+          and a strip is a shortcut to a set of them.
+
+          A GROUP, NOT A TAB LIST. It declared `role="tablist"` while its
+          children are `Chip`s — plain buttons — so it promised a reader tabs
+          it does not contain: `tablist` requires `tab` children, and this is
+          the one mis-role in the tree an automated checker flags outright. It
+          also promised one tab stop with arrows inside it and delivered N
+          stops with no arrow keys, which is the same contract this release
+          just fixed on `Segmented`. These chips are a multi-select-shaped
+          shortcut rather than one-of-N — `Clear` is among them — so the
+          honest role is a labelled group of buttons, each carrying its own
+          `aria-pressed`. */}
       {views.length > 0 && (
-        <div className="toolbar" role="tablist" aria-label="Saved views">
+        <div className="toolbar" role="group" aria-label="Saved views">
           {views.map((v) => (
             <Chip
               key={v.key}

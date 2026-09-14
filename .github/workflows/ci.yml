@@ -179,7 +179,7 @@ jobs:
           fi
 
   # The dashboard is a React + TypeScript application built by Vite. Its own
-  # ~200 assertions run here — the wire protocol, the router's history rules,
+  # assertions run here — the wire protocol, the router's history rules,
   # the ordering comparators, and the MEASURED contrast of every colour token
   # over every surface it can land on, in both themes and for protan and deutan
   # vision. None of that is checkable by looking at the stylesheet, which is

@@ -6,6 +6,7 @@ import (
 
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 
@@ -315,7 +316,7 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 	}
 
 	if res.Suspended {
-		r.recordSuspension(round, surface, res.Result, history)
+		r.recordSuspension(round, surface, res.Result, history, res.Elapsed)
 		// A suspended phase submitted nothing and is not finished. It
 		// returns with the ledger intact; the resumed turn comes back
 		// through Resume and submits then.
@@ -415,7 +416,7 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 	missing := missingTools(w.surface)
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round, System: w.system, User: w.user,
-		Result: w.res.Result, Exhausted: w.res.Exhausted,
+		Result: w.res.Result, Exhausted: w.res.Exhausted, Elapsed: w.res.Elapsed,
 		Decision: payload.Outcome, Rescued: !submitted,
 		Notes:     missingNote(missing),
 		Run:       w.run,
@@ -525,7 +526,7 @@ func reviewRecord(round int, system, user string, res phaseResult,
 ) phaseRecord {
 	return phaseRecord{
 		Phase: phase.Review, Iteration: round, System: system, User: user,
-		Result: res.Result, Exhausted: res.Exhausted,
+		Result: res.Result, Exhausted: res.Exhausted, Elapsed: res.Elapsed,
 		Decision: decision, Notes: notes, Rescued: rescued,
 		Available: surface.Active(),
 	}
@@ -603,6 +604,14 @@ type phaseRun struct {
 	// good and the round numbers claiming to be the phase's first.
 	prior toolloop.Result
 
+	// priorElapsed is the wall clock that same pre-suspend half already
+	// spent, folded in so the resumed phase's `duration_ms` covers the WHOLE
+	// phase rather than the re-entry. Seeded into the clock below rather than
+	// added at each stamp, because there are four places a duration leaves
+	// this function and one that forgot would report a detached coding run as
+	// near-instant on exactly the screen built to show what it cost.
+	priorElapsed time.Duration
+
 	// allowSuspend permits a tool to stop this loop with its call
 	// unanswered. ONLY EXECUTE sets it: a phase that never persists a
 	// partial conversation cannot resume one, so a suspend elsewhere would
@@ -649,6 +658,12 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		attribute.String("crewlet.phase", string(ph)),
 		attribute.Int("crewlet.iteration", in.iteration))
 	defer span.End()
+	// THE SAME BRACKET AS THE SPAN, and deliberately so: a span is a
+	// collector's view of how long this phase took and agent_phase_completed
+	// is the event store's, and the two disagreeing about one phase is worse
+	// than either being absent. A monotonic reading, so a clock correction
+	// mid-phase cannot report a negative duration.
+	began := time.Now().Add(-in.priorElapsed)
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter
@@ -668,6 +683,16 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 	var out phaseResult
 	out.Result = in.prior
 	out.Rounds = in.prior.RoundsUsed
+	// The phase's own wall clock, stamped onto the record on the way out.
+	// A closure rather than a line at each `return`, because there are two
+	// success returns inside the loop below and a measurement that is
+	// written at one of them and not the other is the harder bug: the
+	// record still publishes, and only the EXTENDED phases — the long ones
+	// somebody is timing — come back without a duration.
+	done := func() (context.Context, phaseResult, error) {
+		out.Elapsed = time.Since(began)
+		return ctx, out, nil
+	}
 	// Returns the phase context too, so `return fail(err)` stays a single
 	// line now that runPhase hands its context back.
 	fail := func(err error) (context.Context, phaseResult, error) {
@@ -688,7 +713,12 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			// `out` is read here, not captured: the closure sees whatever
 			// the loop has accumulated by the time it fails.
 			Result: foldOnto(out, progress.Snapshot()), Available: surface.Active(),
-			Failed: true, Err: err,
+			// A PHASE THAT DIED STILL TOOK TIME, and on a timeout it is
+			// the number that says so: a phase whose provider hung for
+			// four minutes and one refused in fifty milliseconds are the
+			// same record without it.
+			Elapsed: time.Since(began),
+			Failed:  true, Err: err,
 		})
 		return ctx, phaseResult{}, err
 	}
@@ -790,7 +820,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 			span.SetAttributes(
 				attribute.Int("crewlet.rounds", out.Rounds),
 				attribute.Bool("crewlet.suspended", out.Suspended))
-			return ctx, out, nil
+			return done()
 		}
 		granted, decision := r.consider(ctx, ph, iteration, policy, extension.Request{
 			Phase: ph, Task: r.cfg.Task, PlanSummary: in.intent,
@@ -799,7 +829,7 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (context.Context, ph
 		if granted <= 0 {
 			log.InfoContext(ctx, "phase_not_extended", "phase", ph, "iteration", iteration,
 				"rounds_used", out.Rounds, "reason", decision.Reason)
-			return ctx, out, nil
+			return done()
 		}
 		log.InfoContext(ctx, "phase_extended", "phase", ph, "iteration", iteration,
 			"granted", granted, "rounds_used", out.Rounds, "reason", decision.Reason)
@@ -883,7 +913,15 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
 		attribute.Int("crewlet.rounds", req.RoundsUsed))
 	defer span.End()
 
+	// THE JUDGE'S OWN WALL CLOCK, bracketed here rather than inside
+	// [extension.Consider] for the same reason the span is: that function is
+	// policy plus a model and has no business knowing what is recorded about
+	// it. It is the one number that separates a judge stalling a phase from
+	// a judge that simply said no — the two are otherwise the same record
+	// with the same verdict.
+	began := time.Now()
 	granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, req)
+	judged := time.Since(began)
 	if !decision.Asked {
 		// The policy declined to ask, or there is no judge. Nothing was
 		// called, so there is nothing to report or to charge — and an event
@@ -903,7 +941,7 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration int,
 			"iteration", iteration, "tokens", decision.Tokens(), "error", err.Error())
 		granted = 0
 	}
-	r.emitter().judged(ctx, ph, iteration, granted, decision)
+	r.emitter().judged(ctx, ph, iteration, granted, decision, judged)
 	return granted, decision
 }
 
@@ -972,6 +1010,16 @@ type phaseResult struct {
 	Rounds    int
 	Exhausted bool
 	Suspended bool
+
+	// Elapsed is the phase's own wall clock, measured around the whole
+	// extension loop rather than around one invocation of it: an extended
+	// phase is one phase that ran longer, exactly as its span is one span.
+	//
+	// Measured here because this is the only frame that brackets the
+	// phase — the callers assemble the record AFTER decoding a payload,
+	// and a clock read there would fold the decode into the measurement
+	// differently on every path.
+	Elapsed time.Duration
 
 	// Result is the loop's own outcome, kept whole so the phase can report
 	// what it spent and what it called. The fields above are the ones the
