@@ -69,13 +69,14 @@ func (e *Engine) RecheckGitHub() {
 // because state set in one and forgotten in the other fails silently and only
 // on the path nobody exercised.
 //
-// Today that is one thing: a store opened with NO width, which is a node that
-// booted with no active revision. It holds no rows, and its first epoch is
+// Today that is two things. A store opened with NO width, which is a node that
+// booted with no active revision: it holds no rows, and its first epoch is
 // what tells it how wide its vectors will be. A store that already has a width
 // keeps it — [store.DB.LearnEmbeddingDim] only ever raises from 0 — because
 // the width belongs to the rows in the file rather than to the current
 // config, and [Engine.buildEmbedder] has already refused any revision that
-// would change it.
+// would change it. And the tool-skill trigger audit, which reads the epoch
+// that is current and so runs once this one is (see [Engine.auditSkills]).
 func (e *Engine) installEpoch(c *Company) {
 	e.epoch.current.Store(c)
 	// Backends are always present on a running engine; a `crewlet validate`
@@ -83,6 +84,7 @@ func (e *Engine) installEpoch(c *Company) {
 	if e.backends != nil && e.backends.Store != nil {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
+	e.auditSkills()
 }
 
 // embeddingWidth is the vector width an epoch's embeddings provider produces,
