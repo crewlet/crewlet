@@ -445,40 +445,17 @@ func (r *Runner) Run(ctx context.Context) error {
 	r.stopped, r.fault, r.faultSince = nil, nil, time.Time{}
 	r.mu.Unlock()
 
-	// A PINNED CONNECTION for the loop's life. The pool is small and every
-	// reader on this node draws from it — and the readers are usually
-	// waiting on state this writer is about to commit, so under load they
-	// occupy every connection while the writer queues behind them for the
-	// one that would unblock them.
-	w, err := r.db.Writer(ctx)
-	if err != nil {
-		return fmt.Errorf("statelog: pin the applier's connection: %w", err)
-	}
+	var w *store.Writer
 	defer func() {
-		_ = w.Close()
+		if w != nil {
+			_ = w.Close()
+		}
 		// A WAITER LEFT ON A STOPPED APPLIER would wait out its whole
 		// budget for a position nothing will ever reach — and one merely
 		// RELEASED would read as satisfied and go on to read rows that
 		// never reached its position. It is told, instead.
 		r.waiters.abandonAll()
 	}()
-
-	if err := r.loadCursor(ctx); err != nil {
-		if errors.Is(err, ErrStopped) {
-			return r.stop(ctx, err)
-		}
-		return err
-	}
-	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
-	// record is applied by the build that can decode it, and the only
-	// moment a build changes is a boot — so this is where the promise is
-	// kept, before the loop consumes anything above it.
-	if err := r.reprocess(ctx, w); err != nil {
-		return err
-	}
-	r.logger.InfoContext(ctx, "statelog_applier_started",
-		"domain", r.domain.Name(), "stream", r.spec.Name,
-		"protocol", string(r.spec.Replay), "position", r.Committed().String())
 
 	// THE LOOP OUTLIVES A FAILURE. A fetch the broker did not answer, a
 	// transaction the disk refused, an applier that errored on a record:
@@ -498,6 +475,33 @@ func (r *Runner) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		// STARTUP IS INSIDE THE RETRY REGIME, and it is the same regime.
+		//
+		// Pinning the connection, reading the checkpoint and reprocessing
+		// what an earlier build retained are all database work, and all
+		// three sat ABOVE this loop: a store that was momentarily
+		// unavailable — the adoption bracket between a close and a
+		// reopen, a refused transaction, a disk that answered slowly —
+		// returned straight out of Run and left the domain with no
+		// applier for the life of the process. Nothing restarted it and
+		// nothing reported it either: Stopped stayed nil and no fault was
+		// recorded, so the node went on publishing a caught-up position
+		// for a domain that would never apply another record. That is the
+		// one failure this loop's whole retry design exists to rule out,
+		// and it was reachable through the door above it.
+		if w == nil {
+			pinned, err := r.startup(ctx)
+			if err != nil {
+				if stopped := r.faulted(ctx, err); stopped != nil {
+					return stopped
+				}
+				pause = r.backOff(ctx, pause)
+				continue
+			}
+			w = pinned
+			r.recovered(ctx)
+			pause = 0
 		}
 		run, err := r.nextRun(ctx, tail, &buffer)
 		if err != nil {
@@ -532,6 +536,45 @@ func (r *Runner) Run(ctx context.Context) error {
 		pause = 0
 		tail = run[len(consumed):]
 	}
+}
+
+// startup is everything the loop needs before it may consume a record: a
+// pinned connection, the checkpoint, and whatever an earlier build retained.
+//
+// IT CLEANS UP AFTER ITSELF, because it is RETRIED: a connection pinned by an
+// attempt that then failed to read the checkpoint would be leaked once per
+// attempt, and the pool this draws from is small enough that a few minutes of
+// retrying would exhaust it — turning a transient failure into the permanent
+// one the retry exists to avoid.
+func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
+	// A PINNED CONNECTION for the loop's life. The pool is small and every
+	// reader on this node draws from it — and the readers are usually
+	// waiting on state this writer is about to commit, so under load they
+	// occupy every connection while the writer queues behind them for the
+	// one that would unblock them.
+	w, err := r.db.Writer(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("statelog: pin the applier's connection: %w", err)
+	}
+	if err := r.loadCursor(ctx); err != nil {
+		_ = w.Close()
+		if errors.Is(err, ErrStopped) {
+			return nil, r.stop(ctx, err)
+		}
+		return nil, err
+	}
+	// WHAT AN EARLIER BUILD RETAINED, THIS ONE MAY NOW READ. A retained
+	// record is applied by the build that can decode it, and the only
+	// moment a build changes is a boot — so this is where the promise is
+	// kept, before the loop consumes anything above it.
+	if err := r.reprocess(ctx, w); err != nil {
+		_ = w.Close()
+		return nil, err
+	}
+	r.logger.InfoContext(ctx, "statelog_applier_started",
+		"domain", r.domain.Name(), "stream", r.spec.Name,
+		"protocol", string(r.spec.Replay), "position", r.Committed().String())
+	return w, nil
 }
 
 // faulted classifies a failure: a STOP is returned to end the loop, anything

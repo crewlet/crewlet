@@ -1785,3 +1785,107 @@ func TestALateRedeliveryDoesNotRegressTheCheckpoint(t *testing.T) {
 			"original delivery and the redelivery", got)
 	}
 }
+
+// flakyEstate is a replicated estate whose connection cannot be pinned for the
+// first `refusals` attempts — a store that is momentarily unavailable, which is
+// what an adoption's close-and-reopen bracket and a refused transaction both
+// look like from the applier.
+type flakyEstate struct {
+	inner interface {
+		Read(context.Context, func(*sql.Tx) error) error
+		Tx(context.Context, func(*sql.Tx) error) error
+		Writer(context.Context) (*store.Writer, error)
+	}
+	mu       sync.Mutex
+	refusals int
+	attempts int
+}
+
+func (f *flakyEstate) Read(ctx context.Context, fn func(*sql.Tx) error) error {
+	return f.inner.Read(ctx, fn)
+}
+
+func (f *flakyEstate) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
+	return f.inner.Tx(ctx, fn)
+}
+
+func (f *flakyEstate) Writer(ctx context.Context) (*store.Writer, error) {
+	f.mu.Lock()
+	f.attempts++
+	refuse := f.refusals > 0
+	if refuse {
+		f.refusals--
+	}
+	f.mu.Unlock()
+	if refuse {
+		return nil, errors.New("the probe store is not available")
+	}
+	return f.inner.Writer(ctx)
+}
+
+func (f *flakyEstate) pinAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
+}
+
+// A STORE THAT IS MOMENTARILY UNAVAILABLE AT STARTUP IS RETRIED, NOT FATAL.
+//
+// Pinning the connection, reading the checkpoint and reprocessing what an
+// earlier build retained are all database work, and all three used to sit
+// ABOVE the retry loop: a store that refused for a moment — the adoption
+// bracket between a close and a reopen, a refused transaction, a slow disk —
+// returned straight out of Run and left the domain with no applier for the
+// life of the process.
+//
+// Nothing restarted it and nothing reported it either. Stopped stayed nil and
+// no fault was recorded, so this node went on publishing a caught-up position
+// for a domain that would never apply another record — which is precisely the
+// failure the loop's retry design exists to rule out, reached through the door
+// above it.
+func TestAStoreThatRefusesAtStartupIsRetried(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t, probeDomain{})
+	flaky := &flakyEstate{inner: h.db.Replicated(), refusals: 3}
+	runner, err := statelog.NewRunner(statelog.RunnerDeps{
+		Domain:     probeDomain{},
+		Applier:    h.applier,
+		Fetch:      h.fetch,
+		DB:         flaky,
+		Generation: 1,
+		Metrics:    h.metrics,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	h.fetch.offer(1, env(1, "object", "a", "op-1", 1))
+
+	ctx, cancel := context.WithTimeout(h.t.Context(), 30*time.Second)
+	defer cancel()
+	errs := make(chan error, 1)
+	go func() { errs <- runner.Run(ctx) }()
+
+	deadline := time.Now().Add(25 * time.Second)
+	for time.Now().Before(deadline) && runner.Committed().Seq < 1 {
+		select {
+		case err := <-errs:
+			t.Fatalf("Run returned %v — a store that refused three times took "+
+				"the domain's applier down for the life of the process, with "+
+				"Stopped unset and no fault recorded", err)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	<-errs
+
+	if got := runner.Committed().Seq; got != 1 {
+		t.Fatalf("the applier reached %d after the store came back, want 1", got)
+	}
+	if got := flaky.pinAttempts(); got < 4 {
+		t.Errorf("the connection was pinned %d time(s), want at least 4 — three "+
+			"refusals and the attempt that succeeded", got)
+	}
+	if err := runner.Stopped(); err != nil {
+		t.Errorf("the applier reports itself stopped after recovering: %v", err)
+	}
+}
