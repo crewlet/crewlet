@@ -215,10 +215,16 @@ function MoveChanges({
   }
   const lines: string[] = [];
   if (!isUnit) {
+    // BEFORE THE MOVE, SAID AS SUCH. What the engine will derive after the
+    // move is the next check's to report; what is known now is who manages
+    // the seat today, and whether that is only as the lead of the unit the
+    // seat is leaving, which the move ends.
     lines.push(
-      preview.reportsTo
-        ? `${name} reports to ${preview.reportsTo} now.`
-        : `${name} reports to nobody now.`,
+      !preview.reportsTo
+        ? `Today ${name} reports to nobody.`
+        : preview.endsAsLeadOf
+          ? `Today ${name} reports to ${preview.reportsTo} as the lead of ${preview.endsAsLeadOf}, which ends with the move.`
+          : `Today ${name} reports to ${preview.reportsTo}.`,
     );
     if (preview.destinationLead) {
       lines.push(

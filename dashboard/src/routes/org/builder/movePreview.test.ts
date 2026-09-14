@@ -39,10 +39,11 @@ function state() {
 }
 
 describe("a seat", () => {
-  test("names who it reports to now, the destination's lead, its onboarding and the credentials it loses", () => {
+  test("names who it reports to before the move, the destination's lead, its onboarding and the credentials it loses", () => {
     expect(movePreview(state(), "seat:dev", "unit:Sales")).toEqual({
       known: true,
       reportsTo: "VP Engineering",
+      endsAsLeadOf: null,
       destinationLead: null,
       leads: [],
       channels: [],
@@ -62,6 +63,32 @@ describe("a seat", () => {
     expect(stay.destinationLead).toBeNull();
   });
 
+  // The engine's auto-management reaches a unit's direct members, so a seat
+  // its unit's lead manages only automatically stops reporting to that lead
+  // when it leaves the unit, and keeps doing so when it stays.
+  test("a manager who is only the home unit's lead ends with a move out of that unit", () => {
+    const managed = keyedState(fixtureCompany(), {
+      seats: {
+        "units[0].roles[0]": { auto_reports: ["dev"], reports: ["dev"] },
+        "units[0].roles[1]": { manager: "vp-engineering" },
+      },
+    });
+    expect(movePreview(managed, "seat:dev", "unit:Sales").endsAsLeadOf).toBe("Engineering");
+    expect(movePreview(managed, "seat:dev", COMPANY_KEY).endsAsLeadOf).toBe("Engineering");
+    // An explicit manager, the fixture's default, is not the move's to end.
+    expect(movePreview(state(), "seat:dev", "unit:Sales").endsAsLeadOf).toBeNull();
+    // A root seat placed in Platform by its unit reference and written into
+    // Platform stays a direct member there.
+    const placed = keyedState(fixtureCompany(), {
+      seats: {
+        "roles[1]": { unit_path: "units[0].children[0]", manager: "sre", placed_by_ref: true },
+        "units[0].children[0].roles[0]": { auto_reports: ["designer"] },
+      },
+    });
+    expect(movePreview(placed, "seat:designer", "unit:Platform").endsAsLeadOf).toBeNull();
+    expect(movePreview(placed, "seat:designer", "unit:Sales").endsAsLeadOf).toBe("Platform");
+  });
+
   test("a human seat gains and loses no tool credentials", () => {
     const doc = fixtureCompany();
     doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
@@ -76,6 +103,7 @@ describe("a unit", () => {
     expect(movePreview(state(), "unit:Platform", COMPANY_KEY)).toEqual({
       known: true,
       reportsTo: null,
+      endsAsLeadOf: null,
       destinationLead: null,
       leads: [{ unit: "Platform", before: "VP Engineering", after: "" }],
       channels: [{ unit: "Platform", before: "eng", after: "" }],

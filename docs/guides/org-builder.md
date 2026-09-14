@@ -256,8 +256,11 @@ changes, read from the engine's check of the draft as it stands. While that
 check is still on its way (just after another change, say), the dialog says
 so rather than reading an older answer:
 
-- who a moved seat reports to now, and the lead of the destination, who
-  manages a unit's direct members unless another member manages the seat;
+- who a moved seat reports to before the move, and whether that ends with
+  it: a unit's lead manages the unit's direct members, so a seat managed only
+  that way stops reporting to the lead of the unit it leaves;
+- the lead of the destination, who manages its direct members unless another
+  member manages the seat;
 - the lead and the channel a moved unit, and the units inside it that declare
   none, would inherit instead;
 - the agent seats that onboard again because the units above them change;

@@ -9,15 +9,16 @@
  * draft as it stands reported about BOTH ends, and nothing while that check
  * is still out: a destination it has not described (a unit added since)
  * would otherwise read as one with no lead and no channel. Both ends are:
- * who the seat reports to now, the lead and channel the destination resolved
- * to, the onboarding chain a seat has now against the unit names above the
- * destination, and the tool credential servers the seat's home unit gives it
- * against the ones the destination's gives. Each of those follows from one
- * documented engine rule applied to reported values: a unit that declares no
- * lead or channel takes the one its parent resolved to, an agent seat
- * onboards again when the unit names above it change, and a unit's `mcp_env`
- * reaches its direct agent members. The check that follows the move reports
- * the result, and the review shows it.
+ * who the seat reports to before the move (and whether that ends with it),
+ * the lead and channel the destination resolved to, the onboarding chain a
+ * seat has now against the unit names above the destination, and the tool
+ * credential servers the seat's home unit gives it against the ones the
+ * destination's gives. Each of those follows from one documented engine rule
+ * applied to reported values: a unit's lead manages its direct members, a
+ * unit that declares no lead or channel takes the one its parent resolved
+ * to, an agent seat onboards again when the unit names above it change, and
+ * a unit's `mcp_env` reaches its direct agent members. The check that follows
+ * the move reports the result, and the review shows it.
  */
 
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
@@ -51,8 +52,15 @@ export interface InheritedChange {
 export interface MovePreview {
   /** Whether the last check described the draft, so the rest is known. */
   readonly known: boolean;
-  /** The moved seat's primary manager now, by name; `null` for none. Seats only. */
+  /** The moved seat's primary manager before the move, by name; `null` for none. Seats only. */
   readonly reportsTo: string | null;
+  /**
+   * The unit whose lead that manager is, when it manages the seat only
+   * automatically, as the lead of the seat's home unit, and the move takes
+   * the seat out of that unit: the engine's auto-management reaches a unit's
+   * direct members, so the relation ends with the move. `null` otherwise.
+   */
+  readonly endsAsLeadOf: string | null;
   /**
    * The destination unit's effective lead, by name, when a seat moves into a
    * unit it does not lead: that lead manages the unit's direct members unless
@@ -72,6 +80,7 @@ export interface MovePreview {
 const NOTHING: MovePreview = {
   known: false,
   reportsTo: null,
+  endsAsLeadOf: null,
   destinationLead: null,
   leads: [],
   channels: [],
@@ -132,9 +141,19 @@ export function movePreview(
       ]);
     const had = agent ? servers(homeData) : new Set<string>();
     const has = agent ? servers(destData) : new Set<string>();
+    // Automatic, as the engine reported it: the manager's own automatic
+    // reports name this seat.
+    const manager = seat.manager
+      ? check.derived.seats?.find((s) => s.handle === seat.manager)
+      : undefined;
+    const automatic = manager?.auto_reports?.includes(seat.handle) === true;
     return {
       known: true,
       reportsTo: seat.manager ? nameOfHandle(state, seat.manager) : null,
+      endsAsLeadOf:
+        automatic && homeData?.kind === "unit" && home !== destination
+          ? homeData.node.data.name
+          : null,
       destinationLead: leadsDestination ? null : destLeadName,
       leads: [],
       channels: [],
@@ -185,6 +204,7 @@ export function movePreview(
   return {
     known: true,
     reportsTo: null,
+    endsAsLeadOf: null,
     destinationLead: null,
     leads,
     channels,

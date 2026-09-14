@@ -44,7 +44,7 @@ describe("a seat", () => {
     const view = open(withManager(), "seat:dev");
     expect(moveButton().disabled).toBe(true);
     choose("Sales");
-    expect(screen.getByText("Dev reports to VP Engineering now.")).toBeDefined();
+    expect(screen.getByText("Today Dev reports to VP Engineering.")).toBeDefined();
     expect(screen.getByText("Dev loses the tool credentials of tracker.")).toBeDefined();
     expect(
       screen.getByText("1 agent seat onboards again, because the units above it change: Dev."),
@@ -57,6 +57,26 @@ describe("a seat", () => {
       clearLeads: [],
     });
     expect(view.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // What is known before the move is who manages the seat today; when that is
+  // only as the lead of the unit it leaves, the move ends it, and says so.
+  test("a manager who is only the lead of the unit the seat leaves is said to end with the move", () => {
+    open(
+      keyedState(fixtureCompany(), {
+        seats: {
+          "units[0].roles[0]": { auto_reports: ["dev"], reports: ["dev"] },
+          "units[0].roles[1]": { manager: "vp-engineering" },
+        },
+      }),
+      "seat:dev",
+    );
+    choose("Sales");
+    expect(
+      screen.getByText(
+        "Today Dev reports to VP Engineering as the lead of Engineering, which ends with the move.",
+      ),
+    ).toBeDefined();
   });
 
   // The credentials a move gives or takes are named by their SERVER, which is
