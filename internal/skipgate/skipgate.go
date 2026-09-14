@@ -1,7 +1,18 @@
-// Command skipgate renders a `go test -json` stream and fails the run when a
-// test skipped that nobody declared could.
+// Command skipgate runs a `go test -json` command, renders its stream, and
+// fails the run when a test skipped that nobody declared could.
 //
-//	go test -json <packages> | go run ./internal/skipgate
+//	go run ./internal/skipgate -- go test -json <packages>
+//
+// IT RUNS THE COMMAND rather than reading a pipe, and that is a correctness
+// decision rather than a convenience. As a pipe consumer this program was the
+// LAST command in the pipeline, so make saw only ITS status — and `go test`'s
+// was gone. A producer killed mid-run (an OOM, a signal, a runner going away)
+// emits a truncated stream with no package-level `fail` record in it, and the
+// gate then reported a green build over a test run that never finished. Under
+// make's default /bin/sh there is no PIPESTATUS to recover it with, and
+// $${PIPESTATUS[0]} would have meant changing the shell for every recipe in
+// the file. Running the command removes the question: the exit status is
+// returned to the process that needs it.
 //
 // It is the enforcement CONTRIBUTING.md's "A skip is not a pass" section
 // promised and nothing supplied. The doctrine named three external
@@ -45,9 +56,11 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 )
@@ -155,7 +168,28 @@ func read(in *bufio.Scanner, out *os.File) report {
 }
 
 func main() {
-	in := bufio.NewScanner(os.Stdin)
+	argv := os.Args[1:]
+	if len(argv) > 0 && argv[0] == "--" {
+		argv = argv[1:]
+	}
+	if len(argv) == 0 {
+		fmt.Fprintf(os.Stderr, "usage: %s -- go test -json <packages>\n", os.Args[0])
+		os.Exit(2)
+	}
+
+	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...)
+	cmd.Stderr = os.Stderr
+	stream, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "skipgate: %v\n", err)
+		os.Exit(1)
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "skipgate: starting %q: %v\n", argv[0], err)
+		os.Exit(1)
+	}
+
+	in := bufio.NewScanner(stream)
 	// go test -json emits one object per line, and an Output field can carry
 	// a very long line — a t.Logf of a config document, say. The default 64
 	// KiB token would end the stream mid-run and take the gate's whole
@@ -163,8 +197,12 @@ func main() {
 	in.Buffer(make([]byte, 0, 1<<20), 16<<20)
 
 	r := read(in, os.Stdout)
-	if err := in.Err(); err != nil {
-		fmt.Fprintf(os.Stderr, "\nskipgate: reading the test stream: %v\n", err)
+	scanErr := in.Err()
+	// Waited for BEFORE anything is decided, so the producer's own verdict is
+	// in hand rather than inferred from what it managed to say.
+	producer := cmd.Wait()
+	if scanErr != nil {
+		fmt.Fprintf(os.Stderr, "\nskipgate: reading the test stream: %v\n", scanErr)
 		os.Exit(1)
 	}
 
@@ -186,29 +224,57 @@ func main() {
 			s.Package, s.Test)
 	}
 
+	code, note := Verdict(r, producer, len(unlisted) > 0 || len(stale) > 0)
+	fmt.Fprintln(os.Stderr, note)
+	os.Exit(code)
+}
+
+// Verdict decides the run from what the stream said and what the producer did.
+//
+// Pure over values, because every branch here is a way a build reports green
+// over a suite that did not run, and a rule exercised only by shelling out to
+// `go test` is a rule nobody re-reads. Two of these were review findings on
+// the shape that preceded it.
+func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 	switch {
+	case producer != nil && len(r.failed) == 0 && len(r.failedPkgs) == 0:
+		// THE PRODUCER FAILED AND THE STREAM DID NOT SAY WHY. A killed or
+		// aborted `go test` is exactly this: a truncated stream carrying no
+		// failure record, which every other branch would read as a clean run.
+		// Decided first, because what it means is that the run did not finish
+		// rather than that it passed.
+		return 1, fmt.Sprintf("\nskipgate: the test command exited %v without reporting "+
+			"a failure, so the run did not finish — its stream ends after %d "+
+			"package(s). Nothing here can say the suite passed.", producer, len(r.ran))
+
+	case len(r.ran) == 0:
+		// NO PACKAGE REPORTED AT ALL. A toolchain error, an unusable package
+		// list, or a producer that died before its first record. The shape
+		// this replaced printed "no test skipped" and exited 0 — the gate
+		// certifying nothing, which is the failure it exists to prevent, one
+		// level up.
+		return 1, "\nskipgate: no package reported a result. The test command " +
+			"produced no usable stream, so no suite ran."
+
 	case len(r.failed) > 0 || len(r.failedPkgs) > 0:
-		// The test run's own verdict decides first: in a pipeline the LAST
-		// command's status is the one make sees, so `go test`'s is gone by the
-		// time this runs and carrying it is this program's job.
-		//
 		// BOTH counts, because they are different failures. A package can fail
 		// with no failing test in it — that is what a build error looks like
 		// from here, and reporting only named tests would pass a tree that
 		// does not compile.
-		fmt.Fprintf(os.Stderr, "\nskipgate: %d test(s) failed in %d package(s)\n",
+		return 1, fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s)",
 			len(r.failed), len(r.failedPkgs))
-		os.Exit(1)
-	case len(unlisted) > 0 || len(stale) > 0:
-		os.Exit(1)
-	case len(r.skipped) == 0 && len(allowed) > 0:
-		// Nothing skipped at all, with entries on the books. Either every
-		// Environment entry's prerequisite was present — ordinary — or this
-		// gate read a stream with no tests in it, which is the failure mode
-		// it exists to prevent, one level up.
-		fmt.Fprintln(os.Stderr, "skipgate: no test skipped")
+
+	case declarationsBroken:
+		return 1, "\nskipgate: the declared skips and the observed ones disagree"
+
+	case len(r.skipped) == 0:
+		// Ordinary: every Environment entry's prerequisite was present. It can
+		// no longer mean "nothing ran" — that is caught above.
+		return 0, fmt.Sprintf("skipgate: no test skipped across %d package(s)", len(r.ran))
+
 	default:
-		fmt.Fprintf(os.Stderr, "skipgate: %d skip(s), all declared\n", len(r.skipped))
+		return 0, fmt.Sprintf("skipgate: %d skip(s) across %d package(s), all declared",
+			len(r.skipped), len(r.ran))
 	}
 }
 

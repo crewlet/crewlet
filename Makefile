@@ -87,10 +87,13 @@ GOTEST := $(GO) test -race -count=1 -timeout $(TEST_TIMEOUT)
 # unchanged, and then fails on a skip nothing declared. `go doc ./internal/skipgate`
 # has the two defects that were found by measuring rather than by reading.
 #
-# It also REPORTS THE RUN'S OWN VERDICT, which is load-bearing in a pipeline:
-# make sees the last command's status, so `go test`'s exit code is gone by the
-# time the gate runs and reporting failures is the gate's job. -v is dropped
-# from test-solo because -json already carries every line.
+# IT RUNS `go test` RATHER THAN CONSUMING A PIPE. As a pipeline the gate was
+# the last command, so make saw only ITS status and `go test`'s was lost — and
+# a producer killed mid-run emits a truncated stream with no failure record in
+# it, which every check in the gate would read as a clean pass. There is no
+# PIPESTATUS in make's default /bin/sh to recover it, and switching this file
+# to bash for one recipe is a wider change than the bug deserves. Running the
+# command removes the question. -v is dropped because -json carries every line.
 SKIPGATE := $(GO) run ./internal/skipgate
 
 # The two halves of the suite, COMPUTED rather than listed.
@@ -340,7 +343,7 @@ lint: ## run golangci-lint (ci: golangci-lint)
 # looser than it, just in the direction nobody notices.
 test: ## the suite, minus the packages that run alone (ci: test (race))
 	@test -n "$(PARALLEL_PKGS)" || { echo "the parallel partition is empty" >&2; exit 1; }
-	$(GOTEST) -json $(PARALLEL_PKGS) | $(SKIPGATE)
+	$(SKIPGATE) -- $(GOTEST) -json $(PARALLEL_PKGS)
 
 # The solo half: every package that needs the runner to itself.
 #
@@ -350,7 +353,7 @@ test: ## the suite, minus the packages that run alone (ci: test (race))
 # The old target ran one package and did not need it.
 test-solo: require-node ## the packages that need a runner to themselves (ci: end-to-end gates)
 	@test -n "$(SOLO_PKGS)" || { echo "no package imports internal/solo" >&2; exit 1; }
-	$(GOTEST) -json -p 1 $(SOLO_PKGS) | $(SKIPGATE)
+	$(SKIPGATE) -- $(GOTEST) -json -p 1 $(SOLO_PKGS)
 
 # The suite without the detector. It is roughly twice as fast and it is NOT
 # what CI runs: a data race it cannot see is a data race that lands.

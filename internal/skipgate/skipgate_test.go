@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -196,6 +197,100 @@ func TestABuildFailureIsCarried(t *testing.T) {
 	}
 	if len(r.failedPkgs) != 1 || r.failedPkgs[0] != "internal/x" {
 		t.Errorf("failedPkgs = %v, want the package that would not build", r.failedPkgs)
+	}
+}
+
+// THE VERDICT, and the two ways a build reports green over a suite that did
+// not run. Both were review findings on the shape this replaced.
+//
+// The gate used to be the LAST command of a shell pipeline, so make saw only
+// its status and `go test`'s was gone. A producer killed mid-run — an OOM, a
+// signal, a runner going away — emits a truncated stream with no failure
+// record in it, and every other check here reads that as a clean pass. And a
+// producer that died before its FIRST record left the gate printing "no test
+// skipped" and exiting 0, certifying nothing.
+func TestARunThatDidNotFinishIsNotAPass(t *testing.T) {
+	t.Parallel()
+
+	killed := errors.New("signal: killed")
+
+	cases := []struct {
+		name     string
+		r        report
+		producer error
+		broken   bool
+		code     int
+		says     string
+	}{
+		{
+			name:     "killed after some packages, no failure recorded",
+			r:        report{ran: ran("internal/a", "internal/b")},
+			producer: killed,
+			code:     1,
+			says:     "did not finish",
+		},
+		{
+			name:     "died before emitting anything",
+			r:        report{ran: map[string]bool{}},
+			producer: killed,
+			code:     1,
+			says:     "did not finish",
+		},
+		{
+			name: "exited 0 having reported no package at all",
+			r:    report{ran: map[string]bool{}},
+			code: 1,
+			says: "no suite ran",
+		},
+		{
+			name:     "a real failure is reported as one, not as an unfinished run",
+			r:        report{ran: ran("internal/a"), failed: []string{"internal/a TestX"}},
+			producer: errors.New("exit status 1"),
+			code:     1,
+			says:     "1 test(s) failed",
+		},
+		{
+			name:     "a build failure, which has no failing test in it",
+			r:        report{ran: ran("internal/a"), failedPkgs: []string{"internal/a"}},
+			producer: errors.New("exit status 2"),
+			code:     1,
+			says:     "in 1 package(s)",
+		},
+		{
+			name:   "declarations disagree",
+			r:      report{ran: ran("internal/a")},
+			broken: true,
+			code:   1,
+			says:   "disagree",
+		},
+		{
+			name: "a clean run",
+			r:    report{ran: ran("internal/a", "internal/b")},
+			code: 0,
+			says: "no test skipped across 2",
+		},
+		{
+			name: "a clean run with declared skips",
+			r: report{
+				ran:     ran("internal/a"),
+				skipped: []Skip{{Package: "internal/a", Test: "TestT"}},
+			},
+			code: 0,
+			says: "1 skip(s) across 1 package(s)",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			code, note := Verdict(c.r, c.producer, c.broken)
+			if code != c.code {
+				t.Errorf("exit = %d, want %d (%s)", code, c.code, note)
+			}
+			if !strings.Contains(note, c.says) {
+				t.Errorf("note = %q, want it to mention %q", note, c.says)
+			}
+		})
 	}
 }
 
