@@ -20,6 +20,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,8 +74,13 @@ func partition(pkgs []pkg) (parallel, solo []string) {
 // NEVER with -e. That flag turns a broken package into a record with an Error
 // field and exit 0, which is precisely the shape that would let this command
 // hand the Makefile a short list and call it the suite.
-func list() ([]pkg, error) {
-	cmd := exec.Command("go", "list", "-json=ImportPath,TestImports,XTestImports", "./...")
+func list(ctx context.Context) ([]pkg, error) {
+	// CommandContext, and the context is Background at the call site: this is
+	// a short-lived command with no caller to cancel it, and a timeout here
+	// would be a worse bug than the hang it guards against — `go list` on a
+	// cold module cache downloads the module graph, and a budget sized for a
+	// warm CI checkout would fail a fresh clone for no reason.
+	cmd := exec.CommandContext(ctx, "go", "list", "-json=ImportPath,TestImports,XTestImports", "./...")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -101,7 +107,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	pkgs, err := list()
+	pkgs, err := list(context.Background())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
