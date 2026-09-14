@@ -404,8 +404,15 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
 
   const disabled = api.readOnly;
 
+  // ASKED OF THE FORM THAT RENAMES, AND ONLY THEN. The question is about what
+  // this Apply does, so a name nobody typed in (a draft renamed by an earlier
+  // edit, a stored name with a space around it) asks nothing of a mission
+  // edit. It compares with the SAVED name as the engine holds it, untrimmed,
+  // because the engine derives agent ids from exactly that string, and a
+  // name typed back to the saved one is no rename at all.
   const savedName = typeof state.base.document?.name === "string" ? state.base.document.name : "";
-  const renaming = savedName !== "" && form.name.trim() !== savedName;
+  const renaming =
+    savedName !== "" && renames(initial.name, form.name) && form.name.trim() !== savedName;
   const blocked =
     form.name.trim() === ""
       ? "The company needs a name."

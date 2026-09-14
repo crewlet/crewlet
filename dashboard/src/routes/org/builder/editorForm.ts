@@ -19,6 +19,14 @@
  * absent as unlimited) are all written as the field removed, because a
  * `goal: ""` or `token_budget: 0` the base never had would read as an edit
  * nobody made.
+ *
+ * A BOX NOBODY TYPED IN IS NO CHANGE, whatever the form would write for it.
+ * Single-line values are written trimmed, so a value the document stored
+ * with spaces around it differs from what its own untouched box would write,
+ * and asking only "does the written value differ" wrote the trimmed form the
+ * moment anything ELSE in the form was applied: an email, a channel, a
+ * contact identity, and the company's name, whose change gives every agent
+ * seat a new id. So every text field first asks whether its box changed.
  */
 
 import type {
@@ -223,6 +231,24 @@ function changed(path: readonly string[], before: unknown, after: unknown): Fiel
   return [{ path, ...(after !== undefined ? { value: after } : {}) }];
 }
 
+/**
+ * A text field's part: nothing unless its box changed, then the value as the
+ * document writes it (trimmed for a single-line value, removed when empty),
+ * when that differs from the stored one.
+ */
+function textPart(
+  path: readonly string[],
+  initial: string,
+  typed: string,
+  { trim }: { trim: boolean },
+): FieldSet[] {
+  if (typed === initial) return [];
+  return changed(path, textValue(initial), textValue(trim ? typed.trim() : typed));
+}
+
+const line = { trim: true };
+const prose = { trim: false };
+
 const toggleParts = (
   target: NodeKey,
   before: Readonly<Record<string, boolean>>,
@@ -256,9 +282,10 @@ export function renames(initial: string, typed: string): boolean {
 
 export function companyParts(initial: CompanyForm, form: CompanyForm): EditPartIntent[] {
   const set = [
-    ...changed(["name"], textValue(initial.name), textValue(form.name.trim())),
-    ...changed(["mission"], textValue(initial.mission), textValue(form.mission)),
-    ...changed(["vision"], textValue(initial.vision), textValue(form.vision)),
+    // A rename, like a seat's or a unit's, comes only from the box.
+    ...(renames(initial.name, form.name) ? textPart(["name"], initial.name, form.name, line) : []),
+    ...textPart(["mission"], initial.mission, form.mission, prose),
+    ...textPart(["vision"], initial.vision, form.vision, prose),
     ...changed(["policies"], listValue(initial.policies), listValue(form.policies)),
   ];
   return set.length > 0 ? [{ type: "updateCompany", set }] : [];
@@ -270,21 +297,13 @@ export function unitParts(key: NodeKey, initial: UnitForm, form: UnitForm): Edit
     parts.push({ type: "renameUnit", target: key, name: form.name });
   }
   const set = [
-    ...changed(["type"], textValue(initial.type), textValue(form.type.trim())),
-    ...changed(["purpose"], textValue(initial.purpose), textValue(form.purpose)),
+    ...textPart(["type"], initial.type, form.type, line),
+    ...textPart(["purpose"], initial.purpose, form.purpose, prose),
     ...changed(["goals"], listValue(initial.goals), listValue(form.goals)),
-    ...changed(["channel"], textValue(initial.channel), textValue(form.channel.trim())),
+    ...textPart(["channel"], initial.channel, form.channel, line),
     ...changed(["knowledge"], listValue(initial.knowledge), listValue(form.knowledge)),
-    ...changed(
-      ["integrations", "jira", "project"],
-      textValue(initial.jira),
-      textValue(form.jira.trim()),
-    ),
-    ...changed(
-      ["integrations", "confluence", "space"],
-      textValue(initial.confluence),
-      textValue(form.confluence.trim()),
-    ),
+    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
+    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
   ];
   if (set.length > 0) parts.push({ type: "updateUnit", target: key, set });
   if (form.lead !== initial.lead) {
@@ -317,12 +336,10 @@ export function seatParts(
     return value === "" || Number(value) === 0 ? undefined : Number(value);
   };
   const set: FieldSet[] = [
-    ...(editableHandle
-      ? changed(["handle"], textValue(initial.handle), textValue(form.handle.trim()))
-      : []),
-    ...changed(["email"], textValue(initial.email), textValue(form.email.trim())),
-    ...changed(["goal"], textValue(initial.goal), textValue(form.goal)),
-    ...changed(["backstory"], textValue(initial.backstory), textValue(form.backstory)),
+    ...(editableHandle ? textPart(["handle"], initial.handle, form.handle, line) : []),
+    ...textPart(["email"], initial.email, form.email, line),
+    ...textPart(["goal"], initial.goal, form.goal, prose),
+    ...textPart(["backstory"], initial.backstory, form.backstory, prose),
     ...changed(
       ["responsibilities"],
       listValue(initial.responsibilities),
@@ -334,13 +351,9 @@ export function seatParts(
       listValue(form.guidelines),
     ),
     ...CONTACT_IDENTITIES.flatMap(({ key: identity }) =>
-      changed(
-        ["contact", identity],
-        textValue(initial.contact[identity]),
-        textValue(form.contact[identity].trim()),
-      ),
+      textPart(["contact", identity], initial.contact[identity], form.contact[identity], line),
     ),
-    ...changed(["availability"], textValue(initial.availability), textValue(form.availability)),
+    ...textPart(["availability"], initial.availability, form.availability, prose),
     ...(form.llm !== null && initial.llm !== null
       ? changed(
           ["llm"],
@@ -349,41 +362,32 @@ export function seatParts(
         )
       : []),
     ...changed(["token_budget"], budget(initial.tokenBudget), budget(form.tokenBudget)),
-    ...changed(
-      ["integrations", "github", "tier"],
-      textValue(initial.githubTier),
-      textValue(form.githubTier),
-    ),
+    ...textPart(["integrations", "github", "tier"], initial.githubTier, form.githubTier, line),
     ...changed(
       ["integrations", "github", "repos"],
       listValue(initial.githubRepos),
       listValue(form.githubRepos),
     ),
-    ...changed(
+    ...textPart(
       ["integrations", "slack", "channel"],
-      textValue(initial.slackChannel),
-      textValue(form.slackChannel.trim()),
+      initial.slackChannel,
+      form.slackChannel,
+      line,
     ),
-    ...changed(
+    ...textPart(
       ["integrations", "mattermost", "channel"],
-      textValue(initial.mattermostChannel),
-      textValue(form.mattermostChannel.trim()),
+      initial.mattermostChannel,
+      form.mattermostChannel,
+      line,
     ),
-    ...changed(
+    ...textPart(
       ["integrations", "mattermost", "username"],
-      textValue(initial.mattermostUsername),
-      textValue(form.mattermostUsername.trim()),
+      initial.mattermostUsername,
+      form.mattermostUsername,
+      line,
     ),
-    ...changed(
-      ["integrations", "jira", "project"],
-      textValue(initial.jira),
-      textValue(form.jira.trim()),
-    ),
-    ...changed(
-      ["integrations", "confluence", "space"],
-      textValue(initial.confluence),
-      textValue(form.confluence.trim()),
-    ),
+    ...textPart(["integrations", "jira", "project"], initial.jira, form.jira, line),
+    ...textPart(["integrations", "confluence", "space"], initial.confluence, form.confluence, line),
   ];
   const levelChanged = form.accessLevel !== initial.accessLevel;
   if (set.length > 0 || levelChanged) {

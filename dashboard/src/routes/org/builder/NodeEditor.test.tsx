@@ -583,4 +583,37 @@ describe("the charter", () => {
     expect(view.state().draft.company.name).toBe("Acme Labs");
     expect(view.state().log.ops).toHaveLength(1);
   });
+
+  // The acknowledgement is about what THIS Apply does: a name the draft
+  // already carries, or one the document stored with a space around it, is
+  // not a rename of the mission edit that follows.
+  test("a charter edit that renames nothing asks nothing, and renames nothing", () => {
+    const renamed = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
+    });
+    const view = edit(renamed, COMPANY_KEY);
+    type("Mission", "Make more things.");
+    expect(screen.queryByRole("checkbox", { name: /renaming the company/ })).toBeNull();
+    apply();
+    expect(view.state().log.ops).toHaveLength(2);
+    cleanup();
+
+    const padded = { ...fixtureCompany(), name: " Acme" };
+    const second = edit(keyedState(padded), COMPANY_KEY);
+    type("Mission", "Make more things.");
+    expect(screen.queryByRole("checkbox", { name: /renaming the company/ })).toBeNull();
+    apply();
+    expect(second.state().draft.company.name).toBe(" Acme");
+    expect(second.state().draft.company.mission).toBe("Make more things.");
+    cleanup();
+
+    // Taking the space out IS a rename: the engine derives agent ids from the
+    // name exactly as stored.
+    edit(keyedState(padded), COMPANY_KEY);
+    type("Company name", "Acme");
+    expect(
+      screen.getByRole("checkbox", { name: "I understand what renaming the company does" }),
+    ).toBeDefined();
+  });
 });

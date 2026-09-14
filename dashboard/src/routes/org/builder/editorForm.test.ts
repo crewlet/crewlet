@@ -71,6 +71,75 @@ describe("an untouched form", () => {
     // trims before it compares, so the part would only be refused.
     expect(renames("Dev", "Dev ")).toBe(false);
   });
+
+  // THE COMPANY'S NAME IS THE ONE THAT COSTS MOST: an agent seat's id is
+  // derived from it, so a phantom rename of a name stored with a space gives
+  // every agent seat a new id over an edit to the mission.
+  test("a charter whose name the document stored with spaces is not renamed by another edit", () => {
+    const company = { ...fixtureCompany(), name: " Acme " };
+    const initial = companyForm(company);
+    expect(companyParts(initial, { ...initial, mission: "Make more things." })).toEqual([
+      { type: "updateCompany", set: [{ path: ["mission"], value: "Make more things." }] },
+    ]);
+    expect(companyParts(initial, { ...initial, name: "Acme Labs" })).toEqual([
+      { type: "updateCompany", set: [{ path: ["name"], value: "Acme Labs" }] },
+    ]);
+  });
+
+  // Every single-line value is written trimmed, so each of them had the same
+  // phantom edit as the name: applying a goal wrote the trimmed email.
+  test("a single-line value stored with spaces is written only when its box changes", () => {
+    const padded: ConfigRole = {
+      name: "Dev",
+      email: "dev@example.com ",
+      contact: { github_login: " dev" },
+      integrations: {
+        slack: { channel: "C1 " },
+        mattermost: { channel: " eng", username: "dev-bot " },
+        jira: { project: "OPS " },
+        confluence: { space: " ENG" },
+      },
+    };
+    const initial = seatForm(padded, "");
+    expect(
+      seatParts(
+        "seat:dev",
+        padded,
+        initial,
+        { ...initial, goal: "Ship" },
+        { editableHandle: true },
+      ),
+    ).toEqual([
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+    ]);
+    // Typing in the box is a change, written as the model writes it.
+    expect(
+      seatParts(
+        "seat:dev",
+        padded,
+        initial,
+        { ...initial, email: "dev@example.org " },
+        { editableHandle: false },
+      ),
+    ).toEqual([
+      {
+        type: "updateSeat",
+        target: "seat:dev",
+        set: [{ path: ["email"], value: "dev@example.org" }],
+      },
+    ]);
+
+    const unit = {
+      name: "Ops",
+      type: "team ",
+      channel: " ops",
+      integrations: { jira: { project: " OPS" } },
+    };
+    const unitInitial = unitForm(unit);
+    expect(unitParts("unit:Ops", unitInitial, { ...unitInitial, purpose: "Run it" })).toEqual([
+      { type: "updateUnit", target: "unit:Ops", set: [{ path: ["purpose"], value: "Run it" }] },
+    ]);
+  });
 });
 
 describe("a seat", () => {
