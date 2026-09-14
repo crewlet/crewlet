@@ -156,30 +156,30 @@ export function AddNodeDialog({
         }}
         autoFocus
         help={
-          <span className="col gap-1">
-            {clash && (
-              <span>
-                A {noun} named {trimmed} already exists.{" "}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setName(suggestion);
-                    setNamed(true);
-                  }}
-                >
-                  {`Use ${suggestion}`}
-                </Button>
-              </span>
-            )}
-            <span>
-              {kind === "unit"
-                ? "Unit names are unique: a lead, a unit reference and a manages entry name exactly one unit."
-                : "Seat names are unique: a lead or a manages entry names exactly one seat."}
-            </span>
-          </span>
+          kind === "unit"
+            ? "Unit names are unique: a lead, a unit reference and a manages entry name exactly one unit."
+            : "Seat names are unique: a lead or a manages entry names exactly one seat."
         }
       />
+      {/* BESIDE THE FIELD, NOT INSIDE ITS DESCRIPTION: the way out of a
+          collision is a control, and a button inside the text a screen reader
+          reads as the field's description is a control nobody is told about. */}
+      {clash && (
+        <p className="row wrap builder-note">
+          <span>
+            A {noun} named {trimmed} already exists.
+          </span>
+          <Button
+            size="sm"
+            onClick={() => {
+              setName(suggestion);
+              setNamed(true);
+            }}
+          >
+            {`Use ${suggestion}`}
+          </Button>
+        </p>
+      )}
       {kind === "unit" && <UnitTypeField value={type} onChange={setType} />}
       {kind === "human" && (
         <>
