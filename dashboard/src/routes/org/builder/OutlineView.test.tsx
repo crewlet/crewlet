@@ -18,7 +18,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
-import type { CompanyDocument } from "~/protocol/index.ts";
+import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import { OutlineView } from "./OutlineView.tsx";
 import { toDocument } from "./model/document.ts";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
@@ -460,5 +460,38 @@ describe("focus", () => {
     expect(focusedRow()).toBe(seatKey("dev"));
     act(() => probe.view!.expandAll());
     expect(rowOf(unitKey("Platform")).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  test("a focus request lands now even on the active row, and never on a later render", () => {
+    const spies = builderSpies();
+    const probe = harnessProbe();
+    const view = (agents: AgentRow[] = []) => (
+      <>
+        <button type="button">Undo</button>
+        <BuilderHarness
+          initial={checkedEdit(fixtureCompany())}
+          spies={spies}
+          probe={probe}
+          agents={agents}
+        >
+          <OutlineView />
+        </BuilderHarness>
+      </>
+    );
+    const { rerender } = render(view());
+    const toolbar = screen.getByRole("button", { name: "Undo" });
+    rowOf(COMPANY_KEY).focus();
+    press("ArrowDown");
+    expect(focusedRow()).toBe(seatKey("ceo"));
+
+    // An undo from the toolbar asks for the row that is already active.
+    toolbar.focus();
+    act(() => probe.view!.focusNode(seatKey("ceo")));
+    expect(document.activeElement).toBe(rowOf(seatKey("ceo")));
+
+    // Once taken, the request is spent: a live push later leaves focus alone.
+    toolbar.focus();
+    rerender(view([{ id: "a1", role: "Dev", handle: "dev", state: "working" }]));
+    expect(document.activeElement).toBe(toolbar);
   });
 });

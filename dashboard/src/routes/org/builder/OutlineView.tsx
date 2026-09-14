@@ -155,32 +155,40 @@ export function OutlineView() {
     return callback;
   };
 
-  const pending = useRef<{ id: string; column: number | null } | null>(null);
+  // A FOCUS REQUEST IS TAKEN BY THE RENDER IT CAUSES, AND BY NO OTHER. Focus
+  // moves once the row it names is rendered (a row inside a unit just opened,
+  // a node an operation just added, a row a reorder just moved, which a
+  // browser blurs as it moves it), so the request is state: each one is a
+  // new value, so even a request for the row already active causes a render,
+  // and the effect acts on that value once. A request held anywhere else
+  // would move no focus when nothing else changed (an undo from the toolbar
+  // asking for its node), then pull focus back to that row on whatever render
+  // came next, a live push twice per tool-loop round, wherever the operator
+  // had gone since.
+  const [request, setRequest] = useState<{
+    readonly id: string;
+    readonly column: number | null;
+  } | null>(null);
   const focusAt = useCallback(
     (id: string, col: number | null) => {
       if (addParentOf(id) === null) api.selection.select(id);
       setActive(id);
       setColumn(col);
-      pending.current = { id, column: col };
+      setRequest({ id, column: col });
     },
     [api.selection, setActive],
   );
-  // Focus moves once the row it names is rendered: a row inside a unit just
-  // opened, or a node an operation just added, exists only after this render.
   useLayoutEffect(() => {
-    const want = pending.current;
-    if (!want) return;
-    const row = rowEls.current.get(want.id);
-    if (!row) return;
-    pending.current = null;
-    if (want.column === null) {
+    const row = request ? rowEls.current.get(request.id) : undefined;
+    if (!request || !row) return;
+    if (request.column === null) {
       row.focus();
       return;
     }
-    const cell = row.querySelector<HTMLElement>(`[aria-colindex="${want.column}"]`);
+    const cell = row.querySelector<HTMLElement>(`[aria-colindex="${request.column}"]`);
     const widget = cell?.querySelector<HTMLElement>("[data-cell-widget] button");
     (widget ?? cell ?? row).focus();
-  });
+  }, [request]);
 
   const focusRef = useRef<(key: NodeKey) => void>(() => {});
   focusRef.current = (key: NodeKey) => {
