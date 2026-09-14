@@ -1373,6 +1373,69 @@ var budgetCases = []fleetCase{{
 				got, callers, callers*10)
 		}
 	},
+}, {
+	name: "a post-charge records spend that overran both caps",
+	fn: func(h *fleetHarness) {
+		// The spend already happened (a detached coding run, collected
+		// long after it started), so nothing can refuse it. Through the
+		// gate it was recorded NOT AT ALL whenever it did not fit, which
+		// is exactly when a cap binds, and the next round was admitted
+		// against room the run had already used.
+		if got := h.charge(testSeat, 90, 100, 100); !got.OK {
+			h.t.Fatalf("setup charge refused: %+v", got)
+		}
+		got, err := h.f.PostCharge(h.ctx, testSeat, 50)
+		if err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		if !got.OK || got.OrgUsed != 140 || got.AgentUsed != 140 {
+			h.t.Fatalf("post-charge = %+v, want OK at 140 on both counters", got)
+		}
+		if h.used(coord.OrgScope) != 140 || h.used(testSeat) != 140 {
+			h.t.Fatal("the post-charge did not reach both counters")
+		}
+		if next := h.charge(testSeat, 1, 100, 100); next.OK || next.RefusedScope != "org" {
+			h.t.Fatalf("next charge = %+v, want the org to refuse against the recorded run", next)
+		}
+	},
+}, {
+	name: "a post-charge leaves every refusal stamp as it was",
+	fn: func(h *fleetHarness) {
+		// It is not a decision about room, so it neither says the gate
+		// turned a charge away nor that it had room for one: a refusing
+		// company stays refusing, and a seat that never refused is not
+		// stamped because a run took it past its cap.
+		h.charge(testSeat, 90, 100, 0)
+		from := time.Now()
+		h.charge(testSeat, 50, 100, 0) // org refuses
+		stamped := h.refusedAt(coord.OrgScope, from, time.Now())
+
+		if _, err := h.f.PostCharge(h.ctx, testSeat, 30); err != nil {
+			h.t.Fatalf("PostCharge: %v", err)
+		}
+		if row, _ := h.usage(coord.OrgScope); !row.RefusedAt.Equal(stamped) || row.Used != 120 {
+			h.t.Fatalf("org = %+v, want 120 used and the refusal stamped at %v kept", row, stamped)
+		}
+		if row, _ := h.usage(testSeat); !row.RefusedAt.IsZero() {
+			h.t.Fatalf("the seat reads as refusing after a post-charge: %+v", row)
+		}
+	},
+}, {
+	name: "a post-charge of nothing records nothing, and one needs a seat",
+	fn: func(h *fleetHarness) {
+		if got, err := h.f.PostCharge(h.ctx, testSeat, 0); err != nil || !got.OK {
+			h.t.Fatalf("PostCharge(0) = (%+v, %v), want OK", got, err)
+		}
+		if _, listed := h.usage(coord.OrgScope); listed {
+			h.t.Fatal("a post-charge of zero created a counter")
+		}
+		if _, err := h.f.PostCharge(h.ctx, "", 5); err == nil {
+			h.t.Fatal("a post-charge with no seat scope was accepted")
+		}
+		if _, listed := h.usage(coord.OrgScope); listed {
+			h.t.Fatal("a post-charge with no seat scope still charged the org")
+		}
+	},
 }}
 
 // ---- the agent-to-agent channels --------------------------------------- //

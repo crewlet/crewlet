@@ -990,6 +990,31 @@ func (f *FleetStore) Charge(ctx context.Context, agentScope string, tokens, orgL
 	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
 }
 
+// PostCharge adds spend that already happened to the org's counter and the
+// seat's, refusing nothing. See [coord.Budgets.PostCharge].
+//
+// The same two writes as an admitted [FleetStore.Charge], org first, with no
+// cap to test and no refusal stamp cleared: [FleetStore.bump] carries a stamp
+// through, and nothing here decided the scope had room.
+func (f *FleetStore) PostCharge(ctx context.Context, agentScope string, tokens int) (coord.Spend, error) {
+	if tokens <= 0 {
+		return coord.Spend{OK: true}, nil
+	}
+	if agentScope == "" {
+		return coord.Spend{}, errors.New("coord/kv: a charge needs a seat scope")
+	}
+	org, _, err := f.bump(ctx, coord.OrgScope, tokens, 0)
+	if err != nil {
+		return coord.Spend{}, err
+	}
+	agent, _, err := f.bump(ctx, agentScope, tokens, 0)
+	if err != nil {
+		f.unwindOrg(ctx, tokens)
+		return coord.Spend{}, err
+	}
+	return coord.Spend{OK: true, OrgUsed: org.Used, AgentUsed: agent.Used}, nil
+}
+
 // unwindOrg takes back the org's half of a charge whose seat half did not land.
 //
 // On a context that OUTLIVES the caller's. The failure being undone is often

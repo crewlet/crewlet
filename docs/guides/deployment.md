@@ -1225,12 +1225,28 @@ Set budgets at two levels:
 - **Org-wide** — `token_budget` in the top-level YAML config
 - **Per-agent** — `token_budget` on each Role definition
 
-When a charge would exceed a cap, the tool loop refuses it and stops the phase;
-the engine ends the turn as failed and publishes `budget_exhausted` beside its
-`agent_turn_completed`. The check is atomic: if the agent's budget
-fails, the org-level consumption it had already charged is rolled back. In a
-fleet the counters live in the coordination slot, so an org cap of 500 k is
-500 k across every node rather than per process.
+Every model round is charged against both before it runs. A charge that does
+not fit is refused: the turn stops and the engine publishes a
+`budget_exhausted` event naming the scope that refused and its figures,
+beside the turn's own `agent_turn_completed`. The
+check is atomic: if the agent's budget refuses, the org-level consumption it
+had already charged is rolled back. In a fleet the counters live in the
+coordination slot, so an org cap of 500 k is 500 k across every node rather
+than per process.
+
+A refusal is also recorded beside the counter, as when that scope last refused
+a charge (`refused_at` on [`GET /budgets`](../reference/api-endpoints.md#get-budgets)
+and on the [live token meter](../reference/api-endpoints.md#the-live-token-meter)),
+and the next charge the scope admits clears it. That, not a counter at its cap,
+is what exhausted means: a refused charge increments nothing, so the counter
+stops short of the cap by the size of the round that did not fit.
+
+A coding run is the one spend that cannot be checked first. Its box spends
+while the turn is suspended, so its tokens are known only when the run is
+collected, and they are **post-charged**: added to both counters without a
+check, because no answer can un-spend them. A run that takes a counter past its
+cap is logged as `sandbox_spend_over_budget`, and the next round the seat or
+the company attempts is refused against the recorded figure.
 
 ### Structured Logging
 
