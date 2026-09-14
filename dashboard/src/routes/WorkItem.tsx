@@ -89,7 +89,13 @@ export function WorkItem({ id }: { id: string }) {
   // status renders in the word the team uses, a type in the name the company
   // declared, and a custom field's value as the option's NAME rather than the
   // uuid it is stored under.
+  // ENABLED ON THE ITEM, not just parameterised by it. `item` is absent until
+  // `work_item` answers — every mount, and every poll that finds nothing — and
+  // a params object that is `undefined` is an EMPTY one on the wire rather
+  // than a skipped question, so without this the engine is asked for a project
+  // with no key and refuses it with `bad_params` on the way in.
   const project = useQuery("work_project", item ? { key: item.project } : undefined, {
+    enabled: Boolean(item),
     pollMs: 300_000,
   });
 
@@ -186,7 +192,11 @@ export function ItemPanel({
   const now = useNow();
   const state = useQuery("work_item", { id: itemKey }, { enabled: itemKey !== "", pollMs: 15_000 });
   const item = state.data?.task;
+  // GUARDED LIKE THE FULL SCREEN'S, and for the same reason: the peek mounts
+  // before its item is read, so an unguarded call asks for a project with no
+  // key every time somebody opens one.
   const project = useQuery("work_project", item ? { key: item.project } : undefined, {
+    enabled: Boolean(item),
     pollMs: 300_000,
   });
 
