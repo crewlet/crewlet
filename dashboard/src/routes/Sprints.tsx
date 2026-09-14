@@ -165,7 +165,12 @@ export function Sprints() {
               <Velocity sprints={sprints} measure={measure} />
 
               {active && (
-                <Burndown data={burndown.data} loading={burndown.loading} sprint={active} />
+                <Burndown
+                  data={burndown.data}
+                  loading={burndown.loading}
+                  error={burndown.error}
+                  sprint={active}
+                />
               )}
 
               {[...sprints].reverse().map((s) => (
@@ -243,12 +248,26 @@ export function Velocity({ sprints, measure }: { sprints: WorkSprintRow[]; measu
 export function Burndown({
   data,
   loading,
+  error,
   sprint,
 }: {
   data?: WorkBurndown | null;
   loading?: boolean;
+  error?: string | null;
   sprint: WorkSprintRow;
 }) {
+  // A REFUSED SERIES KEEPS ITS PANEL, for the same reason a sprint with no
+  // lived day does: this panel is drawn only for a sprint that is RUNNING, so
+  // its absence reads as "this sprint has no burndown" — a statement about the
+  // work — when what happened is that the question failed. `QueryState` is
+  // where every code is turned into a sentence, so the refusal says which.
+  if (error) {
+    return (
+      <Panel title={`Sprint ${sprint.number} burndown`} icon="activity" subtitle={sprint.name}>
+        <QueryState error={error} loading={false} />
+      </Panel>
+    );
+  }
   if (loading && !data) return null;
   if (!data) return null;
   const measure = measureLabel(data.measure);

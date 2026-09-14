@@ -362,3 +362,25 @@ test("a partly unestimated sprint says what its chart leaves out", () => {
   render(<Burndown data={burndown({ unestimated: 4, tasks: 10 })} sprint={sprint()} />);
   expect(screen.getByText(/4 of 10 tasks carry no points/)).toBeTruthy();
 });
+
+// AND A REFUSED SERIES KEEPS ITS PANEL TOO, which is the same rule as the
+// unlived sprint above and was the one case that did not follow it: the panel
+// took `data` and `loading` and never `error`, so `!data` swallowed a refusal
+// and a failure rendered as the panel not existing. It is drawn ONLY for a
+// running sprint, so its absence reads as a statement about the work — "this
+// sprint has no burndown" — rather than as a question that failed.
+test("a refused series keeps its panel and says why", () => {
+  render(<Burndown data={null} error="bad_params" sprint={sprint()} />);
+  // The panel is there...
+  expect(screen.getByText(/burndown/i)).toBeTruthy();
+  // ...and it carries the refusal rather than an empty chart.
+  expect(screen.queryByText("Remaining")).toBeNull();
+  expect(document.querySelector(".banner")).toBeTruthy();
+});
+
+// AND AN ERROR OUTRANKS A STALE SERIES, because the reading on screen would
+// otherwise be presented as current while the poll behind it is failing.
+test("a refused poll says so even when a series was drawn before", () => {
+  render(<Burndown data={burndown()} error="query_failed" sprint={sprint()} />);
+  expect(document.querySelector(".banner")).toBeTruthy();
+});
