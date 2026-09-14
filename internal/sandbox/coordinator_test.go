@@ -865,6 +865,79 @@ func TestAStaleCompletionDoesNotClaimTheNextRun(t *testing.T) {
 	}
 }
 
+// THE SETTLE IS THE CLAIM'S TOO. A resumed turn that called run_sandbox again
+// returns only once its frame has unwound, and the new job can finish, be
+// claimed by its own completion and park on a question of its own inside that
+// window. The settle read the row back, saw a status that was neither running
+// nor launching, and tore down the paused box holding that question's
+// checkout, then marked the run done under the question.
+func TestASettleLeavesTheNextJobItsOwnTail(t *testing.T) {
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		req := launchReq(r.TurnID)
+		req.ReuseBox = r.SandboxID
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, req); err != nil {
+			t.Errorf("relaunch: %v", err)
+		}
+		if suspended, err := rig.pending.MarkSuspended(ctx, r.TurnID, map[string]any{
+			"pending_tool_name": "run_sandbox",
+		}); err != nil || !suspended {
+			t.Errorf("the relaunch's suspension: suspended=%v err=%v", suspended, err)
+		}
+		rig.runner.Finish(Result{NeedsInput: true, Question: "which file?", AskTo: "requester"})
+		next, _, err := rig.pending.Get(ctx, r.TurnID)
+		if err != nil {
+			t.Errorf("Get: %v", err)
+		}
+		completion := types.SandboxRunCompleted{
+			AgentHandle: next.AgentHandle, TurnID: next.TurnID, LaunchID: next.LaunchID,
+			SandboxID: next.SandboxID, CodingAgent: next.CodingAgent,
+		}
+		if err := rig.coordinator.OnCompleted(ctx, completion, events.New(completion, events.TraceContext{})); err != nil {
+			t.Errorf("the next job's completion: %v", err)
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the first job's completion: %v", err)
+	}
+
+	got := rig.get("t1")
+	if got.Status != StatusAwaiting || got.Question != "which file?" {
+		t.Fatalf("row = %s %q, want the next job waiting on its question", got.Status, got.Question)
+	}
+	if killed := rig.provider.KilledIDs(); len(killed) != 0 {
+		t.Fatalf("killed %v under a question still waiting for its answer", killed)
+	}
+}
+
+// A RELAUNCH THAT NEVER STARTED IS SETTLED WITH THE TURN. It could get no box,
+// so the row still names the previous job's, paused, and nothing else will
+// reclaim it: a paused box has no provider-side expiry, and the pause reaper
+// only looks at runs waiting on a person.
+func TestAFinishedTurnTearsDownTheBoxAFailedRelaunchLeftBehind(t *testing.T) {
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	rig.resumer.during = func(ctx context.Context, r PendingRun) {
+		rig.provider.CreateErr = errors.New("no capacity")
+		defer func() { rig.provider.CreateErr = nil }()
+		if _, err := Launch(ctx, rig.manager, rig.pending, rig.queue, launchReq(r.TurnID)); err == nil {
+			t.Error("the relaunch got a box the fixture refuses")
+		}
+	}
+	rig.runner.Finish(Result{Success: true, Text: "first pass"})
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("OnCompleted: %v", err)
+	}
+	if killed := rig.provider.KilledIDs(); !slices.Contains(killed, run.SandboxID) {
+		t.Fatalf("killed %v, want the paused box %q the failed relaunch left named", killed, run.SandboxID)
+	}
+	rig.finished("t1")
+}
+
 // THE WAITER'S OWN SIGNAL IS ONE THE COORDINATOR CLAIMS. Every other case
 // here hands the coordinator a completion built from the row; this one takes
 // the one the poll published, so the two cannot disagree about what names a

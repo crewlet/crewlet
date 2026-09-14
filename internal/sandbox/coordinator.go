@@ -541,9 +541,9 @@ func (c *Coordinator) TryResumeFromAnswer(ctx context.Context, handle, conversat
 // resumeAndSettle re-enters the suspended loop, then settles the box.
 //
 // After the resumed Execute returns: if the executor called run_sandbox AGAIN
-// the row is back in running and a new job owns the paused box, so it is left
-// for the next completion. Otherwise the phase is done with the box, so the box
-// is torn down and the run finished.
+// the row holds a new job that owns the paused box, so it is left for that
+// job's own tail. Otherwise the phase is done with the box, so the box is
+// torn down and the run finished.
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) error {
@@ -618,18 +618,22 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	if !ok {
 		return nil
 	}
-	if latest.Status == StatusRunning || latest.Status == StatusLaunching {
+	if latest.LaunchID != run.LaunchID && slices.Contains(Active, latest.Status) {
 		// The resumed executor called run_sandbox AGAIN: a new detached job
 		// owns the box and the suspending turn re-marked the seat busy.
 		//
-		// BOTH STATES OF A LIVE JOB, not just running. The relaunch takes
-		// the row back through launching and it stays there until the
-		// resumed turn unwinds — which happens after this call returns, so
-		// launching is in fact the status this read usually sees. Reading
-		// only for running is why a second run_sandbox call in one turn had
-		// its box torn down underneath it.
+		// TOLD BY ITS LAUNCH, because its status can be any live one by
+		// now: launching until the resumed turn writes its conversation,
+		// running while it works, and claimed by its own completion, or
+		// parked on a question of its own, when it finished before this
+		// read. Reading for running alone once tore a second run_sandbox
+		// call's box down underneath it, and reading for running or
+		// launching tore down the checkout of a question the next job had
+		// just asked and ended the run under it. A relaunch that is
+		// already over (one that could not start) is settled like the
+		// rest: the phase is done with whatever box it still names.
 		log.InfoContext(ctx, "sandbox_reused_in_turn",
-			"turn_id", run.TurnID, "status", latest.Status)
+			"turn_id", run.TurnID, "status", latest.Status, "launch_id", latest.LaunchID)
 		return nil
 	}
 	c.finish(ctx, latest, fenceOf(run))
