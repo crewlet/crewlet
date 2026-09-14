@@ -55,7 +55,6 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { useNavigator } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { Canvas, useCanvasOverlay, type CanvasHandle } from "~/ui/Canvas.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -63,35 +62,19 @@ import { Menu, type MenuEntry } from "~/ui/Menu.tsx";
 import { Avatar, Badge, Button, Empty, cx } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
-  allExpandable,
   ancestors,
-  collapseOrAscend,
-  createTree,
-  expandOrDescend,
   isExpandable,
-  isTypeAheadKey,
-  lastVisible,
   level,
-  nextVisible,
   posInSet,
-  previousVisible,
   setSize,
-  typeAhead,
-  typeAheadBuffer,
-  visible,
-  firstVisible,
   type TreeInput,
   type TreeModel,
-  type TypeAheadState,
 } from "~/ui/treeModel.ts";
 import { useLayoutAnchor, useMeasuredSizes } from "~/ui/useMeasuredSizes.ts";
 import type { Point, Rect } from "~/ui/viewport.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import {
-  chartInputs,
   CYCLE_GROUP,
-  reporting as buildReporting,
-  structure as buildStructure,
   type NodeView,
   type ReportingItem,
   type SeatView,
@@ -117,21 +100,15 @@ import {
   handleLabel,
   seatKindLabel,
 } from "./nodeMarks.tsx";
+import { treeStep, useOpenScreen, useReporting, useStructure, useTreeState } from "./useCharts.ts";
 
 /** Which arrangement of the draft the canvas draws. */
 export type ChartKind = "structure" | "reporting";
 
 export function CanvasView({ chart }: { chart: ChartKind }) {
   const api = useBuilder();
-  const nav = useNavigator();
-  const open = useCallback<OpenScreen>((path) => nav.to(path), [nav]);
-  const { draft, baseDraft, check } = api.state;
-  // The chart is a reading of these three and nothing else: a live push, a
-  // refusal or a pending update leaves it, and so the layout, as it was.
-  const structure = useMemo(
-    () => buildStructure(chartInputs({ draft, baseDraft, check })),
-    [draft, baseDraft, check],
-  );
+  const open = useOpenScreen();
+  const structure = useStructure(api.state);
   if (chart === "reporting") {
     return <ReportingChart api={api} structure={structure} open={open} />;
   }
@@ -213,11 +190,7 @@ function ReportingChart({
   structure: Structure;
   open: OpenScreen;
 }) {
-  const { draft, baseDraft, check } = api.state;
-  const chart = useMemo(
-    () => buildReporting(chartInputs({ draft, baseDraft, check })),
-    [draft, baseDraft, check],
-  );
+  const chart = useReporting(api.state);
   const boxes = useCallback((model: TreeModel, expanded: ReadonlySet<string>): BoxInput[] => {
     const card = (id: string): BoxInput => ({
       id,
@@ -248,7 +221,7 @@ function ReportingChart({
       />
     );
   }
-  const stale = check.generation !== api.state.generation;
+  const stale = api.state.check.generation !== api.state.generation;
   return (
     <TreeCanvas
       label="Reporting chart"
@@ -665,36 +638,9 @@ function TreeCanvas({
   render: (id: string, ctx: CardContext) => ReactNode;
 }) {
   const api = useBuilder();
-  const model = useMemo(() => createTree(forest), [forest]);
-
-  // COLLAPSED, not expanded, is what is kept: a node nobody has closed is
-  // open, which is also what a node an operation just added should be.
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const expanded = useMemo(() => {
-    const out = allExpandable(model);
-    for (const id of collapsed) out.delete(id);
-    return out;
-  }, [model, collapsed]);
-  const rows = useMemo(() => visible(model, expanded), [model, expanded]);
-
-  const selected = api.selection.key;
-  const [activeRaw, setActive] = useState<string | null>(null);
-  // The roving tab stop: the node last focused, else the selection, else the
-  // first node, and always one that is visible now.
-  const active = useMemo(() => {
-    const wanted = activeRaw ?? selected;
-    if (wanted !== null && model.parent.has(wanted)) {
-      if (rows.includes(wanted)) return wanted;
-      const shown = ancestors(model, wanted)
-        .reverse()
-        .find((a) => rows.includes(a));
-      if (shown) return shown;
-    }
-    return firstVisible(model);
-  }, [activeRaw, selected, model, rows]);
-
+  const tree = useTreeState(forest, api.selection.key);
+  const { model, expanded, active, setActive, toggle } = tree;
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const typed = useRef<TypeAheadState>({ text: "", at: 0 });
 
   // ---- measuring and layout -----------------------------------------------
   const { measure, sizes, measured } = useMeasuredSizes();
@@ -794,18 +740,11 @@ function TreeCanvas({
   const focusNode = useCallback(
     (id: string) => {
       if (!model.parent.has(id)) return;
-      const hidden = ancestors(model, id).filter((a) => collapsed.has(a));
-      if (hidden.length > 0) {
-        setCollapsed((was) => {
-          const next = new Set(was);
-          hidden.forEach((a) => next.delete(a));
-          return next;
-        });
-      }
+      const opened = tree.open(id);
       setActive(id);
-      if (hidden.length > 0 || !focusNow(id)) pendingFocus.current = id;
+      if (opened || !focusNow(id)) pendingFocus.current = id;
     },
-    [model, collapsed, focusNow],
+    [model, tree, setActive, focusNow],
   );
 
   // A node that was not on screen yet (inside a unit just opened, or a card
@@ -815,33 +754,14 @@ function TreeCanvas({
     if (id !== null && focusNow(id)) pendingFocus.current = null;
   });
 
-  const handleRef = useRef({ focusNode, model });
-  handleRef.current = { focusNode, model };
+  const focusRef = useRef(focusNode);
+  focusRef.current = focusNode;
+  const { expandAll, collapseAll } = tree;
   const handle = useMemo(
-    () => ({
-      focusNode: (key: string) => handleRef.current.focusNode(key),
-      expandAll: () => setCollapsed(new Set()),
-      // Everything but the tops, so the chart keeps something to stand on.
-      collapseAll: () => {
-        const { model: m } = handleRef.current;
-        const next = allExpandable(m);
-        m.roots.forEach((r) => next.delete(r));
-        setCollapsed(next);
-      },
-    }),
-    [],
+    () => ({ focusNode: (key: string) => focusRef.current(key), expandAll, collapseAll }),
+    [expandAll, collapseAll],
   );
   useBuilderView(handle);
-
-  // ---- keys -------------------------------------------------------------------
-  const toggle = useCallback((id: string) => {
-    setCollapsed((was) => {
-      const next = new Set(was);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
 
   // SELECTION FOLLOWS FOCUS, for nodes of the draft: the selection is what the
   // toolbar acts on and what the URL names, and a group heading is neither.
@@ -870,47 +790,15 @@ function TreeCanvas({
       if (act(id, action)) e.preventDefault();
       return;
     }
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    let handled = true;
-    switch (e.key) {
-      case "ArrowDown":
-        moveTo(nextVisible(model, expanded, id));
-        break;
-      case "ArrowUp":
-        moveTo(previousVisible(model, expanded, id));
-        break;
-      case "ArrowRight": {
-        const step = expandOrDescend(model, expanded, id);
-        if (step && "expand" in step) toggle(step.expand);
-        else if (step) moveTo(step.focus);
-        break;
-      }
-      case "ArrowLeft": {
-        const step = collapseOrAscend(model, expanded, id);
-        if (step && "collapse" in step) toggle(step.collapse);
-        else if (step) moveTo(step.focus);
-        break;
-      }
-      case "Home":
-        moveTo(firstVisible(model));
-        break;
-      case "End":
-        moveTo(lastVisible(model, expanded));
-        break;
-      default: {
-        const now = e.timeStamp;
-        if (isTypeAheadKey(e, typed.current, now)) {
-          typed.current = typeAheadBuffer(typed.current, e.key, now);
-          moveTo(typeAhead(model, expanded, id, typed.current.text));
-        } else {
-          handled = false;
-        }
-      }
-    }
-    if (handled) e.preventDefault();
+    const step = treeStep(tree, id, e);
+    if (step === undefined) return;
+    e.preventDefault();
+    if (step === null) return;
+    if ("toggle" in step) toggle(step.toggle);
+    else moveTo(step.focus);
   }
 
-  const selectedId = selected;
+  const selectedId = api.selection.key;
   const ctx: CardContext = {
     item: (id) => ({
       role: "treeitem",
