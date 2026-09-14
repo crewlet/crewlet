@@ -21,17 +21,34 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { SandboxRun } from "~/protocol/index.ts";
+import type { SandboxRun, SandboxStatus } from "~/protocol/index.ts";
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
-  running: "info",
-  awaiting_input: "caution",
-  succeeded: "positive",
-  completed: "positive",
-  failed: "critical",
-  cancelled: "neutral",
-  reclaimed: "neutral",
-};
+/**
+ * THE ENGINE'S OWN SEVEN WORDS, and only those.
+ *
+ * This map used to name `awaiting_input`, `succeeded`, `completed`,
+ * `cancelled` and `reclaimed` — five values `sandbox.PendingRun` cannot write.
+ * So the two states this screen exists to show, `awaiting_clarification` and
+ * `reseed`, fell through to the neutral default and read as unremarkable,
+ * while five entries could never match anything. `internal/sandbox/pending.go`
+ * is the list.
+ */
+const STATUS_TONE: Record<SandboxStatus, "positive" | "caution" | "critical" | "info" | "neutral"> =
+  {
+    launching: "info",
+    running: "info",
+    resumed: "info",
+    // A person is being waited on. `reseed` is the same fact one step worse:
+    // the box was reaped past its pause TTL, so the work is gone and only the
+    // question survives.
+    awaiting_clarification: "caution",
+    reseed: "caution",
+    done: "positive",
+    failed: "critical",
+  };
+
+/** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
+const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
 
 export function Runs() {
   const nav = useNavigator();
@@ -52,7 +69,9 @@ export function Runs() {
         turn_id: box.turn_id,
         agent_handle: box.agent_handle,
         role: box.role,
-        status: box.status,
+        // The live projection types its status as a plain string because it
+        // mirrors whatever the run reported; it is the same vocabulary.
+        status: box.status as SandboxStatus,
         coding_agent: box.coding_agent,
         // The live projection carries no placement; the durable row does,
         // and it replaces this entry as soon as the store catches up.
@@ -77,7 +96,7 @@ export function Runs() {
   }, [data, live]);
 
   const detail = rows.find((r) => r.turn_id === selected) ?? null;
-  const waiting = rows.filter((r) => r.status === "awaiting_input").length;
+  const waiting = rows.filter((r) => AWAITING.includes(r.status)).length;
   const running = rows.filter((r) => r.status === "running").length;
 
   return (
@@ -241,7 +260,7 @@ export function Runs() {
             </>
           }
         >
-          {detail.status === "awaiting_input" && (
+          {AWAITING.includes(detail.status) && (
             <div className="banner caution" style={{ marginBottom: "var(--space-3)" }}>
               <Icon name="help" size="sm" />
               <span className="col" style={{ gap: 2 }}>

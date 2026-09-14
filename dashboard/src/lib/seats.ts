@@ -12,7 +12,15 @@
  * So it is resolved ONCE, into an index, and screens consume seats.
  */
 
-import type { AgentRow, OrgRole, OrgTree, OrgUnit, SandboxEntry } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  OrgRole,
+  OrgTree,
+  OrgUnit,
+  PhaseLLM,
+  ProviderKeys,
+  SandboxEntry,
+} from "~/protocol/index.ts";
 
 export interface Seat {
   name: string;
@@ -25,8 +33,11 @@ export interface Seat {
   guidelines: string[];
   manages: string[];
   tokenBudget: number;
-  llm: string;
-  llmAuxiliary: string;
+  /** The seat's model chain in DECLARATION ORDER, flattened from every shape
+   *  `llm:` accepts. Empty when the seat says nothing and takes the default
+   *  provider. See [llmChain]. */
+  llm: string[];
+  llmAuxiliary: string[];
   availability: string;
   contact: Record<string, string>;
   /** Root → own unit. Empty for a root-level seat. */
@@ -38,6 +49,57 @@ export interface Seat {
   mcpEnv: Record<string, Record<string, string>>;
   schedules: { name: string; cron: string; task: string }[];
   raw: OrgRole;
+}
+
+/**
+ * The provider keys a seat's `llm:` names, in declaration order.
+ *
+ * THREE SHAPES REACH THIS BROWSER, because `config.PhaseLLM` accepts three:
+ * `llm: fast`, `llm: [fast, backup]`, and `llm: {default: fast, judge: tiny}`.
+ * The type declared a string, so the other two were rendered by whatever
+ * happened to be asked of them — an array as `fast,backup`, a mapping as
+ * `[object Object]` — and any consumer that called a string method on one
+ * threw on a config the engine accepts.
+ *
+ * The mapping form flattens in PHASE ORDER with `default` first, because the
+ * question a reader has on a seat page is "which models does this seat run
+ * on", not "which model runs its judge". Duplicates are dropped: a chain that
+ * lists one key twice is one key, and the same key reached through two phases
+ * is not two models.
+ *
+ * `phase` picks one phase out of the mapping instead, falling back to
+ * `default` exactly as the engine does.
+ */
+export function llmChain(
+  llm: PhaseLLM | undefined,
+  phase?: "default" | "review" | "subagent" | "auxiliary" | "judge" | "sandbox",
+): string[] {
+  const keys = (value: ProviderKeys | undefined): string[] =>
+    typeof value === "string"
+      ? value
+        ? [value]
+        : []
+      : Array.isArray(value)
+        ? value.filter(Boolean)
+        : [];
+  if (llm == null) return [];
+  if (typeof llm === "string" || Array.isArray(llm)) return dedupe(keys(llm));
+  if (phase) {
+    const own = keys(llm[phase]);
+    return dedupe(own.length ? own : keys(llm.default));
+  }
+  return dedupe([
+    ...keys(llm.default),
+    ...keys(llm.review),
+    ...keys(llm.subagent),
+    ...keys(llm.auxiliary),
+    ...keys(llm.judge),
+    ...keys(llm.sandbox),
+  ]);
+}
+
+function dedupe(keys: string[]): string[] {
+  return keys.filter((key, i) => keys.indexOf(key) === i);
 }
 
 export interface OrgIndex {
@@ -81,8 +143,8 @@ function toSeat(role: OrgRole, chain: OrgUnit[], inheritedLead: string): Seat {
     guidelines: role.behavioral_guidelines ?? [],
     manages: role.manages ?? [],
     tokenBudget: role.token_budget ?? 0,
-    llm: role.llm ?? "",
-    llmAuxiliary: role.llm_auxiliary ?? "",
+    llm: llmChain(role.llm),
+    llmAuxiliary: llmChain(role.llm_auxiliary),
     availability: role.availability ?? "",
     contact: role.contact ?? {},
     unitChain: chain,

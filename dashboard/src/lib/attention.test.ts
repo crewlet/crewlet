@@ -49,27 +49,41 @@ describe("what it surfaces", () => {
     expect(attentionQueue(input({ authRejected: true }))[0]?.id).toBe("auth");
   });
 
+  // THE ENGINE'S OWN WORD. This case asserted `awaiting_input`, which
+  // `sandbox.PendingRun` cannot write — its statuses are `launching`,
+  // `running`, `awaiting_clarification`, `resumed`, `done`, `failed` and
+  // `reseed` — so the condition it was guarding never fired on a real run and
+  // the test passed against a fixture no engine produces.
+  const parked = (status: string) => ({
+    turn_id: "t1",
+    role: "Dev A",
+    agent_handle: "dev-a",
+    agent_id: "",
+    coding_agent: "claude-code",
+    sandbox_id: "s1",
+    task: "",
+    status,
+    started_at: "2026-01-01T11:00:00Z",
+    question: "Which branch should I target?",
+  });
+
   test("a run paused on a question carries the question", () => {
-    const items = attentionQueue(
-      input({
-        sandboxes: [
-          {
-            turn_id: "t1",
-            role: "Dev A",
-            agent_handle: "dev-a",
-            agent_id: "",
-            coding_agent: "claude-code",
-            sandbox_id: "s1",
-            task: "",
-            status: "awaiting_input",
-            started_at: "2026-01-01T11:00:00Z",
-            question: "Which branch should I target?",
-          },
-        ],
-      }),
-    );
+    const items = attentionQueue(input({ sandboxes: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
     expect(items[0]?.path).toEqual(["runs"]);
+  });
+
+  // A BOX REAPED PAST ITS PAUSE TTL is the same fact one step worse: the work
+  // is gone and only the question survives, and `sandbox.Awaiting` counts it.
+  test("a run whose box was reaped is waiting on a person too", () => {
+    const items = attentionQueue(input({ sandboxes: [parked("reseed")] }));
+    expect(items[0]?.detail).toBe("Which branch should I target?");
+  });
+
+  // AND A RUNNING ONE IS NOT WAITING ON ANYBODY. Without this the condition
+  // above could be `status !== "running"` and still pass every case here.
+  test("a running run is not in the queue", () => {
+    expect(attentionQueue(input({ sandboxes: [parked("running")] }))).toEqual([]);
   });
 
   test("a live round that stopped moving is surfaced, and escalates", () => {

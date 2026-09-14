@@ -244,11 +244,20 @@ export interface SandboxEntry {
 }
 
 /** One durable coding run, as the `sandbox_runs` query answers it. */
+/** The durable statuses `sandbox.PendingRun` actually carries.
+ *
+ *  Not a free string: the screen's own tone map named `succeeded`, `completed`,
+ *  `cancelled` and `reclaimed`, none of which the engine can write, so four of
+ *  its seven entries were unreachable and three real states fell through to
+ *  the neutral default. */
+export type SandboxStatus =
+  "launching" | "running" | "awaiting_clarification" | "resumed" | "done" | "failed" | "reseed";
+
 export interface SandboxRun {
   turn_id: string;
   agent_handle: string;
   role: string;
-  status: string;
+  status: SandboxStatus;
   coding_agent: string;
   /** Which configured cell the run's box is in: direct, container or e2b. */
   placement: string;
@@ -346,6 +355,25 @@ export interface BudgetsAnswer {
 // Org, tools, schedules
 // ---------------------------------------------------------------------------
 
+/** The `llm:` field of a seat, in every shape `config.PhaseLLM` accepts:
+ *
+ *      llm: fast                        one provider for every phase
+ *      llm: [fast, backup]              a fallback chain for every phase
+ *      llm: {default: fast, judge: tiny} a chain per phase
+ *
+ *  A phase left unset in the mapping form falls back to `default`. */
+export type ProviderKeys = string | string[];
+export type PhaseLLM =
+  | ProviderKeys
+  | {
+      default?: ProviderKeys;
+      review?: ProviderKeys;
+      subagent?: ProviderKeys;
+      auxiliary?: ProviderKeys;
+      judge?: ProviderKeys;
+      sandbox?: ProviderKeys;
+    };
+
 /** A role as `config.Company` serialises it. Verbatim: the config's own names. */
 export interface OrgRole {
   name: string;
@@ -358,8 +386,15 @@ export interface OrgRole {
   behavioral_guidelines?: string[];
   manages?: string[];
   token_budget?: number;
-  llm?: string;
-  llm_auxiliary?: string;
+  /** THREE SHAPES, not one. `config.PhaseLLM` marshals as a string for one
+   *  provider, an array for a fallback chain, and an object keyed on phase for
+   *  a per-phase mapping — all three are valid config and all three reach this
+   *  browser. Declared as a string, the array and the object both arrived as
+   *  values `String(...)` renders as `fast,backup` or `[object Object]`, and
+   *  any consumer calling a string method on one throws. Read it through
+   *  `llmChain()` in `lib/seats.ts`, never directly. */
+  llm?: PhaseLLM;
+  llm_auxiliary?: PhaseLLM;
   learning_enabled?: boolean;
   availability?: string;
   contact?: Record<string, string>;
@@ -371,10 +406,20 @@ export interface OrgRole {
 export interface OrgUnit {
   name: string;
   type?: string;
+  /** The unit's STABLE IDENTITY, which a name is not — a rename moves
+   *  everything keyed on the name and nothing keyed on this. Absent means the
+   *  name is the key, which is what `org.Unit.Key` falls back to. Keying a
+   *  rendered tree on the name remounts a whole subtree on a rename. */
+  id?: string;
   purpose?: string;
   lead?: string;
   goals?: string[];
   channel?: string;
+  /** The tracker project this unit files under, and the knowledge container it
+   *  writes pages to. Vendor-neutral: the same key names a native project and
+   *  a Jira one. Both reach the wire and neither was declared here. */
+  project?: string;
+  space?: string;
   knowledge_refs?: string[];
   mcp_env?: Record<string, Record<string, string>>;
   integrations?: Record<string, unknown>;
@@ -406,25 +451,54 @@ export interface ToolRow {
   source: string;
 }
 
+/** One declared schedule, as `schedule.Row` serialises it.
+ *
+ *  THE NAMES ARE THE SERVER'S. This type used to declare `scope`, `scope_name`,
+ *  `last_run` and `last_outcome`; the server sends `scope_type` and `scope_id`
+ *  and has no last-run field at all — the ledger is a separate answer — so
+ *  four of its nine fields rendered as `undefined` on every row. */
 export interface ScheduleRow {
+  /** `role` or `unit`. */
+  scope_type: string;
+  /** The seat handle or the unit name this schedule is scoped to. */
+  scope_id: string;
   name: string;
   cron: string;
-  task: string;
-  scope: string;
-  scope_name: string;
   timezone: string;
+  task: string;
+  /** Empty for a role schedule, where a target is meaningless rather than
+   *  defaulted — see `schedule.Row`. */
+  target: string;
+  enabled: boolean;
+  timeout_seconds: number;
+  catchup: boolean;
+  /** The seats a fire actually reaches, resolved from the scope and target. */
+  runners: string[];
+  /** Zero-valued when there is no next fire: disabled, an expression that
+   *  cannot be parsed, or a date the calendar never reaches. */
   next_run: string;
-  last_run: string;
-  last_outcome: string;
+  /** Why `next_run` is empty when the reason is a DEFECT rather than a choice
+   *  — an unparseable cron, an unknown timezone. Empty for a healthy row and
+   *  for a merely disabled one, so a blank cell is never the only symptom. */
+  problem?: string;
 }
 
+/** One fire, from the at-most-once dispatch ledger.
+ *
+ *  `outcome` has exactly two values — `fired` and `skipped_catchup` — because
+ *  this is a DISPATCH ledger and not a turn-outcome one. Nothing here can say
+ *  a turn failed; the turn says that. */
 export interface ScheduleRunRow {
-  name: string;
-  scope: string;
-  scope_name: string;
+  scope_type: string;
+  scope_id: string;
+  schedule_name: string;
+  /** The tick this fire stands for, as the ledger's own at-most-once key. */
+  fire_label: string;
+  target_handle: string;
+  scheduled_at: string;
   fired_at: string;
-  outcome: string;
-  detail: string;
+  outcome: "fired" | "skipped_catchup" | "";
+  trace_id: string;
 }
 
 export interface SchedulesAnswer {
@@ -1447,6 +1521,18 @@ export interface WorkGoal {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  /** The health check-in history, newest LAST as it was written. The only part
+   *  of a goal a person writes in prose, served by `work_goals` since it
+   *  existed and declared by nothing until now. */
+  updates?: WorkGoalUpdate[];
+}
+
+/** One check-in on a goal: who, when, the health they declared, and why. */
+export interface WorkGoalUpdate {
+  at: string;
+  author: string;
+  health?: "on_track" | "at_risk" | "off_track" | "done" | "";
+  text?: string;
 }
 
 export interface WorkGoalsAnswer {
@@ -1803,6 +1889,13 @@ export interface PagesAnswer {
   pages: PageSummary[];
   limit: number;
   offset: number;
+  /** THE COVERAGE HALF, which `Sources.pageList` returns and this type dropped
+   *  — so a page list served far behind the log was pixel-identical to a
+   *  complete one. Same envelope as every other state-log answer. */
+  read_level?: ReadLevel;
+  position?: number;
+  log_lag?: number;
+  complete?: boolean;
 }
 
 export interface PageContainer {

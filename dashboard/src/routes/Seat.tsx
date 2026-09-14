@@ -53,6 +53,24 @@ type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
+/** A provider chain, in the order the fallback walks it. */
+function ModelChain({ keys }: { keys: string[] }) {
+  return (
+    <span className="row gap-1" style={{ flexWrap: "wrap" }}>
+      {keys.map((key, i) => (
+        <span key={key} className="row gap-1">
+          {i > 0 && (
+            <span className="faint" title="falls back to">
+              →
+            </span>
+          )}
+          <code className="inline">{key}</code>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
   const org = useOrg();
@@ -370,10 +388,24 @@ export function SeatScreen({ handle }: { handle: string }) {
                         <span className="faint">nobody</span>
                       ),
                     ],
-                    ["Model", seat.llm || <span className="faint">default provider</span>],
+                    // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or a
+                    // per-phase mapping, so this is the flattened order the
+                    // provider chain actually walks — and an empty ARRAY is
+                    // truthy, which is why the fallback is an explicit length
+                    // test rather than `||`.
+                    [
+                      "Model",
+                      seat.llm.length ? (
+                        <ModelChain keys={seat.llm} />
+                      ) : (
+                        <span className="faint">default provider</span>
+                      ),
+                    ],
                     [
                       "Auxiliary model",
-                      seat.llmAuxiliary || (
+                      seat.llmAuxiliary.length ? (
+                        <ModelChain keys={seat.llmAuxiliary} />
+                      ) : (
                         <span className="faint">none — reflection uses the default</span>
                       ),
                     ],

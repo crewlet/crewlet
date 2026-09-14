@@ -55,6 +55,9 @@ function phase(over: Partial<PhaseRecord> = {}): PhaseRecord {
     hostIteration: 0,
     backend: "",
     codingAgent: "",
+    sandboxId: "",
+    costUSD: 0,
+    deliveredRefs: [],
     trigger: null,
     at: "2026-09-02T10:00:00Z",
     startedAt: "2026-09-02T10:00:00Z",
@@ -71,8 +74,26 @@ const TWO_ROUNDS = phase({
     { round: 2, reasoning: "that is enough", content: "Posted it." },
   ],
   tools: [
-    { name: "read_file", round: 1, args: "{}", result: "contents", failed: false },
-    { name: "submit_work", round: 2, args: "{}", result: "ok", failed: false },
+    {
+      name: "read_file",
+      round: 1,
+      args: "{}",
+      result: "contents",
+      failed: false,
+      durationMs: 0,
+      origin: "builtin",
+      server: "",
+    },
+    {
+      name: "submit_work",
+      round: 2,
+      args: "{}",
+      result: "ok",
+      failed: false,
+      durationMs: 0,
+      origin: "builtin",
+      server: "",
+    },
   ],
 });
 
@@ -131,8 +152,26 @@ describe("a round is one block", () => {
           roundsUsed: 2,
           narration: [{ round: 2, reasoning: "", content: "Done." }],
           tools: [
-            { name: "read_file", round: 1, args: "{}", result: "contents", failed: false },
-            { name: "submit_work", round: 2, args: "{}", result: "ok", failed: false },
+            {
+              name: "read_file",
+              round: 1,
+              args: "{}",
+              result: "contents",
+              failed: false,
+              durationMs: 0,
+              origin: "builtin",
+              server: "",
+            },
+            {
+              name: "submit_work",
+              round: 2,
+              args: "{}",
+              result: "ok",
+              failed: false,
+              durationMs: 0,
+              origin: "builtin",
+              server: "",
+            },
           ],
         })}
         defaultOpen
