@@ -465,8 +465,8 @@ export interface EngineHealth {
   version?: string;
   /**
    * When this node's ENGINE started, which is when the node started: the API
-   * is served inside the engine's process. There is no second `engine_started_at`
-   * beside it any more, because there was never a second process to have one.
+   * is served inside the engine's process, and the fleet view reports the same
+   * instant for this node.
    */
   started_at?: string;
   queue?: string;
@@ -1901,7 +1901,7 @@ export interface SetupRequirement {
   value?: string;
   /** The document names something here: a literal or a ${VAR}. */
   present: boolean;
-  /** Three-valued, as everywhere: null is "this process cannot say". */
+  /** Null for a field the document leaves empty: there is nothing to resolve. */
   resolved?: boolean | null;
   seat?: string;
 }
@@ -2296,6 +2296,5 @@ export type QueryErrorCode =
    *  says "ask again in a moment", never "there is nothing": the second is an
    *  answer a person acts on. */
   | "unavailable"
-  | "no_event_store"
   | "timeout"
   | "closed";
