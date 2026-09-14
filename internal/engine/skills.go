@@ -1,8 +1,6 @@
 package engine
 
 import (
-	"context"
-
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -12,14 +10,14 @@ import (
 // # It outlives an epoch, and the org chart is why
 //
 // The registry's CONTENT comes from the knowledge base rather than from
-// config — a skill is a page somebody wrote, and an apply that changed a
-// seat's model has nothing to say about it. So the registry is built once
-// per node and survives every apply; what an apply refreshes is the
-// operator's ${var} map, which IS config.
+// config: a skill is a page somebody wrote, and an apply that changed a
+// seat's model has nothing to say about it. So the registry is built once per
+// node and survives every apply; what an apply refreshes is the operator's
+// ${var} map, which IS config, and the SOURCE the skills are read from, which
+// is config too (see skillsync.go).
 //
 // Rebuilding it per epoch would empty it on every apply and leave every seat
-// running without its company's guidance until the next sync walk — which on
-// a webhook-driven sync could be never.
+// running without its company's guidance until the next walk.
 
 // skillVariables resolves the operator's substitution map for an epoch, plus
 // the one variable the engine reserves.
@@ -111,7 +109,7 @@ func (e *Engine) auditSkills(c *Company) {
 	e.skills.Audit(snapshot.Names(), snapshot.MCPServers())
 }
 
-// SkillsContainer is the knowledge container the sync worker walks, or "".
+// SkillsContainer is the knowledge container the skill sync walks, or "".
 //
 // Empty means no sync: a company with `knowledge.backend: none`, or one that
 // turned tool skills off with `knowledge.skills_container: ""`. Both are
@@ -119,10 +117,11 @@ func (e *Engine) auditSkills(c *Company) {
 // inventing one.
 //
 // CONTAINER rather than the backend's own word, because the walk it feeds is
-// backend-neutral: [Engine.SyncSkills] takes rendered pages, so the backend
-// that read them is the caller's business and not this signature's. It was
-// `SkillsProject` while Plane was served — a name that outlived its vendor
-// and then described a Confluence SPACE, which is the drift this rename ends.
+// backend-neutral: a [skillsync.Source] carries its backend's own walk, so the
+// backend that reads the pages is that walk's business and not this
+// signature's. It was `SkillsProject` while Plane was served, a name that
+// outlived its vendor and then described a Confluence SPACE, which is the
+// drift this rename ends.
 func (e *Engine) SkillsContainer(c *Company) string {
 	return c.Config.SkillsContainerKey()
 }
@@ -154,42 +153,13 @@ func (e *Engine) skillsContainer() string {
 // company mid-setup.
 func (e *Engine) Skills() *skills.Registry { return e.skills }
 
-// SyncSkills replaces the registry from a knowledge container's pages.
+// auditCurrentSkills audits the registry against the epoch serving now.
 //
-// ALL OR NOTHING. A caller that could not enumerate the whole container must
-// report the failure rather than hand over what it managed to read: the
-// replace is wholesale, so a partial walk silently DELETES every skill it
-// did not reach — and a webhook-driven sync may not walk again for days.
-//
-// It takes rendered page text rather than a backend client, so the walk
-// belongs to whoever owns the backend and this stays the one place that
-// decides what a skill is.
-func (e *Engine) SyncSkills(pages []skills.Page) {
-	admitted, report := skills.Admit(pages)
-	e.skills.Replace(admitted)
-	log.Info("tool_skills_synced", "skills", len(admitted),
-		"pages", report.Pages, "not_skills", report.Ordinary,
-		"undecodable", len(report.Undecodable))
-}
-
-// syncSkillsFrom walks the configured skills container and replaces the
-// registry.
-//
-// Best effort and LOUD on failure: a company whose skills did not load runs
-// with agents that do not know its conventions, which looks from the outside
-// like models that stopped following instructions.
-func (e *Engine) syncSkillsFrom(ctx context.Context, c *Company, walk func(context.Context, string) ([]skills.Page, error)) {
-	container := e.SkillsContainer(c)
-	if container == "" || walk == nil {
-		return
+// For a registry change that no apply made (a walk, a page update): the
+// trigger audit is per epoch, and the epoch to audit against is the current
+// one, whichever apply published it.
+func (e *Engine) auditCurrentSkills() {
+	if c := e.Company(); c != nil {
+		e.auditSkills(c)
 	}
-	pages, err := walk(ctx, container)
-	if err != nil {
-		log.ErrorContext(ctx, "tool_skill_sync_failed", "container", container, "error", err.Error(),
-			"detail", "the registry keeps whatever it already held; agents run "+
-				"without this company's tool guidance until the next sync")
-		return
-	}
-	e.SyncSkills(pages)
-	e.auditSkills(c)
 }

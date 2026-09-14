@@ -355,7 +355,6 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 			e.notify.mu.Unlock()
 			parsers = append(parsers, parts.parser)
 			prompts = append(prompts, confluencePrompt())
-			e.startConfluenceSkillSync(ctx, c)
 		}
 	}
 

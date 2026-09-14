@@ -225,6 +225,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// those follow a coordination family, which a company revision does
 	// not change — see [Engine.reconcileNative].
 	e.reconcileNative(ctx, next)
+	// AND THE TOOL SKILLS' SOURCE, after the knowledge base's own reconcile
+	// above, because the Confluence source is read off the wiring it left
+	// running. See [Engine.reconcileSkills].
+	e.reconcileSkills(next)
 	applied = append(applied, "integrations")
 
 	previous := e.Company()

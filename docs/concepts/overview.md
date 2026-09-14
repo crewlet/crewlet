@@ -178,7 +178,9 @@ internal/
 │                         #   wake it twice), ledger/ (iteration, conversation
 │                         #   and budget ledgers), structured/ (how a phase
 │                         #   gives a typed answer), prefetch/, prompts/,
-│                         #   skills/, builtin/, subagent/ (workers)
+│                         #   skills/, skillsync/ (keeps every node's
+│                         #   skill registry current), builtin/,
+│                         #   subagent/ (workers)
 ├── queue/                # The EventQueue contract + the jetstream backend
 │                         #   and the in-memory twin, both certified by one
 │                         #   suite

@@ -721,7 +721,7 @@ here.
 | The activation pointer and node postures | `internal/configplane` | [Control plane](control-plane.md) |
 | The executor/reviewer loop, workers | `internal/agent/turn`, `runner`, `toolloop`, `subagent` | [Turn engine](turn-engine.md) · [Agent runtime](agent-runtime.md) |
 | The tool registry, MCP children, A2A | `internal/tools`, `internal/mcp`, `internal/a2a` | [Tools & MCP](../guides/tools-and-mcp.md) · [Tool capabilities](tool-capabilities.md) |
-| Knowledge-base-sourced prompt fragments | `internal/agent/skills` | [Tool skills](tool-skills.md) |
+| Knowledge-base-sourced prompt fragments, and keeping every node's copy current | `internal/agent/skills`, `internal/agent/skillsync` | [Tool skills](tool-skills.md) |
 | Live knowledge search | `internal/knowledge` | [Knowledge system](knowledge-system.md) |
 | Diary, episodes, skill induction, profiles | `internal/learning` | [Agent learning](agent-learning.md) |
 | What a seat already said in one thread | `internal/agent/ledger` | [Conversation sessions](conversation-sessions.md) |

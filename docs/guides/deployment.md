@@ -632,6 +632,7 @@ test rather than vanishing quietly.
 | `raw_webhook` | The delivery is **already** a row (the `webhook` category above). This event is the wake the receiver publishes onto a seat's inbox, so categorising it too would store every delivery twice — once as what arrived and once as what was forwarded. |
 | `a2a_request` | The ask is **already** a row: `a2a_channel_opened` and `a2a_message_sent` record the same exchange under the ids the audit trail is keyed on. This event is the wake it puts on the target seat's inbox — same reason as `raw_webhook`. |
 | `a2a_message` | The answer is **already** a row (`a2a_message_sent`). This event is the wake it puts on the requester's inbox. |
+| `tool_skill_page_changed` | A **nudge** between nodes that one tool-skill page moved, so every node's registry re-reads it rather than only the node that won the webhook. The delivery that caused it is **already** a row (the `webhook` category above), and what the change did is a log line on each node, so a durable row would record one wiki edit once more per member of the fleet. |
 | `budget_reported` | A **rollup** of live meters on a 15-second tick, so a durable row per tick is about two million a year to answer a question the live projection answers for free. What the audit log holds instead is the per-turn spend the rollup is a sum *of* — `agent_turn_completed` rows — so "what did we spend last month" is answerable and "what were the meters reading at 14:03:15" is not a question anybody asks. It still drives the live projection. |
 
 #### Querying events
