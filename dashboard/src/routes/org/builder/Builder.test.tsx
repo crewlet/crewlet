@@ -305,16 +305,18 @@ describe("checking the draft", () => {
   });
 });
 
-// NO PROVIDER, NO AGENT. The dashboard writes none, so the lens says where
-// one comes from rather than leaving a company nobody can run.
+// NO PROVIDER, NO TURN. The dashboard writes none, so the lens says where one
+// comes from rather than leaving agents whose work waits with nothing to say
+// why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
   const without = company();
   delete without.providers;
   const engine = new Engine(without);
   mountBuilder({ engine });
-  // The whole company, not only its agents: no node applies it.
+  // The engine applies the company and holds its agents' work, so the
+  // caution says what waits rather than claiming nothing is applied.
   expect(
-    await screen.findByText(/every node refuses to apply this company and nothing in it runs/),
+    await screen.findByText(/no agent seat takes a turn: work sent to a seat waits on its inbox/),
   ).toBeDefined();
   cleanup();
 

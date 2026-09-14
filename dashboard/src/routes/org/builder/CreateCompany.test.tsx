@@ -116,7 +116,9 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
     "#/integrations",
   );
   expect(screen.getByText(/crewlet config import company.yaml/)).toBeDefined();
-  expect(screen.getByText(/every node refuses to apply the company/)).toBeDefined();
+  expect(
+    screen.getByText(/no agent seat takes a turn, and work sent to a seat waits/),
+  ).toBeDefined();
   // The first revision has no parent to differ from, so the strip opens the
   // configuration itself rather than an empty diff.
   expect(screen.queryByRole("link", { name: "View changes" })).toBeNull();
