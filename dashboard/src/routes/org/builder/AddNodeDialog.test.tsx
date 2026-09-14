@@ -85,6 +85,13 @@ test("a unit is added with its type at the company root; its names are checked a
   });
 });
 
+test("a name somebody typed stays when they choose another kind", () => {
+  open(keyedState(fixtureCompany()), "unit:Sales");
+  fireEvent.change(nameBox(), { target: { value: "Closer" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Human seat" }));
+  expect(nameBox().value).toBe("Closer");
+});
+
 test("choosing another kind moves an untouched default name along, and a human seat carries its contact", () => {
   const view = open(keyedState(fixtureCompany()), "unit:Engineering");
   fireEvent.click(screen.getByRole("radio", { name: "Human seat" }));

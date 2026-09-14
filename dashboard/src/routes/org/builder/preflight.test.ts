@@ -121,6 +121,9 @@ describe("stranded schedules", () => {
     expect(newlyStranded(before, after)).toEqual([
       { unit: "unit:Team", unitName: "Team", schedule: "standup", reason: "lead" },
     ]);
+    expect(strandedSentence(newlyStranded(before, after)[0]!)).toBe(
+      "Schedule standup on Team would have no runner: it runs as the unit's lead, and the lead would be a human seat. The engine refuses the save until it is disabled or has a runner.",
+    );
   });
 
   test("a schedule stranded before the operation is not the operation's consequence", () => {

@@ -265,6 +265,20 @@ describe("before the seats go", () => {
     expect(screen.getByText(/Runner is working now/)).toBeDefined();
   });
 
+  test("every seat a unit's removal takes that is working now is named", () => {
+    const agents: AgentRow[] = [
+      { id: "1", role: "VP Engineering", handle: "vp-engineering", state: "working" },
+      { id: "2", role: "SRE", handle: "sre", state: "working" },
+    ];
+    open(keyedState(fixtureCompany()), "unit:Engineering", { agents });
+    const notes = screen.getAllByText(/is working now/);
+    expect(notes.map((n) => n.textContent?.split(" is working")[0])).toEqual([
+      "VP Engineering",
+      "SRE",
+    ]);
+    expect(notes.every((n) => n.tagName === "LI")).toBe(true);
+  });
+
   test("removing more than half the saved company's seats is acknowledged first", () => {
     const doc: CompanyDocument = {
       name: "X",

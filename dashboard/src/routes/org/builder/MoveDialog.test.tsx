@@ -158,6 +158,16 @@ describe("a seat", () => {
 });
 
 describe("a unit", () => {
+  test("a unit that moves with a seat working inside it names that seat", () => {
+    const agents: AgentRow[] = [{ id: "1", role: "SRE", handle: "sre", state: "working" }];
+    open(keyedState(fixtureCompany()), "unit:Platform", { agents });
+    expect(
+      screen.getByText(
+        "SRE is working now. Its current turn continues on the previous configuration until the engine applies this change.",
+      ),
+    ).toBeDefined();
+  });
+
   test("is never offered itself or a unit inside it, and names the lead and channel its subtree inherits", () => {
     const doc = fixtureCompany();
     doc.units![0]!.channel = "eng";

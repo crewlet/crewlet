@@ -439,6 +439,19 @@ describe("seat fields", () => {
     ).toBe("#/config");
   });
 
+  // Read only, the banner is the reason Apply is unavailable; a caption asking
+  // to correct a field nobody can type in would be a second, wrong one.
+  test("a read-only editor asks nobody to correct a field", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.token_budget = -5;
+    edit(keyedState(doc), "seat:dev", { readOnly: true });
+    expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
+    expect(screen.queryByText("Correct the token budget first.")).toBeNull();
+    cleanup();
+    edit(keyedState(doc), "seat:dev");
+    expect(screen.getByText("Correct the token budget first.")).toBeDefined();
+  });
+
   test("a malformed token budget blocks Apply with the reason", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     type("Token budget", "lots");
@@ -597,6 +610,13 @@ describe("integrations", () => {
     expect(
       screen.getByText(/This enrols the seat in GitHub. Create its app from Integrations./),
     ).toBeDefined();
+    cleanup();
+
+    // A repository alone writes the block as well, so it enrols the seat too.
+    edit(keyedState(doc), "seat:sre");
+    type("New repository", "acme/api");
+    fireEvent.keyDown(field("New repository"), { key: "Enter" });
+    expect(screen.getByText(/This enrols the seat in GitHub/)).toBeDefined();
   });
 
   test("a Slack channel needs the seat's own app, and the Datadog fallback is named on its seat", () => {

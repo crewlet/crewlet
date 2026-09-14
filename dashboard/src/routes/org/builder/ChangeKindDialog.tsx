@@ -117,8 +117,9 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
           },
         ].filter((entry) => entry.made.length > 0 || entry.references.length > 0)
       : [];
-  const working =
-    becoming === "human" && isWorking(handle, api.agents, api.sandboxes) ? [name] : [];
+  // Only an agent seat has work in flight, so this names nobody when a human
+  // seat is becoming an agent.
+  const working = isWorking(handle, api.agents, api.sandboxes) ? [name] : [];
 
   const blocked =
     !preview.ok ||
