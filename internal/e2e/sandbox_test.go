@@ -128,9 +128,6 @@ func (n *codingNode) agentArgv(t *testing.T) []string {
 // startCoding stands up a node with a local sandbox and a fake coding CLI.
 func startCoding(t *testing.T, mode string) *codingNode {
 	t.Helper()
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("the local sandbox needs a POSIX shell")
-	}
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
 	// Both reach the box through role.sandbox.env, which is the ONLY way an
@@ -647,9 +644,6 @@ func (n *codingNode) board(t *testing.T) []map[string]any {
 // on the seat's next claim, drives it to completion, and re-enters the SAME
 // conversation the dead process suspended.
 func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("the local sandbox needs a POSIX shell")
-	}
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
 	t.Setenv("FAKE_AGENT_MODE", "held")
@@ -739,7 +733,15 @@ func TestTheContainerModeRunsTheSameProtocol(t *testing.T) {
 	}
 	image := os.Getenv("CREWLET_TEST_SANDBOX_IMAGE")
 	if image == "" {
-		image = "alpine:3"
+		// PINNED, like every image docker-compose.yml names. `alpine:3` is a
+		// floating tag, and CLAUDE.md's rule against those is not about
+		// tidiness: a green run under one is a claim about a build nobody can
+		// name afterwards, and the day the tag moves this gate's subject
+		// changes with no commit to point at. 3.24.1 is the version `3`
+		// resolves to today (Docker Hub puts 3, 3.24, 3.24.1 and latest on one
+		// digest); nothing bumps a literal in Go source, so a failure here that
+		// names the image IS the bump signal.
+		image = "alpine:3.24.1"
 	}
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{
 		Placement: sandbox.Container, StateDir: t.TempDir(),
@@ -862,9 +864,6 @@ func TestAnExpiredPauseReclaimsTheBoxAndLeavesTheRunWaiting(t *testing.T) {
 // hour for the production value.
 func startCodingWithPause(t *testing.T, mode string, pauseTTL int) *codingNode {
 	t.Helper()
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skip("the local sandbox needs a POSIX shell")
-	}
 	stateDir := t.TempDir()
 	binDir := installFakeAgent(t)
 	t.Setenv("FAKE_AGENT_MODE", mode)
