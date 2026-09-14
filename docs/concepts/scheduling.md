@@ -319,7 +319,7 @@ on **every config apply**:
 Because these conditions are re-evaluated live, adding the **first** schedule
 to a running company, or the first provider to a company that has schedules,
 arms the loop on that apply, and removing the last one disarms it and releases
-its fleet duty — neither needs a restart. A freshly armed loop starts with the
+its fleet duty; neither needs a restart. A freshly armed loop starts with the
 missed-tick catchup described above, so a company whose provider arrives late
 catches up at most its most recent missed fire, never the whole wait. The tick
 *knobs* (`tick_seconds`, the catchup clamps) are read when the loop is armed,

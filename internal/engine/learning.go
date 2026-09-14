@@ -194,8 +194,8 @@ func refinerOptions(cfg config.SkillRefinement) learning.RefinerOptions {
 
 // reconfigureReflection points the dispatcher at this epoch.
 //
-// The dispatcher itself is built once and outlives every apply — see
-// [learning.Reflector] for why its redelivery ring must not reset. Once is at
+// The dispatcher itself is built once and outlives every apply (see
+// [learning.Reflector] for why its redelivery ring must not reset). Once is at
 // boot for a node that booted with a company, and HERE for one that did not:
 // its first company attaches the dispatcher, and every later apply swaps what
 // runs behind it. Before that, this returned early with no dispatcher to
