@@ -338,7 +338,7 @@ func (w *Writer) scopeForDependents(ctx context.Context, id, project string,
 		return nil
 	}); err != nil {
 		return scope, fmt.Errorf("tracker: read task %s's dependents to scope "+
-			"its status write: %w", id, err)
+			"its write: %w", id, err)
 	}
 	return scope.withObjects(project, id, dependents), nil
 }
