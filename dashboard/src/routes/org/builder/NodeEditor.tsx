@@ -37,7 +37,7 @@
  */
 
 import { useState, type ReactNode } from "react";
-import type { ConfigRole, ConfigUnit } from "~/protocol/index.ts";
+import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
@@ -259,12 +259,15 @@ function ScheduleToggles({
   values,
   onChange,
   disabled,
+  error,
 }: {
   data: ConfigRole | ConfigUnit;
   unit: boolean;
   values: Readonly<Record<string, boolean>>;
   onChange: (name: string, enabled: boolean) => void;
   disabled: boolean;
+  /** What the engine said about this node's schedules. */
+  error: string | undefined;
 }) {
   const schedules = schedulesOf(data);
   if (schedules.length === 0) return null;
@@ -295,6 +298,7 @@ function ScheduleToggles({
           />
         );
       })}
+      {error && <Banner tone="critical">{error}</Banner>}
     </EditorSection>
   );
 }
@@ -465,18 +469,26 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
 // A unit
 // ---------------------------------------------------------------------------
 
-const UNIT_FIELDS: Segment[][] = [
-  ["name"],
-  ["type"],
-  ["purpose"],
-  ["lead"],
-  ["goals"],
-  ["channel"],
-  ["knowledge"],
-  JIRA_PROJECT,
-  CONFLUENCE_SPACE,
-  ["schedules"],
-];
+/**
+ * The field paths a unit's form draws, so a problem the engine reported on a
+ * field this form does NOT draw (a Jira project on a company that has not
+ * connected Jira) is listed at the top rather than attached to a field nobody
+ * can see.
+ */
+function unitFieldPaths(company: CompanyDocument, data: ConfigUnit): Segment[][] {
+  return [
+    ["name"],
+    ["type"],
+    ["purpose"],
+    ["lead"],
+    ["goals"],
+    ["channel"],
+    ["knowledge"],
+    ...(isConnected(company, "jira") ? [JIRA_PROJECT] : []),
+    ...(isConnected(company, "confluence") ? [CONFLUENCE_SPACE] : []),
+    ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
+  ];
+}
 
 /** The draft unit a unit's key names, and the unit above it. */
 function parentUnitOf(api: BuilderApi, key: NodeKey): DraftUnit | undefined {
@@ -492,7 +504,10 @@ function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void })
   const key = unit.key;
   const { initial, form, set, dirty } = useForm<UnitForm>(() => unitForm(unit.data));
   const { refusal, apply } = useApply(api, key, onClose);
-  const { errorFor, rest } = placeOnFields(placedOn(api, key), UNIT_FIELDS);
+  const { errorFor, rest } = placeOnFields(
+    placedOn(api, key),
+    unitFieldPaths(state.draft.company, unit.data),
+  );
   const disabled = api.readOnly;
 
   // What the unit inherits when it declares nothing: the lead and channel the
@@ -617,8 +632,8 @@ function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void })
         values={form.schedules}
         onChange={(name, enabled) => set({ schedules: { ...form.schedules, [name]: enabled } })}
         disabled={disabled}
+        error={errorFor(["schedules"])}
       />
-      {errorFor(["schedules"]) && <Banner tone="critical">{errorFor(["schedules"])}</Banner>}
 
       {toolCredentialNames(unit.data).length > 0 && (
         <EditorSection title="Configured in the document">
@@ -639,28 +654,39 @@ const SLACK_CHANNEL: Segment[] = ["integrations", "slack", "channel"];
 const MATTERMOST_CHANNEL: Segment[] = ["integrations", "mattermost", "channel"];
 const MATTERMOST_USERNAME: Segment[] = ["integrations", "mattermost", "username"];
 
-const SEAT_FIELDS: Segment[][] = [
-  ["name"],
-  ["handle"],
-  ["email"],
-  ["goal"],
-  ["backstory"],
-  ["responsibilities"],
-  ["behavioral_guidelines"],
-  ["manages"],
-  ["contact"],
-  ["availability"],
-  ["llm"],
-  ["token_budget"],
-  ["schedules"],
-  GITHUB_TIER,
-  GITHUB_REPOS,
-  SLACK_CHANNEL,
-  MATTERMOST_CHANNEL,
-  MATTERMOST_USERNAME,
-  JIRA_PROJECT,
-  CONFLUENCE_SPACE,
-];
+/** The field paths a seat's form draws; see [unitFieldPaths] for why it matters. */
+function seatFieldPaths(
+  company: CompanyDocument,
+  data: ConfigRole,
+  { human, minted }: { human: boolean; minted: boolean },
+): Segment[][] {
+  const seatBlock = (tool: "slack" | "mattermost") =>
+    isConnected(company, tool) && isRecord(getPath(data, ["integrations", tool]));
+  return [
+    ["name"],
+    // An existing seat's handle is a read-only fact, so a problem about it
+    // belongs at the top of the form with the rest.
+    ...(minted ? [["handle"] as Segment[]] : []),
+    ["email"],
+    ["goal"],
+    ["backstory"],
+    ["responsibilities"],
+    ["manages"],
+    ...(human
+      ? [["contact"] as Segment[], ["availability"] as Segment[]]
+      : [
+          ["behavioral_guidelines"] as Segment[],
+          ["llm"] as Segment[],
+          ["token_budget"] as Segment[],
+          ...(schedulesOf(data).length > 0 ? [["schedules"] as Segment[]] : []),
+          ...(isConnected(company, "github") ? [GITHUB_TIER, GITHUB_REPOS] : []),
+          ...(seatBlock("slack") ? [SLACK_CHANNEL] : []),
+          ...(seatBlock("mattermost") ? [MATTERMOST_CHANNEL, MATTERMOST_USERNAME] : []),
+          ...(isConnected(company, "jira") ? [JIRA_PROJECT] : []),
+          ...(isConnected(company, "confluence") ? [CONFLUENCE_SPACE] : []),
+        ]),
+  ];
+}
 
 const GITHUB_TIERS: FieldChoice[] = [
   { value: "", label: "Not set (read only)" },
@@ -682,7 +708,10 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
     seatForm(data, gitLabAccessLevel(company, handle)),
   );
   const { refusal, apply } = useApply(api, key, onClose);
-  const { errorFor, rest } = placeOnFields(placedOn(api, key), SEAT_FIELDS);
+  const { errorFor, rest } = placeOnFields(
+    placedOn(api, key),
+    seatFieldPaths(company, data, { human, minted }),
+  );
   const disabled = api.readOnly;
   const derived = derivedSeatOf(state, key);
 
@@ -843,8 +872,8 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
             values={form.schedules}
             onChange={(name, enabled) => set({ schedules: { ...form.schedules, [name]: enabled } })}
             disabled={disabled}
+            error={errorFor(["schedules"])}
           />
-          {errorFor(["schedules"]) && <Banner tone="critical">{errorFor(["schedules"])}</Banner>}
           <IntegrationsSection
             data={data}
             handle={handle}

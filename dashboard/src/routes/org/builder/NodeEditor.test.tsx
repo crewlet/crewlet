@@ -382,6 +382,51 @@ describe("integrations", () => {
 });
 
 describe("problems", () => {
+  // A problem about a field this form does not draw must not be attached to
+  // one: it would be reported nowhere a reader can see it.
+  test("a problem about a field the form does not draw is listed at the top", () => {
+    // The fixture company has not connected Jira, so the seat's Jira field is
+    // not drawn at all.
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "roles", 1, "integrations", "jira", "project"],
+        "units[0].roles[1].integrations.jira.project: names no project",
+      ),
+    ]);
+    edit(state, "seat:dev");
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.textContent).toContain("names no project");
+    expect(alerts[0]!.closest(".field")).toBeNull();
+    cleanup();
+
+    // The same for a unit, whose Confluence field is not drawn either.
+    const unit = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "integrations", "confluence", "space"],
+        "units[0].integrations.confluence.space: names no space",
+      ),
+    ]);
+    edit(unit, "unit:Engineering");
+    const unitAlerts = screen.getAllByRole("alert");
+    expect(unitAlerts).toHaveLength(1);
+    expect(unitAlerts[0]!.closest(".field")).toBeNull();
+  });
+
+  test("a schedule problem is shown in the schedules panel, where the toggle that fixes it is", () => {
+    const state = checkWithProblems(keyedState(fixtureCompany()), [
+      problemAt(
+        ["units", 0, "schedules", 0],
+        "units[0].schedules[0]: schedule has no runner: the effective lead is a human seat",
+      ),
+    ]);
+    edit(state, "unit:Engineering");
+    const panel = screen.getByRole("heading", { name: "Schedules" }).closest("section")!;
+    expect(within(panel as HTMLElement).getByRole("alert").textContent).toContain(
+      "schedule has no runner",
+    );
+  });
+
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {
     const state = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(["units", 0, "roles", 1, "goal"], "units[0].roles[1].goal: too vague to act on"),
