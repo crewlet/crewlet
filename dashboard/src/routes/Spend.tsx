@@ -337,13 +337,6 @@ export function Spend() {
                   cell: (s) => fmtExact(s.durable_used),
                 },
                 {
-                  key: "live",
-                  header: "This process",
-                  align: "right",
-                  sortValue: (s) => s.live_used,
-                  cell: (s) => fmtExact(s.live_used),
-                },
-                {
                   key: "max",
                   header: "Budget",
                   align: "right",
@@ -361,12 +354,17 @@ export function Spend() {
                   width: "160px",
                   cell: (s) =>
                     s.max_tokens ? (
+                      // A refusing seat says so in words as well as in tone:
+                      // a refused charge increments nothing, so its bar stops
+                      // short of full and would otherwise read as headroom.
                       <Meter
                         used={s.durable_used}
                         max={s.max_tokens}
                         // The column heading names it for a sighted reader;
                         // a screen reader lands on the meter alone.
                         ariaLabel={`${s.role} token budget`}
+                        label={s.refused_at ? "Refusing charges" : undefined}
+                        tone={s.refused_at ? "critical" : undefined}
                       />
                     ) : (
                       <span className="faint">—</span>

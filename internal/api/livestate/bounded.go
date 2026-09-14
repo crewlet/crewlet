@@ -8,7 +8,7 @@ package livestate
 // It exists because the obvious structure — a plain insertion-ordered map,
 // seeded with thirty days of ids and never pruned — is a slow leak in an API
 // process that stays up for weeks. The cap only ever
-// has to cover the hydration overlap plus any redelivery: a window of minutes,
+// has to cover the seeding overlap plus any redelivery: a window of minutes,
 // not the process lifetime.
 type boundedSet[V any] struct {
 	limit int

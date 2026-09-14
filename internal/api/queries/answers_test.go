@@ -653,11 +653,13 @@ token_budget: 10000
 	}
 }
 
-func TestALiveMeterIsNullRatherThanZeroWhenAbsent(t *testing.T) {
+func TestBudgetsCarryTheRefusalTheCounterRecorded(t *testing.T) {
 	t.Parallel()
-	// The live meter is THIS PROCESS's run and shares a span with neither
-	// the cap nor the durable counter. A zero would be a measurement; the
-	// honest answer for a seat this node has not run is nothing at all.
+	// "Exhausted" is a refusal, never durable_used >= max_tokens: a refused
+	// charge increments nothing, so a seat charged in rounds stalls short
+	// of its cap and never reads as full. The stamp is what says the gate
+	// is turning turns away, so the answer carries it for the scope that
+	// refused and leaves it empty for the one that did not.
 	cfg := parsed(t, `
 name: Acme
 providers:
@@ -667,25 +669,52 @@ roles:
   - name: CEO
     handle: ceo
     llm: p
+    token_budget: 100
+token_budget: 10000
 `)
+	organization, err := cfg.Organization()
+	if err != nil {
+		t.Fatalf("organization: %v", err)
+	}
+	id, _ := organization.AgentIDFor(organization.AgentSeatByHandle("ceo"))
+	scope := coord.AgentScope(id.String())
+	budgets := coordmemory.NewFleet()
+	if _, err := budgets.Charge(t.Context(), scope, 90, 10000, 100); err != nil {
+		t.Fatalf("charge: %v", err)
+	}
+	refusal, err := budgets.Charge(t.Context(), scope, 20, 10000, 100)
+	if err != nil || refusal.RefusedScope != "agent" {
+		t.Fatalf("setup: refusal = (%+v, %v), want the seat to refuse", refusal, err)
+	}
+
 	r := registryOver(t, queries.Sources{
 		State:   livestate.New(),
 		Company: func() *config.Company { return cfg },
-		Budget:  coordmemory.NewFleet(),
+		Budget:  budgets,
 	})
 	got := ask(t, r, "budgets", nil)
+
 	seats, _ := got["seats"].([]any)
 	if len(seats) != 1 {
 		t.Fatalf("seats = %d", len(seats))
 	}
 	seat, _ := seats[0].(map[string]any)
-	live, present := seat["live_used"]
-	if !present {
-		t.Fatal("live_used is missing entirely; the client distinguishes " +
-			"null from a number and needs the key")
+	stamp, _ := seat["refused_at"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, stamp); err != nil {
+		t.Errorf("seat refused_at = %q, want the refusal's instant: %v", stamp, err)
 	}
-	if live != nil {
-		t.Errorf("live_used = %v for a seat this node has not run, want null", live)
+	if seat["durable_used"] != 90 {
+		t.Errorf("seat durable_used = %v, want the 90 that fit", seat["durable_used"])
+	}
+	orgRow, _ := got["org"].(map[string]any)
+	if orgRow["refused_at"] != "" {
+		t.Errorf("org refused_at = %v, want empty: the company refused nothing", orgRow["refused_at"])
+	}
+	// The retired per-process figure is gone rather than null.
+	for _, row := range []map[string]any{seat, orgRow} {
+		if _, present := row["live_used"]; present {
+			t.Errorf("row still carries live_used: %+v", row)
+		}
 	}
 }
 

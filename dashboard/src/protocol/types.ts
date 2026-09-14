@@ -204,13 +204,14 @@ export interface Meter {
 
 /** The live half of a seat row, merged onto its static config row. */
 export interface Overlay {
+  /**
+   * Omitted until an event says whether the seat is running, so the state the
+   * roster sent (or the one a client already holds) stands.
+   */
   state?: string;
   runtime_id?: string;
   current_phase?: string | null;
   current_iteration?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  total_tokens?: number;
   live_call?: LiveCall | null;
   last_error?: ErrorInfo | null;
   budget?: Meter | null;
@@ -327,7 +328,8 @@ export interface BudgetsAnswer {
     max_tokens: number;
     durable_used: number;
     durable_updated_at: string;
-    live_used: number;
+    /** When the company cap last refused a charge; empty while it is not refusing. */
+    refused_at: string;
   };
   seats: {
     role: string;
@@ -336,7 +338,8 @@ export interface BudgetsAnswer {
     max_tokens: number;
     durable_used: number;
     durable_updated_at: string;
-    live_used: number;
+    /** When this seat's cap last refused a charge; empty while it is not refusing. */
+    refused_at: string;
   }[];
   /** False means the durable counter could not be READ — never that it is zero. */
   durable: boolean;
