@@ -138,6 +138,42 @@ func TestExtraFieldsNeverDisplaceTheErrorCode(t *testing.T) {
 	}
 }
 
+// A STRUCTURED REFUSAL KEEPS ITS STRUCTURE, and `error` still wins over it.
+//
+// A validation refusal carries a list of problems and a derived hierarchy,
+// which a map of strings cannot hold; flattening them into text would put the
+// dashboard back to parsing a message to find a field.
+func TestStructuredFieldsKeepTheirShapeAndNeverDisplaceTheErrorCode(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	fields := map[string]any{
+		"problems": []map[string]any{{"path": "roles[0].llm", "segments": []any{"roles", 0, "llm"}}},
+		"error":    "hijacked",
+	}
+	httpjson.FailWithFields(rec, http.StatusBadRequest, httpjson.CodeInvalidQuery, fields)
+
+	var body struct {
+		Error    string `json:"error"`
+		Problems []struct {
+			Path     string `json:"path"`
+			Segments []any  `json:"segments"`
+		} `json:"problems"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body)
+	}
+	if body.Error != string(httpjson.CodeInvalidQuery) {
+		t.Errorf("error = %q, want the code rather than the extra", body.Error)
+	}
+	if len(body.Problems) != 1 || body.Problems[0].Path != "roles[0].llm" ||
+		len(body.Problems[0].Segments) != 3 || body.Problems[0].Segments[1] != float64(0) {
+		t.Errorf("problems = %+v, want the list as it was given", body.Problems)
+	}
+	if fields["error"] != "hijacked" {
+		t.Errorf("the caller's map was written to: error = %v", fields["error"])
+	}
+}
+
 // Every declared code is Valid, and an invented one is not — the guard that
 // keeps a fifth spelling of "too large" from appearing.
 func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
@@ -145,7 +181,7 @@ func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 	for _, code := range []httpjson.Code{
 		httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
 		httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
-		httpjson.CodeInternalError,
+		httpjson.CodeInvalidQuery, httpjson.CodeInternalError,
 	} {
 		if !code.Valid() {
 			t.Errorf("%q is declared but not Valid", code)
