@@ -230,7 +230,7 @@ internal/
 ├── tracing/              # OpenTelemetry: one provider, W3C propagation, and
 │                         #   the bridge to the envelope's trace fields
 ├── secrets/              # Config encryption at rest + the ${VAR} resolver
-└── version/ logging/ redact/ envref/ envfile/ workkey/  # small shared grammars
+└── version/ logging/ redact/ envref/ envfile/ workkey/ backoff/  # small shared grammars
 
 dashboard/                # The dashboard's SOURCE — React + TypeScript, built
                           #   by Vite. Its output is committed to
