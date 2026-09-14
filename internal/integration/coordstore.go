@@ -29,15 +29,15 @@ type CoordStore struct{ statuses coord.Integrations }
 // non-nil *CoordStore holding a nil interface, which satisfies [Store], which
 // [New] then accepts because its own nil check sees a value. The failure lands
 // on the first tick, inside a detached goroutine, as a nil dereference that
-// takes the process down. That is exactly what happened when this was wired
-// on a node with no coordination store, so the refusal is here rather than at
-// each call site: a caller cannot forget a check the type will not let them
-// skip.
+// takes the process down. That is exactly what happened when this was once
+// wired to a nil fleet store, so the refusal is here rather than at each call
+// site: a caller cannot forget a check the type will not let them skip.
 func NewCoordStore(statuses coord.Integrations) (*CoordStore, error) {
 	if statuses == nil {
 		return nil, errors.New(
-			"integration: a reconcile status store needs a coordination " +
-				"backend; a node with none cannot record what a pass finds")
+			"integration: NewCoordStore needs the fleet's coordination " +
+				"backend (statuses is nil), which is where every node records " +
+				"what a pass finds")
 	}
 	return &CoordStore{statuses: statuses}, nil
 }
