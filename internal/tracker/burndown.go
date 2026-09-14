@@ -332,6 +332,7 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 		var id string
 		var s stay
 		var value float64
+		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := rows.Scan(&id, &s.from, &s.to, &value); err != nil {
 			return nil, fmt.Errorf("tracker: scan a stay of sprint %d of %s: %w",
 				number, project, err)
@@ -343,6 +344,7 @@ func readBurndownTasks(ctx context.Context, tx *sql.Tx, project string,
 		}
 		task.stays = append(task.stays, s)
 	}
+	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("tracker: read the stays of sprint %d of %s: %w",
 			number, project, err)

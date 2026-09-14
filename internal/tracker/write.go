@@ -425,6 +425,7 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 		MintedAt: at,
 		Pattern:  statelog.PatternArbitrated,
 		Decide: func(tx *sql.Tx) (statelog.Decision, error) {
+			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			current, held, err := readTask(ctx, tx, id)
 			if err != nil {
 				return statelog.Decision{}, err

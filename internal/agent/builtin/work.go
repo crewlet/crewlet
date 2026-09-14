@@ -1181,6 +1181,7 @@ func (t *createWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, ar
 			clip(string(task.Priority)), priorityList())), nil
 	}
 	if ref := strings.TrimSpace(argString(args, "parent")); ref != "" {
+		//nolint:govet // shadow: `x, refusal := f()` declares x too; see .golangci.yml
 		parent, refusal := t.deps.resolveRef(ctx, CreateWorkItemTool, "`parent`", ref)
 		if refusal != "" {
 			return failed(refusal), nil
