@@ -52,6 +52,7 @@ import {
   type ApplyReport,
   type Intent,
   type Operation,
+  type Recorded,
   type RecordRefusal,
 } from "./operations.ts";
 import {
@@ -260,6 +261,45 @@ function currentHandles(state: BuilderState): ReadonlyMap<NodeKey, string> {
   return handlesByKey(state.check.sent, state.check.derived);
 }
 
+/** What recording an intent against a state would answer, before anything is dispatched. */
+export type RecordAnswer =
+  | Recorded
+  | { readonly ok: false; readonly refusal: "mode" | "not_keyed"; readonly message: string };
+
+/**
+ * Records an intent against the state's draft exactly as dispatching it would,
+ * guards included, without changing the state.
+ *
+ * ONE DOOR, ASKED TWICE. A dialog that confirms an operation needs to know
+ * whether the reducer will take it before it closes, so it can keep the
+ * refusal on screen beside the fields that caused it; and a dialog that shows
+ * what an operation will clear or strip needs the operation itself. Both ask
+ * here, and the reducer records through the same function, so what a dialog
+ * was told and what the reducer does cannot drift apart.
+ */
+export function recordIntent(state: BuilderState, intent: Intent): RecordAnswer {
+  if (
+    intent.type === "applyTemplate" &&
+    (state.mode !== "create" || state.base.document !== null)
+  ) {
+    return {
+      ok: false,
+      refusal: "mode",
+      message: "A template starts a new company. It cannot be applied to a company that exists.",
+    };
+  }
+  if (!isBaseKeyed(state)) {
+    return {
+      ok: false,
+      refusal: "not_keyed",
+      message:
+        "The engine has not described this company yet. Wait for the check to finish, then make the change.",
+    };
+  }
+  const handles = currentHandles(state);
+  return record(state.draft, intent, { handleOf: (key) => handles.get(key) });
+}
+
 /** Where focus goes after an operation that was just applied to `before`. */
 function focusAfter(op: Operation, before: Draft, after: Draft): NodeKey {
   if (op.type === "remove") {
@@ -303,26 +343,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
     }
 
     case "record": {
-      const intent = action.intent;
-      if (
-        intent.type === "applyTemplate" &&
-        (state.mode !== "create" || state.base.document !== null)
-      ) {
-        return refused(
-          state,
-          "mode",
-          "A template starts a new company. It cannot be applied to a company that exists.",
-        );
-      }
-      if (!isBaseKeyed(state)) {
-        return refused(
-          state,
-          "not_keyed",
-          "The engine has not described this company yet. Wait for the check to finish, then make the change.",
-        );
-      }
-      const handles = currentHandles(state);
-      const result = record(state.draft, intent, { handleOf: (key) => handles.get(key) });
+      const result = recordIntent(state, action.intent);
       if (!result.ok) return refused(state, result.refusal, result.message);
       const { draft, report } = apply(state.draft, result.op);
       return {

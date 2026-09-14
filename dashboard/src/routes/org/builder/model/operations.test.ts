@@ -1131,3 +1131,207 @@ describe("an operation as data", () => {
     expect(doc(draft)).toEqual(before);
   });
 });
+
+describe("editing a node in one operation", () => {
+  const devEdit = (): Intent => ({
+    type: "edit",
+    target: "seat:dev",
+    intents: [
+      { type: "renameSeat", target: "seat:dev", name: "Developer" },
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+      { type: "setManages", target: "seat:dev", manages: ["SRE"] },
+    ],
+  });
+
+  test("a form's changes to one seat record as one edit that applies every part and follows references", () => {
+    const draft = fixture();
+    const { op, draft: next, report } = run(draft, devEdit());
+    expect(op.type === "edit" && op.ops.map((part) => part.type)).toEqual([
+      "renameSeat",
+      "updateSeat",
+      "setManages",
+    ]);
+    expect(seat(next, "seat:dev")).toMatchObject({
+      name: "Developer",
+      handle: "dev",
+      goal: "Ship",
+      manages: ["SRE"],
+    });
+    expect(seat(next, "seat:vp-engineering").manages).toEqual(["Developer"]);
+    expect(report.followed).toEqual([
+      { kind: "manages", holder: "seat:vp-engineering", from: "Dev", to: "Developer" },
+    ]);
+    expect(describeOperation(op, draft)).toBe("Edited Dev: renamed to Developer, goal, manages.");
+    expect(touchedKeys(op)).toEqual(["seat:dev"]);
+  });
+
+  test("a unit's lead, fields and schedule toggle apply together, and the charter edits as the company", () => {
+    const draft = fixture();
+    const { op, draft: next } = run(draft, {
+      type: "edit",
+      target: "unit:Engineering",
+      intents: [
+        {
+          type: "updateUnit",
+          target: "unit:Engineering",
+          set: [{ path: ["purpose"], value: "Build" }],
+        },
+        { type: "setLead", target: "unit:Engineering", lead: "Dev" },
+        {
+          type: "setScheduleEnabled",
+          target: "unit:Engineering",
+          schedule: "standup",
+          enabled: false,
+        },
+      ],
+    });
+    expect(unit(next, "unit:Engineering")).toMatchObject({ purpose: "Build", lead: "Dev" });
+    expect(unit(next, "unit:Engineering").schedules![0]!.enabled).toBe(false);
+    expect(describeOperation(op, draft)).toBe(
+      "Edited Engineering: purpose, lead, disabled schedule standup.",
+    );
+
+    const charter = recordOk(draft, {
+      type: "edit",
+      target: COMPANY_KEY,
+      intents: [
+        { type: "updateCompany", set: [{ path: ["mission"], value: "Make more" }] },
+        { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
+      ],
+    });
+    expect(describeOperation(charter, draft)).toBe("Edited the charter: mission, vision.");
+  });
+
+  test("what every part cleared is reported together", () => {
+    const ctx: RecordContext = { handleOf: (key) => (key === "new:qa" ? "qa" : undefined) };
+    const added = run(fixture(), {
+      type: "addSeat",
+      key: "new:qa",
+      placement: { parent: "unit:Engineering", after: null },
+      data: { name: "QA" },
+    }).draft;
+    const levelled = run(
+      added,
+      { type: "updateSeat", target: "new:qa", set: [], accessLevel: "maintainer" },
+      ctx,
+    ).draft;
+    const { report } = run(
+      levelled,
+      {
+        type: "edit",
+        target: "new:qa",
+        intents: [
+          { type: "renameSeat", target: "new:qa", name: "Quality" },
+          { type: "updateSeat", target: "new:qa", set: [{ path: ["goal"], value: "Test" }] },
+        ],
+      },
+      ctx,
+    );
+    expect(report.cleared).toEqual([
+      { kind: "gitlab_access_level", holder: COMPANY_KEY, from: "qa" },
+    ]);
+  });
+
+  // ALL OR NOTHING: a refusal of a later part must not leave the earlier
+  // parts recorded, or Apply would half save a form into the draft.
+  test("a refused part refuses the whole edit", () => {
+    const result = record(fixture(), {
+      type: "edit",
+      target: "seat:dev",
+      intents: [
+        { type: "renameSeat", target: "seat:dev", name: "Developer" },
+        { type: "updateSeat", target: "seat:dev", set: [{ path: ["handle"], value: "developer" }] },
+      ],
+    });
+    expect(result).toMatchObject({ ok: false, refusal: "forbidden_field" });
+  });
+
+  test("an unchanged part drops out, a single change records as itself, and no change is no change", () => {
+    const draft = fixture();
+    const single = recordOk(draft, {
+      type: "edit",
+      target: "seat:dev",
+      intents: [
+        { type: "renameSeat", target: "seat:dev", name: "Dev" },
+        { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+      ],
+    });
+    expect(single.type).toBe("updateSeat");
+    expect(
+      record(draft, {
+        type: "edit",
+        target: "seat:dev",
+        intents: [
+          { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Build" }] },
+        ],
+      }),
+    ).toMatchObject({ ok: false, refusal: "no_change" });
+  });
+
+  test("a part for another node, or a change no editor makes, is refused", () => {
+    const draft = fixture();
+    expect(
+      record(draft, {
+        type: "edit",
+        target: "seat:dev",
+        intents: [
+          { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "X" }] },
+        ],
+      }),
+    ).toMatchObject({ ok: false, refusal: "not_editable" });
+    expect(
+      record(draft, {
+        type: "edit",
+        target: "seat:dev",
+        intents: [{ type: "remove", target: "seat:dev" } as never],
+      }),
+    ).toMatchObject({ ok: false, refusal: "not_editable" });
+  });
+
+  test("an upstream change to one part's field is a conflict of the edit; a removed node is gone", () => {
+    const draft = fixture();
+    const op = recordOk(draft, devEdit());
+    const theirs = run(draft, {
+      type: "updateSeat",
+      target: "seat:dev",
+      set: [{ path: ["goal"], value: "Theirs" }],
+    }).draft;
+    expect(evaluate(theirs, op)).toEqual({
+      kind: "conflict",
+      conflicts: [{ subject: "goal", base: "Build", theirs: "Theirs", mine: "Ship" }],
+    });
+    const removed = run(draft, { type: "remove", target: "seat:dev" }).draft;
+    expect(evaluate(removed, op).kind).toBe("gone");
+    expect(() => apply(theirs, op)).toThrow(ApplyError);
+  });
+
+  test("an edit is data: it round-trips, records again from its intent, and is malformed when no build could record it", () => {
+    const draft = fixture();
+    const op = recordOk(draft, devEdit());
+    expect(JSON.parse(JSON.stringify(op))).toEqual(op);
+    expect(recordOk(draft, intentOf(op))).toEqual(op);
+    expect(malformedReason(op)).toBeNull();
+    if (op.type !== "edit") throw new Error("expected an edit");
+    const [rename, update] = op.ops;
+    expect(malformedReason({ ...op, ops: [rename!] })).not.toBeNull();
+    expect(malformedReason({ ...op, target: "seat:sre" })).not.toBeNull();
+    expect(
+      malformedReason({
+        ...op,
+        ops: [rename!, { type: "remove", target: "seat:dev" } as never],
+      }),
+    ).not.toBeNull();
+    expect(
+      malformedReason({
+        ...op,
+        ops: [
+          rename!,
+          {
+            ...(update as Extract<Operation, { type: "updateSeat" }>),
+            changes: [{ path: ["name"], after: "X" }],
+          },
+        ],
+      }),
+    ).not.toBeNull();
+  });
+});

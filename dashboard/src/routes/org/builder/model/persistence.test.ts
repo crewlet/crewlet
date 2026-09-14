@@ -105,6 +105,14 @@ function everyOperation(): Operation[] {
     { type: "setScheduleEnabled", target: "unit:Engineering", schedule: "standup", enabled: false },
     { type: "setDatadogRouteTo", routeTo: "dev" },
     { type: "updateCompany", set: [{ path: ["vision"], value: "Everywhere" }] },
+    {
+      type: "edit",
+      target: "seat:sre",
+      intents: [
+        { type: "renameSeat", target: "seat:sre", name: "Reliability Engineer" },
+        { type: "updateSeat", target: "seat:sre", set: [{ path: ["goal"], value: "Automate it" }] },
+      ],
+    },
     { type: "remove", target: "unit:Sales" },
   ];
   for (const intent of intents) {
@@ -143,7 +151,7 @@ describe("isOperation", () => {
   test("accepts every operation type this build records, after a trip through JSON", () => {
     const ops = [...everyOperation(), templateOperation()];
     const types = new Set(ops.map((op) => op.type));
-    expect(types.size).toBe(16);
+    expect(types.size).toBe(17);
     for (const op of ops) expect(isOperation(JSON.parse(JSON.stringify(op))), op.type).toBe(true);
   });
 
@@ -153,6 +161,12 @@ describe("isOperation", () => {
     expect(isOperation({ ...addSeat, key: "seat:not-minted" })).toBe(false);
     expect(isOperation({ ...addSeat, placement: { parent: "company" } })).toBe(false);
     expect(isOperation({ type: "renameEverything" })).toBe(false);
+    // An edit holds only the changes an editor makes, each in its own shape.
+    const edit = everyOperation().find((op) => op.type === "edit")!;
+    const remove = everyOperation().find((op) => op.type === "remove")!;
+    expect(isOperation({ ...edit, ops: [remove, remove] })).toBe(false);
+    expect(isOperation({ ...edit, ops: [edit, edit] })).toBe(false);
+    expect(isOperation({ ...edit, ops: [{ ...addSeat, key: "seat:x" }] })).toBe(false);
     expect(isOperation(null)).toBe(false);
   });
 });

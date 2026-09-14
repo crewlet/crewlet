@@ -266,6 +266,59 @@ export interface ApplyTemplate {
   readonly units: readonly DraftUnit[];
 }
 
+/**
+ * The operations a node editor's form can make of one node, and nothing else:
+ * no structure (add, remove, move, reorder), no kind change and no template.
+ * Each keeps the precondition and reference rules of its own type inside an
+ * [Edit].
+ */
+export type EditPart =
+  | RenameSeat
+  | RenameUnit
+  | UpdateSeat
+  | UpdateUnit
+  | SetLead
+  | SetManages
+  | SetScheduleEnabled
+  | UpdateCompany;
+
+/** The operation types an [Edit] may hold. */
+export const EDIT_PART_TYPES: ReadonlySet<OperationType> = new Set<EditPart["type"]>([
+  "renameSeat",
+  "renameUnit",
+  "updateSeat",
+  "updateUnit",
+  "setLead",
+  "setManages",
+  "setScheduleEnabled",
+  "updateCompany",
+]);
+
+/**
+ * Several changes to ONE node, made together in its editor and applied as one
+ * operation.
+ *
+ * ONE STEP, ALL OR NOTHING. A person who renames a seat, rewrites its goal and
+ * changes whom it manages pressed Apply once, so Undo takes all of it back at
+ * once and the live region says it once. Recorded as separate operations, a
+ * refusal of the third (a handle the check has not reported yet) would leave
+ * the first two applied: a form half saved into the draft, which is not what
+ * anybody asked for. So the parts are recorded in order against the draft the
+ * earlier parts produce, and any refusal refuses the whole edit.
+ *
+ * EACH PART KEEPS ITS OWN RULES. A rename still pins the handle and follows
+ * references, a seat update still refuses a field another operation owns, and
+ * each part records its own preconditions. A rebase holds the edit as one
+ * choice, the same as an update of several fields: keeping theirs drops the
+ * edit, keeping mine records its parts again over their values.
+ */
+export interface Edit {
+  readonly type: "edit";
+  readonly target: NodeKey;
+  /** At least two parts; recording a single change yields that change's own operation. */
+  readonly ops: readonly EditPart[];
+}
+
 /** Every recorded operation. */
 export type Operation =
   | AddUnit
@@ -283,7 +336,8 @@ export type Operation =
   | SetScheduleEnabled
   | SetDatadogRouteTo
   | UpdateCompany
-  | ApplyTemplate;
+  | ApplyTemplate
+  | Edit;
 
 export type OperationType = Operation["type"];
 
@@ -296,6 +350,19 @@ export interface FieldSet {
 
 /** What an operator asked for, before the draft supplies the preconditions. */
 export type Intent =
+  | SingleIntent
+  | {
+      readonly type: "edit";
+      readonly target: NodeKey;
+      /** In the order they apply: a rename first, so a later part names the node as it now is. */
+      readonly intents: readonly EditPartIntent[];
+    };
+
+/** The intent of one change an editor's form can make, as an [Edit] groups them. */
+export type EditPartIntent = Extract<SingleIntent, { readonly type: EditPart["type"] }>;
+
+/** Every intent but an edit's. */
+type SingleIntent =
   | {
       readonly type: "addUnit";
       readonly key: NodeKey;
@@ -382,6 +449,7 @@ export type RecordRefusal =
   | "no_datadog"
   | "no_gitlab"
   | "not_empty"
+  | "not_editable"
   | "no_change";
 
 export type Recorded =
@@ -602,9 +670,26 @@ export function malformedReason(op: Operation): string | null {
       return templateKeys(op.roles, op.units).every(isMintedKey)
         ? null
         : "a template node has no minted key";
+    case "edit": {
+      // Recording yields a single change as its own operation, so an edit of
+      // fewer than two parts is not something this build writes.
+      if (op.ops.length < 2) return "an edit groups fewer than two changes";
+      for (const part of op.ops) {
+        if (!EDIT_PART_TYPES.has(part.type)) return "an edit holds a change no editor makes";
+        if (partTarget(part) !== op.target) return "an edit changes a node other than its own";
+        const reason = malformedReason(part);
+        if (reason !== null) return reason;
+      }
+      return null;
+    }
     default:
       return null;
   }
+}
+
+/** The node one part of an edit changes: its target, or the company for a charter edit. */
+function partTarget(part: { readonly type: string; readonly target?: NodeKey }): NodeKey {
+  return part.type === "updateCompany" ? COMPANY_KEY : (part.target ?? COMPANY_KEY);
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1306,31 @@ export function record(
         units: cloneJson(intent.units),
       });
     }
+
+    case "edit": {
+      const parts: EditPart[] = [];
+      let at = draft;
+      for (const part of intent.intents) {
+        if (!EDIT_PART_TYPES.has(part.type) || partTarget(part) !== intent.target) {
+          return refuse(
+            "not_editable",
+            "An edit changes the fields of one node. Add, remove, move or change the kind of a node on its own.",
+          );
+        }
+        const result = record(at, part, ctx, options);
+        if (!result.ok) {
+          // A field the form left as it was is no change, not a failure:
+          // the rest of the edit still stands.
+          if (result.refusal === "no_change") continue;
+          return result;
+        }
+        parts.push(result.op as EditPart);
+        at = apply(at, result.op).draft;
+      }
+      if (parts.length === 0) return refuse("no_change", "Nothing changed.");
+      if (parts.length === 1) return recorded(parts[0]!);
+      return recorded({ type: "edit", target: intent.target, ops: parts });
+    }
   }
 }
 
@@ -1343,6 +1453,12 @@ export function intentOf(op: Operation): Intent {
       };
     case "applyTemplate":
       return op;
+    case "edit":
+      return {
+        type: "edit",
+        target: op.target,
+        intents: op.ops.map((part) => intentOf(part) as EditPartIntent),
+      };
   }
 }
 
@@ -1603,6 +1719,24 @@ export function evaluate(draft: Draft, op: Operation): Outcome {
       }
       return finish();
     }
+
+    case "edit": {
+      // Each part is evaluated against the draft the parts before it
+      // produce, as they were recorded. A part that conflicts is not applied,
+      // and every conflict of the edit is reported together, because the
+      // person choosing is choosing for the whole edit.
+      let at = draft;
+      for (const part of op.ops) {
+        const outcome = evaluate(at, part);
+        if (outcome.kind === "gone") return outcome;
+        if (outcome.kind === "conflict") {
+          conflicts.push(...outcome.conflicts);
+          continue;
+        }
+        at = apply(at, part).draft;
+      }
+      return finish();
+    }
   }
 }
 
@@ -1850,6 +1984,21 @@ export function apply(draft: Draft, op: Operation): { draft: Draft; report: Appl
         },
         report: NO_EFFECTS,
       };
+
+    case "edit": {
+      let next = draft;
+      const cleared: ReferenceEffect[] = [];
+      const followed: ReferenceEffect[] = [];
+      const stripped: string[] = [];
+      for (const part of op.ops) {
+        const applied = apply(next, part);
+        next = applied.draft;
+        cleared.push(...applied.report.cleared);
+        followed.push(...applied.report.followed);
+        stripped.push(...applied.report.stripped);
+      }
+      return { draft: next, report: { cleared, followed, stripped } };
+    }
   }
 }
 
@@ -2055,5 +2204,34 @@ export function describeOperation(op: Operation, before: Draft): string {
       return `Edited the charter: ${op.changes.map((c) => fieldName(c.path)).join(", ")}.`;
     case "applyTemplate":
       return `Started ${op.charter.name} from a template.`;
+    case "edit": {
+      const parts = op.ops.flatMap(editPartPhrases).join(", ");
+      return op.target === COMPANY_KEY
+        ? `Edited the charter: ${parts}.`
+        : `Edited ${nameOf(op.target)}: ${parts}.`;
+    }
+  }
+}
+
+/** What one part of an edit changed, as the phrases of an edit's sentence. */
+function editPartPhrases(part: EditPart): string[] {
+  switch (part.type) {
+    case "renameSeat":
+    case "renameUnit":
+      return [`renamed to ${part.after}`];
+    case "updateSeat":
+      return [
+        ...part.changes.map((c) => fieldName(c.path)),
+        ...(part.accessLevels.length > 0 ? ["GitLab access level"] : []),
+      ];
+    case "updateUnit":
+    case "updateCompany":
+      return part.changes.map((c) => fieldName(c.path));
+    case "setLead":
+      return ["lead"];
+    case "setManages":
+      return ["manages"];
+    case "setScheduleEnabled":
+      return [`${part.after ? "enabled" : "disabled"} schedule ${part.schedule}`];
   }
 }

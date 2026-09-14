@@ -38,6 +38,7 @@ import { isRecord } from "./json.ts";
 import { isMintedKey, isNodeKey } from "./keys.ts";
 import type { DraftSeat, DraftUnit, Placement } from "./draft.ts";
 import {
+  EDIT_PART_TYPES,
   OPERATIONS_VERSION,
   malformedReason,
   type FieldChange,
@@ -413,6 +414,14 @@ export function isOperation(v: unknown): v is Operation {
         isOptionalString(v.charter.mission) &&
         list(v.roles, isDraftSeat) &&
         list(v.units, isDraftUnit)
+      );
+    case "edit":
+      // Its parts are operations of their own and are held to their own
+      // shapes; an edit inside an edit is not one of them.
+      return (
+        exactKeys(v, ["type", "target", "ops"]) &&
+        isNodeKey(v.target) &&
+        list(v.ops, (part) => isOperation(part) && EDIT_PART_TYPES.has(part.type))
       );
     default:
       return false;

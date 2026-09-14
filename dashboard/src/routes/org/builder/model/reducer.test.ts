@@ -27,6 +27,7 @@ import {
   hasChanges,
   INITIAL_BUILDER,
   isBaseKeyed,
+  recordIntent,
   type BuilderAction,
   type BuilderState,
 } from "./reducer.ts";
@@ -406,6 +407,43 @@ describe("editing", () => {
     expect(discarded.draft).toBe(state.baseDraft);
     expect(discarded.log.ops).toEqual([]);
     expect(discarded.generation).toBe(edited.generation + 1);
+  });
+});
+
+describe("an editor's edit", () => {
+  const edit: Intent = {
+    type: "edit",
+    target: "seat:dev",
+    intents: [
+      { type: "renameSeat", target: "seat:dev", name: "Developer" },
+      { type: "updateSeat", target: "seat:dev", set: [{ path: ["goal"], value: "Ship" }] },
+    ],
+  };
+
+  test("is one step: one operation logged, announced once, and undone at once", () => {
+    const state = keyedEdit();
+    const edited = run(state, { type: "record", intent: edit });
+    expect(edited.log.ops).toHaveLength(1);
+    expect(edited.last).toMatchObject({
+      description: "Edited Dev: renamed to Developer, goal.",
+      focus: "seat:dev",
+    });
+    const undone = run(edited, { type: "undo" });
+    expect(undone.draft).toEqual(state.draft);
+    expect(run(undone, { type: "redo" }).draft).toEqual(edited.draft);
+  });
+
+  test("a dialog asking recordIntent hears exactly what the reducer would do", () => {
+    const loaded = loadedEdit();
+    const refusedEarly = recordIntent(loaded, edit);
+    expect(refusedEarly).toMatchObject({ ok: false, refusal: "not_keyed" });
+    expect(run(loaded, { type: "record", intent: edit }).refusal?.reason).toBe("not_keyed");
+
+    const state = keyedEdit();
+    const answer = recordIntent(state, edit);
+    const next = run(state, { type: "record", intent: edit });
+    expect(answer.ok && answer.op).toEqual(next.log.ops[0]);
+    expect(recordIntent(state, edit)).toEqual(answer);
   });
 });
 
