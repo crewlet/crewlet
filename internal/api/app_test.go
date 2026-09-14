@@ -159,6 +159,23 @@ func TestDrainingOutranksEveryOtherStatus(t *testing.T) {
 	}
 }
 
+func TestUnconfiguredOutranksAPosture(t *testing.T) {
+	t.Parallel()
+	// The documented precedence, and the one /ready's reason follows. A
+	// node with no active revision refuses every delivery whatever it
+	// concluded about the fleet's epoch, and a status that named the
+	// posture instead would send an operator to read a control-plane error
+	// on a node that has no company at all.
+	for _, posture := range []string{"shed", "stuck", "isolated"} {
+		a := newApp(t, api.Options{Runtime: &fakeRuntime{
+			state: api.RuntimeState{Posture: posture},
+		}})
+		if _, body := get(t, a, "/health"); body["status"] != api.StatusUnconfigured {
+			t.Errorf("unconfigured and %q: status = %v, want unconfigured", posture, body["status"])
+		}
+	}
+}
+
 func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	t.Parallel()
 	// The only place an operator can see WHY a node left rotation: /ready
