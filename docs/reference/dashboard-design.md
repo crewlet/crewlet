@@ -538,6 +538,15 @@ not, which is the class of defect that never shows up in a screenshot:
   their role implies: arrows (both axes) and Home/End move within the group,
   `tabIndex` 0 travels with them, and every other key — Tab above all — is
   left to the browser.
+- **A group always keeps one tab stop, whatever the URL says.** `value` comes
+  off the query string at seven of the nine call sites, so a link from an
+  older build, a typo or a renamed option reaches the control as a value no
+  option carries. The roving stop fell back only when the *held* option left
+  the set, not when `value` was outside it — so `?lens=bogus` gave every
+  option `tabIndex="-1"` and the whole control dropped out of the page's tab
+  order, unreachable by keyboard and strictly worse than the plain buttons it
+  replaced. It falls back to the first option now; nothing is checked, so
+  nothing else has a claim to the stop.
 - **The arrows move focus; Enter and Space choose.** That is manual
   activation, and it is the default on both controls because of what they are
   wired to: seven of the nine groups on the dashboard drive a `useParam`,

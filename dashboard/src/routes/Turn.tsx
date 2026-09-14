@@ -628,6 +628,16 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           trace_id: traceId || null,
           running,
           duration_ms: durationMs,
+          // WHAT THE SCREEN SAYS, THE FILE SAYS TOO. The page marks a capped
+          // turn with a badge and a banner because its opening and ending
+          // without its middle is indistinguishable from a turn that died
+          // early — which is the ambiguity this whole read exists to remove.
+          // Exported without the flag, the file reproduced it exactly: a
+          // reader attaches `turn-<id>.json` to a bug report and whoever
+          // opens it has no way to tell an incomplete turn from a complete
+          // one. Top level, beside `running`, because this is what the page
+          // assembled; `record` below is what the engine published.
+          truncated: cut,
           record: {
             agent_turn_completed: rec.summary?.payload ?? null,
             turn_completed: rec.learning?.payload ?? null,
@@ -638,7 +648,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         null,
         2,
       ),
-    [turnId, role, traceId, running, durationMs, rec, phases, events],
+    [turnId, role, traceId, running, durationMs, cut, rec, phases, events],
   );
   // Memos here rather than thunks: both ARE rendered, so they are computed
   // either way, and `rec` only changes when the turn ends.

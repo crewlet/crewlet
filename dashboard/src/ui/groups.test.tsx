@@ -276,6 +276,73 @@ test("an option disappearing does not strand the tab stop", () => {
   expect(tabstops()).toEqual(["0", "-1"]);
 });
 
+// A VALUE THE GROUP DOES NOT OFFER STILL LEAVES ONE TAB STOP.
+//
+// `value` comes off the URL at seven of the nine call sites, and `useParam`
+// hands back whatever the query string says — so `?lens=bogus` (a link from an
+// older build, a typo, a renamed option) reaches this component as a value no
+// option carries. The stop fell back to `value` in that case, which is not in
+// the group either, so EVERY option rendered tabIndex=-1 and the whole control
+// left the page's tab order: unreachable by keyboard, and worse than the plain
+// buttons this replaced, which were each a stop of their own.
+test("a value outside the group still leaves it reachable", () => {
+  render(
+    <Segmented<Lens>
+      ariaLabel="Org view"
+      value={"bogus" as Lens}
+      onChange={() => {}}
+      options={LENSES}
+    />,
+  );
+  // Exactly one stop, on the first option — nothing is checked, so nothing
+  // else has a claim to it.
+  expect(tabstops()).toEqual(["0", "-1", "-1"]);
+  expect(checked()).toEqual(["false", "false", "false"]);
+
+  // And the arrows still work from there rather than stepping from nowhere.
+  fireEvent.keyDown(screen.getByRole("radiogroup"), { key: "ArrowRight" });
+  expect(document.activeElement).toBe(screen.getAllByRole("radio")[1]);
+});
+
+// THE HELD STOP LIVES IN STATE, NOT A REF.
+//
+// A ref write during render survives a render attempt React DISCARDS, while
+// the state update queued beside it does not — so the pair that tracks "which
+// value have we observed" and "where is the stop" would disagree permanently,
+// and the guard that resyncs them would never fire again. Keeping both in one
+// state object means a discarded attempt reverts them together.
+//
+// The observable consequence is what this asserts: repeated outside changes
+// keep taking the stop back, every time rather than only the first.
+test("every outside change takes the tab stop back, not just the first", () => {
+  function Externally() {
+    const [value, setValue] = useState<Lens>("chart");
+    return (
+      <>
+        <Segmented<Lens> ariaLabel="Org view" value={value} onChange={setValue} options={LENSES} />
+        {LENSES.map((l) => (
+          <button key={l.value} type="button" onClick={() => setValue(l.value)}>
+            go {l.label}
+          </button>
+        ))}
+      </>
+    );
+  }
+  render(<Externally />);
+  const group = screen.getByRole("radiogroup");
+
+  for (const [label, want] of [
+    ["go Charter", ["-1", "-1", "0"]],
+    ["go Directory", ["-1", "0", "-1"]],
+    ["go Chart", ["0", "-1", "-1"]],
+  ] as const) {
+    // Arrow away first, so the stop has somewhere to be taken back FROM.
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(tabstops()).toEqual(want);
+  }
+});
+
 // AUTOMATIC IS STILL THERE, for the two groups that earn it: the shell's theme
 // and density write `localStorage` and a `data-` attribute, so arrowing across
 // them costs a repaint and nothing a reader has to undo. Selection following

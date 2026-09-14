@@ -38,7 +38,15 @@ test("a meter spent past its ceiling reports in range, and says the real figures
 // A NEGATIVE READING IS THE OTHER END OF THE SAME RULE.
 test("a meter below its floor reports in range too", () => {
   render(<Meter used={-5} max={100} ariaLabel="Company token budget" />);
-  expect(screen.getByRole("meter").getAttribute("aria-valuenow")).toBe("0");
+  const meter = screen.getByRole("meter");
+  expect(meter.getAttribute("aria-valuenow")).toBe("0");
+  // AND THE BAR AGREES WITH THE NUMBER. Only the top end used to be clamped,
+  // so the fill was handed `width: -5%` — which CSSOM drops, leaving the bar
+  // at whatever width it last had rather than reading empty. A sighted reader
+  // and a screen-reader one would have been told different things.
+  const fill = meter.querySelector<HTMLElement>(".meter-fill");
+  expect(fill).not.toBeNull();
+  expect(fill!.style.width).toBe("0%");
 });
 
 // NO SCALE, NO METER. `aria-valuemax` defaults to 100 when it is absent or not

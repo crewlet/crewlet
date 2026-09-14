@@ -207,3 +207,61 @@ test("a turn with no events at all says so", async () => {
   mount({ events: [] });
   expect(await screen.findByText("No events for this turn")).toBeTruthy();
 });
+
+// …AND DOES NOT FIRE WHEN THE PHASES ARE ARRIVING ON THE STREAM.
+//
+// The other half of the same condition, and the half the case above cannot
+// see: the empty state is guarded on the store's rows as well as the query's,
+// so a turn deep-linked WHILE IT RUNS — the one this screen exists for — must
+// show the phase it is on rather than "no events for this turn". Without this
+// case, deleting the store term from the guard leaves the whole route suite
+// green.
+test("a running turn's streamed phases keep the empty state away", async () => {
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  // The QUERY comes back empty — the store's write has not reached the event
+  // log yet, which is exactly the deep-link-while-running race.
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
+    what === "turn"
+      ? Promise.resolve({ turn_id: TURN, events: [], truncated: false })
+      : Promise.resolve({});
+  // `failed` is optional on a query row and required on a streamed envelope;
+  // this phase did not fail.
+  store.applyEvent({ ...phase("2026-09-13T10:01:30Z", 90_000), failed: false });
+
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <TurnScreen turnId={TURN} />
+      </Router>
+    </ClientContext.Provider>,
+  );
+
+  expect(await screen.findByTitle("how long this phase took")).toBeTruthy();
+  expect(screen.queryByText("No events for this turn")).toBeNull();
+});
+
+// THE DOWNLOADED FILE SAYS WHAT THE SCREEN SAYS.
+//
+// The page marks a capped turn with a badge and a banner because its opening
+// and ending without its middle is indistinguishable from a turn that died
+// early. The export carried the same rows with no such marker, so a reader who
+// attached `turn-<id>.json` to a bug report handed on the exact ambiguity this
+// read exists to remove — and whoever opened it could not tell an incomplete
+// turn from a complete one.
+test("the exported turn carries the truncation flag", async () => {
+  mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)], truncated: true });
+  const copy = await screen.findByTitle(
+    "the whole turn as JSON — its record, its phases and everything else it published",
+  );
+
+  let written = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => ((written = t), Promise.resolve()) },
+  });
+  copy.click();
+
+  await waitFor(() => expect(written).not.toBe(""));
+  expect(JSON.parse(written)).toHaveProperty("truncated", true);
+});

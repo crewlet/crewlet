@@ -256,20 +256,37 @@ function useRovingGroup<T extends string>(
   // activation a reader stands on an option they have not chosen yet, and the
   // tab stop has to be under their feet or tabbing out and back drops them
   // somewhere else and loses the place they were holding.
-  const [held, setHeld] = useState<T>(value);
+  //
+  // BOTH HALVES IN ONE STATE, the stop and the `value` it was seeded against.
+  // The second used to be a ref, and a ref is the one thing that must not
+  // hold it: React may DISCARD a render attempt and replay it, and a ref
+  // write survives that discard while the state update queued beside it does
+  // not. The pair then disagrees permanently — `seen` already says it has
+  // observed the new value, so the guard below never fires again, and the tab
+  // stop stays on an option nothing selected until `value` changes a second
+  // time. Kept together, a discarded attempt reverts both and the replay
+  // re-runs the guard.
+  const [held, setHeld] = useState<{ stop: T; seen: T }>({ stop: value, seen: value });
 
   // An outside change to `value` retires whatever the arrows were pointing
   // at — a click elsewhere, the browser's Back button, a pasted URL. Adjusted
   // during render rather than from an effect, because an effect commits one
-  // render first, and that render is the one a reader tabs into.
-  const seen = useRef(value);
-  if (seen.current !== value) {
-    seen.current = value;
-    if (held !== value) setHeld(value);
-  }
-  // And an option that left the group takes the tab stop with it, which would
-  // otherwise leave `indexOf` at -1 and the group with no stop at all.
-  const stop = values.includes(held) ? held : value;
+  // render first, and that render is the one a reader tabs into. Setting a
+  // component's own state during its own render is what React documents for
+  // this, and it is not the impurity a ref write is.
+  if (held.seen !== value) setHeld({ stop: value, seen: value });
+
+  // WHERE THE STOP LANDS WHEN THE OBVIOUS ANSWER IS NOT IN THE GROUP. Both
+  // fallbacks are load-bearing and the second was missing: `held` leaves the
+  // set when a caller narrows `options`, and `value` is outside it whenever a
+  // URL carries a parameter this build does not know — `?lens=bogus` is a
+  // link from an older build, a typo, or a renamed option. With neither in
+  // `values`, every option rendered `tabIndex={-1}` and the group left the
+  // page's tab order altogether: unreachable by keyboard, which is worse than
+  // the plain buttons this replaced, since those were each a stop of their
+  // own. The first option is the honest landing place — nothing is checked,
+  // so nothing else has a claim.
+  const stop = values.includes(held.stop) ? held.stop : values.includes(value) ? value : values[0];
 
   const step = (from: number, by: number) => {
     // WRAPS, which is the pattern's own rule for both roles: a reader holding
@@ -277,7 +294,9 @@ function useRovingGroup<T extends string>(
     // cannot see.
     const next = values[(from + by + values.length) % values.length];
     if (next === undefined) return;
-    setHeld(next);
+    // `seen` is untouched: it means "the last `value` this group observed",
+    // and arrowing does not observe a new one.
+    setHeld((h) => ({ ...h, stop: next }));
     if (activate === "automatic" && next !== value) onChange(next);
     // Focus is MOVED rather than requested, because `tabIndex` decides where
     // a LATER Tab lands and says nothing about where the browser's focus is
@@ -289,7 +308,9 @@ function useRovingGroup<T extends string>(
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const at = values.indexOf(stop);
+    // `stop` is undefined only for a group with no options at all, where
+    // `step` returns before it uses this.
+    const at = stop === undefined ? -1 : values.indexOf(stop);
     // BOTH AXES. These render as a horizontal row today, but a group that
     // wraps to two lines is the same control and a reader pressing Down on
     // it is asking for the next option either way.
@@ -603,7 +624,11 @@ export function Meter({
   tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
 }) {
   const scaled = max > 0;
-  const pct = scaled ? Math.min(100, (used / max) * 100) : 0;
+  // CLAMPED AT BOTH ENDS, like `aria-valuenow` below. Only the top used to
+  // be, so a negative reading rendered `width: -5%` — which CSSOM drops,
+  // leaving a bar that silently keeps its previous width rather than reading
+  // empty. The doc above promises clamping; this is the half that was not.
+  const pct = scaled ? Math.max(0, Math.min(100, (used / max) * 100)) : 0;
   // The tone is DERIVED from the fill unless the caller overrides it, so a bar
   // that is nearly full says so without every call site remembering to.
   const auto = pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
