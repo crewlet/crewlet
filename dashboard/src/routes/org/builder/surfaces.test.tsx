@@ -264,3 +264,41 @@ test("every opening of the editor builds its own node's form", async () => {
   const next = await screen.findByRole("dialog", { name: "Edit Dev" });
   expect((within(next).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("");
 });
+
+// A COLLEAGUE'S SAVE IS NO REASON TO LOSE A FORM. A lens with no work in its
+// draft stands on the newer revision, and did it by reading the document
+// again, which keys a seat declaring no handle by its path until the next
+// check: the open editor lost its node for that moment and came back empty.
+test("a colleague's save leaves an open editor and its typed form, which then applies", async () => {
+  const engine = new Engine(company());
+  const { store } = mountBuilder({
+    engine,
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=outline&seat=ceo",
+  });
+  await screen.findByText("No problems");
+  const editor = await typeIntoTheEditor();
+  const next = company();
+  next.roles![1]!.goal = "Design things";
+  engine.document = next;
+  engine.revision = "r2";
+  act(() => store.applyOrg({ name: "Acme", roles: [], units: [] }));
+
+  // Stood on the newer revision, and checked there.
+  await waitFor(() =>
+    expect(engine.checks().some((c) => c.headers["If-Match"] === '"r2"')).toBe(true),
+  );
+  await screen.findByText("No problems");
+  expect(screen.queryByText("This node is no longer in the draft")).toBeNull();
+  expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
+  expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
+  // The selection named in the URL is still the CEO's.
+  expect(location.hash).toContain("seat=ceo");
+
+  fireEvent.click(within(editor).getByRole("button", { name: "Apply" }));
+  await waitFor(() => {
+    const last = engine.checks().at(-1)!;
+    expect(last.headers["If-Match"]).toBe('"r2"');
+    expect(JSON.stringify(last.body)).toContain("Grow");
+  });
+});

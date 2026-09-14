@@ -830,9 +830,11 @@ function Lens({
   // Reads the revision the engine holds now, and hands the reducer the update
   // only once this node serves that revision or a later one: a node behind a
   // load balancer can still answer with the draft's own base, and rebasing
-  // onto that would lose the change the conflict was about.
+  // onto that would lose the change the conflict was about. `stand` is the
+  // lens with no work moving onto that revision (see below): an update of
+  // nothing, confirmed at once, so nothing is offered for review.
   const beginUpdate = useCallback(
-    async (conflictRevisionId: string | null) => {
+    async (conflictRevisionId: string | null, stand = false) => {
       const base = stateRef.current.base.revision;
       if (base === null) return;
       updateRead.current?.abort();
@@ -853,6 +855,13 @@ function Lens({
             revision: ready.revisionId,
             derived: ready.derived,
           });
+          // Only while there is still nothing to carry over: confirming an
+          // update that carries work would drop any operation whose target
+          // is gone without the operator seeing it listed.
+          const { log } = stateRef.current;
+          if (stand && log.ops.length === 0 && log.undone.length === 0) {
+            dispatchRaw({ type: "updateConfirm" });
+          }
           setUpdateNote({ busy: false, message: null });
         } else {
           setUpdateNote({
@@ -881,16 +890,26 @@ function Lens({
   // exists to protect the operator's changes; with none (a lens somebody is
   // only reading when a colleague saves, which the org push reports at
   // once) it would pause editing behind a banner offering to update nothing.
-  // Reading the configuration again adopts the newer revision, because a
-  // read adopts whatever is newer whenever the log is empty. A kept draft
-  // still waiting for its decision is left alone: it was offered against
-  // this base, and moving the base under the offer would refuse its Keep.
+  // A kept draft still waiting for its decision is left alone: it was offered
+  // against this base, and moving the base under the offer would refuse its
+  // Keep.
+  //
+  // THROUGH THE UPDATE, NEVER A PLAIN READ. A document read from `GET
+  // /config` keys the seats that declare no handle by their paths until the
+  // next check answers, so every node something held lost its key for that
+  // moment: an open editor with a typed, unapplied form was drawn as gone
+  // and mounted again empty, and the selection was cleared. The update reads
+  // the newer revision with the engine's description of it
+  // (`writes.readyToUpdate`), so the base is keyed by handle at once and an
+  // existing seat keeps its key across the two revisions.
   const draftIsEmpty = state.log.ops.length === 0 && state.log.undone.length === 0;
   const keptPending = keeping.pending || keeping.offer !== null;
   useEffect(() => {
     if (!conflict || !draftIsEmpty || keptPending) return;
-    if (conflict.reason === "revision_advanced" || conflict.reason === "base_moved") load();
-  }, [conflict, draftIsEmpty, keptPending, load]);
+    if (conflict.reason === "revision_advanced" || conflict.reason === "base_moved") {
+      void beginUpdate(conflict.currentRevisionId, true);
+    }
+  }, [conflict, draftIsEmpty, keptPending, beginUpdate]);
 
   // ---- Saving -------------------------------------------------------------------
 

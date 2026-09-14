@@ -598,7 +598,10 @@ setup flow on the Integrations screen) is found at the next check, not at the
 save. The status reads "The configuration changed", editing pauses, and a
 banner offers **Show what changed** (the newer revision against the one the
 draft was started from) and **Update my draft**. A lens with no changes on it
-has nothing to update: it simply reads the newer revision and goes on.
+has nothing to update: it moves onto the newer revision by itself and goes
+on. An editor you have open keeps what you typed in it, and the selected unit
+or seat stays selected, so an edit you had not applied yet applies to the
+newer revision.
 
 Updating replays each change of the draft onto the revision the engine holds
 now, and sorts every change into one of three outcomes:

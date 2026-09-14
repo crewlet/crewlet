@@ -1069,11 +1069,15 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   the builder except a text field, and never under a modal.
 - **A newer revision is an update, never an overwrite.** A check answering
   `409` (or a dry run validated against another base) halts checking and
-  offers Update my draft; a draft holding no work reads the newer revision
-  instead, since there is nothing to update. The update is read only from a
-  node serving the conflict's revision or a descendant of it, and
-  `UpdateDraftDialog.tsx` shows what still applies, what is dropped and every
-  conflict with its three values; confirming waits for a choice on each. A value is shown as a person reads
+  offers Update my draft. A draft holding no work is updated at once instead,
+  an update of nothing confirmed as it lands, and never by reading the
+  configuration again: a plain read keys the seats that declare no handle by
+  their paths until the next check, so an open editor lost its node, typed
+  form and all, and the selection was cleared. The update is read only from a
+  node serving the conflict's revision or a descendant of it, with the
+  engine's description of it, and `UpdateDraftDialog.tsx` shows what still
+  applies, what is dropped and every conflict with its three values;
+  confirming waits for a choice on each. A value is shown as a person reads
   it: the model tags a conflict over its own structures with their shape, so
   a node key reads as the node's name, a removed node as the fields that
   changed, a kind change's stripped fields by name only, and a credential's
