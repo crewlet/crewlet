@@ -198,6 +198,21 @@ func (r *Reader) Burndown(ctx context.Context, q BurndownQuery, now time.Time) (
 		MaxLagSeq:   q.MaxLagSeq,
 		Set:         true,
 	}, func(tx *sql.Tx) error {
+		// A FRESH ANSWER PER ATTEMPT, assigned to `out` as the last
+		// statement. This closure is not run once: a read transaction
+		// that loses its snapshot to a writer is retried up to
+		// [store.txAttempts] times on a new one, so anything it
+		// ACCUMULATES into a value captured from outside is added to
+		// again on every attempt. `Unestimated` was counted that way —
+		// a sprint with two unestimated tasks reported four after one
+		// retry — and `Ideal` was the same hazard in the other
+		// direction, assigned only when the series has points, so an
+		// attempt that found none kept the previous attempt's height.
+		// Neither is visible in the answer: every other figure is
+		// correct, and `Unestimated` is precisely the number a reader
+		// consults to decide how much of the series to believe.
+		b := Burndown{Project: project, Sprint: q.Sprint}
+
 		p, found, err := readProject(ctx, tx, project)
 		if err != nil {
 			return err
@@ -205,7 +220,7 @@ func (r *Reader) Burndown(ctx context.Context, q BurndownQuery, now time.Time) (
 		if !found {
 			return fmt.Errorf("tracker: no project %q — %w", project, ErrNoProject)
 		}
-		out.Measure = measureOf(p)
+		b.Measure = measureOf(p)
 
 		sprint, found, err := readSprintWindow(ctx, tx, project, q.Sprint)
 		if err != nil {
@@ -215,31 +230,33 @@ func (r *Reader) Burndown(ctx context.Context, q BurndownQuery, now time.Time) (
 			return fmt.Errorf("tracker: %s has no sprint %d — %w",
 				project, q.Sprint, ErrNoSprint)
 		}
-		out.Name = sprint.name
-		out.StartAt = store.DecodeTime(sprint.start)
-		out.EndAt = store.DecodeTime(sprint.end)
+		b.Name = sprint.name
+		b.StartAt = store.DecodeTime(sprint.start)
+		b.EndAt = store.DecodeTime(sprint.end)
 
-		tasks, err := readBurndownTasks(ctx, tx, project, q.Sprint, out.Measure)
+		tasks, err := readBurndownTasks(ctx, tx, project, q.Sprint, b.Measure)
 		if err != nil {
 			return err
 		}
-		out.Tasks = len(tasks)
+		b.Tasks = len(tasks)
 		for _, task := range tasks {
 			if task.measure == 0 {
-				out.Unestimated++
+				b.Unestimated++
 			}
 		}
-		out.Points = burndownSeries(tasks,
-			burndownInstants(out.StartAt, out.EndAt, sprint.closed, now))
-		if len(out.Points) > 0 {
-			out.Ideal = out.Points[0].Scope
+		b.Points = burndownSeries(tasks,
+			burndownInstants(b.StartAt, b.EndAt, sprint.closed, now))
+		if len(b.Points) > 0 {
+			b.Ideal = b.Points[0].Scope
 		}
 
 		position, applied, err := readCheckpoint(ctx, tx)
 		if err != nil {
 			return err
 		}
-		out.LogSeq, out.AppliedThrough = position, applied
+		b.LogSeq, b.AppliedThrough = position, applied
+
+		out = b
 		return nil
 	})
 	if err != nil {
