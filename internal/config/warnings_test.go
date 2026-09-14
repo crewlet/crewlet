@@ -221,30 +221,38 @@ func TestVectorsNeedAKnowledgeBaseOrANativeTracker(t *testing.T) {
 	}
 }
 
-// A NATIVE TRACKER ON AN IN-MEMORY STREAM IS REFUSED, and it takes both
+// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS REFUSED, and it takes both
 // documents to see it.
 //
-// The engine's own tracker keeps its write-ahead log on the stream, and an
-// embedded stream with no store directory keeps its streams in memory — so a
-// restart recreates them empty, and a node whose durable tables are ahead of a
-// stream that restarted from nothing refuses to serve the tracker
-// PERMANENTLY: every snapshot it could adopt is above the recreated stream
-// too.
+// The engine's own tracker and its own knowledge base keep their write-ahead
+// logs on the stream, and an embedded stream with no store directory keeps its
+// streams in memory, so a restart recreates them empty and a node whose
+// durable tables are ahead of a stream that restarted from nothing refuses to
+// serve PERMANENTLY: every snapshot it could adopt is above the recreated
+// stream too.
+//
+// EITHER BACKEND. The rule once asked only about the tracker, and the
+// knowledge base is native by default, so a company on Jira with no Confluence
+// ran its pages on an in-memory log and was accepted.
 //
 // Each tier validates alone and neither can see the other, which is why this
 // is a rule of its own rather than a field's.
-func TestANativeTrackerNeedsAStreamThatSurvivesARestart(t *testing.T) {
+func TestANativeBackendNeedsAStreamThatSurvivesARestart(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		storeDir   string
 		streamType config.StreamType
 		tracker    config.TrackerBackend
+		knowledge  config.KnowledgeBackend
 		accept     bool
 	}{
-		"native on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNative, false},
-		"native with a store directory": {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, true},
-		"native on an external cluster": {"", config.StreamNATS, config.TrackerNative, true},
-		"no tracker on the same stream": {"", config.StreamEmbedded, config.TrackerNone, true},
+		"both native on an in-memory stream":      {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, false},
+		"a native tracker on an in-memory stream": {"", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNone, false},
+		"native pages on an in-memory stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
+		"a blank store directory is none":         {"  ", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNative, false},
+		"native with a store directory":           {"/var/lib/crewlet/stream", config.StreamEmbedded, config.TrackerNative, config.KnowledgeNative, true},
+		"native on an external cluster":           {"", config.StreamNATS, config.TrackerNative, config.KnowledgeNative, true},
+		"vendors for both on the same stream":     {"", config.StreamEmbedded, config.TrackerNone, config.KnowledgeNone, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.DefaultBootstrap()
@@ -256,6 +264,7 @@ func TestANativeTrackerNeedsAStreamThatSurvivesARestart(t *testing.T) {
 			c := config.DefaultCompany()
 			c.Name = "Acme"
 			c.Tracker.Backend = tc.tracker
+			c.Knowledge.Backend = tc.knowledge
 
 			err := config.CheckTiers(&b, &c)
 			if tc.accept {
@@ -265,9 +274,13 @@ func TestANativeTrackerNeedsAStreamThatSurvivesARestart(t *testing.T) {
 				return
 			}
 			if err == nil {
-				t.Fatal("a native tracker on an in-memory stream was accepted")
+				t.Fatal("a native backend on an in-memory stream was accepted")
 			}
-			for _, want := range []string{"stream.store_dir", "refuses to serve"} {
+			for _, want := range []string{
+				"stream.store_dir", "refuses to serve",
+				"tracker.backend: " + string(tc.tracker),
+				"knowledge.backend: " + string(tc.knowledge),
+			} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("refusal = %q, want it to say %q", err, want)
 				}

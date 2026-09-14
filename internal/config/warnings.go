@@ -209,28 +209,36 @@ func CheckTiers(boot *Bootstrap, company *Company) error {
 		return nil
 	}
 
-	// A NATIVE TRACKER ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
+	// A NATIVE BACKEND ON AN IN-MEMORY STREAM IS UNRECOVERABLE, and that is
 	// why it is an error rather than the warning Tier A raises alone.
 	//
-	// The engine's own tracker keeps its write-ahead log on the stream. An
-	// embedded server with no store directory keeps its streams in MEMORY,
-	// so a restart recreates them empty — and a node whose durable tables
-	// are ahead of a stream that has restarted from nothing cannot tell
-	// "the log was trimmed" from "the log is a different log", refuses to
-	// serve, and stays refused: every snapshot it could adopt is above the
-	// recreated stream too.
+	// The engine's own tracker and its own knowledge base keep their
+	// write-ahead logs on the stream, and either one starts the node's state
+	// log ([Company.RunsStateLog]). An embedded server with no store
+	// directory keeps its streams in MEMORY, so a restart recreates them
+	// empty, and a node whose durable tables are ahead of a stream that has
+	// restarted from nothing cannot tell "the log was trimmed" from "the log
+	// is a different log", refuses to serve, and stays refused: every
+	// snapshot it could adopt is above the recreated stream too.
+	//
+	// THE KNOWLEDGE BASE AS MUCH AS THE TRACKER. This rule once asked only
+	// about the tracker, and the knowledge base is native by default: a
+	// company on Jira with no Confluence ran its pages on an in-memory log,
+	// passed, and lost the ability to serve on its first restart.
 	//
 	// It is an error rather than a warning because there is no correct
-	// deployment it describes. A company on a vendor tracker starts no log
-	// at all and is unaffected, which is why the rule needs both documents.
-	if company.TrackerBackendFor() == TrackerNative &&
-		boot.Stream.Type != StreamNATS &&
+	// deployment it describes. A company whose tracker and knowledge base are
+	// both a vendor's starts no log at all and is unaffected, which is why
+	// the rule needs both documents.
+	if company.RunsStateLog() && boot.Stream.Type != StreamNATS &&
 		strings.TrimSpace(boot.Stream.StoreDir) == "" {
 		p.add("stream.store_dir", ErrMissing,
-			"this company runs the engine's own tracker, whose log lives on the "+
-				"stream — and an embedded stream with no store directory keeps its "+
-				"streams in memory, so a restart recreates them empty and this node "+
-				"refuses to serve the tracker permanently. Name a directory")
+			"this company runs the engine's own backends (tracker.backend: %s, "+
+				"knowledge.backend: %s), whose logs live on the stream, and an "+
+				"embedded stream with no store directory keeps its streams in "+
+				"memory: a restart recreates them empty and this node refuses to "+
+				"serve them permanently. Name a directory",
+			company.TrackerBackendFor(), company.KnowledgeBackendFor())
 	}
 	return p.err()
 }
