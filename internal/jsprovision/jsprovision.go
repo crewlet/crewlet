@@ -303,5 +303,6 @@ func Unplaceable(err error) bool {
 // that same stream had succeeded.
 func NotYetVisible(err error) bool {
 	return errors.Is(err, jetstream.ErrStreamNotFound) ||
-		errors.Is(err, jetstream.ErrBucketNotFound)
+		errors.Is(err, jetstream.ErrBucketNotFound) ||
+		errors.Is(err, jetstream.ErrConsumerNotFound)
 }

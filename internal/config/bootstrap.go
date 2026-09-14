@@ -1081,6 +1081,24 @@ func (s *Stream) validate(path string) error {
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)
 	}
+	// A CLUSTER BLOCK WITHOUT A NAME DOES NOTHING, and doing nothing
+	// SILENTLY is what this refuses.
+	//
+	// The embedded server's options are built only when the cluster is
+	// NAMED: without it the route port and the peer list are dropped on the
+	// floor, so a node configured with both still starts solo, binds no
+	// route listener and forms no cluster — while every other reading of
+	// the same file (the provisioning budgets, the topology validation
+	// below) calls it clustered. An operator who wrote a port and a peer
+	// list did not ask for a solo node, and the only honest answers are to
+	// cluster or to say why not.
+	if s.Cluster.Name == "" && (s.Cluster.Port != 0 || len(s.Cluster.Peers) > 0) {
+		p.add(at(path, "cluster.name"), ErrMissing,
+			"is required once cluster.port or cluster.peers is set: the "+
+				"embedded server takes its route port and its peers only from a "+
+				"NAMED cluster, so this node would start solo and form no cluster "+
+				"at all")
+	}
 	// Refused here rather than at the broker. nats-server validates an
 	// advertise address while STARTING, logs it and shuts the server down
 	// — which surfaces as a node that boots, fails and leaves the operator

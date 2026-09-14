@@ -25,6 +25,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -233,6 +234,22 @@ func (n *Node) Start(ctx context.Context) error {
 // adds a seat, and that seat's mail is dropped until somebody makes it a
 // mailbox.
 func (n *Node) EnsureMailboxes(ctx context.Context) {
+	// ONE CEILING OVER THE WHOLE PASS, because this is one replicated
+	// create PER SEAT in a row and each carries its own per-create budget.
+	// A company of thirty seats on a wedged metadata group would otherwise
+	// hold the boot for thirty of them, serially — the product again,
+	// which is the bound [jsprovision.SequenceBudget] exists to replace.
+	//
+	// It reads the topology off the queue, so a solo node keeps the short
+	// one and nothing here has to be told which it is.
+	if c, ok := n.cfg.Queue.(interface {
+		Clustered() jsprovision.Clustered
+	}); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.Clustered().SequenceBudget())
+		defer cancel()
+	}
+
 	created := 0
 	for _, seat := range n.cfg.Seats() {
 		inbox, group := topics.AgentInbox(seat.Handle), topics.AgentInboxGroup(seat.Handle)

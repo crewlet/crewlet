@@ -28,6 +28,21 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"negative pool", "store:\n  max_open_conns: -1\n", "store.max_open_conns", ErrOutOfRange},
 
 		{"unknown stream type", "stream:\n  type: kafka\n", "stream.type", ErrUnknownValue},
+		// A CLUSTER BLOCK WITHOUT A NAME CONFIGURES NOTHING: the embedded
+		// server takes its route port and its peers only from a NAMED
+		// cluster, so a node written this way starts solo, binds no route
+		// listener and forms no cluster — while every other reading of the
+		// same file calls it clustered.
+		{
+			"cluster port with no cluster name",
+			"stream:\n  cluster:\n    port: 6222\n",
+			"stream.cluster.name", ErrMissing,
+		},
+		{
+			"cluster peers with no cluster name",
+			"stream:\n  cluster:\n    peers: [\"nats://a:6222\"]\n",
+			"stream.cluster.name", ErrMissing,
+		},
 		{"external stream with no url", "stream:\n  type: nats\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},
 		{"embedded stream with a url", "stream:\n  url: nats://localhost:4222\n", "stream.url", ErrConflict},
 		// `debug` starts the EMBEDDED server verbose. Against an external

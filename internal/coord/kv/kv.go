@@ -333,7 +333,7 @@ func Open(ctx context.Context, nc *nats.Conn, cfg Config) (*Store, error) {
 	// is visible here, so one lookup inside that window fails a clustered
 	// boot over a bucket this node just opened.
 	var status jetstream.KeyValueStatus
-	err = jsprovision.Settle(readCtx, func() error {
+	err = jsprovision.Settle(ctx, func() error {
 		var e error
 		status, e = leases.Status(readCtx)
 		return e

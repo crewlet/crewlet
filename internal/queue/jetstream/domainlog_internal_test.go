@@ -135,8 +135,10 @@ func (f *deadlineJS) Consumer(context.Context, string, string) (jetstream.Consum
 func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
 	t.Parallel()
 	js := &deadlineJS{}
-	// Replicas > 1 is the clustered case, whose budget is the long one.
-	q := &Queue{js: js, cfg: Config{Replicas: 3}, log: slog.Default()}
+	// A NAMED CLUSTER is what selects the clustered budget — Replicas does
+	// not, and a test that set only it would exercise the solo path while
+	// claiming to cover this one. See [Queue.Clustered].
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
 
 	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what a boot passes.
 	_, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",

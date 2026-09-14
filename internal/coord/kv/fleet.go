@@ -146,7 +146,7 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 	// visible to this member only on its next metadata update — see
 	// [jsprovision.Settle]. One lookup answers at an arbitrary instant
 	// inside that window and fails a boot over a bucket that exists.
-	err := jsprovision.Settle(readCtx, func() error {
+	err := jsprovision.Settle(ctx, func() error {
 		var e error
 		bucket, e = js.KeyValue(readCtx, cfg.Bucket)
 		return e

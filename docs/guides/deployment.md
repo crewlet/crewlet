@@ -116,6 +116,13 @@ company's whole event history. Set it to the private address, or keep the port
 off the public interface with a firewall; the engine cannot tell which of a
 host's addresses is the private one, so it does not guess.
 
+**A cluster block without a name is refused, because it would do nothing.**
+The embedded server takes its route port and its peer list only from a *named*
+cluster, so `cluster.port` or `cluster.peers` with no `cluster.name` starts a
+solo node that binds no route listener and forms no cluster — while every
+other reading of the same file (the provisioning budgets, the topology
+validation) calls it clustered. Tier A now names the missing field instead.
+
 **A route port something else already holds is refused at startup, by name.**
 This is the one clustering failure with no other symptom: NATS does not fail
 when its route listener cannot bind — it logs the error and carries on serving

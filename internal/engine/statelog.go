@@ -317,14 +317,19 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// and a stream created a moment ago reports a first sequence of 1,
 	// which reads as "nothing was trimmed" for a log the fleet has been
 	// writing to for months.
-	// ONE CEILING OVER ALL THREE DOMAINS, for [jsprovision.SequenceBudget]'s
-	// reason: this loop is three replicated stream creates in a row on the
-	// detached boot context, each of which would otherwise discover a wedged
-	// cluster on its own per-create budget. The queue's own sequence ceiling
-	// covers the engine's streams and not these, so without it the state log
-	// added three more full budgets after that ceiling had already been
-	// spent — and the package's claim to bound a whole bring-up was not true
-	// of all of it.
+	// ONE CEILING OVER THE WHOLE STATE-LOG BRING-UP, for
+	// [jsprovision.SequenceBudget]'s reason: this is three replicated stream
+	// creates AND three durable consumer creates, each of which would
+	// otherwise discover a wedged cluster on its own per-create budget. The
+	// queue's own sequence ceiling covers the engine's streams and not
+	// these, so without it the state log added six more full budgets after
+	// that ceiling had already been spent — and the package's claim to bound
+	// a whole bring-up was not true of all of it.
+	//
+	// The consumer each start creates is a replicated object on the same
+	// metadata group, and gets a ceiling of its own below — after the join,
+	// which is a snapshot transfer rather than a create and must not spend
+	// the creates' budget.
 	provisionCtx, cancelProvision := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
 	defer cancelProvision()
 
@@ -348,8 +353,16 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		return nil, err
 	}
 
+	// A SECOND CEILING, over the consumer creates, and deliberately not the
+	// same one: it is opened AFTER the join above, which transfers a
+	// snapshot rather than creating metadata and can honestly take minutes.
+	// Spanning both would let a large adoption eat the budget the creates
+	// need.
+	consumerCtx, cancelConsumers := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
+	defer cancelConsumers()
+
 	for _, domain := range registeredDomains() {
-		running, err := s.start(ctx, host, domain, logs[domain.Name()], epoch)
+		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()], epoch)
 		if err != nil {
 			// EVERY DOMAIN OR NONE. A node running half its register
 			// serves rows derived from one log while another's records
@@ -485,7 +498,7 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 }
 
 // start brings up one domain on the log [stateLog.provision] opened.
-func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.Domain,
+func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, domain statelog.Domain,
 	appendTo *jetstream.DomainLog, epoch map[string]any) (*runningDomain, error) {
 
 	spec := domain.Stream()
@@ -520,7 +533,11 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 	if err != nil {
 		return nil, err
 	}
-	consumer, err := host.DomainConsumer(ctx, spec.Name, s.nodeID, at.Seq)
+	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
+	// like the stream above it, and the three domains share one ceiling so
+	// a wedged metadata group cannot spend a full per-create budget three
+	// times over. Everything else here takes the ordinary boot context.
+	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
 	}

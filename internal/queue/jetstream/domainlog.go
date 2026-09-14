@@ -125,10 +125,20 @@ func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.S
 	// what is slow here, so truncating it would trade a not-found for a
 	// deadline on the same boot. [jsprovision.Settle] re-asks; each attempt
 	// keeps whatever deadline the caller gave it.
+	// THE CEILING IS REAL, which means it bounds the LOOKUPS and not only
+	// the gaps between them: [jsprovision.Settle] limits how long it keeps
+	// re-asking, so a single metadata request that blocks would otherwise
+	// outlive the window this function documents and hang until the boot
+	// context expired. Derived from the caller's context rather than
+	// detached from it, because nothing here is recovering from an expired
+	// deadline — an operator who cancels a boot is answered at once.
+	readCtx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
+	defer cancel()
+
 	var s jetstream.Stream
 	err := jsprovision.Settle(ctx, func() error {
 		var e error
-		s, e = q.js.Stream(ctx, stream)
+		s, e = q.js.Stream(readCtx, stream)
 		return e
 	})
 	return s, err

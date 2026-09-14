@@ -310,3 +310,45 @@ func TestTheSlowThresholdFitsInsideEveryBudget(t *testing.T) {
 		}
 	}
 }
+
+// A CONSUMER THAT HAS NOT PROPAGATED is the same propagation delay a stream or
+// a bucket is, and leaving it out of the predicate defeated the retry on the
+// one object a seat's mailbox is made of.
+func TestAConsumerNotYetVisibleIsAPropagationDelay(t *testing.T) {
+	t.Parallel()
+	if !NotYetVisible(jetstream.ErrConsumerNotFound) {
+		t.Error("a durable consumer that has not propagated is not recognised, " +
+			"so its read-back gives up on the first 404")
+	}
+	// AND IT IS STILL NOT A PLACEMENT FAILURE: the two predicates stay
+	// disjoint, or a lookup would wait for peers nobody is bringing.
+	if Unplaceable(jetstream.ErrConsumerNotFound) {
+		t.Error("a consumer propagation delay was treated as a placement failure")
+	}
+}
+
+// A CANCELLED CALLER STOPS THE RE-ASKING AT ONCE, even though the lookups
+// themselves run on a context detached from that cancellation.
+//
+// The read-backs deliberately survive the deadline that just expired — that is
+// what they exist for — but detaching the LOOP as well meant an operator who
+// cancelled a boot waited out the whole window for an answer nobody wanted.
+func TestCancellingTheCallerStopsTheReAsking(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	calls := 0
+	start := time.Now()
+	err := Settle(ctx, func() error { calls++; return jetstream.ErrStreamNotFound })
+	if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Errorf("reported %v, want the ask's own error", err)
+	}
+	if calls != 1 {
+		t.Errorf("a cancelled caller was asked %d times, want 1", calls)
+	}
+	if waited := time.Since(start); waited > ReadBack/2 {
+		t.Errorf("a cancelled caller waited %v, close to the whole %v window",
+			waited, ReadBack)
+	}
+}

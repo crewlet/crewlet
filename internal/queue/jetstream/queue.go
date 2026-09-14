@@ -397,15 +397,23 @@ func (q *Queue) provisionBudget() time.Duration {
 // clustered is whether this queue's broker has peers, which is the fact every
 // provisioning budget branches on.
 //
-// THE SAME EXPRESSION [startEmbedded] uses for the server it starts, plus the
-// external case: a URL is somebody else's broker, so its metadata group is
-// remote and a create on it is never the local file-store setup the solo
-// budget is sized for. Read off the topology rather than off Replicas, which
-// is a proxy that reports a single-replica clustered member as solo — see
+// THE NAME IS WHAT DECIDES IT, because the name is what [embeddedOptions]
+// gates the whole cluster block on: without it the route port and the peer
+// list are dropped and the server starts solo, so a predicate that counted
+// either of them would promise a clustered budget to a broker that never
+// clusters. Tier A refuses that shape outright (stream.cluster.name is
+// required once a port or peers is set), which is what makes one field
+// sufficient here.
+//
+// A URL is the other half: somebody else's broker, whose metadata group is
+// remote, so a create on it is never the local file-store setup the solo
+// budget is sized for.
+//
+// Read off the TOPOLOGY rather than off Replicas, which is a proxy that
+// reports a single-replica clustered member as solo — see
 // [jsprovision.Clustered].
 func (q *Queue) Clustered() jsprovision.Clustered {
-	return jsprovision.Clustered(q.cfg.URL != "" || q.cfg.ClusterName != "" ||
-		len(q.cfg.ClusterURLs) > 0 || q.cfg.ClusterPort != 0)
+	return jsprovision.Clustered(q.cfg.URL != "" || q.cfg.ClusterName != "")
 }
 
 // ensureStream provisions one stream, remembering that it did so. Streams
@@ -547,7 +555,7 @@ func (q *Queue) createOrObserveStream(
 	// to this member only on its next metadata update, so a single lookup
 	// inside that window reports not-found for a stream that exists and
 	// fails the boot before [Queue.DomainLog]'s own retry could help.
-	err = jsprovision.Settle(readCtx, func() error {
+	err = jsprovision.Settle(ctx, func() error {
 		var e error
 		info, e = q.js.Stream(readCtx, spec.name)
 		return e
@@ -912,7 +920,15 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	}
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.ReadBack)
 	defer cancel()
-	cons, err := q.js.Consumer(readCtx, stream, cfg.Durable)
+	// RE-ASKED, like the stream and bucket read-backs: a peer's create is
+	// visible to this member only on its next metadata update, so one
+	// lookup answers at an arbitrary instant inside that window and fails
+	// a boot over a consumer that exists.
+	err := jsprovision.Settle(ctx, func() error {
+		var e error
+		cons, e = q.js.Consumer(readCtx, stream, cfg.Durable)
+		return e
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}

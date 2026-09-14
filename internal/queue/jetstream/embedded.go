@@ -225,7 +225,13 @@ func (s *Server) Shutdown() {
 // failing in production, and a wrong SyncAlways surfaces only as acked data
 // missing after a host loses power — which no test can stage.
 func embeddedOptions(cfg Config) (*server.Options, string, error) {
-	clustered := cfg.ClusterName != "" || len(cfg.ClusterURLs) > 0 || cfg.ClusterPort != 0
+	// THE NAME, and only the name: the cluster block below is installed on
+	// it alone, so a port or a peer list without one configures nothing and
+	// this member starts solo. Tier A refuses that shape (it requires
+	// stream.cluster.name once either is set), and [Queue.Clustered] reads
+	// the same field for the provisioning budgets — one rule, so the server
+	// that gets built and the budget it is given cannot disagree.
+	clustered := cfg.ClusterName != ""
 	name := cfg.ServerName
 	if name == "" {
 		if clustered {
@@ -367,7 +373,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	clustered := opts.Cluster.Name != "" || len(opts.Routes) > 0 || opts.Cluster.Port != 0
+	clustered := opts.Cluster.Name != ""
 
 	// THE ROUTE PORT IS PROBED BEFORE THE SERVER IS ASKED FOR IT, because
 	// nats-server does not report this failure in any way an operator can

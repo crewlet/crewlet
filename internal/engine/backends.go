@@ -539,12 +539,14 @@ func effectiveLeaseTTL(b *config.Bootstrap, backend coord.Backend) time.Duration
 // clusteredStream is whether this node's broker has PEERS.
 //
 // The one place the engine decides it, so the queue, the lease store and the
-// fleet store cannot disagree about which budget they are on. It is a topology
-// question rather than a replica count: an external NATS is somebody else's
-// cluster, and an embedded member that names peers is one whatever replica
-// count it asks for — see [jsprovision.Clustered].
+// fleet store cannot disagree about which budget they are on — and it is the
+// same rule [Queue.Clustered] applies, which is the rule the embedded server
+// itself is built by: the cluster block takes effect only when it is NAMED.
+// Tier A refuses a port or a peer list without one, so the name is sufficient.
+//
+// A topology question rather than a replica count: an external NATS is
+// somebody else's cluster, and an embedded member that names one is clustered
+// whatever replica count it asks for — see [jsprovision.Clustered].
 func clusteredStream(b *config.Bootstrap) bool {
-	return b.Stream.Type == config.StreamNATS ||
-		b.Stream.Cluster.Name != "" || b.Stream.Cluster.Port != 0 ||
-		len(b.Stream.Cluster.Peers) > 0
+	return b.Stream.Type == config.StreamNATS || b.Stream.Cluster.Name != ""
 }
