@@ -224,8 +224,7 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	// belongs in this member's list, after the engine's, so a failed
 	// attempt stops the listener, the projector and the app before the
 	// engine they read from, and before the next attempt starts.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot,
-		func() *config.Company { return cfg }, nil)
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil)
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))

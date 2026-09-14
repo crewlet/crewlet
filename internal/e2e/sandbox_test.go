@@ -251,13 +251,12 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, func() *config.Company { return cfg },
-		func(opts *api.Options) {
-			// The DURABLE record, which is what the board must read: a
-			// run parked on a question waits days, and the live
-			// projection sweeps long before that.
-			opts.Sources.Sandbox = sandbox.NewCoordStore(e.Backends().Fleet)
-		})
+	app, srv := serveAPI(t, e, &boot, func(opts *api.Options) {
+		// The DURABLE record, which is what the board must read: a run
+		// parked on a question waits days, and the live projection sweeps
+		// long before that.
+		opts.Sources.Sandbox = sandbox.NewCoordStore(e.Backends().Fleet)
+	})
 	return &node{engine: e, app: app, server: srv, model: model}
 }
 
