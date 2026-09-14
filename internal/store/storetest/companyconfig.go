@@ -54,6 +54,65 @@ func testOnlyOneRevisionIsActive(t *testing.T, db *store.DB) {
 	}
 }
 
+func testAnInsertedRevisionIsHistoryUntilActivated(t *testing.T, db *store.DB) {
+	// A write through a running node's API stores its revision before the
+	// fleet has taken it, and one that loses the activation's compare-and-set
+	// must stay exactly that: history. Made active on the way in, it was what
+	// the node served and what the node published to the fleet at its next
+	// start, so a refused write landed after all.
+	configs := db.Configs()
+
+	// With nothing active, an inserted revision leaves nothing active.
+	lone, err := configs.Insert(t.Context(), store.Revision{
+		Summary: "refused", Payload: json.RawMessage(`{"n":0}`), CreatedAt: base,
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if active, found, aerr := configs.Active(t.Context()); aerr != nil || found {
+		t.Fatalf("an inserted revision became active: %+v found=%v err=%v", active, found, aerr)
+	}
+
+	live, err := configs.InsertActive(t.Context(), store.Revision{
+		Summary: "live", Payload: json.RawMessage(`{"n":1}`), CreatedAt: base.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("insert the live revision: %v", err)
+	}
+	pending, err := configs.Insert(t.Context(), store.Revision{
+		ParentID: live, Summary: "pending",
+		Payload: json.RawMessage(`{"n":2}`), CreatedAt: base.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("insert the pending revision: %v", err)
+	}
+	if active, found, aerr := configs.Active(t.Context()); aerr != nil || !found || active.ID != live {
+		t.Fatalf("active is %+v (found=%v err=%v), want the live revision %s kept", active, found, aerr, live)
+	}
+	stored, found, err := configs.Get(t.Context(), pending)
+	if err != nil || !found {
+		t.Fatalf("the inserted revision is not in the history: found=%v err=%v", found, err)
+	}
+	if stored.Active || !stored.ActivatedAt.IsZero() || stored.ParentID != live {
+		t.Errorf("inserted = %+v, want inactive, never activated, with its parent", stored)
+	}
+	all, err := configs.List(t.Context(), 0, 0)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("list: %d rows, err %v, want all three revisions", len(all), err)
+	}
+
+	// And activating it afterwards is the ordinary local activation.
+	if _, err := configs.Activate(t.Context(), pending, base.Add(3*time.Minute)); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	if active, _, err := configs.Active(t.Context()); err != nil || active.ID != pending {
+		t.Fatalf("active is %s (err %v), want the activated revision %s", active.ID, err, pending)
+	}
+	if again, _, _ := configs.Get(t.Context(), lone); again.Active {
+		t.Error("an unrelated inserted revision became active")
+	}
+}
+
 func testActivatingAMissingRevisionChangesNothing(t *testing.T, db *store.DB) {
 	// The deactivate runs first, so a failure that committed anyway would
 	// leave a company with NO active configuration — every node

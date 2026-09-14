@@ -67,7 +67,40 @@ const revisionColumns = `revision_id, parent_revision_id, created_at, created_by
 // ONE transaction still covers the deactivate and the insert. The partial
 // unique index refuses two active rows, so a deactivate that landed without
 // its insert would leave a company with no configuration.
+//
+// # Active on the way in is a claim, and only the offline paths may make it
+//
+// This node's active revision is what it serves from GET /config, what it
+// boots on, and what it offers the fleet at its next start when the pointer
+// it finds is older (see the boot publish in cmd/crewlet). So marking a
+// revision active here says "this is the company", and that is true for a
+// command run while the engine is stopped, which cannot move the pointer and
+// leaves the publish to the next boot. A write through a running node's API
+// has not been accepted by anybody yet when it stores its revision, and it
+// uses [Configs.Insert] instead.
 func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, error) {
+	return c.insert(ctx, r, true)
+}
+
+// Insert writes a new revision into the history WITHOUT making it the active
+// one, returning its id.
+//
+// The config API's write path: its revision becomes this node's active one
+// only once the FLEET has taken it, with [Configs.Activate] after the pointer
+// moved. A revision that lost the activation's compare-and-set stays here,
+// readable and revertable, and nothing on this node treats it as the
+// company. Inserted active, the loser was what GET /config served until the
+// next activation, and what this node published to the whole fleet at its
+// next start, since a locally active revision newer than the pointer is
+// exactly what the boot publish offers: a write answered with a 409 or a 412
+// landed after all, one restart later.
+func (c *Configs) Insert(ctx context.Context, r Revision) (string, error) {
+	return c.insert(ctx, r, false)
+}
+
+// insert is the one INSERT both writes share, so a revision stored active and
+// one stored inactive cannot differ in anything but the flag.
+func (c *Configs) insert(ctx context.Context, r Revision, active bool) (string, error) {
 	id := r.ID
 	if id == "" {
 		id = uuid.NewString()
@@ -80,25 +113,33 @@ func (c *Configs) InsertActive(ctx context.Context, r Revision) (string, error) 
 	if len(payload) == 0 {
 		payload = json.RawMessage("{}")
 	}
+	// NULL until the revision is active, which is what activated_at says
+	// about every row a later activation deactivated too.
+	isActive, activatedAt := 0, sql.NullInt64{}
+	if active {
+		isActive, activatedAt = 1, sql.NullInt64{Int64: EncodeTime(at), Valid: true}
+	}
 	err := c.db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
-			return err
+		if active {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE company_config SET is_active = 0 WHERE is_active <> 0`); err != nil {
+				return err
+			}
 		}
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO company_config
 			     (revision_id, parent_revision_id, created_at, created_by,
 			      source, summary, payload, is_active, activated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id, NullText(r.ParentID), EncodeTime(at), r.CreatedBy,
-			r.Source, r.Summary, string(payload), EncodeTime(at))
+			r.Source, r.Summary, string(payload), isActive, activatedAt)
 		return err
 	})
 	if err != nil {
 		return "", fmt.Errorf("store: insert config revision: %w", err)
 	}
 	log.InfoContext(ctx, "config_revision_stored",
-		"revision", id, "source", r.Source, "by", r.CreatedBy)
+		"revision", id, "source", r.Source, "by", r.CreatedBy, "active", active)
 	return id, nil
 }
 
