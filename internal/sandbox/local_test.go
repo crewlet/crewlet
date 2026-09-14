@@ -868,27 +868,57 @@ func TestAControlCommandThatHangsIsAbandonedWithATimeoutCode(t *testing.T) {
 
 // `docker run` spawning a stuck child is precisely the case: killing the CLI
 // alone would leave it behind.
+//
+// THE FIXTURE IS WAITED FOR, NOT RACED. This ran the tree under a 1s timeout
+// and then read the pid file, with a t.Skip when it was not there yet — so the
+// assertion switched ITSELF OFF whenever the machine was too loaded for a fork
+// and an `echo` to land inside a second. That is the worst shape a skip can
+// have: least likely to be present exactly when process-tree teardown is most
+// likely to be wrong, and invisible, because a skipped subtest is not printed
+// without -v.
+//
+// So the timeout is made generous enough never to fire, readiness is WAITED
+// for, and the teardown is triggered by CANCELLING the context — which reaches
+// the identical path in [runHost], whose select has one `<-ctx.Done()` case
+// for both. A grandchild that never records its pid is now a failure, because
+// that is what it is: the fixture did not come up.
 func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "child.pid")
-	_, err := runHost(t.Context(), hostCommand{
-		argv:    []string{"/bin/sh", "-c", "sh -c 'echo $$ > " + pidFile + "; sleep 300' & sleep 300"},
-		timeout: time.Second,
-		env:     map[string]string{"PATH": os.Getenv("PATH")},
-	})
-	if err != nil {
-		t.Fatalf("runHost: %v", err)
-	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runHost(ctx, hostCommand{
+			argv: []string{"/bin/sh", "-c", "sh -c 'echo $$ > " + pidFile + "; sleep 300' & sleep 300"},
+			// Long enough that it is never what ends this command: the
+			// cancel below is, and a timeout racing it would reintroduce
+			// exactly the flake this case was rewritten to remove.
+			timeout: time.Minute,
+			env:     map[string]string{"PATH": os.Getenv("PATH")},
+		})
+		done <- err
+	}()
+
+	waitFor(t, 30*time.Second, func() bool { return fileSize(pidFile) > 0 },
+		"the grandchild never recorded its pid, so the fixture never came up")
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
-		t.Skip("the grandchild never recorded its pid before the timeout")
+		t.Fatalf("read the grandchild's pid: %v", err)
 	}
 	child, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil {
 		t.Fatalf("pid: %v", err)
 	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runHost: %v", err)
+	}
 	waitFor(t, 5*time.Second, func() bool { return syscall.Kill(child, 0) != nil },
-		"a timed-out control command left its child running")
+		"a cancelled control command left its grandchild running")
 }
 
 func TestControlOutputIsBoundedRatherThanTheEnginesMemory(t *testing.T) {
