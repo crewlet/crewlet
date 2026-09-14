@@ -203,6 +203,9 @@ describe("keys", () => {
     expect(rowOf(unitKey("Engineering")).getAttribute("aria-expanded")).toBe("true");
     press("End");
     expect(focusedRow()).toBe(`add:${COMPANY_KEY}`);
+    // An add row names no node, so reaching it leaves the selection where it
+    // was: the selection is what the toolbar acts on and the URL names.
+    expect(probe.selection).toBe(unitKey("Engineering"));
   });
 
   test("Enter edits, Delete and Backspace delete but never the company, ContextMenu opens the actions", () => {

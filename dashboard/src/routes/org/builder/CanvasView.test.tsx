@@ -498,7 +498,7 @@ describe("the reporting chart", () => {
   };
 
   test("draws the forest with no-manager tops and the cycle group, and changes nothing itself", () => {
-    const { spies } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
+    const { spies, probe } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
     const shape = screen
       .getAllByRole("treeitem")
@@ -523,6 +523,16 @@ describe("the reporting chart", () => {
       expect.stringMatching(/^Edit reports/),
       "Open seat",
     ]);
+    press("Escape");
+
+    // The group heading is no node of the draft, so reaching it selects
+    // nothing: the selection is what the toolbar acts on and the URL names.
+    item("Chief").focus();
+    press("ArrowDown");
+    expect(probe.selection).toBe(seatKey("ops"));
+    press("ArrowDown");
+    expect(nameOf(document.activeElement as HTMLElement)).toBe("Reporting cycle");
+    expect(probe.selection).toBe(seatKey("ops"));
   });
 
   test("says its lines are the last check's once the draft has moved past it", () => {
