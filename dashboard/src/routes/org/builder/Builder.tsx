@@ -873,6 +873,11 @@ function Lens({
   const look = statusLook(status, problemCount);
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
+  // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
+  // until a template is recorded. Not rendered rather than hidden with the
+  // attribute, because `.org-builder-toolbar` sets `display: flex` and an
+  // author rule beats the user agent's `[hidden] { display: none }`.
+  const startingCompany = creating && !templateApplied;
   const viewSurface = view === "canvas" ? surfaces.canvas : surfaces.outline;
   const fill = view === "canvas";
   const providers = state.base.document?.providers;
@@ -984,99 +989,96 @@ function Lens({
   return (
     <BuilderContext.Provider value={api}>
       <div className={cx("org-builder-body", fill && "fill")}>
-        <div
-          className="org-builder-toolbar"
-          role="toolbar"
-          aria-label="Organization builder"
-          hidden={creating && !templateApplied}
-        >
-          <Segmented
-            ariaLabel="Builder view"
-            semantics="tabs"
-            panelId={viewPanel}
-            value={view}
-            onChange={setView}
-            size="sm"
-            options={[
-              { value: "canvas", label: "Canvas", icon: "sitemap" },
-              { value: "outline", label: "Outline", icon: "list" },
-            ]}
-          />
-          {view === "canvas" && (
+        {!startingCompany && (
+          <div className="org-builder-toolbar" role="toolbar" aria-label="Organization builder">
             <Segmented
-              ariaLabel="Chart"
+              ariaLabel="Builder view"
               semantics="tabs"
-              panelId={chartPanel}
-              value={chart}
-              onChange={setChart}
+              panelId={viewPanel}
+              value={view}
+              onChange={setView}
               size="sm"
               options={[
-                { value: "structure", label: "Structure" },
-                { value: "reporting", label: "Reporting" },
+                { value: "canvas", label: "Canvas", icon: "sitemap" },
+                { value: "outline", label: "Outline", icon: "list" },
               ]}
             />
-          )}
-          <span className="org-builder-wide row gap-1">
-            <Button
+            {view === "canvas" && (
+              <Segmented
+                ariaLabel="Chart"
+                semantics="tabs"
+                panelId={chartPanel}
+                value={chart}
+                onChange={setChart}
+                size="sm"
+                options={[
+                  { value: "structure", label: "Structure" },
+                  { value: "reporting", label: "Reporting" },
+                ]}
+              />
+            )}
+            <span className="org-builder-wide row gap-1">
+              <Button
+                size="sm"
+                icon="undo"
+                title="Undo"
+                onClick={handlers.undo}
+                disabled={!canUndo}
+                aria-keyshortcuts="Control+Z Meta+Z"
+              />
+              <Button
+                size="sm"
+                icon="redo"
+                title="Redo"
+                onClick={handlers.redo}
+                disabled={!canRedo}
+                aria-keyshortcuts="Shift+Control+Z Shift+Meta+Z"
+              />
+              <Button size="sm" variant="ghost" onClick={handlers.expandAll}>
+                Expand all
+              </Button>
+              <Button size="sm" variant="ghost" onClick={handlers.collapseAll}>
+                Collapse all
+              </Button>
+            </span>
+            <span className="org-builder-narrow">
+              <Menu label="More builder actions" items={more} />
+            </span>
+            <Menu
+              label={selected ? `Actions for ${selectedName}` : "Add to the organization"}
+              icon={selected ? "more" : "plus"}
+              items={nodeItems()}
               size="sm"
-              icon="undo"
-              title="Undo"
-              onClick={handlers.undo}
-              disabled={!canUndo}
-              aria-keyshortcuts="Control+Z Meta+Z"
-            />
-            <Button
-              size="sm"
-              icon="redo"
-              title="Redo"
-              onClick={handlers.redo}
-              disabled={!canRedo}
-              aria-keyshortcuts="Shift+Control+Z Shift+Meta+Z"
-            />
-            <Button size="sm" variant="ghost" onClick={handlers.expandAll}>
-              Expand all
-            </Button>
-            <Button size="sm" variant="ghost" onClick={handlers.collapseAll}>
-              Collapse all
-            </Button>
-          </span>
-          <span className="org-builder-narrow">
-            <Menu label="More builder actions" items={more} />
-          </span>
-          <Menu
-            label={selected ? `Actions for ${selectedName}` : "Add to the organization"}
-            icon={selected ? "more" : "plus"}
-            items={nodeItems()}
-            size="sm"
-          >
-            {selected ? selectedName : "Add"}
-          </Menu>
-          <span className="spacer" />
-          <FullscreenToggle container={container} />
-          <Badge tone={look.tone} icon={look.icon}>
-            {look.label}
-          </Badge>
-          <span className="org-builder-wide">
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={handlers.discard}
-              disabled={readOnly || !changed}
             >
-              Discard changes
+              {selected ? selectedName : "Add"}
+            </Menu>
+            <span className="spacer" />
+            <FullscreenToggle container={container} />
+            <Badge tone={look.tone} icon={look.icon}>
+              {look.label}
+            </Badge>
+            <span className="org-builder-wide">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handlers.discard}
+                disabled={readOnly || !changed}
+              >
+                Discard changes
+              </Button>
+            </span>
+            <Button
+              size="sm"
+              variant="primary"
+              icon="save"
+              onClick={openReview}
+              disabled={!rules.review || save.unsettled}
+              title={rules.reason ?? undefined}
+            >
+              Review and save
             </Button>
-          </span>
-          <Button
-            size="sm"
-            variant="primary"
-            icon="save"
-            onClick={openReview}
-            disabled={!rules.review || save.unsettled}
-            title={rules.reason ?? undefined}
-          >
-            Review and save
-          </Button>
-        </div>
+          </div>
+        )}
 
         {(posture.kind === "guarded" || status === "guarded") && (
           <Banner
@@ -1251,7 +1253,7 @@ function Lens({
 
         {created && <NextSteps onDismiss={() => setCreated(false)} />}
 
-        {creating && !templateApplied ? (
+        {startingCompany ? (
           <CreateCompany
             keys={keys}
             disabled={readOnly}

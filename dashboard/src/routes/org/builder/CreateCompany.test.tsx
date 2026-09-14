@@ -69,6 +69,19 @@ test("the form starts the company from a template, and the check is create-only"
   expect(await screen.findByRole("button", { name: "Start the company" })).toBeDefined();
 });
 
+// NOTHING TO UNDO, CHECK OR SAVE until a template is recorded, so the form
+// stands alone. `hidden` alone did not hide it: the toolbar's own
+// `display: flex` outranks the user agent's rule for the attribute.
+test("the create form carries no builder toolbar until a template is recorded", async () => {
+  const engine = new Engine(null);
+  mountBuilder({ engine });
+  await screen.findByLabelText("Company name");
+  expect(screen.queryByRole("toolbar", { name: "Organization builder" })).toBeNull();
+  expect(document.querySelector(".org-builder-toolbar")).toBeNull();
+  await startCompany({});
+  expect(await screen.findByRole("toolbar", { name: "Organization builder" })).toBeDefined();
+});
+
 test("a company with no name is refused by the form, not by the engine", async () => {
   const engine = new Engine(null);
   mountBuilder({ engine });
