@@ -319,7 +319,7 @@ func TestAResumeThatBrokeAfterActingKeepsItsClaim(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	rig.runner.Finish(Result{Success: true, Text: "done"})
-	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeActed)
+	rig.resumer.err = fmt.Errorf("%w: the reviewer's provider went away", ErrResumeAbandoned)
 
 	payload, ev := rig.completion("t1")
 	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {

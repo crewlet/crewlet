@@ -71,12 +71,7 @@ func (e *Engine) describeTurn(ctx context.Context, company *Company, req Request
 		convKey:   req.ConversationKey,
 		startedAt: time.Now().UTC(),
 	}
-	if role := company.Org.AgentSeatByHandle(req.Handle); role != nil {
-		t.role = role.Name
-		if id, ok := company.Org.AgentIDFor(role); ok {
-			t.agentID = id.String()
-		}
-	}
+	t.role, t.agentID = seatIdentity(company, req.Handle)
 	// OFF THE ASK: a coalesced conversation's interactions come from the
 	// merged digest's own constituent list, which is the same set the
 	// partition held and the one place a merge combined them.
@@ -180,20 +175,29 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		Failed:          failed,
 		ConversationKey: t.convKey,
 	}
-	switch {
-	case err != nil:
+	if err != nil {
 		// Bounded only so the event is publishable at all; see
 		// events.MaxDiagnosticBytes. An event refused by the queue is
 		// logged and dropped, so an unbounded failure text costs the
 		// operator the whole record rather than its tail.
 		summary.Error = events.ClipDiagnostic(err.Error())
 		summary.ErrorKind = "error"
-	case res.Breach != nil:
-		// A guard breach is not an error — the turn ran and was stopped by
-		// a rule. Naming the RULE is the whole value: "depth" and "stall"
-		// send an operator to different places, and a bare "failed" sends
-		// them to neither.
-		summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+	}
+	if res.Breach != nil {
+		// A guard breach is not an error: the turn ran and was stopped by
+		// a rule. Naming the RULE is the whole value: "depth_cap" and
+		// "stall" send an operator to different places, and a bare "failed"
+		// sends them to neither.
+		//
+		// THE RULE WINS WHEN BOTH ARE SET, and a panic is the case that
+		// sets both: its error says what broke and its breach names the
+		// guard. Read the other way round, the one kind that says the
+		// engine itself is at fault reached the Turn screen as the generic
+		// "error". The error's own text is kept, since it names the phase
+		// and round the breach detail does not.
+		if summary.Error == "" {
+			summary.Error = events.ClipDiagnostic(res.Breach.Detail)
+		}
 		summary.ErrorKind = string(res.Breach.Kind)
 	}
 	e.publishEvent(ctx, events.New(summary, t.trace), t.role)
@@ -376,13 +380,38 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	}
 	// Re-derived from the org when the row predates a rename, so a resumed
 	// turn is still attributed to a seat that exists.
-	if role := company.Org.AgentSeatByHandle(in.Run.AgentHandle); role != nil {
-		t.role = role.Name
-		if id, ok := company.Org.AgentIDFor(role); ok {
-			t.agentID = id.String()
+	if role, agentID := seatIdentity(company, in.Run.AgentHandle); role != "" {
+		t.role = role
+		if agentID != "" {
+			t.agentID = agentID
 		}
 	}
 	return t
+}
+
+// seatIdentity is the role name and agent id a seat's events are addressed
+// to, or two empty strings for a handle this company does not name.
+//
+// ONE DERIVATION for every frame that addresses a seat-level event: the
+// turn's own telemetry, the resumed turn's, and the guard breach a panic
+// outside either publishes. Written out at each, the three would have to
+// agree about a human seat (no agent id) and an unknown handle (no role)
+// without anything checking that they do.
+//
+// Nil-safe on the company, because the panic path can run on a node that has
+// no epoch yet.
+func seatIdentity(company *Company, handle string) (role, agentID string) {
+	if company == nil || company.Org == nil {
+		return "", ""
+	}
+	seat := company.Org.AgentSeatByHandle(handle)
+	if seat == nil {
+		return "", ""
+	}
+	if id, ok := company.Org.AgentIDFor(seat); ok {
+		agentID = id.String()
+	}
+	return seat.Name, agentID
 }
 
 // skipDecision maps the turn's decision onto the one plan_decision value

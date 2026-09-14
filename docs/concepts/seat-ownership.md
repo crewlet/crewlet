@@ -220,6 +220,7 @@ record rather than from `err != nil`:
 |---|---|
 | nothing reached outside the engine | **redelivered**, exactly as before — a provider that never answered, a runner that could not be built, a refused budget, a seat handed to another node mid-call. None of them wrote anything, and every one is worth trying again. |
 | a call reached outside the engine | **recorded and acked.** The rest of the turn is lost; its writes are not un-doable, and only one of those two is recoverable by trying again. |
+| the turn panicked | **recorded and acked**, whatever the record proves. A panic is a defect in the engine, so a redelivery runs the same code on the same input and panics again, having repeated whatever came before it. The panicking round's own record is lost with it, so "nothing reached outside" could not be established anyway. Before panics were recovered, one unwound into the queue backend's handler guard, which NAKs, and the trigger came back for the whole delivery budget. |
 
 The proof is deliberately narrow, because a true answer *spends* a trigger.
 A call counts only when it is MCP-backed and not positively annotated
@@ -233,14 +234,18 @@ every turn that closed a single round.
 
 Giving up on a trigger is never silent. The turn has already published its own
 completion marked failed, and a `TurnTriggerSkipped` beside it says the trigger
-behind it will not come back, and why.
+behind it will not come back, and why. A panic also publishes
+`turn.guard_breach(kind="unhandled_exception")`, which is what puts the seat in
+the dashboard's `afk` state, and the log line that recovered it
+(`turn_phase_panicked`, `dispatch_panicked` or `sandbox_resume_panicked`)
+carries the stack.
 
 The same decision guards the other path a turn can arrive by. A **resumed**
 turn re-enters the executor's suspended conversation, so a redelivery repeats
 every call the resumed round made — and a turn coming back from a coding box is
 the one most likely to have pushed a branch already. A resume that broke after
-acting therefore leaves its run row claimed, which is what stops a retry
-winning the flip; every other resume failure still un-claims and comes back,
+acting, or that panicked, therefore leaves its run row claimed, which is what
+stops a retry winning the flip; every other resume failure still un-claims and comes back,
 because the suspended conversation is the expensive thing there and a resume
 that proved nothing has lost nothing by trying again.
 
