@@ -887,8 +887,7 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 	// IF-NONE-MATCH FIRST, because `*` on a write is the create-only
 	// precondition (RFC 9110 §13.1.2): "store this only if the company has
 	// not been configured yet". It is the only spelling of that condition
-	// this surface takes. `If-Match: none` is not an alias for it: `none`
-	// is read as the entity-tag it looks like, and matches nothing.
+	// this surface takes: every If-Match value but `*` is an entity-tag.
 	if none := r.Header.Get("If-None-Match"); none != "" {
 		createOnly = strings.TrimSpace(none) == "*"
 		if !found {

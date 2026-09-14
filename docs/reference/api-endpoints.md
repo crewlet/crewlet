@@ -309,7 +309,7 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 | `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
 | `If-None-Match: *` | writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
 
-The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition: `If-Match: none` is not a second spelling of it, so `none` is read as an entity tag like any other and matches no revision.
+The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition, and every `If-Match` value other than `*` is an entity tag, matched against the active revision and nothing else.
 
 Independently of any header, every write names the revision it derived from as the new revision's parent, and the activation is a compare-and-set on that parent — so a lost update is refused **whether or not** the caller sent a precondition. See [Concurrent writes](#concurrent-writes).
 

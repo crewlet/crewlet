@@ -1146,8 +1146,9 @@ func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 // literal, so the wildcard could never equal it — when the spec makes it
 // "any current representation", the ordinary way to say "only if something is
 // there". `If-None-Match: *` is the reverse, and the only create-only
-// precondition: `If-Match: none` is not a second spelling of it, so `none` is
-// an entity-tag like any other and matches nothing, configured or not.
+// precondition: every other If-Match value is an entity-tag, whatever word it
+// happens to be, and one no revision carries matches nothing, configured or
+// not.
 func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1160,8 +1161,8 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 		{"a wildcard refuses an unconfigured one", "If-Match", "*", false, http.StatusPreconditionFailed, "no_active_revision"},
 		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated, ""},
 		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed, "already_configured"},
-		{"none is no create-only alias on an unconfigured node", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
-		{"none is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
+		{"a word is an entity-tag an unconfigured node cannot match", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
+		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
