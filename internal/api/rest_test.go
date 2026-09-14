@@ -282,6 +282,11 @@ func TestTheBurndownRouteCarriesItsQueryString(t *testing.T) {
 // route test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
 
+func (stubWorkReader) Inbox(context.Context, tracker.InboxQuery, time.Time) (
+	tracker.InboxAnswer, error) {
+	return tracker.InboxAnswer{}, nil
+}
+
 func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
 	return tracker.Answer{}, nil
 }
@@ -342,4 +347,37 @@ func (stubWorkReader) MyWork(context.Context, tracker.MyWorkQuery, time.Time) (
 func (stubWorkReader) Person(context.Context, tracker.PersonQuery, time.Time) (
 	tracker.PersonState, error) {
 	return tracker.PersonState{}, nil
+}
+
+// THE INBOX IS A LITERAL SEGMENT, not a task called "inbox".
+//
+// Same hazard the burndown had, one route later: `/work/{id}` matches the
+// path, so a table entry with no route behind it answers 404 about a task
+// nobody named. The refusal proves the query was reached — `work_inbox`
+// refuses an unresolvable handle with `bad_params`, and the wildcard would
+// answer `not_found`.
+func TestTheInboxIsServedAtThePathTheTableDocuments(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Runtime: &fakeRuntime{},
+		Sources: queries.Sources{Work: stubWorkReader{}},
+	})
+
+	rec := httptest.NewRecorder()
+	a.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/work/inbox", nil))
+	res := rec.Result()
+
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("GET /work/inbox = %d, want 400: an anonymous caller names "+
+			"no seat and the question refuses, so any other status means "+
+			"/work/{id} answered the path instead", res.StatusCode)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["error"] != "bad_params" {
+		t.Errorf("error = %q, want bad_params; `not_found` is the wildcard "+
+			"answering about a task called \"inbox\"", body["error"])
+	}
 }

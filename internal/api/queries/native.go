@@ -119,6 +119,7 @@ type WorkReader interface {
 	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
 		tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
+	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
 }
 
 // PageReader is the knowledge read side this surface calls.
@@ -401,15 +402,21 @@ func (s Sources) workCatalogue(ctx context.Context, p Params) (any, error) {
 // workPerson answers one human's own state — their inbox, their queue and
 // their pins.
 //
-// THE HANDLE IS A PARAMETER for the reason [Sources.workViews]' viewer is: this
-// whole surface is guarded, so the caller already holds the company's own
-// credential. What the parameter selects is whose day to render, and the
-// engine's own write side is where the authority lives — a read here can no
-// more mark somebody's work read than a screen can.
+// SCOPED BY [Sources.viewerHandle], the same rule `work_my_work` and
+// `work_inbox` take: an absent handle is the caller's own seat, and naming
+// anybody else's needs an operator credential.
+//
+// It DEMANDED a handle and checked nothing, on the reasoning that the whole
+// surface is guarded so the caller already holds the company's credential.
+// That reasoning has a hole in it that the other two do not: `api.allow_
+// anonymous_read` opens this surface, and this answer carries the richest
+// personal record the engine keeps — somebody's unread notices, what they mean
+// to work on next, and who set that order. The parameter selected whose. A
+// scope rule two of the three personal questions follow is not a rule.
 func (s Sources) workPerson(ctx context.Context, p Params) (any, error) {
-	handle := strings.TrimSpace(p.String("handle"))
-	if handle == "" {
-		return nil, badParams("handle", "", nil)
+	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
 	}
 	fresh, err := freshness(p)
 	if err != nil {
@@ -834,9 +841,13 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 
 // workMyWork answers everything one person is expected to look at.
 func (s Sources) workMyWork(ctx context.Context, p Params) (any, error) {
-	handle := strings.TrimSpace(p.String("handle"))
-	if handle == "" {
-		return nil, badParams("handle", "", nil)
+	// THE SAME SCOPE RULE AS THE INBOX — see [Sources.viewerHandle]. This
+	// was registered operator-only and demanded a handle, which is why
+	// routes/MyWork.tsx picked the alphabetically first seat: there was no
+	// way for the screen to know whose day it was drawing.
+	handle, err := s.viewerHandle(ctx, strings.TrimSpace(p.String("handle")))
+	if err != nil {
+		return nil, err
 	}
 	fresh, err := freshness(p)
 	if err != nil {

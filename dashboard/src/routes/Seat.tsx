@@ -29,6 +29,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { awaitingPerson, indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
 import {
   fmtCount,
@@ -109,10 +110,17 @@ export function SeatScreen({ handle }: { handle: string }) {
   // A PERSON RECORD IS A HUMAN'S. A seat has a MAILBOX — the durable
   // subscription the engine attaches when it acquires the seat — and nothing
   // on a person's record describes one, so this is read only for a human.
+  // AND ONLY WHERE THE READER MAY HAVE IT. A person record is somebody's
+  // unread notices, the order they mean to work in and who set it — the
+  // engine scopes it to the seat the caller's own credential is bound to, and
+  // a colleague reading it needs an operator one. Asking anyway would put a
+  // refusal on the screen where the honest answer is that this is theirs.
+  const viewer = useViewer();
+  const mayReadPerson = viewer.operator || (viewer.handle !== "" && viewer.handle === handle);
   const person = useQuery(
     "work_person",
     { handle },
-    { enabled: tab === "overview" && seat?.kind === "human", pollMs: 60_000 },
+    { enabled: tab === "overview" && seat?.kind === "human" && mayReadPerson, pollMs: 60_000 },
   );
   const spend = useQuery(
     "tokens",
@@ -282,6 +290,18 @@ export function SeatScreen({ handle }: { handle: string }) {
               ]
         }
       >
+        {/* WITHHELD, and said so. A panel that simply is not there reads as
+            a person with nothing on their plate, which is the one thing it
+            must not read as. */}
+        {shown === "overview" && human && !mayReadPerson && (
+          <Panel title="Their day" icon="check">
+            <p className="t-body">
+              Their inbox, their queue and their pinned views are theirs. Reading another person's
+              record needs an operator credential.
+            </p>
+          </Panel>
+        )}
+
         {shown === "overview" && human && person.data?.held && (
           <Panel
             title="Their day"

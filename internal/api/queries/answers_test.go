@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -100,8 +101,13 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	// one, because a dashboard drawing "no events" for "this node has no
 	// event log" would report a quiet company during a misconfiguration.
 	r := registryOver(t, queries.Sources{})
-	if got := r.Names(); len(got) != 0 {
-		t.Errorf("names = %v, want none with no sources", got)
+	// EXCEPT THE ONES WHOSE SOURCE IS THE CALLER. `viewer` answers who
+	// presented this credential, which is a fact about the request rather
+	// than about anything this process was wired with — so a node with no
+	// sources at all still answers it, and answers "no seat", which is what
+	// lets a screen say what to bind instead of looking broken.
+	if got := r.Names(); !slices.Equal(got, []string{"viewer"}) {
+		t.Errorf("names = %v, want only the caller's own questions", got)
 	}
 	if _, err := r.Answer(t.Context(), "events", nil, ""); !errors.Is(err, queries.ErrUnknown) {
 		t.Errorf("err = %v, want ErrUnknown", err)
@@ -113,14 +119,23 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	state := livestate.New()
 	db := openStore(t)
 
-	if got := registryOver(t, queries.Sources{State: state}).Names(); len(got) != 2 {
+	// ALWAYS REGISTERED, whatever this process has: a credential is
+	// presented to a node with no sources at all, and "this token resolves
+	// to no seat" is the answer the screen needs in order to say what to
+	// bind. Named here so adding another is a deliberate edit to this list
+	// rather than a silent shift in every count below.
+	always := []string{"viewer"}
+	if got := registryOver(t, queries.Sources{}).Names(); !slices.Equal(got, always) {
+		t.Errorf("with no sources at all = %v, want %v", got, always)
+	}
+	if got := registryOver(t, queries.Sources{State: state}).Names(); len(got) != 2+len(always) {
 		t.Errorf("projection questions = %v", got)
 	}
 	// event, events, trace, turn, phases — five. `turn` is what made
 	// "everything that happened in this unit of work" askable at all (see
 	// migration 0014), and `phases` is the company-wide phase record with its
 	// payloads, which the event listing deliberately cannot serve.
-	if got := registryOver(t, queries.Sources{Events: db.Events()}).Names(); len(got) != 5 {
+	if got := registryOver(t, queries.Sources{Events: db.Events()}).Names(); len(got) != 5+len(always) {
 		t.Errorf("event-log questions = %v", got)
 	}
 	full := registryOver(t, queries.Sources{
@@ -128,7 +143,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
 	})
 	for _, want := range []string{
-		"agent", "event", "events", "phases", "stream", "tokens", "trace", "turn",
+		"agent", "event", "events", "phases", "stream", "tokens", "trace", "turn", "viewer",
 	} {
 		found := false
 		for _, got := range full.Names() {

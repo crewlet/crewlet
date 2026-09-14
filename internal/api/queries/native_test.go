@@ -18,6 +18,8 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
+	inbox       tracker.InboxAnswer
+	inboxQuery  tracker.InboxQuery
 	query       tracker.Query
 	answer      tracker.Answer
 	detail      tracker.TaskDetail
@@ -120,6 +122,11 @@ func (s *stubWork) Person(_ context.Context, q tracker.PersonQuery, _ time.Time)
 	return s.person, s.err
 }
 
+func (s *stubWork) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (tracker.InboxAnswer, error) {
+	s.inboxQuery = q
+	return s.inbox, s.err
+}
+
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	s.query = q
 	return s.answer, s.err
@@ -167,6 +174,18 @@ func (s *stubPages) Containers(_ context.Context,
 ) ([]pages.Container, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
+}
+
+// personalQuestions are the three scoped by the caller's own seat — see
+// Sources.viewerHandle. They refuse an anonymous caller who names somebody
+// else, so a sweep that walks every native question has to present a
+// credential for these three. Named once rather than per sweep: the set grew
+// from one to three, and each sweep that spelled it as `== "work_my_work"`
+// silently stopped covering the other two.
+var personalQuestions = map[string]bool{
+	"work_my_work": true,
+	"work_person":  true,
+	"work_inbox":   true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -613,6 +632,8 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 		// credential in front of it.
 		{"work_my_work", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }},
 		{"pages", map[string]any{},
 			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
 		{"page", map[string]any{"id": "p1"},
@@ -627,7 +648,7 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			work, pages := &stubWork{}, &stubPages{}
 			src := queries.Sources{Work: work, Pages: pages}
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			if _, err := ask(t, src, tc.what, tc.args); err != nil {
@@ -734,6 +755,10 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.myWorkQuery.MaxLag, w.myWorkQuery.MaxLagSeq)
 			}},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.inboxQuery.MaxLag, w.inboxQuery.MaxLagSeq)
+			}},
 		{"pages", nil, func(_ *stubWork, p *stubPages) func(*testing.T, string) {
 			return bounds(p.fresh.MaxLag, p.fresh.MaxLagSeq)
 		}},
@@ -778,7 +803,7 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			t.Parallel()
 			work, pages := &stubWork{}, &stubPages{}
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			all := map[string]any{}
@@ -845,6 +870,8 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
 		{"work_my_work", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
+		{"work_inbox", map[string]any{"handle": "ana"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.inboxQuery.MinPosition }},
 		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
 		{"page", map[string]any{"id": "p1"},
 			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
@@ -853,7 +880,7 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
 			ask := askNative
-			if tc.what == "work_my_work" {
+			if personalQuestions[tc.what] {
 				ask = askAsOperator
 			}
 			for _, level := range []string{"", "linearizable", "session", "stale", "consistent_prefix"} {

@@ -35,6 +35,40 @@ var (
 	ErrBadParams = errors.New("queries: bad parameters")
 )
 
+// operatorKey is the context key this package carries the caller's operator id
+// under.
+//
+// THE CONTEXT, NOT THE PARAMS, and the distinction is a security one: params
+// are the caller's own bag, so an id read from there would be an id the caller
+// chose. This one is written in exactly one place — [Registry.AnswerWith],
+// after the operator check — so every question that asks who is calling gets
+// the same answer, on both transports, and no caller can write it.
+//
+// Its own type, unexported, so nothing outside this package can collide with
+// the key or forge a value under it.
+type operatorKey struct{}
+
+// withOperator returns a context carrying the caller's operator id.
+//
+// UNEXPORTED, because both transports reach an answer through
+// [Registry.AnswerWith] and there is nowhere else this may be set from. A
+// package that could stamp its own operator id onto a context would be a
+// second authority on who the caller is, which is the whole thing this key
+// exists to prevent.
+func withOperator(ctx context.Context, operatorID string) context.Context {
+	return context.WithValue(ctx, operatorKey{}, operatorID)
+}
+
+// operatorFrom reads the caller's operator id, or "" for an anonymous one.
+//
+// EMPTY IS A REAL ANSWER, not a failure: most questions here are readable
+// without a token, and "nobody presented one" is exactly what a viewer query
+// reports back.
+func operatorFrom(ctx context.Context) string {
+	id, _ := ctx.Value(operatorKey{}).(string)
+	return id
+}
+
 // Params are one query's arguments.
 //
 // It exists so a single answer function can be fed from both transports: a
@@ -259,7 +293,11 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	if e.operator && operatorID == "" {
 		return nil, fmt.Errorf("%w: %q", ErrUnauthorized, what)
 	}
-	return e.answer(ctx, p)
+	// WHO IS ASKING, for the questions that answer differently per person.
+	// Set here rather than at each transport, because this is the one
+	// function both of them meet at — which is the same reason this package
+	// exists at all.
+	return e.answer(withOperator(ctx, operatorID), p)
 }
 
 // RequiresOperator reports whether a question needs one, for a REST route that
