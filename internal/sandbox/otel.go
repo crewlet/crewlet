@@ -306,10 +306,11 @@ const (
 //
 // A run's endpoint is minted by the engine that launched it, and the token is
 // verified by whichever node the box exports to, which on a fleet need not be
-// the same one. A node that built no receiver answers 401 to every export
-// while its config looks complete, which is the failure the signed, stateless
-// token exists to prevent, and it cannot prevent it if the verifying side
-// never constructs one.
+// the same one. So every node builds its receiver from the same environment
+// and the same Tier A keyring: a node keyed differently from the one that
+// minted answers 401 to every export while its config looks complete, which is
+// the failure the signed, stateless token exists to prevent. A node with the
+// variable unset builds none, and its route is absent rather than refusing.
 //
 // keyMaterial is the Tier A keyring, which every process already loads. Nil
 // or empty takes a per-process key: correct for a single process, and warned

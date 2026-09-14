@@ -121,9 +121,15 @@ type CoordinatorOptions struct {
 	Pending PendingStore
 	Manager *Manager
 
-	// Resume re-enters a suspended turn. Nil means this node cannot resume
-	// anything, which is a valid build (an API-only process) and is
-	// reported as [ErrResumeUnavailable] rather than silently settling runs.
+	// Resume re-enters a suspended turn. Required: every node that builds a
+	// coordinator runs the engine whose seats a completion resumes into,
+	// and [NewCoordinator] refuses one without it.
+	//
+	// "This node cannot resume this run" is still an answer, and it is the
+	// resumer's to give, by wrapping [ErrResumeUnavailable]: only the engine
+	// knows which seats it holds and which conversation formats it reads.
+	// That answer takes the path every failed resume takes, which gives the
+	// claim back, so the node that does hold the seat can win it.
 	Resume Resumer
 
 	// Account post-charges collected tokens. Nil skips accounting.
@@ -185,10 +191,27 @@ type Coordinator struct {
 	busy map[string]int
 }
 
-// NewCoordinator validates the options and returns the coordinator.
+// NewCoordinator validates the options and returns the coordinator, or refuses
+// a missing collaborator by name.
 func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
-	if opts.Queue == nil || opts.Pending == nil || opts.Manager == nil {
-		return nil, errors.New("sandbox: a coordinator needs a queue, a pending store and a manager")
+	var missing []string
+	for _, field := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Queue", opts.Queue == nil},
+		{"Pending", opts.Pending == nil},
+		{"Manager", opts.Manager == nil},
+		{"Resume", opts.Resume == nil},
+	} {
+		if field.absent {
+			missing = append(missing, "CoordinatorOptions."+field.name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("sandbox: a coordinator needs %s: a detached run is "+
+			"published, recorded, reconnected to and resumed through them",
+			strings.Join(missing, ", "))
 	}
 	c := &Coordinator{
 		queue: opts.Queue, pending: opts.Pending, manager: opts.Manager,
@@ -579,7 +602,11 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// take the slot first.
 	c.clearBusy(run.AgentHandle)
 
-	if err := c.dispatchResume(ctx, ResumeRequest{
+	// STRAIGHT TO THE RESUMER, which [NewCoordinator] refuses to be built
+	// without: "this node cannot resume this run" is the resumer's own
+	// answer, wrapping [ErrResumeUnavailable], and it takes the failure
+	// path below like every other failed resume.
+	if err := c.resume.Resume(ctx, ResumeRequest{
 		Run: run, Answer: answer, Success: success, Trigger: trigger,
 		CostUSD: outcome.CostUSD, DeliveredRefs: outcome.DeliveredRefs,
 	}); err != nil {
@@ -676,20 +703,6 @@ func (c *Coordinator) current(ctx context.Context, run PendingRun) (PendingRun, 
 		return run, true
 	}
 	return latest, true
-}
-
-// dispatchResume hands a claimed run to the resumer.
-//
-// A node with NO resumer answers [ErrResumeUnavailable] from here, inside the
-// failure handling every other unavailable resume goes through, rather than
-// before it. Returned ahead of that handling it left the claim taken: the
-// NAK'd completion came back to a claim that refused it, and the suspended
-// conversation was stranded in resumed until the seat next changed hands.
-func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) error {
-	if c.resume == nil {
-		return fmt.Errorf("%w: seat %q has no resumer on this node", ErrResumeUnavailable, req.Run.AgentHandle)
-	}
-	return c.resume.Resume(ctx, req)
 }
 
 // unclaim hands a claimed tail back, so the signal's retry can win the flip
