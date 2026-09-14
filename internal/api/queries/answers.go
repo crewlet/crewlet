@@ -93,7 +93,7 @@ type Sources struct {
 	}
 
 	// Knowledge resolves the company's ONE knowledge backend, behind the
-	// same seam a seat's Plan phase searches through — so an operator
+	// same seam a seat's own turn searches through, so an operator
 	// asking "what would an agent find" gets the answer an agent would
 	// get, rather than one from an index somebody has to keep fresh.
 	//

@@ -1059,7 +1059,7 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 //
 // DERIVED FROM THE TRIGGER, before the turn starts and from nothing the model
 // says. It is the half of the delivery question a model cannot get wrong: the
-// old engine asked the planner to declare its own intent, and a turn that
+// old engine asked the model to declare its own intent, and a turn that
 // declared `skip` on a direct @mention read to the person who sent it exactly
 // like the message never arriving.
 //

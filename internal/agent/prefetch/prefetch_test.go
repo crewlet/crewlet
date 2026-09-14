@@ -605,7 +605,7 @@ func TestAGuaranteedEmptySearchSpendsNoModelCall(t *testing.T) {
 }
 
 // AUTO-DRAFTS ARE HIDDEN. Those pages are unreviewed proposals a synthesis
-// pass wrote; a planner cannot tell one from a ratified runbook, and
+// pass wrote; an executor cannot tell one from a ratified runbook, and
 // following one is how a draft becomes policy without anyone agreeing to it.
 func TestTheSearchHidesUnreviewedDrafts(t *testing.T) {
 	t.Parallel()
@@ -685,7 +685,7 @@ func TestRecallRendersWhatAPastTurnWasAndHowItWent(t *testing.T) {
 
 // NO FALLBACK TO RECENCY. Recall's whole claim is "this resembles what you
 // are doing now"; the three most recent turns carry no such claim, and a
-// planner told they are similar work will treat them as precedent.
+// executor told they are similar work will treat them as precedent.
 func TestRecallWithNoEmbeddingSurfacesNothing(t *testing.T) {
 	t.Parallel()
 	got := fetch(t, prefetch.Sources{
@@ -731,7 +731,7 @@ func TestTheEpisodeSummaryIsOptionalAndFailsSoft(t *testing.T) {
 // ── counterparty ──
 
 // ONE BLOCK PER DISTINCT SENDER: a coalesced trigger is several people
-// speaking, and profiling only the latest hands the planner a profile of
+// speaking, and profiling only the latest hands the executor a profile of
 // whoever spoke last while it answers all of them.
 func TestEverySenderWithAProfileIsRendered(t *testing.T) {
 	t.Parallel()

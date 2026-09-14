@@ -2,7 +2,8 @@ package prompts
 
 import "strings"
 
-// OnboardingHeader is the one-time, pre-Plan setup contract.
+// OnboardingHeader is the one-time setup contract, run on a seat's first turn
+// before the executor.
 //
 // Backend-neutral by design: it points at the team's knowledge-base MCP
 // server by CAPABILITY ("a page-search / get-page tool"), never by product,

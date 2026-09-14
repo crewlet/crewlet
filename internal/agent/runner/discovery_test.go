@@ -58,7 +58,7 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 	// ONE BULLET PER TOOL, description whole. A real server publishes
 	// paragraphs, and the entry that used to be cut to its first line was
 	// cut exactly where the usable part starts: "Accepts a cursor for
-	// paging" is what a planner needs to call the tool correctly, and this
+	// paging" is what an executor needs to call the tool correctly, and this
 	// listing is the only place it is ever shown. Continuation lines are
 	// indented so the shape survives without paying for it in content.
 	if !strings.Contains(listing, "Accepts a cursor") {
@@ -77,7 +77,7 @@ func TestAPhaseCanDiscoverAndActivateAnMCPTool(t *testing.T) {
 		t.Errorf("the listing has %d bullets for 2 tools:\n%s", bullets, listing)
 	}
 	// ONE server's tools, not every MCP tool. A listing that ignored the
-	// argument would hand a planner the wall of text discovery exists to
+	// argument would hand an executor the wall of text discovery exists to
 	// avoid.
 	if strings.Contains(listing, "jira_create") {
 		t.Errorf("the listing for slack included another server's tools:\n%s", listing)

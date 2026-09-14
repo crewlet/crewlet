@@ -15,10 +15,10 @@ import (
 //
 // A tool skill that does not load is INVISIBLE — the registry is populated by
 // one walk of one space at boot, and the only symptom of a page that failed to
-// admit is guidance that never appears in a Plan prompt. This command runs the
-// engine's own walk against a throwaway registry so an operator can see what
-// the next boot will see, without restarting anything and without a running
-// engine to ask.
+// admit is guidance that never appears in an executor's prompt. This command
+// runs the engine's own walk against a throwaway registry so an operator can
+// see what the next boot will see, without restarting anything and without a
+// running engine to ask.
 //
 // The cases below are about that promise: the walk reaches the right space,
 // the counts are the registry's own, and a page that MEANT to be a skill and

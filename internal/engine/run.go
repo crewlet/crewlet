@@ -301,8 +301,8 @@ type Engine struct {
 	seatTools map[string]*tools.Registry
 
 	// embeddings is the company's vector backend, swapped on apply. An
-	// atomic pointer rather than a mutex because it is read on the Plan
-	// phase's hot path and written only by an apply: the read must not
+	// atomic pointer rather than a mutex because it is read on the turn's
+	// prefetch hot path and written only by an apply: the read must not
 	// queue behind anything, and there is nothing else to hold a lock
 	// across.
 	embeddings atomic.Pointer[embeddings.Embedder]
@@ -431,7 +431,8 @@ type Options struct {
 //
 // A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
 // two subsystems gating one inbox cannot release each other's hold, which
-// means the pause and the eventual resume must spell it identically. Deriving
+// means the pause and the resume must spell it identically. It is the one
+// reason the engine takes today. Deriving
 // it from the human-readable reason would make an edit to a log message
 // silently strand every seat that was parked under the old wording.
 const pauseReasonNoTurnEngine = "no_turn_engine"
@@ -1333,10 +1334,10 @@ func (e *Engine) runTurn(ctx context.Context, req Request) (turn.Result, error) 
 		return turn.Result{}, err
 	}
 
-	// BEFORE Plan, on its own budget. A seat's first ever turn used to run
-	// onboarding inside Plan and could spend the whole plan budget reading
-	// pages — the turn most likely to produce no plan at all was the one
-	// where a seat had never planned before.
+	// BEFORE THE EXECUTOR, on its own budget. A seat's first ever turn used
+	// to onboard inside the phase that decides what to do, and could spend
+	// that phase's whole budget reading pages: the turn least likely to get
+	// any work done was the one where a seat had never worked before.
 	//
 	// A failure here does NOT fail the turn: the seat is un-onboarded, which
 	// is the state it was already in, and refusing to work over it would

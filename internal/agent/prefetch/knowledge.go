@@ -17,7 +17,7 @@ import (
 // queried at turn time, so the block always reflects what the page says
 // now — which is the whole reason procedural knowledge lives in a wiki
 // rather than in the engine. The engine's contribution is searching it on
-// the agent's behalf, so a planner sees the runbook without having to think
+// the agent's behalf, so an executor sees the runbook without having to think
 // to go and look.
 //
 // # An auxiliary model writes the query
@@ -29,7 +29,7 @@ import (
 const (
 	// AuxTimeout bounds one auxiliary call.
 	//
-	// The prefetch runs before the planner sees anything, so this is
+	// The prefetch runs before the executor sees anything, so this is
 	// latency a person is waiting through. Thirty seconds is generous for
 	// a small fast model and short enough that a hung provider costs one
 	// turn's start rather than the turn.
@@ -141,7 +141,7 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) (string, int
 	hits := f.src.Knowledge.Search(ctx, knowledge.Query{
 		Text: query, Seat: r.Seat, Org: r.Org, Limit: knowledgeHits,
 		// AUTO-DRAFTS HIDDEN. Those pages are unreviewed proposals a
-		// synthesis pass wrote; a planner cannot tell one from a
+		// synthesis pass wrote; an executor cannot tell one from a
 		// ratified runbook, and following an unratified one is how a
 		// draft becomes policy without anybody agreeing to it.
 		ExcludeAncestors: []string{knowledge.AutoDraftedParent},

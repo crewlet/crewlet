@@ -21,7 +21,7 @@
 //     them belong to the Broker; attachments, pause holds, quiesce flags and
 //     the drain pause belong to a node. For one process the conflation is
 //     invisible; for two it inverts the property above — one node's Detach
-//     dropped its peer's consumer, and one node's sandbox pause stopped its
+//     dropped its peer's consumer, and one node's pause hold stopped its
 //     peer serving a seat it owned. Broker.Client mints a peer.
 //
 // What it still does differently, deliberately: DISPATCH IS INLINE. Publish
@@ -351,9 +351,9 @@ func (q *Queue) Start(context.Context) error {
 	// queue silently deaf" — but clearing on only one side leaves the window
 	// between the two open, and a hold taken there survives into the next
 	// life. Measured: Stop, PauseTopic, Start, Subscribe, Publish delivers
-	// nothing, with holds=[sandbox] on a queue that reports itself running.
-	// That is the same incident reached from the other side, and it is
-	// reachable by a sandbox gate or a config shed racing a drain.
+	// nothing, with a hold on a queue that reports itself running. That is
+	// the same incident reached from the other side, and it is reachable by
+	// any hold racing a drain, the no-turn-engine park's among them.
 	//
 	// The invariant is about the START of a life, not the end of one: a
 	// queue that has been started serves, and is never silently gated by
@@ -901,8 +901,8 @@ func (q *Queue) PauseDelivery(context.Context) error {
 //
 // It also had a consequence with real blast radius. DeleteSubscription exists
 // so a decommissioned role's inbox cannot accumulate undeliverable events for
-// ever; measured, a stray PauseTopic afterwards — a sandbox gate or a config
-// shed racing the decommission — RESURRECTED the subscription, which then
+// ever; measured, a stray PauseTopic afterwards (any hold racing the
+// decommission) RESURRECTED the subscription, which then
 // retained every event published to that topic for a role that no longer
 // existed. Exactly the accumulation the verb exists to prevent.
 //
@@ -932,10 +932,9 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 
 // ResumeTopic releases one reason's hold, flushing when none remain.
 //
-// A topic stays paused while ANY reason holds it. Two independent subsystems
-// gate the same inbox — the sandbox busy gate and the config-divergence shed —
-// and with one flat hold the sandbox resuming its own run would un-gate a node
-// serving a stale company, on a completely ordinary code path.
+// A topic stays paused while ANY reason holds it. With one flat hold, a
+// second subsystem gating the same inbox would un-gate the first by lifting
+// its own hold, on a completely ordinary code path.
 func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)

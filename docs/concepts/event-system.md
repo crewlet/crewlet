@@ -31,9 +31,10 @@ A fleet's shape is a stream choice: clustered embedded members (`stream.cluster.
 # the node that attaches is the node that gets that seat's work.
 crewlet.agent.{handle}.inbox         # Per-agent inbox — all work arrives here
 crewlet.agent.{handle}.control       # Sandbox completions — separate, because a
-                                     #   detached run PAUSES the inbox and a
-                                     #   completion riding it would queue behind
-                                     #   the very pause it exists to lift
+                                     #   seat awaiting a detached run REQUEUES
+                                     #   everything its inbox delivers, and a
+                                     #   completion riding it would be requeued
+                                     #   behind the wait it exists to end
 
 # Fleet-wide work queues — ONE consumer group each, so whichever node wins a
 # delivery is the node that has to route it

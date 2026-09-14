@@ -26,7 +26,7 @@ const SynthesizerSource = "skill_synthesizer"
 // Everything downstream of a synthesized skill shipped and nothing produced
 // one. `Skills.Insert` had no caller outside its own tests, so
 // `synthesized_skills` was permanently empty and every reader of it —
-// `use_skill`, the Plan-phase "Synthesized skills you've learned" block,
+// `use_skill`, the turn-start "Synthesized skills you've learned" block,
 // `refine_skill`, the curator's ageing pass, the health rollup — ran
 // correctly over nothing. The config block (`learning.skill_synthesis`)
 // validated, shipped in the example company, and had no reader outside

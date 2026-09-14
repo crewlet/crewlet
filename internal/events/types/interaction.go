@@ -63,9 +63,9 @@ type InboundInteraction struct {
 	// RequiresRecon is true when the trigger is a POINTER (a webhook naming a
 	// thing-that-changed) rather than self-contained context: the agent must
 	// fetch the issue, read the thread or pull the diff before it has anything
-	// substantive. The Plan-phase relevance filters skip their aux-LLM call on
+	// substantive. The turn-start relevance filters skip their aux-LLM call on
 	// it — filtering against a bare pointer is near-guaranteed low value, and
-	// the planner is already told to re-query after recon. This is the one
+	// the executor is already told to re-query after recon. This is the one
 	// field workers MAY branch on, because it is a normalized platform-agnostic
 	// property rather than an event-type check.
 	RequiresRecon bool `json:"requires_recon"`

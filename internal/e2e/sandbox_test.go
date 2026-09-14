@@ -346,7 +346,7 @@ func sawSandboxResult(raw []byte) bool {
 // the gate
 // ---------------------------------------------------------------------
 
-// A coding turn end to end: plan, launch, suspend, poll, collect, resume, and
+// A coding turn end to end: decide, launch, suspend, poll, collect, resume, and
 // the same turn finishing with the agent's findings in hand.
 func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	n := startCoding(t, "succeed")

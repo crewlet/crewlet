@@ -8,11 +8,12 @@ import "strconv"
 //
 // ONE principle decides every number: ELIDE PAYLOADS, NEVER STRUCTURE. A
 // payload (a message body, page HTML, a diff) is a tool ARGUMENT: unbounded,
-// re-authored from the plan next round, and unable to answer the ledger's
+// re-authored from scratch next round, and unable to answer the ledger's
 // question — so carrying it whole only buries the two lines that can.
 //
-// Structure is everything else: the plan's steps, the draft under review, the
-// reviewer's correction, the trigger, the reply that was sent. That is exactly
+// Structure is everything else: the round's own account of what it set out to
+// do, the draft under review, the reviewer's correction, the trigger, the
+// reply that was sent. That is exactly
 // what the next round has to act on, and it is now carried VERBATIM. It used
 // not to be — six further limits sat here cutting each of those at 400 to 2000
 // runes, which is the principle above applied to the half it excludes. A

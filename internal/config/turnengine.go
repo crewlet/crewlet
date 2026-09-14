@@ -85,13 +85,14 @@ func DefaultTurnEngine() TurnEngine {
 		MaxIterations:        3,
 		Delegation:           DefaultDelegation(),
 		DelegationDepthLimit: 3,
-		// 24 = the 16 the planner had plus the 20 the actor had, minus
-		// the round each spent on its own submission and the re-reads the
-		// actor made of what the planner had already fetched. One
-		// conversation does the discovery once: measured against the
-		// three-phase engine's own logs, a turn that took 16+20 spends
-		// closer to 20 when the plan is not thrown away between them, and
-		// 24 leaves headroom before the extension judge is consulted.
+		// 24 = the 16 the retired planning phase had plus the 20 the
+		// acting phase had, minus the round each spent on its own
+		// submission and the re-reads the second made of what the first
+		// had already fetched. One conversation does the discovery once:
+		// measured against the three-phase engine's own logs, a turn that
+		// took 16+20 spends closer to 20 when its reading is not thrown
+		// away between them, and 24 leaves headroom before the extension
+		// judge is consulted.
 		MaxToolRounds:           24,
 		OnboardingMaxToolRounds: 10,
 		// 2x each phase's base, which is what an extension is for: a phase

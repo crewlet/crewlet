@@ -122,7 +122,7 @@ func roster(ctx context.Context, company func() *config.Company, runtime NodeRun
 // half of a company — the thing the whole product is FOR — and they were on no
 // wire at all, so the screen that shows a company's charter could only ever
 // render blank, and the dashboard could not put a name to the company it was
-// describing. Policies especially: they render into every planner's prompt in
+// describing. Policies especially: they render into every executor's prompt in
 // full, so an operator reading "why did it do that" needs to see the standing
 // instructions it was given.
 //

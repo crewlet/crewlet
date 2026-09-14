@@ -298,7 +298,7 @@ Single node or fleet, it is armed the same way. With one node no peer is waiting
 
 A detached coding run outlives the node that started it, so its completion has to reach whichever node owns the seat *now*. Each seat has a control topic, `crewlet.agent.{handle}.control`, attached and detached alongside the inbox — so routing emerges from who subscribes, exactly as it does for the inbox, rather than from any "which node" computation.
 
-It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` the inbox is paused, and a completion riding it would queue behind the very pause it exists to lift.
+It cannot ride the inbox itself: while a seat is `AWAITING_SANDBOX` every inbox delivery is requeued, and a completion riding it would be requeued behind the wait it exists to end.
 
 The run record carries `owner` and `owner_epoch`, so a run is recovered by the node that owns the seat, under that node's epoch, as a step inside `on_acquire`. The record lives in the [coordination store](coordination.md), which is what makes that possible at all: on the node's own database the successor's recovery pass listed nothing, and the run's box was neither resumed nor reaped.
 

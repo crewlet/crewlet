@@ -26,8 +26,8 @@ import (
 //   - agent_turn_completed is the DASHBOARD's single-phase summary. It is what
 //     ends a seat's live row, so a turn that failed to publish it leaves a
 //     working indicator up until the next turn starts.
-//   - turn_completed is the LEARNING subsystem's Plan/Execute/Review-shaped
-//     record — the same turn, described for a different consumer. One event
+//   - turn_completed is the LEARNING subsystem's own record of the same turn,
+//     described for a different consumer. One event
 //     serving both would have to be the union of two schemas, and every reader
 //     would then have to know which half applied to it.
 //
@@ -419,7 +419,7 @@ func seatIdentity(company *Company, handle string) (role, agentID string) {
 //
 // A turn that decided nobody was asking is [types.PlanDecisionSkip]; every
 // other turn writes the empty string, which is what the field already meant
-// for a turn that produced no plan artifact. The learning gate reads exactly
+// for a turn that produced no artifact. The learning gate reads exactly
 // one value, so writing a richer vocabulary here would be inventing consumers.
 func skipDecision(decision string) types.PlanDecision {
 	if decision == string(phase.Skipped) {

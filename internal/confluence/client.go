@@ -3,7 +3,7 @@
 //
 // # It is the KNOWLEDGE backend, and that is what makes it different
 //
-// The other third-party apps route events. This one also answers the Plan phase's
+// The other third-party apps route events. This one also answers a turn's
 // "what do we already know about this" — a live CQL search at retrieval
 // time, run as the ASKING SEAT wherever that seat has its own Atlassian
 // credential, so Confluence enforces its own page permissions and the engine
@@ -83,7 +83,7 @@ const wikiPrefix = "/wiki"
 
 // ClientTimeout bounds one request.
 //
-// The search runs INSIDE the Plan phase, before a model call the turn is
+// The search runs INSIDE the turn, before a model call the turn is
 // waiting on, so a slow wiki costs the turn directly. Fifteen seconds is
 // generous for one CQL page and short enough that a hung instance degrades
 // to an empty knowledge block rather than stalling a seat.

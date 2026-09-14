@@ -1,5 +1,5 @@
-// Package turn drives one agent turn: Plan, Execute, Review, and the loop
-// between them.
+// Package turn drives one agent turn: the executor, the reviewer, and the
+// loop between them.
 //
 // THE DECISIONS ARE SEPARATED FROM THE I/O. The loop here owns what happens
 // between phases — the delivery overrides, the stall guard, the iteration
@@ -11,7 +11,8 @@
 //
 // A TURN RUNS UNDER ONE CONFIG SNAPSHOT, taken as a value at Run. Reading each
 // of ~18 settings from a live cell on every access lets a hot reload landing
-// mid-turn run Plan under one round cap and Execute under another, or size a
+// mid-turn run the executor under one round cap and the reviewer under
+// another, or size a
 // sub-agent's budget from a fraction the parent never saw — and then needs a
 // context-local "pin" to paper over it. Passing the snapshot makes
 // the bug unrepresentable, so there is nothing to pin.

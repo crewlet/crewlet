@@ -451,27 +451,26 @@ func (s *suite) runCore(t *testing.T) {
 
 	t.Run("pause_topic_holds_are_reason_scoped", func(t *testing.T) {
 		t.Parallel()
-		// Two independent subsystems gate the same inbox — the sandbox
-		// busy gate and the config-divergence shed. With one flat hold the
-		// sandbox resuming its own run would un-gate a node serving a
-		// stale company, on a completely ordinary code path.
+		// Two subsystems gating the same inbox take two holds. With one
+		// flat hold, either releasing its own would un-gate the other, on
+		// a completely ordinary code path.
 		q := s.start(ctx, t)
 		j := newJournal()
 		subscribe(ctx, t, q, "seat.inbox", "grp", recordingHandler(j))
 
-		for _, reason := range []string{"sandbox", "config-divergence"} {
+		for _, reason := range []string{holdReason, "second-subsystem"} {
 			if err := q.PauseTopic(ctx, "seat.inbox", "grp", reason); err != nil {
 				t.Fatalf("PauseTopic(%s): %v", reason, err)
 			}
 		}
 		publish(ctx, t, q, "seat.inbox", newEvent("work"))
 
-		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "sandbox"); err != nil {
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", holdReason); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.staysAt(t, 0, "one subsystem released its hold and un-gated another's")
 
-		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "config-divergence"); err != nil {
+		if err := q.ResumeTopic(ctx, "seat.inbox", "grp", "second-subsystem"); err != nil {
 			t.Fatalf("ResumeTopic: %v", err)
 		}
 		j.awaitLabels(t, "the last hold to release the topic", "work")
@@ -480,14 +479,14 @@ func (s *suite) runCore(t *testing.T) {
 	t.Run("pause_topic_holds_are_keyed_by_the_pair", func(t *testing.T) {
 		t.Parallel()
 		// Keyed by topic alone, a hold gated every group on a shared
-		// subject like crewlet.events.* — one seat's sandbox pause
+		// subject like crewlet.events.*, so a hold taken for one seat
 		// silenced the fleet's routing.
 		q := s.start(ctx, t)
 		held, free := newJournal(), newJournal()
 		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "held-grp", recordingHandler(held))
 		subscribe(ctx, t, q, "crewlet.events.agent_phase_started", "free-grp", recordingHandler(free))
 
-		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", "sandbox"); err != nil {
+		if err := q.PauseTopic(ctx, "crewlet.events.agent_phase_started", "held-grp", holdReason); err != nil {
 			t.Fatalf("PauseTopic: %v", err)
 		}
 		publish(ctx, t, q, "crewlet.events.agent_phase_started", newEvent("t"))

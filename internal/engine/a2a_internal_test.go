@@ -349,10 +349,10 @@ func TestACoalescedPartitionTakesItsDeepestTrigger(t *testing.T) {
 // A COLLEAGUE IS TOLD WHAT ACTUALLY HAPPENED.
 //
 // Only `done` produced something for them. The other decisions carry an
-// artifact that means something else — `skipped` holds the PLANNER'S private
+// artifact that means something else: `skipped` holds the EXECUTOR'S private
 // reasoning that nobody was asking, which is both internal and wrong, since
-// somebody plainly was — and forwarding it verbatim sends the wrong thing
-// while looking like an answer.
+// somebody plainly was. Forwarding it verbatim sends the wrong thing while
+// looking like an answer.
 func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	t.Parallel()
 	if got := answerContent(turn.Result{Decision: phase.Done, Artifact: "the answer"}); got != "the answer" {
@@ -362,7 +362,7 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 		Decision: phase.Skipped, Artifact: "nobody was asking this seat to do anything",
 	})
 	if strings.Contains(skipped, "nobody was asking") {
-		t.Errorf("the planner's private reasoning was sent to a colleague: %q", skipped)
+		t.Errorf("the executor's private reasoning was sent to a colleague: %q", skipped)
 	}
 	if skipped == "" {
 		t.Error("a skipped turn answered with silence, so the asker waits out the sweep")

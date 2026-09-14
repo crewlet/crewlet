@@ -203,6 +203,6 @@ func elideTail(text string, limit int) string {
 // doc, which says the same thing from the other side.
 //
 // NOT for content. Every caller here bounds a string whose length is set by
-// something outside the engine; the draft, the plan and the reviewer's notes
-// are carried whole (see budgets.go).
+// something outside the engine; the draft, the round's own account of it and
+// the reviewer's notes are carried whole (see budgets.go).
 func Elide(text string, limit int) string { return elide(text, limit) }

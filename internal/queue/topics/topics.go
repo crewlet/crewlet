@@ -142,10 +142,11 @@ func AgentInboxGroup(handle string) string {
 
 // AgentControl returns the seat's sandbox-control subject.
 //
-// Separate from the inbox because a detached sandbox run PAUSES the inbox: a
-// completion riding the inbox would queue behind the very pause it exists to
-// lift. Attached and detached alongside the inbox, so a completion reaches
-// the seat's owner and only its owner.
+// Separate from the inbox because a seat awaiting a detached run REQUEUES
+// everything its inbox delivers: a completion riding the inbox would be
+// requeued behind the very wait it exists to end. Attached and detached
+// alongside the inbox, so a completion reaches the seat's owner and only its
+// owner.
 func AgentControl(handle string) string {
 	if handle == "" {
 		return ""

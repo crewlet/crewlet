@@ -281,8 +281,8 @@ func TestOnlyAPositiveReadHintCounts(t *testing.T) {
 
 func TestTheCatalogueNamesServersRatherThanExpandingThem(t *testing.T) {
 	t.Parallel()
-	// A real server publishes dozens of tools and a planner shown all of
-	// them plans against a wall of text. Naming the server keeps the prompt
+	// A real server publishes dozens of tools, and an executor shown all of
+	// them works against a wall of text. Naming the server keeps the prompt
 	// prefix stable while its catalogue changes underneath.
 	r := tools.NewRegistry()
 	first := tool("reflect")
@@ -348,14 +348,14 @@ func TestASnapshotDoesNotMoveUnderAPhase(t *testing.T) {
 
 func TestASurfaceOffersOnlyWhatWasActivated(t *testing.T) {
 	t.Parallel()
-	// Everything in the snapshot is REACHABLE but not offered — that is
-	// what discovery is for, and why a planner is not handed the whole of a
-	// large server's catalogue in its prompt.
+	// Everything in the snapshot is REACHABLE but not offered: that is
+	// what discovery is for, and why an executor is not handed the whole of
+	// a large server's catalogue in its prompt.
 	r := tools.NewRegistry()
 	for _, n := range []string{"a", "b", "c"} {
 		mustRegister(t, r, tool(n), tools.OriginBuiltin)
 	}
-	s := tools.NewSurface("plan", r.Snapshot(), []string{"a"})
+	s := tools.NewSurface("execute", r.Snapshot(), []string{"a"})
 	if got := defNames(s.ToolDefs()); !slices.Equal(got, []string{"a"}) {
 		t.Errorf("offered %v, want just the activated one", got)
 	}
@@ -377,7 +377,7 @@ func TestActivatingTwiceOffersTheToolOnce(t *testing.T) {
 	// whole round.
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("a"), tools.OriginBuiltin)
-	s := tools.NewSurface("plan", r.Snapshot(), []string{"a"})
+	s := tools.NewSurface("execute", r.Snapshot(), []string{"a"})
 	s.Activate("a")
 	if got := defNames(s.ToolDefs()); !slices.Equal(got, []string{"a"}) {
 		t.Errorf("offered %v", got)
@@ -391,7 +391,7 @@ func TestAToolWithNoArgumentsGetsAValidSchema(t *testing.T) {
 	// request rather than just itself.
 	r := tools.NewRegistry()
 	mustRegister(t, r, tool("noargs"), tools.OriginBuiltin)
-	defs := tools.NewSurface("plan", r.Snapshot(), []string{"noargs"}).ToolDefs()
+	defs := tools.NewSurface("execute", r.Snapshot(), []string{"noargs"}).ToolDefs()
 	if len(defs) != 1 {
 		t.Fatalf("defs = %v", defs)
 	}
