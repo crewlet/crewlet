@@ -515,30 +515,47 @@ func (r *Reconciler) applyRevision(ctx context.Context, target coord.Activation)
 // One line per violation, and each carries what to do: the violation stays
 // in place while the revision is active, and the next write that keeps it is
 // refused, so an operator reading the log learns that before the write does.
+//
+// THE VIOLATIONS ARE THE CONFIG PACKAGE'S OWN, flattened and located by
+// [config.Company.AdmissionWarnings], the same list a reload's or a revert's
+// answer carries. This used to walk the joined error itself, a second copy of
+// the flattening that disagreed with the config package on an error built
+// with several %w verbs, which renders as one line and is one violation.
+// That list holds one warning per entity a violation is about, so a duplicate
+// name held by two units would log twice; the lines are grouped back into
+// one per violation, carrying the path of every entity it names.
 func (r *Reconciler) warnAdmission(ctx context.Context, target coord.Activation, cfg *config.Company) {
-	for _, violation := range leaves(cfg.ValidateAdmission()) {
+	for _, violation := range violations(cfg.AdmissionWarnings()) {
 		r.log.WarnContext(ctx, "org_admission_warning",
 			"revision", target.RevisionID, "epoch", target.Epoch,
-			"detail", violation.Error(),
+			"detail", violation.message, "paths", violation.paths,
 			"hint", "the revision is applied as it stands, and any configuration "+
 				"write that keeps this is refused; correct it with PUT /config "+
 				"or PATCH /config")
 	}
 }
 
-// leaves flattens a joined error into the errors it joins, depth first, so
-// each violation is reported on its own.
-func leaves(err error) []error {
-	if err == nil {
-		return nil
-	}
-	joined, ok := err.(interface{ Unwrap() []error })
-	if !ok {
-		return []error{err}
-	}
-	var out []error
-	for _, inner := range joined.Unwrap() {
-		out = append(out, leaves(inner)...)
+// violation is one admission rule broken, with every place it is about.
+type violation struct {
+	message string
+	paths   []string
+}
+
+// violations groups warnings that render the same message into one, in the
+// order each message first appears.
+func violations(warnings []config.Warning) []violation {
+	var out []violation
+	at := map[string]int{}
+	for _, w := range warnings {
+		i, seen := at[w.Message]
+		if !seen {
+			i = len(out)
+			at[w.Message] = i
+			out = append(out, violation{message: w.Message})
+		}
+		if w.Path != "" {
+			out[i].paths = append(out[i].paths, w.Path)
+		}
 	}
 	return out
 }

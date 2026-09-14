@@ -102,18 +102,32 @@ func TestARevisionAnOlderPeerActivatedIsAppliedWithAdmissionWarnings(t *testing.
 		t.Fatalf("%d admission warnings, want one per violation (seat name and unit name): %v",
 			len(warnings), warnings)
 	}
-	var details []string
+	// Each line names every place its violation is about, in the paths the
+	// config package located it at: both seats, and both units.
+	placed := map[string][]string{}
 	for _, w := range warnings {
 		if w["revision"] != "from-an-older-peer" {
 			t.Errorf("a warning does not name the revision: %v", w)
 		}
 		detail, _ := w["detail"].(string)
-		details = append(details, detail)
+		raw, _ := w["paths"].([]any)
+		var paths []string
+		for _, path := range raw {
+			text, _ := path.(string)
+			paths = append(paths, text)
+		}
+		for _, rule := range []string{"duplicate seat name", "duplicate unit name"} {
+			if strings.Contains(detail, rule) {
+				placed[rule] = paths
+			}
+		}
 	}
-	joined := strings.Join(details, "\n")
-	for _, want := range []string{"duplicate seat name", "duplicate unit name"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("no warning reports %q: %s", want, joined)
+	for rule, want := range map[string][]string{
+		"duplicate seat name": {"units[0].children[0].roles[0].name", "units[1].children[0].roles[0].name"},
+		"duplicate unit name": {"units[0].children[0].name", "units[1].children[0].name"},
+	} {
+		if !slices.Equal(placed[rule], want) {
+			t.Errorf("the %s warning names paths %v, want %v", rule, placed[rule], want)
 		}
 	}
 
