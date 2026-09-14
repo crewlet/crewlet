@@ -1434,11 +1434,12 @@ reconnect restores every field without a second round trip.
 | `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck` (embedded API only). |
 | `applied_epoch` | The activation epoch this node last applied (embedded API only). |
+| `engine_started_at` | When this node's engine started (embedded API only). |
 | `seats` | The handles of the seats this node holds (embedded API only). |
 | `stall_lag_seconds` | Present only when the node's watched duty is behind: how far, in seconds. It climbs towards the seat lease TTL, at which the watchdog ends the process. |
 
-Per-socket facts — how many envelopes *this* connection dropped, how deep
-its queue is — are deliberately **not** here. The tick encodes one JSON
+Per-socket facts, such as how many envelopes *this* connection dropped and how
+deep its queue is, are deliberately **not** here. The tick encodes one JSON
 string and hands the same string to every client, so a per-client field
 would force one encode per client per tick; they are answered on demand
 by the `stream` query instead.
