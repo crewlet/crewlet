@@ -104,9 +104,10 @@ type routeMounter interface {
 //
 // # What is required, and why a nil is refused rather than served around
 //
-// Runtime, Sources.Company, Sources.Events, the Inbound edge's Publisher,
-// Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets, Retention,
-// Capacity and Backup are REQUIRED, and [New] refuses a missing one by name.
+// Runtime, Sources.Company, Sources.Events, Sources.NodeID, the Inbound edge's
+// Publisher, Claims, Secrets and AppFlow, Config, Secrets, Setup, Budgets,
+// Retention, Capacity and Backup are REQUIRED, and [New] refuses a missing one
+// by name.
 //
 // Every one of them is something the engine beside the API holds: `crewlet
 // run` is the only thing that builds an App, it builds one over an engine that
@@ -119,9 +120,14 @@ type routeMounter interface {
 // on Jira), an operator MCP surface, a telemetry receiver or a tool bridge (an
 // unset environment variable), and the defaults a test injects.
 type Options struct {
-	// Bootstrap supplies the auth posture and the node's identity. Nil is
-	// permitted and is not the same as absent config: the guard then
-	// refuses every write, because nobody has said who may make one.
+	// Bootstrap supplies the auth posture. Nil is permitted and is not the
+	// same as absent config: the guard then refuses every write, because
+	// nobody has said who may make one.
+	//
+	// It does NOT supply the node's name. The raw `node.id` is empty on a
+	// node named through CREWLET_NODE_ID and may itself be a ${VAR}; the
+	// name every surface reports is [queries.Sources.NodeID], the one
+	// config.ResolveNodeID answered.
 	Bootstrap *config.Bootstrap
 
 	// Runtime is the engine this process runs beside.
@@ -130,10 +136,12 @@ type Options struct {
 	// State is the projection to serve. Nil builds an empty one.
 	State *livestate.LiveState
 
-	// Sources are what the read surface answers from. Company and Events
-	// are required; see above. Any other source left nil makes its
-	// questions UNREGISTERED rather than failing, which is the honest
-	// answer for a node that does not have that surface at all (no
+	// Sources are what the read surface answers from. Company, Events and
+	// NodeID are required; see above. NodeID is the node's RESOLVED id, and
+	// it names this node on the health body as well as in the fleet answer,
+	// so the two cannot disagree about who answered. Any other source left
+	// nil makes its questions UNREGISTERED rather than failing, which is the
+	// honest answer for a node that does not have that surface at all (no
 	// knowledge backend, no native tracker) and distinct from an empty one.
 	Sources queries.Sources
 
@@ -248,7 +256,7 @@ func New(opts Options) (*App, error) {
 		guard:        auth.New(opts.Bootstrap),
 		state:        state,
 		runtime:      opts.Runtime,
-		nodeID:       nodeIDOf(opts.Bootstrap),
+		nodeID:       opts.Sources.NodeID,
 		queueBackend: opts.QueueBackend,
 		events:       opts.Sources.Events,
 		now:          now,
@@ -412,6 +420,7 @@ func (o Options) missing() error {
 		{"Runtime", o.Runtime == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
+		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
 		{"Inbound.Publisher", o.Inbound.Publisher == nil},
 		{"Inbound.Claims", o.Inbound.Claims == nil},
 		{"Inbound.Secrets", o.Inbound.Secrets == nil},
@@ -489,13 +498,6 @@ func (a *App) mountWebhooks(mux *http.ServeMux, in Inbound, sources queries.Sour
 	}
 	receiver.Routes(mux)
 	return nil
-}
-
-func nodeIDOf(b *config.Bootstrap) string {
-	if b == nil || b.Node.ID == "" {
-		return config.DefaultNodeID
-	}
-	return b.Node.ID
 }
 
 // ServeHTTP makes the app the process's handler.

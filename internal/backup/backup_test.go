@@ -306,20 +306,23 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 	}
 }
 
-// A STORE AND BOTH FLEET REGISTERS ARE REQUIRED, and a missing one is refused
-// by name.
+// A STORE, BOTH FLEET REGISTERS AND A NODE ID ARE REQUIRED, and a missing one
+// is refused by name.
 //
-// The engine beside every API holds all three, and a backup that did less
-// around a nil would be either missing the node's own estate or invisible to
-// the trim.
+// The engine beside every API holds all three registers, and a backup that did
+// less around a nil would be either missing the node's own estate or invisible
+// to the trim. A blank node id is the subtler one: it keys the hold and the
+// announced point, so every node that named itself through CREWLET_NODE_ID
+// would share one hold and announce a point the register refuses.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	fleet := memory.NewFleet()
 	for field, opts := range map[string]backup.Options{
-		"Store":   {Holds: fleet, Backups: fleet},
-		"Holds":   {Store: db, Backups: fleet},
-		"Backups": {Store: db, Holds: fleet},
+		"Store":   {NodeID: "n", Holds: fleet, Backups: fleet},
+		"Holds":   {NodeID: "n", Store: db, Backups: fleet},
+		"Backups": {NodeID: "n", Store: db, Holds: fleet},
+		"NodeID":  {NodeID: "  ", Store: db, Holds: fleet, Backups: fleet},
 	} {
 		svc, err := backup.New(opts)
 		if err == nil {

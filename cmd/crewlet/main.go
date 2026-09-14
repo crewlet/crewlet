@@ -1509,7 +1509,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// fleet with a working nightly backup would still never trim its
 		// log.
 		Backups: e.Backends().Fleet,
-		NodeID:  boot.Node.ID,
+		// RESOLVED, never boot.Node.ID: the raw field is empty on a node
+		// named through CREWLET_NODE_ID, and this id keys the node's trim
+		// hold and its announced backup point.
+		NodeID: nodeID,
 		// THE PROCESS'S OWN RECORDER, never a second one: the copy's
 		// duration is a catalogued instrument, and two recorders in one
 		// process would be two sets of series for one fleet.

@@ -264,6 +264,12 @@ announce is logged rather than silent — and it is bounded and self-correcting:
 the log keeps a longer window than it needed to, and the next backup announces
 again.
 
+The announcement, the trim hold and the manifest's `node_id` are all keyed on
+the node's **resolved** id: `node.id` when the file sets it, else
+`CREWLET_NODE_ID`, else the default. A node named only through the variable
+is the shape a container orchestrator runs, and keying on the raw field would
+give every such node one shared, blank key.
+
 **A pin that outlives its owner is visible.** A backup takes a trim hold before
 the first byte is copied and releases it when the copy ends; `crewlet.backup.holds`
 is how many the fleet is carrying, and a count that does not return to zero is a
@@ -334,7 +340,8 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   that live leaseholders outrank. Every node down → restore store files and
   the stream estate from the *same* backup set → start everything.
 - **Keep node identity.** A clustered embedded member's replicas are placed by
-  server name, which is the node's `node.id`: a node restored under a fresh
+  server name, which is the node's resolved id (`node.id`, else
+  `CREWLET_NODE_ID`): a node restored under a fresh
   name is a new peer, its old replicas are orphaned, and the stream sits short
   of quorum waiting for a server that will never return.
 - **Expect bounded duplicates, not loss.** Mailboxes hold exactly the unacked
