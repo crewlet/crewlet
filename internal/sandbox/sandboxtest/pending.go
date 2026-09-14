@@ -55,11 +55,10 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AStaleFenceCannotRelease", testAStaleFenceCannotRelease},
 		{"AReleaseGoesBackOnlyToAClaimableStatus", testAReleaseGoesBackOnlyToAClaimableStatus},
 		{"AReleaseOfAMissingRunIsNotAnError", testAReleaseOfAMissingRunIsNotAnError},
-		{"AChargeIsRecordedOnce", testAChargeIsRecordedOnce},
-		{"OnlyAClaimedRunRecordsACharge", testOnlyAClaimedRunRecordsACharge},
-		{"AChargeRecordComesBackOnTheRetrysClaim", testAChargeRecordComesBackOnTheRetrysClaim},
+		{"AReleaseRecordsTheClaimsCharge", testAReleaseRecordsTheClaimsCharge},
+		{"AReleaseNeverClearsAChargeRecord", testAReleaseNeverClearsAChargeRecord},
+		{"ARefusedReleaseRecordsNoCharge", testARefusedReleaseRecordsNoCharge},
 		{"OnlyALaunchClearsAChargeRecord", testOnlyALaunchClearsAChargeRecord},
-		{"AChargeForAMissingRunIsNotRecorded", testAChargeForAMissingRunIsNotRecorded},
 		{"ParkingCarriesTheBranch", testParkingCarriesTheBranch},
 		{"OwnershipIsNotStolenByAnOlderLease", testOwnershipIsNotStolenByAnOlderLease},
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
@@ -753,67 +752,62 @@ func mustClaim(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Pend
 	return got
 }
 
-// mustCharge records the claimed run's charge.
-func mustCharge(t *testing.T, s sandbox.PendingStore, turnID string) {
+// mustReleaseCharged hands a claimed run back with its charge recorded.
+func mustReleaseCharged(t *testing.T, s sandbox.PendingStore, claimed sandbox.PendingRun) {
 	t.Helper()
-	recorded, err := s.MarkCharged(t.Context(), turnID)
-	if err != nil || !recorded {
-		t.Fatalf("record the charge on %s: recorded=%v err=%v", turnID, recorded, err)
+	release := releaseOf(claimed)
+	release.Charged = true
+	released, err := s.ReleaseClaim(t.Context(), claimed.TurnID, release)
+	if err != nil || !released {
+		t.Fatalf("release %s charged: released=%v err=%v", claimed.TurnID, released, err)
 	}
 }
 
-func testAChargeIsRecordedOnce(t *testing.T, s sandbox.PendingStore) {
-	// THE DURABLE HALF OF CHARGING A RUN ONCE. The first record lands and
-	// every later one reports that it wrote nothing, so the coordinator that
-	// retries the tail, on this node or the next owner's, reads the charge
-	// as made rather than making it again.
+func testAReleaseRecordsTheClaimsCharge(t *testing.T, s sandbox.PendingStore) {
+	// THE DURABLE HALF OF CHARGING A RUN ONCE, in the one write that reopens
+	// the run to a retry. The retry reads nothing but the row its own claim
+	// returns, on this node or the seat's next owner, so the record has to
+	// come back on it.
 	mustLaunched(t, s, run("t1"))
-	mustClaim(t, s, "t1")
-	if got := mustGet(t, s, "t1"); got.Charged {
+	claimed := mustClaim(t, s, "t1")
+	if claimed.Charged {
 		t.Fatal("a run nothing has charged reads as charged")
 	}
-	mustCharge(t, s, "t1")
-	if recorded, err := s.MarkCharged(t.Context(), "t1"); err != nil || recorded {
-		t.Errorf("a second record reported writing: recorded=%v err=%v", recorded, err)
-	}
-	if got := mustGet(t, s, "t1"); !got.Charged {
-		t.Error("the record did not persist")
+	mustReleaseCharged(t, s, claimed)
+	if got := mustClaim(t, s, "t1"); !got.Charged {
+		t.Error("the retry's claim came back without the charge the first attempt made")
 	}
 }
 
-func testOnlyAClaimedRunRecordsACharge(t *testing.T, s sandbox.PendingStore) {
-	// A charge is only ever made under a claim. A record written on a run
-	// no tail holds names a charge nothing made, and on a row a second
-	// launch has already opened it would let that job's own spend go
-	// uncounted.
+func testAReleaseNeverClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
+	// A charge that landed stays landed. A later release that says nothing
+	// about it (a retry whose resume failed too, having charged nothing
+	// because the record said not to) must not erase what the first
+	// attempt recorded, or the retry after it charges the run again.
+	mustLaunched(t, s, run("t1"))
+	mustReleaseCharged(t, s, mustClaim(t, s, "t1"))
+	retry := mustClaim(t, s, "t1")
+	retry.Charged = false
+	mustRelease(t, s, retry)
+	if got := mustGet(t, s, "t1"); !got.Charged {
+		t.Error("a release that carried no charge erased the record of one")
+	}
+}
+
+func testARefusedReleaseRecordsNoCharge(t *testing.T, s sandbox.PendingStore) {
+	// A release that hands nothing back writes nothing, the record included:
+	// on a row a second launch has opened it would let that job's own spend
+	// go uncounted.
+	mustLaunched(t, s, run("t1"))
+	claimed := mustClaim(t, s, "t1")
 	mustBeginLaunch(t, s, run("t1"))
-	if recorded, err := s.MarkCharged(t.Context(), "t1"); err != nil || recorded {
-		t.Errorf("a launching run recorded a charge: recorded=%v err=%v", recorded, err)
-	}
-	suspended, err := s.MarkSuspended(t.Context(), "t1", suspension())
-	if err != nil || !suspended {
-		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
-	}
-	if recorded, err := s.MarkCharged(t.Context(), "t1"); err != nil || recorded {
-		t.Errorf("an unclaimed running run recorded a charge: recorded=%v err=%v", recorded, err)
+	release := releaseOf(claimed)
+	release.Charged = true
+	if released, err := s.ReleaseClaim(t.Context(), "t1", release); err != nil || released {
+		t.Fatalf("the claim handed back a launch it never took: released=%v err=%v", released, err)
 	}
 	if got := mustGet(t, s, "t1"); got.Charged {
-		t.Error("a refused record still marked the run charged")
-	}
-}
-
-func testAChargeRecordComesBackOnTheRetrysClaim(t *testing.T, s sandbox.PendingStore) {
-	// The retry a failed resume opens is the case the record exists for:
-	// it has to outlive the revert and arrive on the row the retry's own
-	// claim returns, because that row is all the retry reads.
-	mustLaunched(t, s, run("t1"))
-	mustClaim(t, s, "t1")
-	mustCharge(t, s, "t1")
-	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusRunning, sandbox.Fence{}); err != nil {
-		t.Fatalf("revert the claim: %v", err)
-	}
-	if got := mustClaim(t, s, "t1"); !got.Charged {
-		t.Error("the retry's claim came back without the charge the first attempt recorded")
+		t.Error("a refused release recorded its charge on the next launch")
 	}
 }
 
@@ -824,24 +818,29 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 	// the launch that follows is a new job, and must not inherit it.
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
+	mustReleaseCharged(t, s, mustClaim(t, s, "t1"))
 	tail := completionOf(t, s, "t1")
-	mustClaim(t, s, "t1")
-	mustCharge(t, s, "t1")
+	var claimed sandbox.PendingRun
 	for _, step := range []struct {
 		name  string
 		write func() error
 	}{
 		{"pause the box", func() error { return s.MarkBoxPaused(ctx, "t1", base) }},
-		{"revert the claim", func() error {
-			return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{})
-		}},
 		{"take ownership", func() error {
 			_, err := s.ClaimOwnership(ctx, "t1", "node-b:2", 3)
 			return err
 		}},
 		{"claim the tail", func() error {
-			_, _, err := s.ClaimForResume(ctx, "t1", tail)
+			var err error
+			claimed, _, err = s.ClaimForResume(ctx, "t1", tail)
 			return err
+		}},
+		{"hand the claim back", func() error {
+			_, err := s.ReleaseClaim(ctx, "t1", releaseOf(claimed))
+			return err
+		}},
+		{"change status", func() error {
+			return s.SetStatus(ctx, "t1", sandbox.StatusRunning, sandbox.Fence{})
 		}},
 		{"park on a question", func() error {
 			return s.MarkAwaiting(ctx, "t1", sandbox.Clarification{Question: "which branch?"})
@@ -870,15 +869,6 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 	mustBeginLaunch(t, s, run("t1"))
 	if got := mustGet(t, s, "t1"); got.Charged {
 		t.Error("a second launch inherited the first job's charge, so its own spend would go uncounted")
-	}
-}
-
-func testAChargeForAMissingRunIsNotRecorded(t *testing.T, s sandbox.PendingStore) {
-	// Not an error: a run whose row is gone has nothing left to retry, so
-	// there is nothing a record could stop.
-	recorded, err := s.MarkCharged(t.Context(), "never-launched")
-	if err != nil || recorded {
-		t.Errorf("a missing run recorded a charge: recorded=%v err=%v", recorded, err)
 	}
 }
 

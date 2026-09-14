@@ -113,7 +113,7 @@ func AnswerTail(launch string) Tail {
 }
 
 // Release is how a claimed tail is handed back for its signal's retry: the
-// claim it hands back, and where to.
+// claim it hands back, where to, and what the claim already did.
 //
 // A RELEASE NAMES WHAT IT RELEASES, for the reason a claim names what it
 // claims. The claim is held across the resume, and the resumed turn is free to
@@ -129,6 +129,10 @@ type Release struct {
 	// To is the status the claim took the run out of, which is one of
 	// [Claimable].
 	To string
+
+	// Charged is whether the run's spend is on the token counter, recorded
+	// on the row by the release itself. See [PendingRun.Charged].
+	Charged bool
 
 	// Fence is the lease the claim was taken under.
 	Fence Fence
@@ -331,15 +335,22 @@ type PendingRun struct {
 	//
 	// ON THE ROW, not in the coordinator's memory, because the charge sits
 	// inside the part of the tail that is RETRIED. A resume that fails
-	// reverts the claim and the completion comes back, to this node or to
-	// the seat's next owner, and the retry collects the same finished job
-	// again. With nothing recording the first charge, every retry charged
-	// the run again, against the seat's budget and the company's, for as
-	// long as the resume kept failing.
+	// hands the claim back and the completion comes back, to this node or
+	// to the seat's next owner, and the retry collects the same finished
+	// job again. With nothing recording the first charge, every retry
+	// charged the run again, against the seat's budget and the company's,
+	// for as long as the resume kept failing.
+	//
+	// WRITTEN BY THE RELEASE that hands the claim back (see [Release]),
+	// because that is the only write through which a retry reaches the
+	// charge again: recorded in a write of its own, a store that refused it
+	// and then accepted the release reopened the run with no record, and the
+	// retry charged it twice. A run parked on its question is reached only
+	// by an answer, which charges nothing, so its park needs no record.
 	//
 	// Launch-scoped, like the suspension: a second run_sandbox call in one
 	// turn is a second job with spend of its own, so [PendingStore.BeginLaunch]
-	// clears it.
+	// clears it, and nothing else does.
 	Charged bool `json:"charged,omitempty"`
 
 	PauseTTLSeconds float64 `json:"pause_ttl_seconds"`
@@ -409,33 +420,14 @@ type PendingStore interface {
 	// Anything else means the run has moved on from the claim (see
 	// [Release]), and a retry of the signal has nothing left to take.
 	//
+	// The claim's charge is recorded IN THE SAME WRITE, and never cleared
+	// by one: a run is reopened to a retry with its record or not at all
+	// (see [PendingRun.Charged]).
+	//
 	// FALSE IS NOT AN ERROR: it is a run that moved on, or a row that is
 	// gone. A release to a status outside [Claimable] is an error, because
 	// no claim ever takes a run out of one.
 	ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error)
-
-	// MarkCharged records that a claimed run's collected tokens are on
-	// the token counter, reporting whether THIS call recorded it.
-	//
-	// The durable half of charging a run once. The coordinator charges
-	// while it holds the claim and records it here before anything can
-	// open the run to another claim, so the retry a failed resume opens
-	// reads [PendingRun.Charged] and charges nothing. See the coordinator's
-	// charge for the one window the ordering cannot close.
-	//
-	// ONLY A CLAIMED RUN, because a charge is only ever made under a claim:
-	// a record written anywhere else names a charge nothing made, and on a
-	// row a second launch has already opened it would let that job's own
-	// spend go uncounted.
-	//
-	// NO FENCE, for the reason [PendingStore.AppendBridgeCall] gives: the
-	// counter has already moved, and refusing to record that because the
-	// seat's lease moved would hand the next owner's retry the same spend
-	// to charge again.
-	//
-	// FALSE IS NOT AN ERROR: it is a charge already recorded, a run that is
-	// not claimed, or a row that is gone.
-	MarkCharged(ctx context.Context, turnID string) (bool, error)
 
 	// MarkAwaiting parks a run on a question, freeing the seat.
 	MarkAwaiting(ctx context.Context, turnID string, q Clarification) error

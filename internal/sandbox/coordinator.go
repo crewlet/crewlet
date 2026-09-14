@@ -345,7 +345,9 @@ func (c *Coordinator) OnCompleted(ctx context.Context, ev types.SandboxRunComple
 		return nil
 	}
 
-	c.charge(ctx, run, result)
+	// Carried on the claimed row from here, so that handing the claim back
+	// hands the record back with it.
+	run.Charged = c.charge(ctx, run, result)
 
 	if result.NeedsInput {
 		return c.park(ctx, run, result)
@@ -387,52 +389,49 @@ func (c *Coordinator) collect(ctx context.Context, run PendingRun) (Result, erro
 	return result, nil
 }
 
-// charge post-accounts a collected run's tokens, ONCE per launch.
+// charge post-accounts a collected run's tokens, ONCE per launch, and reports
+// whether the run's spend is on the counter.
 //
 // The charge sits inside the part of the tail that is retried: a resume that
-// fails reverts the claim, the completion comes back to this node or to the
+// fails hands the claim back, the completion comes back to this node or to the
 // seat's next owner, and the retry collects the same finished job again. So
 // the run's own row records the charge, and a retry that finds it there
 // charges nothing. In memory it would be lost to exactly the two retries that
 // matter, the one on another node and the one after a restart.
 //
-// THE RECORD IS WRITTEN BEFORE ANYTHING CAN REOPEN THE RUN. The claim is held
-// from the flip until the revert or the park, and only those let another
-// signal take the tail; a process that dies in between leaves the row resumed,
-// which no signal claims and the seat's next owner reaps. What the order
-// cannot cover is a store that refuses this write and accepts the revert right
-// after it: the retry then charges the run again. That over-states the
-// counter, which trips a cap early rather than late, and it is logged.
+// THE RECORD RIDES ON THE RELEASE. The only write that lets a retry reach this
+// charge again is the one that hands the claim back, so that write carries it
+// (see [PendingRun.Charged]): the run is reopened with its record or not at
+// all, whatever else the store refuses in between. A process that dies holding
+// the claim leaves the run resumed, which no signal claims and the seat's next
+// owner reaps.
 //
-// A REFUSED CHARGE IS NOT RECORDED, and neither is one the counter never
-// answered: neither moved it, so the retry offers the spend again rather than
-// inheriting an answer about a counter that may have room by then.
-func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) {
+// A REFUSED CHARGE IS NOT RECORDED: it moved neither counter, so the retry
+// offers the spend again, to a counter that may have room by then. Nor is one
+// the counter never answered, which may or may not have landed; offering it
+// again can only over-state the counter, which trips a cap early rather than
+// late, the direction the counter itself takes when a node dies mid-charge.
+func (c *Coordinator) charge(ctx context.Context, run PendingRun, result Result) bool {
 	tokens := result.InputTokens + result.OutputTokens
-	if c.account == nil || tokens == 0 {
-		return
-	}
 	if run.Charged {
 		log.InfoContext(ctx, "sandbox_charge_already_recorded",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
-		return
+		return true
+	}
+	if c.account == nil || tokens == 0 {
+		return false
 	}
 	refused, err := c.account.Charge(ctx, run.AgentID, run.AgentHandle, tokens)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_accounting_failed", "turn_id", run.TurnID, "error", err.Error())
-		return
+		return false
 	}
 	if refused {
 		log.WarnContext(ctx, "sandbox_spend_over_budget",
 			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens)
-		return
+		return false
 	}
-	if _, err := c.pending.MarkCharged(ctx, run.TurnID); err != nil {
-		log.ErrorContext(ctx, "sandbox_charge_record_failed",
-			"agent_id", run.AgentID, "turn_id", run.TurnID, "tokens", tokens, "error", err.Error(),
-			"detail", "the run's tokens are on the counter but its row does not say so, "+
-				"so a retry of this completion will charge them again")
-	}
+	return true
 }
 
 // park announces the question, records it, and settles the box per the pause
@@ -697,7 +696,7 @@ func (c *Coordinator) dispatchResume(ctx context.Context, req ResumeRequest) err
 func (c *Coordinator) unclaim(ctx context.Context, run PendingRun, counted bool) {
 	to := claimedFrom(run)
 	released, err := c.pending.ReleaseClaim(ctx, run.TurnID, Release{
-		Launch: run.LaunchID, To: to, Fence: fenceOf(run),
+		Launch: run.LaunchID, To: to, Charged: run.Charged, Fence: fenceOf(run),
 	})
 	switch {
 	case err != nil:

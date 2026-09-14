@@ -189,22 +189,10 @@ func (s *CoordStore) ReleaseClaim(ctx context.Context, turnID string, release Re
 			return false
 		}
 		run.Status = release.To
+		run.Charged = run.Charged || release.Charged
 		return true
 	})
 	return released, err
-}
-
-// MarkCharged records that a claimed run's spend is on the token counter. See
-// the contract on [PendingStore].
-func (s *CoordStore) MarkCharged(ctx context.Context, turnID string) (bool, error) {
-	_, recorded, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.Status != StatusResumed || run.Charged {
-			return false
-		}
-		run.Charged = true
-		return true
-	})
-	return recorded, err
 }
 
 // MarkAwaiting parks a run until a person answers.
