@@ -886,7 +886,15 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 	if none := r.Header.Get("If-None-Match"); none != "" {
 		createOnly = strings.TrimSpace(none) == "*"
 		if !found {
-			return createOnly, true
+			// THE FLEET'S POINTER TOO, not just this node's store. A node
+			// that has joined a fleet and not reconciled yet, or whose
+			// best-effort copy of the pointer failed, has an empty store
+			// while the fleet runs a company. "Only if nothing is
+			// configured" asked of the local store alone would let the
+			// dashboard's create flow replace that company outright:
+			// renaming it changes every seat id derived from the name, and
+			// orphans all of their memory.
+			return createOnly, !createOnly || s.checkFleetAbsent(w, r)
 		}
 		if matchesTag(none, etagOf(active)) {
 			writeJSON(w, http.StatusPreconditionFailed, map[string]any{
@@ -922,6 +930,37 @@ func (s *Service) checkPrecondition(w http.ResponseWriter, r *http.Request, acti
 	default:
 		return false, true
 	}
+}
+
+// checkFleetAbsent reports whether the FLEET has no activation, answering the
+// refusal itself when it has one.
+//
+// A plane that is not there is not an answer: this process cannot activate
+// anything, so the write is refused with 503 further on, where that is what
+// the caller needs to hear. A plane that cannot be READ is three-valued and
+// the third value is refused rather than guessed: "the fleet has nothing" and
+// "I could not ask" send a create-only write to opposite outcomes, and
+// guessing the first is the one that overwrites a running company.
+func (s *Service) checkFleetAbsent(w http.ResponseWriter, r *http.Request) bool {
+	if s.plane == nil {
+		return true
+	}
+	target, found, err := s.plane.Target(r.Context())
+	switch {
+	case err != nil:
+		s.fail(w, "read the fleet's activation", err)
+		return false
+	case !found:
+		return true
+	}
+	writeJSON(w, http.StatusPreconditionFailed, map[string]any{
+		"error": "already_configured", "current_revision_id": target.RevisionID,
+		"hint": "If-None-Match asked for this write to land only on a config " +
+			"that is not there; the fleet is running revision " + target.RevisionID +
+			", which this node has not caught up with yet. Read /config again " +
+			"once it has, and edit that",
+	})
+	return false
 }
 
 // --- plumbing --------------------------------------------------------------

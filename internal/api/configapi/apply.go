@@ -337,6 +337,14 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary, operator str
 	}
 	published, err := s.plane.Activate(ctx, coord.ActivationRequest{
 		RevisionID: id, Summary: summary, Payload: payload, At: at, Expect: p.base,
+		// A WRITE BUILT ON NOTHING SAYS SO. Every write here names what it
+		// was built on as the activation's expectation, and a write with no
+		// base was built on an empty store: on a node that has not caught up
+		// with its fleet that is not "the first company", it is a company
+		// nobody has seen replacing the one the fleet is running. The
+		// create-only compare-and-set refuses it; on a genuinely
+		// unconfigured fleet there is no pointer and it lands.
+		ExpectAbsent: p.base == "",
 	})
 	if errors.Is(err, coord.ErrActivationRaced) {
 		// THE REVISION IS KEPT, not unwound: stored, valid and inert, so

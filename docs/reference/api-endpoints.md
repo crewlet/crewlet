@@ -307,7 +307,7 @@ The [`/setup`](#setting-an-integration-up) submissions that change the document 
 | `If-None-Match: <etag>` | `GET` | `304 Not Modified` when the document has not moved |
 | `If-Match: <etag>` | writes | Proceed only against that revision; `409 revision_advanced` otherwise |
 | `If-Match: *` | writes | Proceed only if *something* is active; `412` on an unconfigured node |
-| `If-None-Match: *` | writes | Proceed only if **nothing** is active — the create-only precondition; `412 already_configured` otherwise |
+| `If-None-Match: *` | writes | Proceed only if **nothing** is configured, on this node **or anywhere in the fleet**; `412 already_configured` otherwise, naming the revision it lost to |
 
 The bare revision id is accepted wherever an `ETag` is, unquoted, because this surface shipped that form before it had entity tags. `If-None-Match: *` is the only create-only precondition: `If-Match: none` is not a second spelling of it, so `none` is read as an entity tag like any other and matches no revision.
 
@@ -432,6 +432,7 @@ why the CLI goes through a running node rather than writing the KV itself.
 - `If-Match: <revision_id>` is still worth sending: it is checked before any work is done, so a caller editing a revision that has already moved is told so without a document being built, validated and stored first.
 - A losing write's revision **is kept**, and the `409` names it as `stored_revision_id`. It is stored, valid and inert — the operator's work survives as history they can revert to — and this node's reconciler adopts whichever revision actually won at its next tick. Unwinding it instead would mean a second write that can itself fail, on the path where something has already gone wrong.
 - **An unset pointer is not a race.** A node seeded from a file holds a locally-active revision before it has published anything; refusing there would fail every config write on a fresh single-node deployment that had done nothing wrong.
+- **A write built on nothing is a create.** A node whose own store is empty answers `404 no_active_revision` on `GET /config`, and it reaches that state while its fleet runs a company: it joined and has not reconciled yet, or its best-effort copy of the fleet's pointer failed. A write there was derived from nothing, so its activation is a **create-only compare-and-set**: it lands only while the fleet has no activation. `If-None-Match: *` also consults the fleet's pointer before anything is built, and answers `412 already_configured` naming the revision the fleet is on. Without both, the dashboard's create flow on such a node replaced the running company outright, which renames it, changes every seat id derived from the name and orphans all of their memory.
 - The **boot publish** is deliberately unconditional. Two nodes starting at once may both offer the revision they hold; both are legitimate, last-write-wins is the right answer, and every node converges. It is the *edit* path that must not lose a write.
 
 On a `409`, re-read `/config` and send the edit again.

@@ -77,6 +77,14 @@ func newCountedSurface(t *testing.T) *counted {
 	return c
 }
 
+// forget zeroes the counts, for a case that had to set the fleet up through
+// the same plane it counts.
+func (c *counted) forget() {
+	c.revisions.inserts.Store(0)
+	c.plane.activations.Store(0)
+	c.queue.publishes.Store(0)
+}
+
 // writes is how many stores, activations and publishes the surface has made.
 func (c *counted) writes() [3]int32 {
 	return [3]int32{c.revisions.inserts.Load(), c.plane.activations.Load(), c.queue.publishes.Load()}

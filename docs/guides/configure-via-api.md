@@ -267,9 +267,9 @@ classified, beside the `detail` that renders them.
 | `404` | `no_active_revision` | Reading `/config` before the first PUT |
 | `404` | `no_such_entity` | A per-entity `PUT` naming an id the active revision does not carry — this route never creates |
 | `409` | `no_active_revision` | A per-entity write before the first PUT: there is nothing to splice into |
-| `409` | `revision_advanced` | Stale `If-Match` or concurrent writer won the race |
+| `409` | `revision_advanced` | Stale `If-Match`, a concurrent writer won the race, or the write was built on an empty store while the fleet is running a company |
 | `412` | `no_active_revision` | `If-Match: <revision>` sent while the node has no active revision; retry without `If-Match`, or send `If-None-Match: *` |
-| `412` | `already_configured` | `If-None-Match: *` sent while a revision is active |
+| `412` | `already_configured` | `If-None-Match: *` sent while a revision is active on this node or anywhere in the fleet |
 | `415` | `unsupported_patch_media_type` | A `PATCH` in a patch format other than a JSON Merge Patch, such as `application/json-patch+json` |
 | `503` | `no_control_plane` | The process has no coordination store, so it cannot activate a revision; a dry run is refused the same way |
 
