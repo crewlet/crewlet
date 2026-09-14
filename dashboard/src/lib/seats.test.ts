@@ -12,6 +12,7 @@
 import { describe, expect, test } from "vitest";
 import {
   indexOrg,
+  llmChain,
   runState,
   seatTone,
   slugify,
@@ -190,5 +191,51 @@ describe("staleness", () => {
 
   test("a missing stamp makes no claim", () => {
     expect(staleness(undefined, now)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The model chain, in every shape the config accepts
+// ---------------------------------------------------------------------------
+
+// `config.PhaseLLM` marshals as a STRING for one provider, an ARRAY for a
+// fallback chain, and an OBJECT keyed on phase for a per-phase mapping. The
+// client declared a string, so an array rendered as `fast,backup` and a
+// mapping as `[object Object]`, and any consumer calling a string method on
+// one threw on a config the engine accepts.
+describe("llmChain", () => {
+  test("reads all three shapes the engine marshals", () => {
+    expect(llmChain("fast")).toEqual(["fast"]);
+    expect(llmChain(["fast", "backup"])).toEqual(["fast", "backup"]);
+    expect(llmChain({ default: "big", judge: "tiny" })).toEqual(["big", "tiny"]);
+  });
+
+  // A SEAT THAT SAYS NOTHING takes the default provider, and that is not the
+  // same as a seat pinned to a provider called "".
+  test("an unset field is an empty chain, not a chain of one empty key", () => {
+    expect(llmChain(undefined)).toEqual([]);
+    expect(llmChain("")).toEqual([]);
+    expect(llmChain([])).toEqual([]);
+    expect(llmChain({})).toEqual([]);
+  });
+
+  // THE SAME KEY REACHED THROUGH TWO PHASES IS NOT TWO MODELS. Without this
+  // the common mapping — one strong model for most phases, a cheap one for the
+  // judge — reads as five models on the seat page.
+  test("one key named by several phases is listed once", () => {
+    expect(
+      llmChain({ default: "big", review: "big", judge: "tiny", sandbox: ["big", "tiny"] }),
+    ).toEqual(["big", "tiny"]);
+  });
+
+  // A PHASE FALLS BACK TO `default`, exactly as the engine's own resolution
+  // does — so asking for the judge of a seat that never named one answers the
+  // model the judge will actually run on.
+  test("a named phase falls back to default", () => {
+    const llm = { default: "big", judge: "tiny" };
+    expect(llmChain(llm, "judge")).toEqual(["tiny"]);
+    expect(llmChain(llm, "review")).toEqual(["big"]);
+    // And a flat chain answers the same for every phase, because it is one.
+    expect(llmChain(["fast", "backup"], "judge")).toEqual(["fast", "backup"]);
   });
 });

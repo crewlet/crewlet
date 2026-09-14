@@ -136,7 +136,11 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- sandboxes -----------------------------------------------------------
   for (const box of sandboxes) {
-    if (box.status !== "awaiting_input") continue;
+    // THE ENGINE'S OWN WORDS. `awaiting_input` is not one of them, so this
+    // condition never fired and a run parked on a question reached the queue
+    // through no path at all. `reseed` is the same fact one step worse — the
+    // box was reaped past its pause TTL and only the question survives.
+    if (box.status !== "awaiting_clarification" && box.status !== "reseed") continue;
     out.push({
       id: `sandbox-${box.turn_id}`,
       severity: "caution",
