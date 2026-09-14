@@ -72,12 +72,16 @@ const (
 	// holds. Any wider window the Tokens view offers is a store query.
 	LiveSpendWindow = 24 * time.Hour
 
-	// spendRecordLimit is a memory and latency backstop on retained
+	// SpendRecordLimit is a memory and latency backstop on retained
 	// per-phase records. The real bound is the window above; this only
 	// binds for an org emitting more than this in a day. Truncation drops
 	// the OLDEST records, so an org past the cap sees a rollup covering
 	// slightly less than a day rather than a wrong total.
-	spendRecordLimit = 8000
+	//
+	// Exported because the startup seed reads no more than this from the
+	// store: a record past the cap would be dropped on arrival, so reading
+	// it costs the seed's time budget and buys nothing.
+	SpendRecordLimit = 8000
 
 	// sandboxEntryMaxAge is how long an in-flight sandbox entry survives
 	// without a completion.

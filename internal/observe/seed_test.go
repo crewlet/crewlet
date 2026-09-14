@@ -160,6 +160,46 @@ func (h halfBroken) PhaseTokens(_ context.Context, _ store.PhaseTokenQuery) ([]t
 	}}, nil
 }
 
+// THE SEED READS NO MORE SPEND THAN THE PROJECTION KEEPS. A day busier than
+// the record cap used to be read in full, inside the seed's time budget, and
+// cut to the cap on arrival; on the one kind of company the cap exists for, a
+// read that ran out of budget seeded no spend at all.
+func TestTheSpendSeedStopsAtTheProjectionsRecordCap(t *testing.T) {
+	t.Parallel()
+	history := &recordingHistory{}
+	if err := observe.Seed(t.Context(), history, livestate.New()); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	if history.spend.Limit != livestate.SpendRecordLimit {
+		t.Errorf("spend read limit = %d, want the projection's record cap %d",
+			history.spend.Limit, livestate.SpendRecordLimit)
+	}
+	if history.spend.SinceDays != livestate.LiveSpendWindowDays() {
+		t.Errorf("spend read window = %d days, want the live window's %d",
+			history.spend.SinceDays, livestate.LiveSpendWindowDays())
+	}
+	if history.feed.Limit != livestate.EventFeedLimit {
+		t.Errorf("feed read limit = %d, want the ring's %d",
+			history.feed.Limit, livestate.EventFeedLimit)
+	}
+}
+
+// recordingHistory answers nothing and remembers what it was asked.
+type recordingHistory struct {
+	feed  store.ListQuery
+	spend store.PhaseTokenQuery
+}
+
+func (r *recordingHistory) List(_ context.Context, q store.ListQuery) ([]store.EventRecord, error) {
+	r.feed = q
+	return nil, nil
+}
+
+func (r *recordingHistory) PhaseTokens(_ context.Context, q store.PhaseTokenQuery) ([]tokens.Record, error) {
+	r.spend = q
+	return nil, nil
+}
+
 // THE WINDOW THE SEED READS IS THE WINDOW THE PROJECTION KEEPS. The store
 // takes whole DAYS, so a live window that is not a whole number of them would
 // silently seed less history than the projection retains.

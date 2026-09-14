@@ -1638,13 +1638,14 @@ const apiReadHeaderTimeout = 10 * time.Second
 
 // projectionSeedBudget bounds the store read that seeds the live projection.
 //
-// The read is two indexed range scans of this node's own file: the newest 400
-// event rows without their payloads, and one day of phase spend from promoted
-// columns. Both are milliseconds on a healthy node, so five seconds is three
-// orders of magnitude of headroom and is a ceiling on the one case that
-// matters: a store that will not answer must not hold the listener shut, since
-// nothing else can accept a webhook while the bind is waiting. A seed that
-// times out costs history on a screen, never a delivery.
+// The read is two indexed range scans of this node's own file, each stopping at
+// the projection's own bound: the newest 400 event rows without their payloads,
+// and the newest 8 000 phase records of one day from promoted columns. Both are
+// milliseconds on a healthy node, so five seconds is three orders of magnitude
+// of headroom and is a ceiling on the one case that matters: a store that will
+// not answer must not hold the listener shut, since nothing else can accept a
+// webhook while the bind is waiting. A seed that times out costs history on a
+// screen, never a delivery.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between

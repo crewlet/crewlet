@@ -23,7 +23,7 @@ type History struct {
 	Events []FeedRow
 
 	// Spend is the per-phase spend records inside [LiveSpendWindow], in any
-	// order.
+	// order. Past [SpendRecordLimit] only the newest are kept.
 	Spend []tokens.Record
 }
 
@@ -88,9 +88,10 @@ func (s *LiveState) seedSpend(records []tokens.Record) bool {
 	// stream can still redeliver.
 	slices.SortStableFunc(entries, func(a, b spendEntry) int { return a.at.chronological(b.at) })
 	// Only the newest records the window can hold are worth an id: the
-	// count cap below would drop the rest from the front anyway.
-	if len(entries) > spendRecordLimit {
-		entries = entries[len(entries)-spendRecordLimit:]
+	// count cap below would drop the rest from the front anyway. The seed's
+	// own read already stops at the cap; this holds for any other caller.
+	if len(entries) > SpendRecordLimit {
+		entries = entries[len(entries)-SpendRecordLimit:]
 	}
 
 	counted := false

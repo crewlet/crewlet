@@ -31,9 +31,12 @@ type Seeded interface {
 //   - the feed: the newest [livestate.EventFeedLimit] persisted events, inside
 //     the store's own read floor ([store.EventHistory]). Payload-free, because
 //     a feed row carries none;
-//   - the spend: every phase record inside [livestate.LiveSpendWindow], read
-//     from the promoted token columns rather than the payloads, and cut to the
-//     projection's record cap by the projection itself.
+//   - the spend: the newest [livestate.SpendRecordLimit] phase records inside
+//     [livestate.LiveSpendWindow], read from the promoted token columns rather
+//     than the payloads. The count is the projection's record cap, applied
+//     at the READ: a busy day past it was otherwise read in full inside the
+//     seed's time budget, only to be cut to the cap on arrival, and a read
+//     that ran out of budget seeded no spend at all.
 //
 // Called AFTER the broadcast subscription is attached, so an event published
 // between the read and the subscription cannot fall into the gap; the
@@ -59,6 +62,7 @@ func Seed(ctx context.Context, history EventHistory, live Seeded) error {
 
 	h.Spend, err = history.PhaseTokens(ctx, store.PhaseTokenQuery{
 		SinceDays: livestate.LiveSpendWindowDays(),
+		Limit:     livestate.SpendRecordLimit,
 	})
 	if err != nil {
 		errs = append(errs, fmt.Errorf("observe: read the live spend window's history: %w", err))
