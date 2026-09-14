@@ -214,8 +214,9 @@ function ReportingChart({
   };
   const act = (id: string, action: NodeKeyAction): boolean => {
     const seat = seatOf(id);
+    // Enter on the reporting chart is its menu's first entry, Edit reports.
     if (action === "edit" && seat) {
-      api.openEditor(seat.key);
+      api.openEditor(seat.key, "reports");
       return true;
     }
     return false;

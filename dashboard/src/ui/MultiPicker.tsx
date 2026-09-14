@@ -58,6 +58,7 @@ export function MultiPicker({
   error,
   disabled,
   required,
+  autoFocus,
 }: {
   label: string;
   options: readonly PickerOption[];
@@ -68,6 +69,12 @@ export function MultiPicker({
   error?: string;
   disabled?: boolean;
   required?: boolean;
+  /**
+   * Focus the search box when the field mounts, as `Field`'s does: for a form
+   * opened AT this field, where starting on the first control would leave the
+   * field it was opened for further down the form. The list stays closed.
+   */
+  autoFocus?: boolean;
 }) {
   const id = useId();
   const inputID = `${id}-input`;
@@ -203,6 +210,7 @@ export function MultiPicker({
           disabled={disabled}
           autoComplete="off"
           spellCheck={false}
+          autoFocus={autoFocus}
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);

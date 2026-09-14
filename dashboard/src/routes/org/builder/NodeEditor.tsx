@@ -49,7 +49,7 @@ import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { ListField } from "~/ui/ListField.tsx";
 import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
 import { Banner, Button, Empty } from "~/ui/primitives.tsx";
-import { useBuilder, type BuilderApi } from "./BuilderContext.tsx";
+import { useBuilder, type BuilderApi, type EditorSectionName } from "./BuilderContext.tsx";
 import {
   companyForm,
   companyParts,
@@ -107,7 +107,16 @@ import {
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 
-export function NodeEditor({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
+export function NodeEditor({
+  nodeKey,
+  section,
+  onClose,
+}: {
+  nodeKey: NodeKey;
+  /** The part of the form to start on (see `EditorSectionName`). */
+  section?: EditorSectionName;
+  onClose: () => void;
+}) {
   const { state } = useBuilder();
   if (nodeKey === COMPANY_KEY) return <CompanyEditor onClose={onClose} />;
   const found = locate(state.draft, nodeKey);
@@ -125,9 +134,9 @@ export function NodeEditor({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
   // form from that node rather than keeping the one the last node filled: a
   // form's fields are state, and React would otherwise reuse them.
   return found.kind === "unit" ? (
-    <UnitEditor key={found.node.key} unit={found.node} onClose={onClose} />
+    <UnitEditor key={found.node.key} unit={found.node} section={section} onClose={onClose} />
   ) : (
-    <SeatEditor key={found.node.key} seat={found.node} onClose={onClose} />
+    <SeatEditor key={found.node.key} seat={found.node} section={section} onClose={onClose} />
   );
 }
 
@@ -535,7 +544,15 @@ function parentUnitOf(api: BuilderApi, key: NodeKey): DraftUnit | undefined {
   return parent?.kind === "unit" ? parent.node : undefined;
 }
 
-function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void }) {
+function UnitEditor({
+  unit,
+  section,
+  onClose,
+}: {
+  unit: DraftUnit;
+  section: EditorSectionName | undefined;
+  onClose: () => void;
+}) {
   const api = useBuilder();
   const { state } = api;
   const key = unit.key;
@@ -624,6 +641,7 @@ function UnitEditor({ unit, onClose }: { unit: DraftUnit; onClose: () => void })
           value={form.lead}
           onChange={(lead) => set({ lead })}
           disabled={disabled}
+          autoFocus={section === "leadership"}
           help="The lead manages the unit's direct members, and a unit below that names no lead inherits this one."
           error={errorFor(["lead"])}
         />
@@ -733,7 +751,15 @@ const GITHUB_TIERS: FieldChoice[] = [
   { value: "full_access", label: "Full access" },
 ];
 
-function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void }) {
+function SeatEditor({
+  seat,
+  section,
+  onClose,
+}: {
+  seat: DraftSeat;
+  section: EditorSectionName | undefined;
+  onClose: () => void;
+}) {
   const api = useBuilder();
   const { state } = api;
   const key = seat.key;
@@ -867,6 +893,7 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
         onChange={(manages) => set({ manages })}
         disabled={disabled}
         error={errorFor(["manages"])}
+        autoFocus={section === "reports"}
       />
 
       {human ? (
@@ -992,12 +1019,15 @@ function Reports({
   onChange,
   disabled,
   error,
+  autoFocus,
 }: {
   seat: DraftSeat;
   value: readonly string[];
   onChange: (next: string[]) => void;
   disabled: boolean;
   error?: string;
+  /** Starts the form here: the editor was opened at the seat's reports. */
+  autoFocus: boolean;
 }) {
   const { state } = useBuilder();
   const seatNames = new Set<string>();
@@ -1040,6 +1070,7 @@ function Reports({
         disabled={disabled}
         help="The seats this seat manages, or a unit to manage every seat in it."
         error={error}
+        autoFocus={autoFocus}
       />
       {groups.map((g) => (
         <ReadOnlyFact

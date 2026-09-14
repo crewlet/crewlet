@@ -141,3 +141,21 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   expect(labels).toContain("Edit reports");
   expect(labels).not.toContain("Open seat");
 });
+
+// The lens hands the part an action names on to the editor it opens: Edit
+// reports is about whom the seat manages, so that is where the form starts.
+test("Edit reports opens the seat's editor at Manages", async () => {
+  mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=outline&seat=ceo",
+  });
+  await screen.findByText("No problems");
+  fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+  const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Edit reports" }));
+  const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
+  await waitFor(() =>
+    expect(document.activeElement).toBe(within(editor).getByRole("combobox", { name: /^Manages/ })),
+  );
+});

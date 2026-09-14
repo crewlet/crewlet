@@ -32,7 +32,7 @@ import { builderReducer, type BuilderAction, type BuilderState } from "./model/r
 
 /** The spies standing in for what the Builder owns. */
 export interface BuilderSpies {
-  openEditor: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
+  openEditor: ReturnType<typeof vi.fn<BuilderApi["openEditor"]>>;
   openAdd: ReturnType<typeof vi.fn<BuilderApi["openAdd"]>>;
   openMove: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;
   openDelete: ReturnType<typeof vi.fn<(key: NodeKey) => void>>;

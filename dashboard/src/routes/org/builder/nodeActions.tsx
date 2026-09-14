@@ -150,7 +150,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
       key: "reports",
       label: "Edit reports",
       icon: "sitemap",
-      onSelect: () => api.openEditor(view.key),
+      onSelect: () => api.openEditor(view.key, "reports"),
     },
     {
       key: "kind",
@@ -178,7 +178,7 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
       label: "Edit reports",
       icon: "sitemap",
       hint: <Kbd keys={["Enter"]} />,
-      onSelect: () => api.openEditor(view.key),
+      onSelect: () => api.openEditor(view.key, "reports"),
     },
   ];
   if (screen) {
@@ -263,7 +263,7 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
       label: "Choose another seat",
       icon: "pencil",
       disabled: api.readOnly,
-      onSelect: () => api.openEditor(unit.key),
+      onSelect: () => api.openEditor(unit.key, "leadership"),
     },
   );
   return entries;

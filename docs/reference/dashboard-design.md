@@ -1132,8 +1132,11 @@ to.
   with no manager at the top, marked "No manager", and seats that manage each
   other in a loop under one "Reporting cycle" group, each loop drawn from its
   first seat in the engine's order. The reporting chart is read-only, because
-  a reporting line is not written anywhere as such; "Edit reports" opens the
-  seat's editor, where `manages` is.
+  a reporting line is not written anywhere as such; "Edit reports" (and Enter
+  on a reporting card) opens the seat's editor at its Manages field, where
+  `manages` is. The Builder's `openEditor` names the part of the form to start
+  on (`EditorSectionName`), so an action about one field lands on it: a lead
+  chip's "Choose another seat" opens the unit's editor at its lead.
 - **A card holds no control a keyboard has to reach.** Each card header and
   each seat row is a `treeitem` with its level, position and expansion, and
   one roving tab stop moves among them: the arrows, Home, End and type-ahead

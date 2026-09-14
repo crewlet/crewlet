@@ -53,6 +53,15 @@ export interface BuilderDerived {
   readonly units: DerivedUnit[];
 }
 
+/**
+ * A part of the node editor it can be opened at: a seat's Reports (whom it
+ * manages) or a unit's Leadership (its lead). The editor then starts on that
+ * part's first field rather than on the name at the top of a long form, so an
+ * action about one field ("Edit reports", a lead chosen outside the unit)
+ * lands on it. A part the node does not have opens the editor as usual.
+ */
+export type EditorSectionName = "reports" | "leadership";
+
 /** What the mounted view does for the Builder. */
 export interface BuilderViewHandle {
   /** Moves focus to the node without scrolling, then reveals it. */
@@ -76,7 +85,8 @@ export interface BuilderApi {
   documentProblems: ConfigProblem[];
   /** The selected node, mirrored in the URL's `unit=` and `seat=` filters. */
   selection: { key: NodeKey | null; select(key: NodeKey | null): void };
-  openEditor(key: NodeKey): void;
+  /** Opens the node's editor, at `section` when one is named. */
+  openEditor(key: NodeKey, section?: EditorSectionName): void;
   /** `parent` is a unit's key, or `null` for the company root. */
   openAdd(parent: NodeKey | null, kind?: AddKind): void;
   openMove(key: NodeKey): void;

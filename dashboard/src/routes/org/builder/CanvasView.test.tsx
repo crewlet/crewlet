@@ -401,6 +401,14 @@ describe("keys", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to" }));
     expect(spies.openMove).toHaveBeenCalledWith(seatKey("dev"));
     expect(document.activeElement).toBe(dev);
+
+    // Edit opens the whole form; Edit reports opens it at the seat's reports.
+    press("ContextMenu");
+    fireEvent.click(screen.getAllByRole("menuitem").find((m) => label(m) === "Edit")!);
+    expect(spies.openEditor).toHaveBeenLastCalledWith(seatKey("dev"));
+    press("ContextMenu");
+    fireEvent.click(screen.getByRole("menuitem", { name: "Edit reports" }));
+    expect(spies.openEditor).toHaveBeenLastCalledWith(seatKey("dev"), "reports");
   });
 });
 
@@ -505,7 +513,8 @@ describe("menus", () => {
       ["CEO", "true"],
     ]);
     fireEvent.click(screen.getByRole("menuitem", { name: /Choose another seat/ }));
-    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Sales"));
+    // At the unit's Leadership, where a lead outside the unit is chosen.
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Sales"), "leadership");
   });
 
   test("choosing the answer already chosen records nothing and is refused nowhere", () => {
@@ -560,7 +569,9 @@ describe("the reporting chart", () => {
     press("Delete");
     expect(spies.openDelete).not.toHaveBeenCalled();
     press("Enter");
-    expect(spies.openEditor).toHaveBeenCalledWith(seatKey("b"));
+    // Enter is the menu's first entry here, Edit reports, so the editor opens
+    // at the seat's reports.
+    expect(spies.openEditor).toHaveBeenCalledWith(seatKey("b"), "reports");
     press("ContextMenu");
     expect(screen.getAllByRole("menuitem").map((m) => m.textContent)).toEqual([
       expect.stringMatching(/^Edit reports/),

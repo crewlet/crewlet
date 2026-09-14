@@ -78,6 +78,7 @@ import {
   type BuilderApi,
   type BuilderViewHandle,
   type ChartKind,
+  type EditorSectionName,
 } from "./BuilderContext.tsx";
 import { allUnits, locate, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
@@ -130,6 +131,11 @@ export interface NodeDialogProps {
   onClose: () => void;
 }
 
+/** What the node editor is given: a dialog about one node, opened at a part of it. */
+export interface EditorDialogProps extends NodeDialogProps {
+  section?: EditorSectionName;
+}
+
 /** What the Add dialog is given. */
 export interface AddDialogProps {
   /** A unit's key, or `null` for the company root. */
@@ -148,7 +154,7 @@ export interface AddDialogProps {
 export interface BuilderSurfaces {
   canvas: ComponentType<{ chart: ChartKind }>;
   outline: ComponentType;
-  editor: ComponentType<NodeDialogProps>;
+  editor: ComponentType<EditorDialogProps>;
   add: ComponentType<AddDialogProps>;
   move: ComponentType<NodeDialogProps>;
   remove: ComponentType<NodeDialogProps>;
@@ -156,7 +162,8 @@ export interface BuilderSurfaces {
 }
 
 type OpenDialog =
-  | { readonly type: "editor" | "move" | "remove" | "changeKind"; readonly key: NodeKey }
+  | { readonly type: "editor"; readonly key: NodeKey; readonly section?: EditorSectionName }
+  | { readonly type: "move" | "remove" | "changeKind"; readonly key: NodeKey }
   | { readonly type: "add"; readonly parent: NodeKey | null; readonly kind?: AddKind }
   | { readonly type: "discard" };
 
@@ -926,7 +933,7 @@ function Lens({
             .map((p) => p.source as ConfigProblem)
         : [],
       selection: { key: selected, select },
-      openEditor: (key) => setDialog({ type: "editor", key }),
+      openEditor: (key, section) => setDialog({ type: "editor", key, section }),
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
@@ -1534,6 +1541,10 @@ function DialogHost({
     case "add": {
       const Add = surfaces.add;
       return <Add parent={dialog.parent} kind={dialog.kind} onClose={onClose} />;
+    }
+    case "editor": {
+      const Editor = surfaces.editor;
+      return <Editor nodeKey={dialog.key} section={dialog.section} onClose={onClose} />;
     }
     default: {
       const Node = surfaces[dialog.type];

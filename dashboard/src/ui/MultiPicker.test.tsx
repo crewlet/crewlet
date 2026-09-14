@@ -70,6 +70,19 @@ test("the search box is a labelled list combobox, and the list is multiselectabl
   expect(screen.getByRole("group", { name: "Units" })).toBeDefined();
 });
 
+// A form opened AT a field starts there, as `Field`'s autoFocus does, and a
+// drawer's own start on its first control gives way to it.
+test("autoFocus starts a drawer on the search box, with the list closed", () => {
+  render(
+    <Drawer title="Edit seat" onClose={() => {}}>
+      <input aria-label="Name" />
+      <MultiPicker label="Manages" options={OPTIONS} value={[]} onChange={() => {}} autoFocus />
+    </Drawer>,
+  );
+  expect(document.activeElement).toBe(box());
+  expect(box().getAttribute("aria-expanded")).toBe("false");
+});
+
 test("typing narrows by label or value, case-insensitively", () => {
   render(<Manages />);
   fireEvent.change(box(), { target: { value: "ENG" } });

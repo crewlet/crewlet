@@ -20,6 +20,7 @@ import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
+import type { EditorSectionName } from "./BuilderContext.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
 import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
 import {
@@ -33,9 +34,18 @@ import {
 
 afterEach(cleanup);
 
-function edit(state: BuilderState, key: NodeKey, options: HarnessOptions = {}) {
+function edit(
+  state: BuilderState,
+  key: NodeKey,
+  options: HarnessOptions = {},
+  section?: EditorSectionName,
+) {
   const onClose = vi.fn();
-  const view = renderInBuilder(state, <NodeEditor nodeKey={key} onClose={onClose} />, options);
+  const view = renderInBuilder(
+    state,
+    <NodeEditor nodeKey={key} section={section} onClose={onClose} />,
+    options,
+  );
   return { ...view, onClose };
 }
 
@@ -858,6 +868,24 @@ describe("a unit", () => {
     expect(found?.kind === "unit" && found.node.data.schedules?.[0]?.enabled).toBe(false);
     expect(screen.getByText(/Knowledge/)).toBeDefined();
     expect(screen.getByText("Free-text references, not a read scope.")).toBeDefined();
+  });
+});
+
+// "Edit reports" is about one field of a long form, and "Choose another
+// seat" in a unit's lead chip about another: each opens the editor on that
+// field rather than on the name at the top.
+describe("opening at a part of the form", () => {
+  test("a seat opened at its reports starts on Manages, and one opened plainly on its name", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev", {}, "reports");
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: /^Manages/ }));
+    cleanup();
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(document.activeElement).toBe(field("Name"));
+  });
+
+  test("a unit opened at its leadership starts on its lead", () => {
+    edit(keyedState(fixtureCompany()), "unit:Sales", {}, "leadership");
+    expect(document.activeElement).toBe(field("Lead"));
   });
 });
 
