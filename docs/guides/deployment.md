@@ -40,6 +40,34 @@ crewlet run -config crewlet.yaml -company company.yaml
 That is the deployment. Point a reverse proxy at the API port for inbound
 webhooks and the dashboard, and there is nothing else to operate.
 
+### The room the stream's volume needs
+
+The engine's own tracker, knowledge base and vector index each keep an ordered
+log on the stream, and each log's byte ceiling is **reserved** on the volume
+holding `stream.store_dir` when its stream is created: the embedded broker
+grants a ceiling in full, up front, or refuses to create the stream at all.
+Its limit is three quarters of that volume's free space.
+
+The node sizes the three ceilings together to fit half of that limit, and
+never below 1 GiB each, so:
+
+- **A first boot needs at least 4 GiB free on that volume.** Three quarters of
+  4 GiB is the three 1 GiB floors. Below it the node refuses to boot with an
+  error naming the log it could not reserve, the bytes it needed, the bytes
+  the broker had left, and the Tier A field that sets the ceiling.
+- **More room buys longer logs, up to a point.** Unset, the mutation log asks
+  for a quarter of the free space (4..64 GiB), the knowledge base's log for a
+  quarter of that, and the vector changelog for 16 GiB; they are scaled down
+  together only when the broker cannot give them all of it.
+- **The ceilings are fixed when the streams are created.** Moving the node to
+  a bigger volume, or setting `stream.tracker_log_max_bytes`,
+  `stream.tracker_vectors_max_bytes` or `stream.pages_log_max_bytes` later,
+  changes nothing about streams that already exist; `crewlet retention
+  set-capacity` is what changes a running log's ceiling.
+
+[Replication](replication.md#how-the-byte-ceilings-are-sized) has the whole
+arithmetic and the refusal's text.
+
 ---
 
 ## The compose stack starts nothing
@@ -312,6 +340,15 @@ alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
 consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
+
+**And it needs room for the state logs.** The three logs reserve their byte
+ceilings against the account's JetStream storage limit when their streams are
+created, and the node sizes them to half of what that limit has left. An
+untiered limit counts every replica, so a `replicas: 3` fleet needs three
+times the bytes; a tiered one needs its `R3` tier. An account that states no
+limit leaves the node nothing to size against but its own disk, and a server's
+own cap then refuses what does not fit, by name. See
+[Replication](replication.md#how-the-byte-ceilings-are-sized).
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it

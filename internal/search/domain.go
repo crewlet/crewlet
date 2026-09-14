@@ -25,7 +25,11 @@ type Domain struct{}
 func (Domain) Name() string { return "vectors" }
 
 const (
-	// VectorLogMaxBytes is the compacted stream's ceiling.
+	// VectorLogMaxBytes is the ceiling this domain declares for its
+	// compacted stream, which is what the framework's own suites provision
+	// it with. A node sizes the stream from Tier A
+	// (`stream.tracker_vectors_max_bytes`) instead, together with every
+	// other state log, inside what the broker can actually grant.
 	//
 	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
 	// than its history: at the packed 12 KiB a 3 072-wide vector costs,

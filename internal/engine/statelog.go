@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"golang.org/x/sys/unix"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -71,12 +70,17 @@ import (
 type domainHost interface {
 	EnsureDomainStream(ctx context.Context, spec jetstream.DomainStream) error
 
-	// StreamBudget is what the broker will actually let this account
-	// store. A ceiling is a RESERVATION the broker refuses if it cannot
-	// honour it, and the number it compares against is the account's own
-	// limit rather than the disk — so a ceiling derived from free space
-	// alone is refused on machines that have the space.
-	StreamBudget(ctx context.Context) (limit, used int64, err error)
+	// StreamBudget is what the broker will actually let this node
+	// reserve. A ceiling is a RESERVATION the broker refuses if it cannot
+	// honour it, and the number it compares against is a limit of the
+	// broker's own rather than the disk, so a ceiling derived from free
+	// space alone is refused on machines that have the space.
+	StreamBudget(ctx context.Context) (jetstream.StorageBudget, error)
+
+	// DomainStreamCeiling is the ceiling a domain's stream already holds,
+	// and whether it exists. What the logs hold counts as theirs when they
+	// are sized, which is what sizes a restart as the first boot was.
+	DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error)
 	DomainLog(ctx context.Context, stream string) (*jetstream.DomainLog, error)
 	DomainConsumer(ctx context.Context, stream, nodeID string, after uint64) (*jetstream.DomainConsumer, error)
 }
@@ -152,13 +156,17 @@ type stateLog struct {
 	nudgeSkills func()
 
 	// ceilings is the byte ceiling each domain's stream is CREATED with,
-	// from Tier A. It overrides the domain's own default, which is the
-	// value a domain declares in the absence of an operator — and the
-	// override is only ever applied at creation: a stream's configuration
-	// has one writer and a booting node is not it, so re-applying it would
-	// let restart order decide a shared limit and let a late node lower a
+	// sized from Tier A inside the broker's budget ([ceilingsFor]). It is
+	// only ever applied at creation: a stream's configuration has one
+	// writer and a booting node is not it, so re-applying it would let
+	// restart order decide a shared limit and let a late node lower a
 	// ceiling an emergency grant had just raised.
-	ceilings map[string]int64
+	ceilings map[string]domainCeiling
+
+	// volume is the directory the ceilings were derived from, which a
+	// refused reservation names when that volume is what bounds the
+	// broker.
+	volume string
 
 	// snapshot is what this node's snapshot loop last concluded, carried
 	// from that loop to the position heartbeat.
@@ -293,14 +301,21 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 			"what the eviction gate compares against")
 	}
 
+	// SIZED BEFORE ANYTHING IS STARTED, so the one failure here that is a
+	// declaration rather than a broker (a registered domain Tier A has no
+	// ceiling for) has nothing to unwind.
+	ceilings, err := ceilingsFor(ctx, host, boot)
+	if err != nil {
+		return nil, err
+	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	s := &stateLog{
 		domains: map[string]*runningDomain{},
 		nodeID:  nodeID, db: e.backends.Store, fleet: e.backends.Fleet,
 		metrics: e.metrics,
 		skills:  skillDetector{}, nudgeSkills: e.nudgeSkills,
-		ceilings: ceilingsFor(ctx, host, boot),
-		run:      runCtx, stop: cancel,
+		ceilings: ceilings, volume: streamVolume(boot),
+		run: runCtx, stop: cancel,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -312,14 +327,10 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// and a stream created a moment ago reports a first sequence of 1,
 	// which reads as "nothing was trimmed" for a log the fleet has been
 	// writing to for months.
-	logs := map[string]*jetstream.DomainLog{}
-	for _, domain := range registeredDomains() {
-		appendTo, err := s.provision(ctx, host, domain)
-		if err != nil {
-			s.Stop()
-			return nil, err
-		}
-		logs[domain.Name()] = appendTo
+	logs, err := s.provisionAll(ctx, host)
+	if err != nil {
+		s.Stop()
+		return nil, err
 	}
 
 	// ADOPT BEFORE ANY APPLIER RUNS, because a join REPLACES the
@@ -442,6 +453,20 @@ func registeredDomains() []statelog.Domain {
 	return []statelog.Domain{tracker.Domain{}, search.Domain{}, pages.Domain{}}
 }
 
+// provisionAll provisions every registered domain's stream, in the register's
+// order, and opens each.
+func (s *stateLog) provisionAll(ctx context.Context, host domainHost) (map[string]*jetstream.DomainLog, error) {
+	logs := map[string]*jetstream.DomainLog{}
+	for _, domain := range registeredDomains() {
+		appendTo, err := s.provision(ctx, host, domain)
+		if err != nil {
+			return nil, err
+		}
+		logs[domain.Name()] = appendTo
+	}
+	return logs, nil
+}
+
 // provision creates one domain's stream if it is not there and opens it.
 //
 // SEPARATED FROM [stateLog.start] because the join between them needs every
@@ -451,15 +476,27 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 	domain statelog.Domain) (*jetstream.DomainLog, error) {
 
 	spec := domain.Stream()
-	if err := host.EnsureDomainStream(ctx, jetstream.DomainStream{
+	ceiling, err := s.ceilingFor(domain)
+	if err != nil {
+		return nil, err
+	}
+	if err = host.EnsureDomainStream(ctx, jetstream.DomainStream{
 		Name:          spec.Name,
 		Subjects:      spec.Subjects,
-		MaxBytes:      s.ceilingFor(domain, spec),
+		MaxBytes:      ceiling.Bytes,
 		MaxPerSubject: spec.MaxPerSubject,
 		MaxAge:        spec.MaxAge,
 		Duplicates:    spec.Duplicates,
 	}); err != nil {
-		return nil, fmt.Errorf("engine: provision %s's log: %w", domain.Name(), err)
+		if errors.Is(err, jetstream.ErrInsufficientStorage) {
+			return nil, s.storageRefused(ctx, host, domain, ceiling, err)
+		}
+		// THE CEILING AND ITS FIELD RIDE EVERY FAILURE, because a
+		// clustered broker that cannot place the stream says
+		// "insufficient storage" in prose, about members this node
+		// cannot see, and names neither.
+		return nil, fmt.Errorf("engine: provision %s's log at a %d-byte ceiling "+
+			"(%s): %w", domain.Name(), ceiling.Bytes, ceiling.Field, err)
 	}
 	appendTo, err := host.DomainLog(ctx, spec.Name)
 	if err != nil {
@@ -1015,150 +1052,6 @@ func (c *Company) Epoch() map[string]any {
 		epoch["tracker.native.inbox_retention_days"] = native.InboxRetentionDays
 	}
 	return epoch
-}
-
-// ceilingsFor is each domain's stream ceiling, from Tier A.
-//
-// # Why the mutation log's is DERIVED and the vector changelog's is not
-//
-// A fixed default for the mutation log is wrong in both directions: the same
-// number is five years of history at the modelled write rate and one boot on a
-// small disk. So an unset value takes a quarter of the stream volume's free
-// space, clamped — the same volume holds this node's databases and its
-// snapshots, and a log allowed to fill the disk takes down the store it is
-// applied TO.
-//
-// The vector changelog's default is fixed because its peak is not a function
-// of the disk: the stream keeps one message per source and bounds their age, so
-// a week's minting is small — but changing the embedding model rewrites every
-// source in a few hours, and for the following week every source's current
-// message is inside the window. The default is sized for that operation rather
-// than for the steady state, because sizing it from the steady state would
-// refuse the one operation it exists to survive.
-func ceilingsFor(ctx context.Context, host domainHost, boot *config.Bootstrap) map[string]int64 {
-	if boot == nil {
-		return nil
-	}
-	free, err := freeSpace(boot.Store.Path)
-	if err != nil {
-		// LOGGED AND CARRIED with a zero, which the derivation clamps up
-		// to its floor. A node that cannot measure its own disk still has
-		// to boot, and the floor is a value that fits on any volume this
-		// engine runs on.
-		log.WarnContext(ctx, "statelog_free_space_unmeasured",
-			"path", boot.Store.Path, "error", err.Error(),
-			"detail", "the mutation log's derived ceiling falls back to its "+
-				"floor; set stream.tracker_log_max_bytes to choose one")
-	}
-	ceiling, derived := boot.Stream.LogMaxBytes(free)
-	vectors, vectorsCapped := boot.Stream.VectorsMaxBytes(free)
-	out := map[string]int64{
-		tracker.Domain{}.Name(): ceiling,
-		search.Domain{}.Name():  vectors,
-	}
-
-	// AND THEN THE BROKER'S OWN ANSWER, which is what a reservation is
-	// actually compared against. Every derived ceiling is scaled down to
-	// fit inside the account's remaining budget, SHARED between the
-	// domains — deriving each from the same free space independently
-	// double-counts, and the failure is a node that will not boot with
-	// nothing naming the number it exceeded.
-	//
-	// An operator's EXPLICIT ceiling is not scaled. They named a limit for
-	// a broker they can see, and silently lowering it would be the engine
-	// deciding a limit an emergency grant had just raised — a refused
-	// boot naming the field is the honest answer there.
-	limit, used, err := host.StreamBudget(ctx)
-	available := max(limit-used, 0)
-	if err != nil || limit < 0 {
-		// UNLIMITED IS NOT UNBOUNDED. An account with no configured
-		// limit reports -1, and the broker still refuses a reservation
-		// the DISK cannot back — so the disk is what bounds it, which is
-		// the same number the derivation started from and the same
-		// share applies. An unreadable limit is carried the same way,
-		// for the reason the disk measurement is: a derived value is a
-		// default, and a node that cannot read one still boots.
-		available = free
-	}
-	var claimed int64
-	for _, value := range out {
-		claimed += value
-	}
-	// A SHARE RATHER THAN ALL OF IT: the same broker holds every mailbox,
-	// every coordination bucket and the snapshots a join reads, and a log
-	// allowed to reserve the whole account starves the estate it is part of.
-	budget := int64(float64(available) * StreamBudgetShare)
-	if claimed > budget && claimed > 0 {
-		for name, value := range out {
-			if explicit(boot, name) {
-				continue
-			}
-			out[name] = max(value*budget/claimed, MinDomainCeiling)
-		}
-	}
-	log.InfoContext(ctx, "statelog_ceilings",
-		"free", free, "tracker", out[tracker.Domain{}.Name()],
-		"tracker_derived", derived, "vectors", out[search.Domain{}.Name()],
-		"vectors_capped", vectorsCapped,
-		"broker_limit", limit, "broker_used", used, "budget", budget)
-	return out
-}
-
-// StreamBudgetShare is how much of the broker's remaining storage the state
-// logs' derived ceilings may reserve between them.
-//
-// HALF. The same broker holds every seat's mailbox, every coordination bucket
-// — the leases, the ledgers, the counters, the company's sealed credentials —
-// and the snapshot a joining node reads. A log allowed to reserve the whole
-// account starves the estate it is part of, and the failure is not a full log:
-// it is a company that cannot claim a seat.
-const StreamBudgetShare = 0.5
-
-// MinDomainCeiling is the floor a scaled-down ceiling never goes below.
-//
-// A gibibyte, which is the same floor Tier A's own validation enforces on an
-// explicit value: below it a log is not a log, it is a window that refuses
-// appends within a week of a company starting work.
-const MinDomainCeiling int64 = 1 << 30
-
-// explicit reports whether the operator named this domain's ceiling.
-func explicit(boot *config.Bootstrap, domain string) bool {
-	switch domain {
-	case tracker.Domain{}.Name():
-		return boot.Stream.TrackerLogMaxBytes > 0
-	case search.Domain{}.Name():
-		return boot.Stream.TrackerVectorsMaxBytes > 0
-	}
-	return false
-}
-
-// ceilingFor is one domain's ceiling, falling back to what the domain itself
-// declares.
-func (s *stateLog) ceilingFor(domain statelog.Domain, spec statelog.StreamSpec) int64 {
-	if ceiling, held := s.ceilings[domain.Name()]; held && ceiling > 0 {
-		return ceiling
-	}
-	return spec.MaxBytes
-}
-
-// freeSpace is what an unprivileged process may actually use on the volume
-// holding path.
-//
-// Bavail rather than Bfree: the reserve only root can reach is not space this
-// engine has, and counting it would derive a ceiling the disk cannot honour.
-func freeSpace(path string) (int64, error) {
-	dir := filepath.Dir(path)
-	if dir == "" || dir == "." {
-		dir = "."
-	}
-	var fs unix.Statfs_t
-	if err := unix.Statfs(dir, &fs); err != nil {
-		return 0, fmt.Errorf("engine: measure the free space on %s: %w", dir, err)
-	}
-	//nolint:unconvert // Statfs_t.Bsize is int64 on linux and uint32 on
-	// darwin, and both are release targets — the conversion is what makes
-	// this one expression compile on the whole matrix.
-	return int64(fs.Bavail) * int64(fs.Bsize), nil
 }
 
 // joinIfBehind adopts a peer's snapshot when this node cannot replay its way

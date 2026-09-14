@@ -585,29 +585,6 @@ func (g *DomainGroup) stop() {
 // Name is what this group is called on the broker.
 func (g *DomainGroup) Name() string { return g.name }
 
-// StreamBudget is what the broker will actually let this account store, and
-// how much of it is already used.
-//
-// # Why a ceiling is MEASURED here rather than modelled
-//
-// A stream's byte ceiling is a RESERVATION: the broker refuses to create one it
-// could not honour, with `insufficient storage resources available` and nothing
-// naming the number it compared against. So a ceiling derived from the disk —
-// a share of free space, a fixed default — can be refused on a machine that has
-// the space, because the account's own limit is what decides and it is not the
-// disk.
-//
-// This is that number. A limit of -1 means unlimited, which an in-memory or
-// explicitly unbounded server reports; the caller reads it as "no cap to apply"
-// rather than as zero, which would refuse every stream.
-func (q *Queue) StreamBudget(ctx context.Context) (limit, used int64, err error) {
-	info, err := q.js.AccountInfo(ctx)
-	if err != nil {
-		return 0, 0, fmt.Errorf("jetstream: read the account's storage limits: %w", err)
-	}
-	return info.Limits.MaxStore, int64(info.Store), nil
-}
-
 // GroupAckFloor is how far a fleet-wide group has acknowledged, WITHOUT
 // attaching to it.
 //

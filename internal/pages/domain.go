@@ -27,9 +27,17 @@ type Domain struct{}
 // Name is the register key, the manifest key and the operator's own column.
 func (Domain) Name() string { return "pages" }
 
-// PagesLogMaxBytes is the mutation stream's default ceiling.
+// PagesLogMaxBytes is the ceiling this domain declares for its log, which is
+// what the framework's own suites provision the stream with.
 //
-// Crossing it REFUSES an append rather than dropping the oldest record —
+// A NODE DOES NOT CREATE THE STREAM AT IT. Every state log's ceiling is a
+// reservation the broker grants in full, so the engine sizes them together
+// from Tier A (`stream.pages_log_max_bytes`) inside what the broker can
+// actually grant. This value once was the node's too, reserved on top of a
+// budget the other two logs had been scaled to fill, and on a small disk it
+// was the one reservation the broker refused.
+//
+// Crossing a ceiling REFUSES an append rather than dropping the oldest record:
 // nothing on this stream is derivable from anything else, so shedding history
 // is data loss with a tidy name.
 //
@@ -39,7 +47,8 @@ func (Domain) Name() string { return "pages" }
 // page's records are dominated by SAVES rather than by creates. At a 512 KiB
 // body cap and the modelled edit rate a completely blocked trim reaches this
 // in about five years, which is the same unmistakable operator failure the
-// tracker's ceiling is sized for.
+// tracker's ceiling is sized for. Tier A's derived value keeps the same ratio
+// to the tracker's on every volume.
 const PagesLogMaxBytes = 4 << 30
 
 // PagesLogDuplicates is the window the broker collapses a repeated operation
