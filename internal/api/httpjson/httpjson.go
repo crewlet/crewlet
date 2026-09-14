@@ -54,13 +54,18 @@ const (
 	// CodeInternalError is the deliberately opaque answer to a failure the
 	// caller can do nothing about. The detail goes to the log.
 	CodeInternalError Code = "internal_error"
+
+	// CodeDraining is a request that would start work on a node that has
+	// begun to drain. The request was fine and nothing was done with it; it
+	// belongs on another node, or on this one once it has restarted.
+	CodeDraining Code = "draining"
 )
 
 // Valid reports whether c is one this package defines.
 func (c Code) Valid() bool {
 	switch c {
 	case CodeEncodeFailed, CodeBodyTooLarge, CodeUnreadableBody,
-		CodeInvalidBody, CodeInternalError:
+		CodeInvalidBody, CodeInternalError, CodeDraining:
 		return true
 	default:
 		return false

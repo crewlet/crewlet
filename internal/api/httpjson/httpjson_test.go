@@ -145,7 +145,7 @@ func TestOnlyTheDeclaredCodesAreValid(t *testing.T) {
 	for _, code := range []httpjson.Code{
 		httpjson.CodeEncodeFailed, httpjson.CodeBodyTooLarge,
 		httpjson.CodeUnreadableBody, httpjson.CodeInvalidBody,
-		httpjson.CodeInternalError,
+		httpjson.CodeInternalError, httpjson.CodeDraining,
 	} {
 		if !code.Valid() {
 			t.Errorf("%q is declared but not Valid", code)

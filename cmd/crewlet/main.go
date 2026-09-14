@@ -1668,11 +1668,17 @@ func (r engineRuntime) Tools() []api.ToolInfo {
 	return out
 }
 
+// ShuttingDown is the engine's own flag, which is set at the first moment of
+// its drain rather than when the drain reaches the seat host.
+func (r engineRuntime) ShuttingDown() bool { return r.engine.ShuttingDown() }
+
 func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 	host := r.engine.Node().Host()
 	state := api.RuntimeState{
-		InFlight:     r.engine.Backends().Queue.InFlightCount(),
-		ShuttingDown: host.Draining(),
+		InFlight: r.engine.Backends().Queue.InFlightCount(),
+		// THE SAME FLAG the drain gate refuses work on, so a probe can
+		// never report a node in rotation while its routes refuse.
+		ShuttingDown: r.ShuttingDown(),
 		Seats:        host.Held(),
 		StartedAt:    r.engine.StartedAt().Format(time.RFC3339),
 		// Which integrations have a PARSER, which is the only thing that
@@ -1693,9 +1699,8 @@ func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached
 		// posture is a node that reports healthy through the whole
-		// window in which it stopped being so — and this is the ONLY
-		// place an operator can see why a node left rotation, since
-		// /ready answers a bare 503 either way and "draining" and
+		// window in which it stopped being so, and it is what names
+		// why a node that is not draining left rotation. "draining" and
 		// "cannot apply epoch 41" call for opposite responses.
 		state.Posture = string(r.reconciler.Posture(ctx))
 		state.AppliedEpoch = r.reconciler.Applied()

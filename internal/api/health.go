@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/version"
 )
@@ -79,7 +80,25 @@ type Readiness struct {
 	Configured bool   `json:"configured"`
 	Draining   bool   `json:"draining"`
 	Posture    string `json:"posture"`
+
+	// Reason names what took this node out of rotation, and is absent while
+	// it is in rotation: [ReasonDraining], [ReasonUnconfigured], or the
+	// diverged posture itself. ONE FIELD, decided here in the precedence the
+	// health status uses, so a load balancer's record of a failed probe says
+	// why without its reader re-deriving it from the three fields above.
+	Reason string `json:"reason,omitempty"`
 }
+
+// The reasons a refused /ready names, beside the diverged postures, which are
+// named as themselves.
+//
+// ReasonDraining is the drain gate's own code, spelled once: a node that
+// refuses a webhook because it is draining and a probe that reports it out of
+// rotation are describing one fact.
+const (
+	ReasonDraining     = string(httpjson.CodeDraining)
+	ReasonUnconfigured = StatusUnconfigured
+)
 
 // divergedPostures take a node out of rotation.
 //
@@ -171,7 +190,15 @@ func (a *App) readiness(ctx context.Context) (Readiness, int) {
 		}
 	}
 	_, diverged := divergedPostures[body.Posture]
-	body.Ready = configured && !body.Draining && !diverged
+	switch {
+	case body.Draining:
+		body.Reason = ReasonDraining
+	case !configured:
+		body.Reason = ReasonUnconfigured
+	case diverged:
+		body.Reason = body.Posture
+	}
+	body.Ready = body.Reason == ""
 	if body.Ready {
 		return body, http.StatusOK
 	}
