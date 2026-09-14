@@ -638,11 +638,11 @@ export function withoutHeadline<T extends { kind: string; subject?: string; deta
 /**
  * What the reconcile loop last found for one surface.
  *
- * Renders NOTHING when the status is null, and the silence is the point: a
- * standalone API has no loop to ask and the loop may not have reached this
- * surface yet, and neither of those is a claim that the surface is healthy.
- * A green tick here would be exactly the invented health this screen has
- * always refused to show.
+ * Renders NOTHING when the status is null, and the silence is the point: this
+ * node may not have been able to read the fleet's rows, and the loop may not
+ * have reached this surface yet, and neither of those is a claim that the
+ * surface is healthy. A green tick here would be exactly the invented health
+ * this screen has always refused to show.
  */
 export function Reconcile({
   status,
