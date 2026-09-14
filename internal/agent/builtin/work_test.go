@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -1602,5 +1603,99 @@ func TestAnExplicitZeroEstimateIsSet(t *testing.T) {
 	})
 	if got.Failed {
 		t.Fatalf("an explicit zero estimate was refused: %s", got.Output)
+	}
+}
+
+// A SIZE THAT IS NOT A NUMBER IS REFUSED, and NaN is the one that gets past a
+// range check by definition: every comparison with it is false, so the
+// `points < 0` guard said nothing about it and it reached the writer. An
+// infinity passed the same guard honestly. Neither is a value a sprint's
+// figures can be summed from, and JSON cannot encode either — so the failure
+// would have surfaced somewhere downstream with no memory of who typed it.
+func TestANonFiniteSizeIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		field string
+		value any
+	}{
+		{"points as NaN", "points", "NaN"},
+		{"points as an infinity", "points", "Inf"},
+		{"points as a spelled-out infinity", "points", "infinity"},
+		{"points as a negative infinity", "points", "-Inf"},
+		// `int(+Inf)` is not defined by the language: it lands on the
+		// platform's minimum int, which the negative check then refused
+		// as a NEGATIVE estimate — the right answer for the wrong reason,
+		// naming a sign nobody typed.
+		{"an infinite estimate", "estimate_minutes", math.Inf(1)},
+		{"a NaN estimate", "estimate_minutes", math.NaN()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+			got := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
+				"title": "sized wrong", "project": "ENG", tc.field: tc.value,
+			})
+			if !got.Failed {
+				t.Fatalf("%s=%v was accepted and reached the writer", tc.field, tc.value)
+			}
+			if !strings.Contains(got.Output, tc.field) {
+				t.Errorf("the refusal does not name `%s`: %s", tc.field, got.Output)
+			}
+		})
+	}
+}
+
+// THE UPDATE SCHEMA ADMITS THE NULL ITS OWN DESCRIPTION PROMISES.
+//
+// Clearing a date, a size or a sprint is done by passing null; `readSchedule`
+// reads it and the description says so. The declared type said `string` and
+// `integer` alone, so a caller that VALIDATES against this schema refuses the
+// null before the tool is reached — a gesture documented, implemented, and
+// unreachable through any strict client.
+//
+// A CREATE STAYS NON-NULLABLE, because a create has nothing to clear: a null
+// there is a value nobody meant rather than an instruction.
+func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	typeOf := func(tool, field string) any {
+		t.Helper()
+		entry, held := reg.Lookup(tool)
+		if !held {
+			t.Fatalf("no %s tool", tool)
+		}
+		props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+		prop, _ := props[field].(map[string]any)
+		return prop["type"]
+	}
+
+	for _, field := range []string{"due", "start", "estimate_minutes", "points", "sprint"} {
+		update := typeOf(builtin.UpdateWorkItemTool, field)
+		types, ok := update.([]string)
+		if !ok {
+			t.Errorf("update's %q is %v (%T), want a union admitting null",
+				field, update, update)
+			continue
+		}
+		if !slices.Contains(types, "null") {
+			t.Errorf("update's %q is %v and cannot express the clear its own "+
+				"description documents", field, types)
+		}
+		// AND THE VALUE TYPE SURVIVES the union: admitting null must not
+		// stop the field accepting what it is for.
+		if len(types) != 2 || types[1] != "null" {
+			t.Errorf("update's %q is %v, want its own type then null", field, types)
+		}
+
+		if create := typeOf(builtin.CreateWorkItemTool, field); create == nil {
+			t.Errorf("create's %q declares no type at all", field)
+		} else if _, union := create.([]string); union {
+			t.Errorf("create's %q is %v; a create has nothing to clear", field, create)
+		}
 	}
 }

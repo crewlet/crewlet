@@ -703,11 +703,18 @@ func (s Sources) workBurndown(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out, err := s.Work.Burndown(ctx, tracker.BurndownQuery{
-		Project:   project,
-		Sprint:    number,
-		Level:     fresh.Level,
-		MaxLag:    fresh.MaxLag,
-		MaxLagSeq: fresh.MaxLagSeq,
+		Project: project,
+		Sprint:  number,
+		// THE WHOLE FRESHNESS, as every other native read hands it over.
+		// `MinPosition` was the one field this call dropped, so a caller
+		// that had just written and passed the position back was told
+		// its burndown was served — at a checkpoint that need not have
+		// included the write. A floor silently ignored is the one shape
+		// a read level cannot be audited from the answer.
+		Level:       fresh.Level,
+		MaxLag:      fresh.MaxLag,
+		MaxLagSeq:   fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
 	}, time.Now().UTC())
 	switch {
 	case errors.Is(err, tracker.ErrNoProject), errors.Is(err, tracker.ErrNoSprint):

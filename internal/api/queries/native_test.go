@@ -839,6 +839,8 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.detailQuery.MinPosition }},
 		{"work_sprints", map[string]any{"project": "ENG"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.sprintQuery.MinPosition }},
+		{"work_burndown", map[string]any{"project": "ENG", "sprint": 1},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.burnQuery.MinPosition }},
 		{"work_activity", map[string]any{"container": "workspace"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.activityQuery.MinPosition }},
 		{"work_my_work", map[string]any{"handle": "ana"},
