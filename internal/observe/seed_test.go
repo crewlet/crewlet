@@ -89,6 +89,45 @@ func TestSeedingReadsTheFeedAndTheSpendWindowFromTheStore(t *testing.T) {
 	}
 }
 
+// A SEEDED ROW KEEPS ITS FAILURE MARK. The feed listing never selects the
+// payload, so the mark a live row derives from it has to come back through the
+// tag the writer stamped; a seed that dropped it would show every failure from
+// before the restart as a success, on the first screen an operator opens after
+// one.
+func TestASeededRowKeepsItsFailureMark(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	failed := events.New(types.AgentPhaseCompleted{
+		RoleName: "Lead", Agent: "a-1", TurnID: "tn-1", Phase: types.PhaseExecute,
+		Model: "claude-sonnet-5", Failed: true,
+	}, events.TraceContext{})
+	failed.Timestamp = time.Now().UTC().Add(-time.Minute)
+	rec, ok := observe.Record(failed)
+	if !ok {
+		t.Fatal("a failed phase did not render as a store row")
+	}
+	if err := log.Append(t.Context(), rec); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	fine := storePhase(t, log, "Lead", 10, time.Now().UTC().Add(-2*time.Minute))
+
+	live := livestate.New()
+	if err := observe.Seed(t.Context(), log, live); err != nil {
+		t.Fatalf("Seed: %v", err)
+	}
+	marks := map[string]bool{}
+	for _, row := range live.RecentEvents(0) {
+		marks[row.ID] = row.Failed
+	}
+	if failedMark, seeded := marks[rec.ID]; !seeded || !failedMark {
+		t.Errorf("the failed phase seeded as (listed %v, failed %v), want a failed row", seeded, failedMark)
+	}
+	if marks[fine] {
+		t.Error("an ordinary phase seeded as failed")
+	}
+}
+
 // A WEBHOOK DELIVERY'S SEEDED ROW READS LIKE ITS LIVE ONE. The receiver
 // writes the row itself and ingests its own envelope, so the two halves of one
 // feed are built in different places and must not name the delivery
