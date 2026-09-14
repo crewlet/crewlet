@@ -61,6 +61,7 @@ import {
   DownloadButton,
   KeyValue,
   Panel,
+  PhaseTag,
   Skeleton,
   Stat,
   StatRow,
@@ -87,7 +88,14 @@ import {
   type PhaseRecord,
   type Timed,
 } from "~/lib/phases.ts";
-import { prefetchBlocks, tellStory, TURN_STOP, type PrefetchBlock } from "~/lib/turnstory.ts";
+import {
+  prefetchBlocks,
+  promptWeights,
+  tellStory,
+  TURN_STOP,
+  type PrefetchBlock,
+  type PromptWeight,
+} from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
 
@@ -283,7 +291,14 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
 }
 
 /**
- * The six context blocks the executor's prompt was built from.
+ * What went INTO the prompt, from both directions: the six context blocks the
+ * executor's prompt was assembled from, and what each phase's prompt then came
+ * to. Two halves of one question — whether a heavy prompt is heavy because of
+ * what was prefetched or in spite of it — and either alone leaves it open.
+ *
+ * Either half can be absent. A turn whose prefetch record fell out of the
+ * store still has its `prompt.size` rows, and the reverse holds too, so the
+ * panel renders whichever it has rather than gating both on the first.
  *
  * A BLOCK THAT FOUND NOTHING DID NOT FAIL, and the first version of this panel
  * said it did: a ✓/✗ column, four crosses down the left, reading as four
@@ -302,7 +317,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
  * versus a quiet turn, and it is the whole reason the engine puts
  * `trigger_requires_recon` on the wire.
  */
-function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
+function Given({ blocks, weights }: { blocks: PrefetchBlock[]; weights: PromptWeight[] }) {
   const got = blocks.filter((b) => b.hit);
   const gated = blocks.filter((b) => !b.hit && b.gated);
   const empty = blocks.filter((b) => !b.hit && !b.gated);
@@ -310,11 +325,17 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
     <Panel
       title="What the turn was given"
       icon="book"
-      subtitle="the context blocks its prompt was assembled from"
+      subtitle="the context blocks its prompt was assembled from, and what each phase's prompt weighed"
       padding="tight"
     >
       <div className="col gap-2">
-        {got.length > 0 ? (
+        {blocks.length === 0 && (
+          <span className="t-caption">
+            No prefetch record for this turn, so there is no breakdown of where the prompt&rsquo;s
+            context came from — only what each phase&rsquo;s prompt came to.
+          </span>
+        )}
+        {blocks.length > 0 && got.length > 0 ? (
           <div className="col gap-1">
             {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
                 The grid's second track starts at 120px, so a byte count sat
@@ -336,10 +357,12 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
             ))}
           </div>
         ) : (
-          <span className="t-caption">
-            The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
-            alone — no stored context reached it.
-          </span>
+          blocks.length > 0 && (
+            <span className="t-caption">
+              The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
+              alone — no stored context reached it.
+            </span>
+          )
         )}
         {gated.length > 0 && (
           <div className="banner neutral">
@@ -354,8 +377,60 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
         {empty.length > 0 && (
           <span className="t-caption">Nothing to add from {list(empty.map((b) => b.label))}.</span>
         )}
+        {weights.length > 0 && <PromptWeights rows={weights} />}
       </div>
     </Panel>
+  );
+}
+
+/**
+ * What each phase's prompt came to, off the engine's own measurement.
+ *
+ * `prompt.size` exists so prompt-slimming progress is measurable rather than
+ * argued about, and six small integers per phase have been reaching this
+ * browser and rendering nowhere: the screen read one event out of the `given`
+ * band and dropped the rest, so the only route to the number was the raw
+ * payload of a row in the residual list. It belongs here, beside the blocks
+ * the prompt was assembled FROM — the two halves of one question, and the
+ * pair is what says whether a heavy prompt is heavy because of what was
+ * prefetched or in spite of it.
+ *
+ * PER PHASE AND PER ROUND, never summed. A prompt is re-sent on every round of
+ * the tool loop, so a total here would be neither the turn's input bill (which
+ * is what the token tiles above already report) nor any single thing that was
+ * ever sent. What the number answers is "how big is the frame this phase
+ * reasons in", and that is a per-phase question.
+ */
+function PromptWeights({ rows }: { rows: PromptWeight[] }) {
+  return (
+    <div className="col gap-1">
+      <div className="row gap-2">
+        <span className="t-label spacer">Prompt sent</span>
+        <span className="t-label num-col">System</span>
+        <span className="t-label num-col">User</span>
+        <span className="t-label num-col">Approx. tokens</span>
+      </div>
+      {rows.map((w, i) => (
+        <div key={`${w.phase}|${w.iteration}|${i}`} className="row gap-2">
+          <PhaseTag phase={w.phase} />
+          {w.iteration > 1 && (
+            <span className="t-caption" title="self-iterate round">
+              iter {w.iteration}
+            </span>
+          )}
+          <span className="spacer" />
+          <span className="mono t-num t-caption num-col" title="characters in the system prompt">
+            {fmtBytes(w.systemChars)}
+          </span>
+          <span className="mono t-num t-caption num-col" title="characters in the user message">
+            {fmtBytes(w.userChars)}
+          </span>
+          <span className="mono t-num t-caption num-col" title="the engine's own approximation">
+            {fmtCount(w.approximateTokens)}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -500,6 +575,8 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     () => prefetchBlocks(story.given.find((e) => e.type === "prefetch_summary")),
     [story],
   );
+  // The other half of the `given` band, and until now the half nothing read.
+  const weights = useMemo(() => promptWeights(story.given), [story]);
 
   const role = phases[0]?.role ?? (rec.summary?.actor || "");
   const trigger = phases.find((p) => p.trigger)?.trigger ?? null;
@@ -788,7 +865,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Panel>
         )}
 
-        {prefetch.length > 0 && <Prefetch blocks={prefetch} />}
+        {(prefetch.length > 0 || weights.length > 0) && (
+          <Given blocks={prefetch} weights={weights} />
+        )}
 
         <Panel title="Phases" icon="brain" count={own.length} padding="tight">
           <div className="col gap-2">

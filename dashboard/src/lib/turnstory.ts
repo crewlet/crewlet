@@ -198,6 +198,48 @@ export function tellStory(events: readonly EventRecord[]): Story {
   return story;
 }
 
+/** One phase's final prompt, as the engine measured it. */
+export interface PromptWeight {
+  phase: string;
+  iteration: number;
+  /** The engine's own approximation, off `prompt.size`. */
+  approximateTokens: number;
+  systemChars: number;
+  userChars: number;
+}
+
+/**
+ * What each phase's prompt actually weighed.
+ *
+ * `prompt.size` exists so prompt-slimming is measurable rather than argued
+ * about, and it is addressed like every other phase event precisely so the
+ * size a TURN paid is readable on that turn. It was banded into `given` here
+ * and then read by nobody: the Turn screen took one event out of that band
+ * (`prefetch_summary`) and dropped the rest, so six small integers per phase
+ * reached the browser and went nowhere. The only way to the number was the
+ * raw payload of a row in the residual list.
+ *
+ * Rows come back in the order they were published — one per phase run, so a
+ * self-iterating turn contributes one per round and they read down the page
+ * beside the phases they belong to.
+ */
+export function promptWeights(events: readonly EventRecord[]): PromptWeight[] {
+  const out: PromptWeight[] = [];
+  for (const event of events) {
+    if (event.type !== "prompt.size") continue;
+    const p = event.payload as Record<string, unknown> | undefined;
+    if (!p) continue;
+    out.push({
+      phase: String(p.phase ?? ""),
+      iteration: Number(p.iteration ?? 0),
+      approximateTokens: Number(p.approximate_tokens ?? 0),
+      systemChars: Number(p.system_chars ?? 0),
+      userChars: Number(p.user_chars ?? 0),
+    });
+  }
+  return out;
+}
+
 /** One prefetch block: what it is called, whether it hit, and how big it was. */
 export interface PrefetchBlock {
   label: string;

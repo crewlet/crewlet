@@ -625,6 +625,18 @@ Four rules replace it, and each one names what it fixes.
    list rather than being dropped. The event registry is additive-only; a type
    a newer node publishes has to still render.
 
+   A band is not a rendering, though, and *What the turn was given* was
+   rendering half of its own. `prompt.size` — six integers per phase, which
+   exist so prompt-slimming progress is measurable rather than argued about —
+   was banded here and then read by nobody: the panel took `prefetch_summary`
+   out of the band and dropped the rest, so the only route to a phase's prompt
+   size was the raw payload of a row in the residual list. The panel carries
+   both halves now, which is the pair that says whether a heavy prompt is
+   heavy *because* of what was prefetched or in spite of it. Per phase and per
+   round, never summed: a prompt is re-sent on every round of the tool loop,
+   so a total would be neither the turn's input bill — the tiles above already
+   report that — nor any single thing that was ever sent.
+
 3. **A healthy turn must be able to say so — and only when it can.** A set
    defined by subtraction (`type !== …`) has no meaningful empty state, so
    "nothing went wrong here" was not a state this screen could reach — and a

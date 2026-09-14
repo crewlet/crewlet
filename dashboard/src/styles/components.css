@@ -99,6 +99,21 @@
   border-radius: var(--r-sm);
 }
 
+/* A FIGURE COLUMN, fixed width and right-aligned, so a header label and the
+   values under it line up.
+
+   `.row` is a flex line with a gap and nothing else, so a trailing figure
+   after a `.spacer` lands wherever its own text ends. That is right for ONE
+   figure — the spacer pushes both the header and the value to the same right
+   edge — and wrong the moment there is a second: three figures of differing
+   widths sit adjacent, and the labels above them sit adjacent at their own
+   widths, so nothing is a column. */
+.num-col {
+  flex: none;
+  width: 5.5rem;
+  text-align: right;
+}
+
 /* A count beside a section title. Neutral by design: a coloured count is a
    claim about severity that a number alone cannot support. */
 .count-chip {
