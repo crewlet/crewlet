@@ -21,6 +21,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // DepthError reports a delegation chain that has hit its cap.
@@ -103,29 +105,19 @@ func (s *StallDetector) ShouldAbort() bool {
 // progress, so the run of identical rounds starts over.
 func (s *StallDetector) Reset() { s.history = nil }
 
-// BreachKind names why a guard ended a turn. Carried on the breach the caller
-// publishes, so a dashboard can tell a loop that gave up from one that never
-// moved.
-type BreachKind string
-
-const (
-	// BreachStall — repeated rounds produced the same artifact.
-	BreachStall BreachKind = "stall"
-	// BreachMaxIterations — the loop ran out of rounds without reaching done.
-	BreachMaxIterations BreachKind = "max_iter"
-	// BreachDepth — the delegation chain hit its cap.
-	BreachDepth BreachKind = "depth"
-	// BreachScheduledTimeout — the turn ran past the wall-clock cap its
-	// trigger carried. Only a scheduled fire sets one, which is why the
-	// operator-facing string is the one docs/concepts/scheduling.md and
-	// [types.GuardScheduledTimeout] already name.
-	BreachScheduledTimeout BreachKind = "scheduled_timeout"
-)
-
 // Breach is a guard firing. Returned on the result rather than published from
 // inside the loop: the loop has no event queue, which is what keeps its rules
 // testable without one.
+//
+// Its Kind is the WIRE vocabulary, [types.GuardKind], and not a second enum of
+// the loop's own. There were two, and they had already disagreed: the loop
+// called the delegation cap "depth" while the event type, the docs and the
+// dashboard's AFK sentence all said "depth_cap". The engine converted one into
+// the other with a plain string cast, so every depth breach reached the store
+// and the screen as a kind nothing recognised, and the seat's AFK line fell
+// back to the generic "the engine paused this seat". One type makes that drift
+// a compile error rather than a silent rename.
 type Breach struct {
-	Kind   BreachKind
+	Kind   types.GuardKind
 	Detail string
 }

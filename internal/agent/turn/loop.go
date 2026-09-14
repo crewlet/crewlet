@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
@@ -327,7 +328,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		// distinction this function's doc comment exists to keep.
 		return Result{
 			Decision: phase.Failed,
-			Breach:   &Breach{Kind: BreachDepth, Detail: err.Error()},
+			Breach:   &Breach{Kind: types.GuardDepthCap, Detail: err.Error()},
 		}, nil
 	}
 
@@ -346,7 +347,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 		if elapsed := set.now().Sub(started); round > 1 &&
 			set.MaxWallClock > 0 && elapsed >= set.MaxWallClock {
 			res.Breach = &Breach{
-				Kind: BreachScheduledTimeout,
+				Kind: types.GuardScheduledTimeout,
 				Detail: fmt.Sprintf(
 					"the turn ran %s across %d round(s), past its %s cap, so no "+
 						"further round was started", elapsed.Round(time.Second),
@@ -468,7 +469,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 			log.InfoContext(ctx, "turn_stall_aborted", "turn_id", in.TurnID, "round", round)
 			res.Decision = phase.Failed
 			res.Breach = &Breach{
-				Kind:   BreachStall,
+				Kind:   types.GuardStall,
 				Detail: "consecutive self_iterate rounds produced the same artifact",
 			}
 			return res, nil
@@ -500,7 +501,7 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (Result, error)
 	log.InfoContext(ctx, "turn_max_iterations_exhausted", "turn_id", in.TurnID, "max", maxRounds)
 	res.Decision = phase.Failed
 	res.Breach = &Breach{
-		Kind: BreachMaxIterations,
+		Kind: types.GuardMaxIter,
 		Detail: fmt.Sprintf("executor/review loop exhausted at %d rounds without done",
 			maxRounds),
 	}

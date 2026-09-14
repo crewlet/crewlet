@@ -105,14 +105,14 @@ func TestAGuardBreachIsItsOwnEventNotJustAFieldOnTheSummary(t *testing.T) {
 
 	e.publishFailure(context.Background(), tel, "t-1", turn.Result{
 		Decision: phase.Failed,
-		Breach:   &turn.Breach{Kind: turn.BreachStall, Detail: "two rounds, one artifact"},
+		Breach:   &turn.Breach{Kind: types.GuardStall, Detail: "two rounds, one artifact"},
 	}, nil)
 
 	got := only[*types.TurnGuardBreach](t, p, "turn.guard_breach")
 	// THE KIND IS THE WHOLE VALUE. "stall" and "max_iter" send an operator
 	// to different places; a bare "failed" sends them to neither.
-	if got.Kind != types.GuardKind(turn.BreachStall) {
-		t.Errorf("kind = %q, want %q", got.Kind, turn.BreachStall)
+	if got.Kind != types.GuardStall {
+		t.Errorf("kind = %q, want %q", got.Kind, types.GuardStall)
 	}
 	if got.TurnID != "t-1" {
 		t.Errorf("turn_id = %q, want t-1 — without it the Turn screen cannot "+
@@ -234,20 +234,20 @@ func TestClosingAFailedTurnPublishesTheSummaryAndTheCause(t *testing.T) {
 
 	e.publishTurnCompleted(context.Background(), tel, "t-6", runner.Spend{}, turn.Result{
 		Decision: phase.Failed,
-		Breach:   &turn.Breach{Kind: turn.BreachMaxIterations, Detail: "6 rounds, no done"},
+		Breach:   &turn.Breach{Kind: types.GuardMaxIter, Detail: "6 rounds, no done"},
 	}, nil)
 
 	// All FOUR: the dashboard's summary, the learning record, and the guard
 	// that named the stop. Dropping any one of them takes a whole surface
 	// with it — the seat's live row, the episode, or the afk state.
 	summary := only[*types.AgentTurnCompleted](t, p, "agent_turn_completed")
-	if !summary.Failed || summary.ErrorKind != string(turn.BreachMaxIterations) {
+	if !summary.Failed || summary.ErrorKind != string(types.GuardMaxIter) {
 		t.Errorf("summary = failed:%v kind:%q, want failed with the guard's kind",
 			summary.Failed, summary.ErrorKind)
 	}
 	_ = only[*types.TurnCompleted](t, p, "turn_completed")
 	breach := only[*types.TurnGuardBreach](t, p, "turn.guard_breach")
-	if breach.Kind != types.GuardKind(turn.BreachMaxIterations) {
+	if breach.Kind != types.GuardMaxIter {
 		t.Errorf("breach kind = %q", breach.Kind)
 	}
 	if breach.TurnID != "t-6" {
