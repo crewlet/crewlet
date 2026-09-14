@@ -258,7 +258,17 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	if !ok {
 		t.Fatal("no built-in kimi-code profile")
 	}
-	out, _ := exec.Command(binary, "--version").Output()
+	// THE SAME FILTERED ENVIRONMENT AND DIRECTORY as the invocation below.
+	// A bare exec.Command leaves cmd.Env nil, which hands the child this
+	// process's WHOLE environment — so the step that decides whether the
+	// binary on PATH is even the right program would give an unidentified
+	// executable every key the environment carries, before any identity check
+	// has run. Same repair as the grok case.
+	probeDir := t.TempDir()
+	probe := exec.CommandContext(t.Context(), binary, "--version")
+	probe.Dir = probeDir
+	probe.Env = vendorCLIEnv(probeDir, nil)
+	out, _ := probe.Output()
 	version := strings.TrimSpace(string(out))
 	if strings.HasPrefix(version, "1.") {
 		// The unscoped `kimi-code` package on npm is a Claude Code

@@ -59,6 +59,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -214,6 +215,14 @@ func main() {
 
 	r := read(in, os.Stdout)
 	scanErr := in.Err()
+	// DRAINED BEFORE WAITING, always. If the scan stopped early — a line past
+	// the buffer cap is the reachable case, since a t.Log can carry one — the
+	// producer is left writing into a pipe nobody reads, blocks on it, and
+	// cmd.Wait() below never returns. A gate that HANGS is worse than either
+	// answer it could have given, and it would look like a slow test run
+	// rather than a broken one. Whatever is left goes nowhere; the scan error
+	// is still what decides.
+	_, _ = io.Copy(io.Discard, stream)
 	// Waited for BEFORE anything is decided, so the producer's own verdict is
 	// in hand rather than inferred from what it managed to say.
 	producer := cmd.Wait()

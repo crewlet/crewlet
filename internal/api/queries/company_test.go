@@ -931,9 +931,17 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 	if len(rows) == 0 {
 		t.Fatal("the answer carried no integrations, so this proves nothing")
 	}
-	// Across every row, not just the first: `url` and `seats` are
-	// per-integration detail, so a field carried by ANY row is a field the
-	// answer knows how to send.
+	// TWO READINGS, because the two halves of the contract are different.
+	//
+	// A REQUIRED field is required of EVERY row — the TypeScript interface
+	// describes each element, not the set — so it is checked per entry. The
+	// union was wrong for this: one integration carrying `endpoint` made the
+	// gate accept another that omitted it, which is precisely the card
+	// rendering undefined that this exists to catch.
+	//
+	// An OPTIONAL field is the other way round: `url` and `seats` are
+	// per-integration detail, so a field carried by ANY row is one the answer
+	// knows how to send, and only a field NO row carries is worth reporting.
 	sent := map[string]bool{}
 	for _, r := range rows {
 		entry, _ := r.(map[string]any)
@@ -944,11 +952,19 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 
 	// Every field the client declares on a row, and on the answer around it.
 	for field, required := range declaredFields(t, string(source), "IntegrationRow") {
+		if required {
+			for _, r := range rows {
+				entry, _ := r.(map[string]any)
+				if _, ok := entry[field]; !ok {
+					t.Errorf("IntegrationRow declares %s as REQUIRED and the row "+
+						"for %v does not send it — that field renders as undefined "+
+						"on that card", field, entry["key"])
+				}
+			}
+			continue
+		}
 		switch {
 		case sent[field]:
-		case required:
-			t.Errorf("IntegrationRow declares %s as REQUIRED and the answer "+
-				"never sends it — that field renders as undefined on every card", field)
 		default:
 			// An optional field no row carries is within the type's contract,
 			// so it is not a failure — but it is either dead client code or a

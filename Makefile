@@ -250,13 +250,29 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard is not what dash
 # faster. CI keeps them in separate jobs and so is unaffected; this is what
 # gives the local gate the same isolation.
 #
-# Measured here, by doing it accidentally: `make test-solo` with a
-# `make test-cross` running beside it failed internal/e2e's
+# THE TWO TEST HALVES RUN IN THE RECIPE, one after the other, and everything
+# else stays a prerequisite. As prerequisites they were independent, so
+# `make -j check` was free to start both race suites at once — putting the
+# multi-member cluster packages back on the machine beside the whole parallel
+# partition, which is exactly the contention the split exists to remove, on
+# the invocation a contributor reaches for to go faster.
+#
+# A bare `.NOTPARALLEL:` fixes it and costs too much: it is GLOBAL, so every
+# other parallel invocation of this file loses its concurrency to settle a
+# collision between two targets. Prerequisites on .NOTPARALLEL would scope it,
+# but that is GNU Make 4.4 and this repository pins no version (4.3 here).
+# Two lines in the recipe are portable, and they say the thing plainly.
+#
+# It also fails faster: formatting, vet, lint and the build are all ahead of a
+# six-minute test run rather than beside it.
+#
+# Measured, by doing it accidentally: `make test-solo` with a `make
+# test-cross` running beside it failed internal/e2e's
 # TestEveryNodeMintsIntoOneKeySpace with `ensure stream
 # CREWLET_NOTIFICATIONS: context deadline exceeded`, and passed alone.
-.NOTPARALLEL:
-
-check: fmt-check tidy-check signoff-check signoff-test vet lint build test test-solo test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+	@$(MAKE) test
+	@$(MAKE) test-solo
 	@echo
 	@echo "All local gates passed. One thing this did NOT cover, because it"
 	@echo "needs a service CI starts for itself:"

@@ -235,6 +235,36 @@ func TestTheSuiteCatchesADomainThatMisdeclaresItself(t *testing.T) {
 		})
 	}
 
+	// AND A CANDIDATE THAT PUBLISHES NOTHING, which is the one shape the
+	// suite cannot certify at all.
+	//
+	// Kinds is what these cases publish records OF, so a candidate declaring
+	// none leaves the apply path — the rolling-upgrade envelope contract, the
+	// op-id round trip, the gated reprocess — with nothing to exercise. It was
+	// three t.Skips, which reported a pass over a domain nothing had touched;
+	// they are fatal now, and this is what pins that. Without it the guard
+	// could be reverted to a skip and every case here would still be green,
+	// because every other candidate in this file declares a kind.
+	t.Run("a candidate that declares no kinds", func(t *testing.T) {
+		t.Parallel()
+		c := control()
+		c.Kinds = nil
+		errs := statelogtest.Declaration(c)
+		if len(errs) == 0 {
+			t.Fatal("the suite passed a candidate that publishes no kind, so its " +
+				"arbitrated kind is an anchor nothing ever writes")
+		}
+		var found bool
+		for _, err := range errs {
+			if strings.Contains(err.Error(), "publishes no record of that kind") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the suite objected, but to something else: %v", errs)
+		}
+	})
+
 	// AND AN APPLIER THAT IS NOT IDEMPOTENT AT A POSITION. This one needs
 	// a store, so its verdict comes back from the apply case rather than
 	// from the declaration.
