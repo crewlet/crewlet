@@ -1,11 +1,9 @@
 package cliagent
 
 import (
-	"maps"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 )
@@ -50,7 +48,7 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	probeDir := t.TempDir()
 	probe := exec.CommandContext(t.Context(), binary, "--version")
 	probe.Dir = probeDir
-	probe.Env = vendorCLIEnv(probeDir, nil)
+	probe.Env = vendorCLIEnv(p, probeDir, nil)
 	out, err := probe.Output()
 	version := strings.TrimSpace(string(out))
 	// THE BUILD ID IS THE PROVENANCE, not the major number and not a bare
@@ -86,43 +84,51 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	dir := t.TempDir()
 	cmd := exec.Command(binary, args...) //nolint:gosec // args come from the shipped profile
 	cmd.Dir = dir
-	cmd.Env = vendorCLIEnv(dir, nil)
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
 	assertArgvReachedAuth(t, args, string(combined))
 }
 
 // vendorCLIEnv is the environment a real-CLI case runs a vendor binary in.
 //
-// THE PRODUCTION ALLOWLIST, not os.Environ(). This case built its child
-// environment as `append(os.Environ(), "HOME="+t.TempDir())`, which is wrong
-// twice. It does not resemble what the engine actually hands a CLI — buildEnv
-// composes hostAllowlist plus the isolation, and an argv test running under a
-// different environment than production is testing a different call. And a
-// fresh HOME isolates a credential FILE while doing nothing about an exported
-// one, so on any machine with a vendor key in the environment this case
-// signed in and `say hello` became a real, billed completion — on a test whose
-// own comment promises it asserts "on ARGUMENT PARSING alone".
+// IT IS buildEnv — production's own, with a Checkout rooted at the case's
+// temporary directory and a ZERO Auth. Not an approximation of it, and that is
+// the whole point: an argv test running under a different environment than
+// production is testing a different call, so the only environment that cannot
+// drift from the real one is the real one.
+//
+// This started as `append(os.Environ(), "HOME="+t.TempDir())`, which was wrong
+// twice — it resembled nothing the engine hands a CLI, and a fresh HOME
+// isolates a credential FILE while doing nothing about an exported one, so on
+// any machine with a vendor key in the environment the case signed in and
+// `say hello` became a real, billed completion. Re-composing hostAllowlist and
+// HOME by hand fixed that and left the SAME shape of bug one layer in: each
+// case then named the one or two profile variables it remembered, so a profile
+// declaring a third had a test running a call the engine never makes. kimi-code
+// declares KIMI_CODE_NO_AUTO_UPDATE, KIMI_CODE_BACKGROUND_PRINT_BACKGROUND_MODE
+// and KIMI_LOOP_MAX_ATTEMPTS_PER_STEP; the case carried none of them, so it
+// could trigger the vendor's updater mid-run and wait out its default retry
+// policy in full. Deriving the whole environment is what ends that class.
+//
+// A ZERO Auth is what keeps the promise the cases make. buildEnv's default
+// branch sets no token (auth.Token is empty) and DELETES p.APIKeyEnv outright,
+// so the child reaches authentication and stops — which is exactly what
+// assertArgvReachedAuth reads as proof, and it is why these cases can be run on
+// a machine that is signed in to the vendor.
 //
 // Callers also set cmd.Dir to that same fresh directory. A vendor CLI reads
 // AGENTS.md / CLAUDE.md from its working directory, and this repository has
 // both — so a probe left in the checkout is answering with whatever the tree
 // happens to contain rather than about the shipped profile.
-func vendorCLIEnv(home string, extra map[string]string) []string {
-	env := map[string]string{}
-	for _, name := range hostAllowlist {
-		if value, ok := os.LookupEnv(name); ok {
-			env[name] = value
-		}
+func vendorCLIEnv(p Profile, home string, extra map[string]string) []string {
+	// Cache beside the home rather than in it, as Workspace.Acquire lays it
+	// out; Work is unread by buildEnv and set for the same reason.
+	c := &Checkout{
+		Home:  home,
+		Cache: filepath.Join(home, "cache"),
+		Work:  home,
 	}
-	env["HOME"] = home
-	maps.Copy(env, extra)
-
-	out := make([]string, 0, len(env))
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	slices.Sort(out)
-	return out
+	return buildEnv(p, c, extra, Auth{})
 }
 
 // assertArgvReachedAuth fails unless a vendor CLI got past argument parsing.

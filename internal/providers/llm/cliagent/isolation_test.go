@@ -154,7 +154,9 @@ func TestThePiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = vendorCLIEnv(dir, map[string]string{"PI_CODING_AGENT_DIR": dir + "/.pi/agent", "PI_OFFLINE": "1"})
+	// PI_CODING_AGENT_DIR and PI_OFFLINE are both the profile's own; see
+	// vendorCLIEnv.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
 	assertArgvReachedAuth(t, args, string(combined))
 }

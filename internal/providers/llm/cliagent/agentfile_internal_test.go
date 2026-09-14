@@ -267,7 +267,7 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	probeDir := t.TempDir()
 	probe := exec.CommandContext(t.Context(), binary, "--version")
 	probe.Dir = probeDir
-	probe.Env = vendorCLIEnv(probeDir, nil)
+	probe.Env = vendorCLIEnv(p, probeDir, nil)
 	out, _ := probe.Output()
 	version := strings.TrimSpace(string(out))
 	if strings.HasPrefix(version, "1.") {
@@ -299,7 +299,10 @@ func TestTheKimiProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = vendorCLIEnv(dir, map[string]string{"KIMI_CODE_HOME": filepath.Join(dir, ".kimi-code")})
+	// No KIMI_CODE_HOME here: the profile declares it in config_env and
+	// vendorCLIEnv derives it, which is the point of deriving rather than
+	// re-stating what profiles.yaml already says.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
 	assertArgvReachedAuth(t, args, string(combined))
 }

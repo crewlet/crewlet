@@ -310,7 +310,8 @@ func TestTheHermesProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = dir
-	cmd.Env = vendorCLIEnv(dir, map[string]string{"HERMES_HOME": dir + "/.hermes"})
+	// HERMES_HOME is the profile's config_env; see vendorCLIEnv.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
 	assertArgvReachedAuth(t, args, string(combined))
 }

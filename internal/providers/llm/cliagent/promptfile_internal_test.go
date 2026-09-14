@@ -161,10 +161,11 @@ func TestTheMuseProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 
 	cmd := exec.Command(binary, args...) //nolint:gosec // args come from the shipped profile
 	cmd.Dir = dir
-	// The production allowlist, minus anything that would sign this in: the
-	// point is to reach authentication, not to spend a plan. MUSE_NO_AUTO_UPDATE
-	// is the launcher's, and is asserted on its own below.
-	cmd.Env = vendorCLIEnv(dir, map[string]string{"MUSE_NO_AUTO_UPDATE": "1"})
+	// Production's own environment, minus anything that would sign this in:
+	// the point is to reach authentication, not to spend a plan.
+	// MUSE_NO_AUTO_UPDATE is the profile's, so vendorCLIEnv carries it here;
+	// that it is DECLARED is asserted on its own below.
+	cmd.Env = vendorCLIEnv(p, dir, nil)
 	combined, _ := cmd.CombinedOutput()
 
 	// REACHING AUTHENTICATION IS THE PROOF. This was a list of five strings
