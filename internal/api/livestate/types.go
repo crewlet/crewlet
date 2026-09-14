@@ -147,9 +147,6 @@ type Overlay struct {
 	RuntimeID        string    `json:"runtime_id"`
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
-	InputTokens      int       `json:"input_tokens"`
-	OutputTokens     int       `json:"output_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
 	LiveCall         *LiveCall `json:"live_call"`
 
 	// LastError is nil once the seat does real work again. It says WHY a

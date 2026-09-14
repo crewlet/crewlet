@@ -25,7 +25,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { MeterCell, TextCell, TokenCell } from "~/app/frame/cells.tsx";
 import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
-import { Callout, Card, EmptyValue, Skeleton } from "@crewlethq/ui";
+import { Callout, Card, Skeleton } from "@crewlethq/ui";
 import { DatabaseGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtExact } from "~/lib/format.ts";
@@ -141,29 +141,6 @@ export function Budgets() {
                   cell: (s) => <TokenCell value={s.durable_used} />,
                 },
                 {
-                  key: "live",
-                  header: "This process",
-                  align: "right",
-                  // NULL IS NOT ZERO, and the two are the whole point of
-                  // this column: the answer sends null for a seat this
-                  // node holds no live meter for — a seat it has never
-                  // run — and `fmtExact` drew a confident 0 for it, one
-                  // column away from a durable total that says otherwise.
-                  // Sorted to -1 so the unmetered seats group together at
-                  // one end rather than among the genuine zeroes.
-                  sortValue: (s) => s.live_used ?? -1,
-                  // THE DASH IS SPELT OUT rather than left to the cell's own: a
-                  // token cell handed null says "nothing recorded", and what is
-                  // true here is the narrower fact that this NODE holds no meter
-                  // — the fleet's own total is one column to the left.
-                  cell: (s) =>
-                    s.live_used === null || s.live_used === undefined ? (
-                      <EmptyValue label="This node holds no live meter for this seat" />
-                    ) : (
-                      <TokenCell value={s.live_used} />
-                    ),
-                },
-                {
                   key: "max",
                   header: "Budget",
                   align: "right",
@@ -189,15 +166,24 @@ export function Budgets() {
                   // that is right here — there is nothing to measure an
                   // unlimited seat against, which is a different absence from a
                   // budget nobody recorded.
+                  // A REFUSING SEAT OUTRANKS THE RATIO. A refused charge
+                  // increments nothing, so the counter stops short of the cap by
+                  // the size of the round that would not fit: the seat that is
+                  // being turned away right now draws the calmest bar on the
+                  // table unless the stamp, not the fraction, decides the tone.
                   cell: (s) => (
                     <MeterCell
                       used={s.durable_used}
                       max={s.max_tokens}
-                      tone={headroomTone(s.durable_used, s.max_tokens)}
+                      tone={s.refused_at ? "critical" : headroomTone(s.durable_used, s.max_tokens)}
                       // The column heading names it for a sighted reader; a
                       // screen reader lands on the bar alone, so it carries the
                       // seat and the reading it is drawing.
-                      label={`${s.role}: ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`}
+                      label={
+                        s.refused_at
+                          ? `${s.role}: refusing charges since ${s.refused_at}, ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
+                          : `${s.role}: ${fmtExact(s.durable_used)} of ${fmtExact(s.max_tokens)} tokens spent`
+                      }
                     />
                   ),
                 },

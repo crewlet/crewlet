@@ -3,8 +3,10 @@
 //
 // It consumes the engine event stream — the same feed the WebSocket fan-out
 // reads — and maintains, per agent role: the seat's live state, its current
-// task, phase and iteration, cumulative token totals, and the IN-FLIGHT LLM
-// call. It solves two problems, and both are worth stating because they are why
+// task, phase and iteration, its live token meter, and the IN-FLIGHT LLM call.
+// What a seat has SPENT is not held per seat: it is the per-agent row of the
+// spend rollup, folded from the same records by internal/tokens, so a seat
+// card and the Spend screen cannot disagree about one seat. It solves two problems, and both are worth stating because they are why
 // this exists at all rather than the dashboard querying the store.
 //
 // REFRESH SURVIVAL. agent_turn_progress events are stream-only — the event
@@ -55,9 +57,9 @@ const (
 	// rows could never be delivered at all.
 	EventFeedLimit = 400
 
-	// dedupeLimit caps the id sets that stop a hydrated turn being counted
-	// again when the same turn also arrives on the live stream. The window
-	// they need to cover is the hydration overlap plus any redelivery —
+	// dedupeLimit caps the id sets that stop a seeded phase being counted
+	// again when the same phase also arrives on the live stream. The window
+	// they need to cover is the seeding overlap plus any redelivery:
 	// minutes, not the process lifetime.
 	dedupeLimit = 8000
 
@@ -148,10 +150,6 @@ type agentLive struct {
 	currentPhase     string
 	currentIteration int
 
-	inputTokens  int
-	outputTokens int
-	totalTokens  int
-
 	afkReason string
 	lastError *ErrorInfo
 	liveCall  *LiveCall
@@ -168,9 +166,6 @@ func (a *agentLive) overlay() Overlay {
 		RuntimeID:        a.runtimeID,
 		CurrentPhase:     optional(a.currentPhase),
 		CurrentIteration: a.currentIteration,
-		InputTokens:      a.inputTokens,
-		OutputTokens:     a.outputTokens,
-		TotalTokens:      a.totalTokens,
 		LiveCall:         a.liveCall.clone(),
 		LastError:        a.lastError.clone(),
 		Budget:           a.budget.clone(),
@@ -200,9 +195,8 @@ type LiveState struct {
 	feed      []FeedRow
 	feedLimit int
 
-	// countedTurns and countedPhases are the id sets that stop a hydrated
-	// turn being counted twice against a streamed one.
-	countedTurns  *boundedSet[struct{}]
+	// countedPhases is the id set that stops a seeded phase being counted
+	// twice against a streamed one.
 	countedPhases *boundedSet[struct{}]
 
 	// finishedCalls maps a phase invocation to the instant its completion
@@ -244,7 +238,6 @@ func New(opts ...Option) *LiveState {
 		agents:        map[string]*agentLive{},
 		sandboxes:     map[string]*SandboxEntry{},
 		feedLimit:     EventFeedLimit,
-		countedTurns:  newBoundedSet[struct{}](dedupeLimit),
 		countedPhases: newBoundedSet[struct{}](dedupeLimit),
 		finishedCalls: newBoundedSet[stamp](dedupeLimit),
 	}
@@ -498,10 +491,6 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		agent.runtimeID = id
 	}
 
-	if env.Type == "agent_turn_completed" {
-		s.addTurnTokens(agent, *env, payload)
-		change.agentMoved(role)
-	}
 	if s.applyState(agent, *env, payload) {
 		change.agentMoved(role)
 	}
@@ -689,18 +678,6 @@ func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
 		// rows with the old array.
 		s.feed = s.feed[len(s.feed)-s.feedLimit:]
 	}
-}
-
-func (s *LiveState) addTurnTokens(agent *agentLive, env Envelope, payload map[string]any) {
-	if env.ID != "" {
-		if s.countedTurns.has(env.ID) {
-			return
-		}
-		s.countedTurns.put(env.ID, struct{}{})
-	}
-	agent.inputTokens += num(payload, "input_tokens")
-	agent.outputTokens += num(payload, "output_tokens")
-	agent.totalTokens += num(payload, "total_tokens")
 }
 
 // callKey is the identity of one phase invocation, shared by both its events.

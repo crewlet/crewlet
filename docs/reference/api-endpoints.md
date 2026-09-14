@@ -1361,7 +1361,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
 ```json
 {
   "health":    { /* the health envelope — see below */ },
-  "agents":    [ { /* /agents row: live state + tokens + live_call (the
+  "agents":    [ { /* /agents row: live state + budget meter + live_call (the
                       in-flight LLM call, or null between turns) +
                       last_error (the phase failure that stopped this
                       seat, or null) */ }, ... ],
@@ -2456,25 +2456,24 @@ its reason in the log.
 
 ### `GET /budgets`
 
-Backs the dashboard's **Spend & budgets** screen. Three numbers describe a token
-budget and they cover three different spans, which is why any surface
-mixing them can only be wrong:
+Backs the dashboard's **Spend & budgets** screen. A token budget is described by
+two numbers that share a span, and one stamp:
 
 - the **cap** is configuration, from the active company revision;
 - **durable usage** is the fleet's shared counter, in the
   [coordination store](../concepts/coordination.md), written by every node
-  running the company and surviving restarts. It is what the engine
-  actually enforces against;
-- the **live figure** is this process's own view: the projection's per-seat
-  token totals, folded from the phase events it has seen since it started, so
-  it resets when the process does.
+  running the company and surviving restarts, until an operator resets it. It
+  is what the engine actually enforces against, and it is the same counter the
+  [live token meter](#the-live-token-meter) pushes;
+- **`refused_at`** is when that scope last turned a charge away, kept in the
+  same counter and cleared by the scope's next admitted charge.
 
-Only a live figure and the cap could share a span, which is why this screen
-draws the durable counter against the cap rather than a bar from the live
-figure. What it could never show before is the
-more useful picture — "this seat has burned 94% of its cap across two
-restarts" — because the durable half was reachable only from
-`crewlet budgets show`, which is itself a client of this route.
+What a seat *spent over a window* is not here: that is the per-agent row of the
+[spend breakdown](#get-tokensbreakdown), a different span that must not be
+divided into a cap. The cap and the durable counter are the pair that can be,
+which is how this screen can say "this seat has burned 94% of its cap across two
+restarts". That was reachable only from `crewlet budgets show` before, which is
+itself a client of this route.
 
 ```json
 {
@@ -2482,37 +2481,32 @@ restarts" — because the durable half was reachable only from
   "org": {
     "max_tokens": 5000000, "durable_used": 1284410,
     "durable_updated_at": "2026-06-08T07:30:02Z",
-    "live_used": 91200
+    "refused_at": ""
   },
   "seats": [
     {
       "agent_id": "<uuid>", "role": "Engineer", "handle": "eng",
       "max_tokens": 100000, "durable_used": 99120,
       "durable_updated_at": "2026-06-08T07:29:51Z",
-      "live_used": 41000
+      "refused_at": "2026-06-08T07:29:51Z"
     }
   ]
 }
 ```
 
-Two fields carry the honesty. `durable` is `false` when the shared counter
-could not be read — a counter that cannot be read is not a counter that
-reads zero, and without the flag a database blip renders every seat at the
-bottom of its cap, which is the most reassuring possible picture drawn at
-the moment nothing is known. `live_used` is `null`, never `0`, when this
-process's projection has no figure for the seat (or, for `org`, for any
-seat): zero would let a client draw an empty bar and call it "nothing spent
-this run", a claim about a run this process has not seen. Human seats have
-no row, because they spend nothing.
+`durable` carries the honesty. It is `false` when the shared counter could not
+be read: a counter that cannot be read is not a counter that reads zero, and
+without the flag a coordination blip renders every seat at the bottom of its
+cap, which is the most reassuring possible picture drawn at the moment nothing
+is known.
 
-This answer does not say whether a cap is exhausted, and `durable_used >=
-max_tokens` is the wrong test for it. The counter (`coord.Budgets.Charge`)
-refuses a charge that would exceed the cap and increments nothing, so a seat
-charged in 3k-token rounds against a 100k cap stalls near 99k and never
-compares equal to its own maximum; a ratio test shows a permanently blocked
-seat at 99% and calls it healthy. A refused charge is recorded as a
-`budget_exhausted` event, which is what the seat's `afk` state and the
-activity feed show.
+Exhaustion is `refused_at`, the moment a charge was turned away, never
+`durable_used >= max_tokens`. The gate refuses a charge that would exceed the
+cap and increments nothing, so a seat charged in 3k-token rounds against a 100k
+cap stalls near 99k and never compares equal to its own maximum. A ratio test
+shows a permanently blocked seat at 99% and calls it healthy. A scope known
+only for a refusal (refused on its very first charge) is listed with no spend
+and an empty `durable_updated_at`.
 
 ### `POST /budgets/reset`
 
