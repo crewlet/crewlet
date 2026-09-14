@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -242,5 +244,34 @@ func TestAMemberIsReadByTheDocumentsRules(t *testing.T) {
 	}
 	if seat.Name != "CTO" || seat.Handle != "cto" || len(seat.Manages) != 1 {
 		t.Errorf("decoded %+v", seat)
+	}
+}
+
+// A DOCUMENT TAKEN APART BEFORE IT IS READ STILL NAMES ITS OWN LINES.
+//
+// The write surface lifts a key out of a body before the company in it is
+// read. Encoding what was left to hand it to the text reader renumbered every
+// line; the node readers take the parsed document, whose nodes keep the lines
+// they were parsed from.
+func TestAParsedDocumentKeepsTheLinesItWasParsedFrom(t *testing.T) {
+	t.Parallel()
+	const text = "_lifted: first\n\n# a comment\nname: Acme\nnonsense: true\n"
+	lifted := func(t *testing.T) *yaml.Node {
+		t.Helper()
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+			t.Fatal(err)
+		}
+		root := doc.Content[0]
+		root.Content = root.Content[2:]
+		return &doc
+	}
+	var f *config.Fault
+	if _, err := config.ParseCompanyNode(lifted(t)); !errors.As(err, &f) || f.Line != 5 {
+		t.Errorf("ParseCompanyNode = %v, want the unknown key on line 5, where it was written", err)
+	}
+	var seat config.Role
+	if err := config.ParseMemberNode(lifted(t), &seat); !errors.As(err, &f) || f.Line != 5 {
+		t.Errorf("ParseMemberNode = %v, want the key a seat does not have on line 5", err)
 	}
 }

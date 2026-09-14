@@ -181,15 +181,30 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, syntaxFault(err)
 	}
-	if empty(&doc) {
+	return ParseCompanyNode(&doc)
+}
+
+// ParseCompanyNode is [ParseCompanyDocument] over a document already parsed,
+// for a caller that has taken the document apart before handing it on: the
+// write surface lifts a `_summary` key out of a body before the company in it
+// is read.
+//
+// THE NODES KEEP THE LINES THEY WERE PARSED FROM, and every failure is placed
+// at its node, so a failure names the line it has in the text the caller sent.
+// Encoding the edited document again to hand it to [ParseCompanyDocument]
+// renumbered every line: in a YAML body opening with its summary, a typo
+// twenty lines down was reported a line or two above where it was written.
+// doc is only read.
+func ParseCompanyNode(doc *yaml.Node) (*Company, error) {
+	if empty(doc) {
 		return nil, fault(nil, ErrMissing, "the company config is empty; it needs at least a name")
 	}
-	if err := requireMapping(&doc); err != nil {
+	if err := requireMapping(doc); err != nil {
 		return nil, err
 	}
 
 	cfg := DefaultCompany()
-	if err := decodeDocument(&doc, &cfg); err != nil {
+	if err := decodeDocument(doc, &cfg); err != nil {
 		return nil, err
 	}
 	// The declaration order of providers.llm exists only in the document —
@@ -206,7 +221,7 @@ func ParseCompanyDocument(data []byte) (*Company, error) {
 	// every provider chain the moment somebody read a config and sent it
 	// back.
 	if len(cfg.Providers.LLMOrder) == 0 {
-		cfg.Providers.LLMOrder = llmKeyOrder(&doc)
+		cfg.Providers.LLMOrder = llmKeyOrder(doc)
 	}
 	return &cfg, nil
 }
@@ -230,16 +245,26 @@ func ParseMember(data []byte, out any) error {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return syntaxFault(err)
 	}
-	if empty(&doc) {
+	return ParseMemberNode(&doc, out)
+}
+
+// ParseMemberNode is [ParseMember] over a document already parsed, for the
+// reason [ParseCompanyNode] gives: the failures keep the lines of the text the
+// caller sent. doc is only read.
+func ParseMemberNode(doc *yaml.Node, out any) error {
+	if empty(doc) {
 		return fault(nil, ErrMissing, "the body is empty; send the whole entity, "+
 			"as reading it from the same route answers it")
 	}
-	root := doc.Content[0]
+	root := doc
+	if root.Kind == yaml.DocumentNode {
+		root = root.Content[0]
+	}
 	if root.Kind != yaml.MappingNode {
 		return fault(nil, ErrShape, "an entity is a mapping of its fields, as "+
 			"reading it from the same route answers it, not a list or a value")
 	}
-	return decodeDocument(&doc, out)
+	return decodeDocument(doc, out)
 }
 
 // DecodeCompany reads Tier B from its STORED form.
