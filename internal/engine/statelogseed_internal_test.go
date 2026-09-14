@@ -64,6 +64,14 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	name := tracker.Domain{}.Name()
 	stream := tracker.Domain{}.Stream().Name
 
+	// THIS NODE'S OWN TRIM STOPS FIRST. It ticks the moment the state log
+	// is up and publishes this node's floor at generation 0, and a tick
+	// landing after the floor below overwrote it: the node then read a
+	// fleet at its own generation and was right to replay, which failed
+	// this case about one run in ten under load for a reason it does not
+	// test.
+	e.stopRetention()
+
 	// THE FLEET HAS RE-ANCHORED: an operator moved it to generation 3, and
 	// the trim has published a floor there.
 	if err := back.Fleet.PutFloor(t.Context(), coord.TrimFloor{

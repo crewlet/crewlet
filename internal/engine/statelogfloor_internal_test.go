@@ -88,6 +88,13 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 	// in-flight tick — so the floor under test is the only one there is.
 	e.stopRetention()
 
+	// THIS NODE'S OWN TRIM STOPS FIRST. It ticks the moment the state log
+	// is up and publishes the floor it computes, and a tick landing after
+	// the floor below overwrote it with this node's own: the case then read
+	// a floor of 0 and a node that was not below it, for a reason it does
+	// not test.
+	e.stopRetention()
+
 	// THE TRIM CONCLUDES the fleet may remove everything below a point this
 	// node has not reached — which is what happens to a node that was away
 	// while its peers moved on and were counted without it.
