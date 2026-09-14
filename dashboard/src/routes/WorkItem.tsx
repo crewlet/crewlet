@@ -258,6 +258,46 @@ export function ItemPanel({
 // The three shared pieces
 // ---------------------------------------------------------------------------
 
+/**
+ * The children of a task, and the one rule this panel exists to keep.
+ *
+ * A FAILED SUBTREE READ IS NOT AN EMPTY ONE. This is the ONLY read that can
+ * see a task's children — the detail answer carries links and comments but
+ * never the tree below it — so nothing else on the screen contradicts it, and
+ * a refusal that renders as no panel says "this task has no subtasks" about a
+ * task that may have twenty. It is the same confusion the `scope` parameter
+ * produced before it was corrected: the read failed, every child came back
+ * absent, and the panel simply did not draw.
+ *
+ * So the error is drawn WHERE THE ROWS WOULD HAVE BEEN, and only a read that
+ * actually answered is allowed to conclude the task is a leaf.
+ */
+export function Subtasks({
+  rows,
+  error,
+  now,
+  chrome,
+}: {
+  rows: WorkSummary[];
+  error?: string | null;
+  now: number;
+  chrome: RowChrome;
+}) {
+  if (error) {
+    return (
+      <Panel title="Subtasks" padding="none">
+        <QueryState error={error} loading={false} />
+      </Panel>
+    );
+  }
+  if (rows.length === 0) return null;
+  return (
+    <Panel title="Subtasks" count={rows.length} padding="none">
+      <RowList rows={rows} now={now} chrome={chrome} hrefOf={(row) => href(["work", row.key])} />
+    </Panel>
+  );
+}
+
 /** The description, the subtasks, the checklists and the thread. */
 export function ItemBody({
   detail,
@@ -315,16 +355,7 @@ export function ItemBody({
         )}
       </Wrap>
 
-      {subtasks.length > 0 && (
-        <Panel title="Subtasks" count={subtasks.length} padding="none">
-          <RowList
-            rows={subtasks}
-            now={now}
-            chrome={chrome}
-            hrefOf={(row) => href(["work", row.key])}
-          />
-        </Panel>
-      )}
+      <Subtasks rows={subtasks} error={children.error} now={now} chrome={chrome} />
 
       {(item.checklists ?? []).map((list) => (
         <Panel key={list.id} title={list.name} icon="check" count={list.items?.length ?? 0}>

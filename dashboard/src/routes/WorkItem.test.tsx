@@ -9,10 +9,12 @@
 
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { ItemLinks, ItemProps, linkHeading } from "./WorkItem.tsx";
+import { ItemLinks, ItemProps, Subtasks, linkHeading } from "./WorkItem.tsx";
 import type { WorkItem, WorkItemDetail, WorkProjectDetail } from "~/protocol/index.ts";
 
 afterEach(cleanup);
+
+const NOW = Date.parse("2031-04-16T12:00:00Z");
 
 const task = (over: Partial<WorkItem> = {}): WorkItem => ({
   id: "t-1",
@@ -234,4 +236,50 @@ test("a linked page points at the page rather than at a task", () => {
 test("a task with no links draws no panel at all", () => {
   const { container } = render(<ItemLinks detail={detail()} chrome={{}} />);
   expect(container.textContent).toBe("");
+});
+
+// A FAILED SUBTREE READ IS NOT AN EMPTY ONE.
+//
+// The subtasks read is the only thing on this screen that can see a task's
+// children, so nothing contradicts it: a refusal that draws no panel states
+// that the task is a leaf. The panel took the rows and never the error, so
+// every failure rendered as the fact that a task has no subtasks.
+test("a refused subtree read says so rather than looking like a leaf", () => {
+  render(<Subtasks rows={[]} error="bad_params" now={NOW} chrome={{}} />);
+  expect(screen.getByText("Subtasks")).toBeTruthy();
+  expect(document.querySelector(".banner")).toBeTruthy();
+});
+
+// AND A READ THAT ANSWERED IS ALLOWED TO CONCLUDE IT. An empty answer is a
+// fact about the task, so the panel stays away and the screen does not carry
+// a heading over nothing.
+test("a task that answered with no children draws no panel", () => {
+  const { container } = render(<Subtasks rows={[]} error={null} now={NOW} chrome={{}} />);
+  expect(container.textContent).toBe("");
+});
+
+// AND AN ERROR OUTRANKS ROWS ALREADY ON SCREEN, so a failing poll is never
+// presented as the current shape of the tree.
+test("a refused poll says so even when children were listed before", () => {
+  render(
+    <Subtasks
+      rows={[
+        {
+          id: "t-2",
+          key: "ENG-43",
+          project: "ENG",
+          title: "A child",
+          type: "task",
+          status: "todo",
+          updated: "2031-04-16T09:00:00Z",
+          version: 1,
+        },
+      ]}
+      error="query_failed"
+      now={NOW}
+      chrome={{}}
+    />,
+  );
+  expect(document.querySelector(".banner")).toBeTruthy();
+  expect(screen.queryByText("A child")).toBeNull();
 });
