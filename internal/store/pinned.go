@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -41,8 +42,11 @@ import (
 // owner is one goroutine. Two goroutines sharing one would interleave
 // statements inside each other's transactions.
 type Writer struct {
-	db   *DB
-	conn *sql.Conn
+	db *DB
+	// conn is the pinned connection. REPLACED, not kept, when a
+	// transaction on it fails to end: see Tx.
+	conn   *sql.Conn
+	closed bool
 }
 
 // Writer pins a connection and returns a handle that owns it until Close.
@@ -79,14 +83,56 @@ func (d *DB) Writer(ctx context.Context) (*Writer, error) {
 // [DB.Tx]'s lock, retry and rollback semantics exactly, including that fn MAY
 // RUN MORE THAN ONCE, so anything with an effect outside the transaction
 // belongs after Tx returns rather than inside it.
+//
+// A CONNECTION THAT CANNOT BE TRUSTED IS REPLACED. When an attempt leaves its
+// transaction possibly open ([attempt] reports it unfit), the pinned
+// connection is retired and a fresh one pinned in its place, under the same
+// declared pin. Keeping it would refuse every later BEGIN on the one
+// connection this writer uses, which stopped a domain applying for good.
 func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	return retryTransient(ctx, func() error { return w.db.writeOn(ctx, w.conn, fn) })
+	return retryTransient(ctx, func() error {
+		conn, err := w.pinned(ctx)
+		if err != nil {
+			return err
+		}
+		fit, err := w.db.writeOn(ctx, conn, fn)
+		if !fit {
+			giveBack(conn, false)
+			w.conn = nil
+			// RE-PINNED NOW rather than at the next Tx, so [Writer.Conn]
+			// keeps answering a live connection, and drawn WITHOUT the
+			// caller's cancellation: a replacement is cleanup, and the
+			// failure that made it necessary is often the cancellation
+			// itself. If it cannot be had, the next Tx tries again and
+			// says why.
+			_, _ = w.pinned(context.WithoutCancel(ctx))
+		}
+		return err
+	})
 }
 
-// Conn exposes the pinned connection for statements that are not transactions
-// — a PRAGMA, a single read.
+// pinned is the writer's connection, drawn afresh if the last was retired.
+func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
+	if w.closed {
+		return nil, errors.New("store: this writer is closed")
+	}
+	if w.conn == nil {
+		conn, err := w.db.sql.Conn(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("store: re-pin a writer connection: %w", err)
+		}
+		w.conn = conn
+	}
+	return w.conn, nil
+}
+
+// Conn exposes the pinned connection for statements that are not
+// transactions: a PRAGMA, a single read.
 //
-// It is the SAME connection every Tx runs on. There is deliberately NO
+// It is the SAME connection every Tx runs on, until a transaction fails to end
+// and Tx replaces it: ask again after a failed Tx rather than holding the old
+// one. It is nil only when that replacement could not be had, which the next
+// Tx reports. There is deliberately NO
 // prepared-statement cache on it, and the reason is a measurement rather than
 // a preference: on this driver, executing an applier-shaped upsert 4 000 times
 // through a statement prepared once on this connection is not faster than
@@ -101,11 +147,15 @@ func (w *Writer) Conn() *sql.Conn { return w.conn }
 
 // Close releases the pinned connection back to the pool.
 func (w *Writer) Close() error {
-	if w == nil || w.conn == nil {
+	if w == nil || w.closed {
 		return nil
 	}
-	err := w.conn.Close()
-	w.conn = nil
+	w.closed = true
+	var err error
+	if w.conn != nil {
+		err = w.conn.Close()
+		w.conn = nil
+	}
 	w.db.pins.mu.Lock()
 	w.db.pins.held--
 	w.db.pins.mu.Unlock()
@@ -143,6 +193,12 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 		if d == nil || d.sql == nil {
 			return ErrNoEstate
 		}
-		return attempt(ctx, d.sql.BeginTx, nil, fn)
+		conn, err := d.sql.Conn(ctx)
+		if err != nil {
+			return fmt.Errorf("store: begin: %w", err)
+		}
+		fit, err := attempt(ctx, conn.BeginTx, nil, fn)
+		giveBack(conn, fit)
+		return err
 	})
 }

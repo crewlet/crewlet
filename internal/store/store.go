@@ -808,17 +808,19 @@ func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 		if err != nil {
 			return fmt.Errorf("store: begin: %w", err)
 		}
-		defer func() { _ = conn.Close() }()
-		return d.writeOn(ctx, conn, fn)
+		clean, err := d.writeOn(ctx, conn, fn)
+		giveBack(conn, clean)
+		return err
 	})
 }
 
 // writeOn is one write attempt on conn: its place in the queue, then an
 // IMMEDIATE begin, then fn. [DB.Tx] and [Writer.Tx] differ only in where conn
-// comes from, which is why both reach the lock through here.
-func (d *DB) writeOn(ctx context.Context, conn *sql.Conn, fn func(*sql.Tx) error) error {
+// comes from, which is why both reach the lock through here. It reports, as
+// [attempt] does, whether conn is still fit to be used again.
+func (d *DB) writeOn(ctx context.Context, conn *sql.Conn, fn func(*sql.Tx) error) (bool, error) {
 	if err := d.writes.acquire(ctx, d.busy); err != nil {
-		return err
+		return true, err
 	}
 	defer d.writes.release()
 	return attempt(ctx, conn.BeginTx, writeTx, fn)
@@ -913,24 +915,23 @@ func retryable(err error) (string, bool) {
 		return "the database's write lock was held past the busy timeout " +
 			"by a statement outside this process's queue; waiting again", true
 	case strings.Contains(msg, "transaction within a transaction"):
-		// A CONNECTION THE POOL HANDED BACK WITH A TRANSACTION STILL
-		// OPEN, which the driver reports on the next BEGIN over it.
+		// A CONNECTION WITH A TRANSACTION STILL OPEN ON IT, which the
+		// driver reports on the next BEGIN over it.
 		//
-		// It is retryable for a reason that is about the POOL rather
-		// than about the database: the next attempt draws a different
-		// connection, and a clean one begins normally. Without this a
-		// caller that happened to draw the dirty one fails permanently;
-		// the projector's boot reconcile did exactly that, restarting
-		// every two seconds against the same connection and never
-		// hydrating, with the failure visible only as a WARN nobody was
-		// watching.
+		// It is retryable because the attempt that met it RETIRED that
+		// connection (a BEGIN that failed leaves [attempt] reporting its
+		// connection unfit), so the next attempt draws a different one.
+		// That is what makes the retry work: database/sql hands out the
+		// connection it freed LAST, so a retry that merely returned the
+		// dirty connection drew it straight back, eight times, and the
+		// projector's boot reconcile failed every two seconds for the
+		// life of the process against the same one.
 		//
-		// It is NOT the whole fix. What leaves a connection dirty is a
-		// rollback that failed and was discarded, which [rollback] now
-		// reports instead. This clause is what keeps a caller working
-		// while that report reaches somebody.
-		return "the pooled connection this attempt drew still had a " +
-			"transaction open; drawing another", true
+		// This package no longer leaves such a connection behind (see
+		// [giveBack]), so what this clause meets is one somebody else's
+		// raw transaction on [DB.SQL] left open.
+		return "the connection this attempt drew still had a transaction " +
+			"open; it is retired, and the next attempt draws another", true
 	}
 	return "", false
 }
@@ -951,13 +952,22 @@ func sleepFor(ctx context.Context, d time.Duration) {
 // One body for every transaction this package runs, pooled or pinned, read or
 // write. Each used to carry its own copy of these twenty lines, and the copies
 // had already begun to differ in what their comments claimed.
+//
+// It reports whether the connection underneath is still FIT, which is false
+// whenever the transaction may still be open on it: a BEGIN the driver
+// refused (the usual reason is a transaction already open), a rollback that
+// failed, and a commit that failed (the driver keeps a transaction open when a
+// commit is refused, as SQLite does for a deferred constraint). Telling the
+// harmless cases of those apart would be another text match over driver
+// errors, and the cost of retiring a connection that was in fact clean is one
+// reconnect on a path that is already failing.
 func attempt(ctx context.Context,
 	begin func(context.Context, *sql.TxOptions) (*sql.Tx, error),
 	opts *sql.TxOptions, fn func(*sql.Tx) error,
-) error {
+) (fit bool, err error) {
 	tx, err := begin(ctx, opts)
 	if err != nil {
-		return fmt.Errorf("store: begin: %w", err)
+		return false, fmt.Errorf("store: begin: %w", err)
 	}
 	defer func() {
 		if p := recover(); p != nil {
@@ -966,46 +976,51 @@ func attempt(ctx context.Context,
 		}
 	}()
 	if err := fn(tx); err != nil {
-		rollback(ctx, tx)
-		return err
+		return rollback(ctx, tx), err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit: %w", err)
+		return false, fmt.Errorf("store: commit: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
-// rollback undoes an attempt and REPORTS a rollback that did not happen.
+// rollback undoes an attempt and reports whether it did.
 //
-// # Why a discarded rollback error is not harmless
+// A ROLLBACK THAT FAILED LEAVES THE TRANSACTION OPEN on its connection, and
+// database/sql does not know: it hands the connection back when the
+// transaction ends, and the driver reports the failure without answering
+// ErrBadConn, so nothing retires it. The next caller to draw it was refused its
+// own BEGIN, "cannot start a transaction within a transaction", on a
+// connection it did nothing to; on a PINNED connection that was every
+// subsequent attempt, and the domain stopped applying for good.
 //
-// database/sql returns the connection to the pool when the transaction ends.
-// If the rollback failed, the transaction is still open on that connection and
-// the pool does not know: the next caller to draw it gets "cannot start a
-// transaction within a transaction" from its own BEGIN, on a connection it did
-// nothing to. The driver reports the failure and does not answer ErrBadConn, so
-// nothing retires the connection either. On a PINNED connection the
-// consequence is worse: it is the one connection that writer will ever use, so
-// every subsequent attempt is refused its own BEGIN.
-//
-// This does not repair it; there is nothing here that can, short of closing a
-// connection the pool owns. What it does is make it VISIBLE, at WARN, naming
-// the consequence. Discarding it made a poisoned pool entry into a mystery that
-// surfaced somewhere else entirely, as a subsystem that had been failing every
-// two seconds for as long as the process had been up.
-//
-// [retryable] classifies the downstream symptom as retryable, so a caller that
-// draws the dirty connection recovers on the next one. The two halves are
-// deliberately separate: one keeps the engine working, and this one is how
-// anybody finds out it had to.
-func rollback(ctx context.Context, tx *sql.Tx) {
+// So the answer is the caller's to act on (see [giveBack]), and the failure is
+// also logged at WARN: what forced a connection out of the pool is worth an
+// operator's eye even though nothing downstream fails on it any more.
+func rollback(ctx context.Context, tx *sql.Tx) bool {
 	// ErrTxDone is the ORDINARY case and not a failure: the driver ends a
 	// transaction itself when a statement inside it aborts, so a rollback
 	// after one has nothing left to undo.
-	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
-		log.WarnContext(ctx, "store_rollback_failed", "error", err.Error(),
-			"detail", "the transaction may still be open on the connection this "+
-				"returned to the pool, and the next caller to draw it will be "+
-				"refused its own BEGIN")
+	err := tx.Rollback()
+	if err == nil || errors.Is(err, sql.ErrTxDone) {
+		return true
 	}
+	log.WarnContext(ctx, "store_rollback_failed", "error", err.Error(),
+		"detail", "the transaction may still be open on its connection, so "+
+			"the connection is retired rather than handed to another caller")
+	return false
+}
+
+// giveBack returns conn to the pool, or RETIRES it when [attempt] reported it
+// unfit.
+//
+// database/sql offers one door for "this connection must not be reused": a
+// [sql.Conn.Raw] callback answering [driver.ErrBadConn], which closes the
+// driver connection instead of pooling it. The pool opens a fresh one, with
+// its session state, the next time it needs one.
+func giveBack(conn *sql.Conn, fit bool) {
+	if !fit {
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	_ = conn.Close()
 }
