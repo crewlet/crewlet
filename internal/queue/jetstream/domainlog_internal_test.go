@@ -3,10 +3,14 @@ package jetstream
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // notYetVisibleJS answers `Stream` with "not found" for the first n calls and
@@ -95,5 +99,56 @@ func TestACancelledLookupReturnsAtOnce(t *testing.T) {
 	}
 	if got := js.calls.Load(); got > 1 {
 		t.Errorf("a cancelled lookup made %d calls, want at most the first", got)
+	}
+}
+
+// deadlineJS records the deadline the call it was handed actually carried.
+type deadlineJS struct {
+	jetstream.JetStream
+	had   bool
+	until time.Time
+}
+
+func (f *deadlineJS) CreateConsumer(ctx context.Context, _ string,
+	_ jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.until, f.had = ctx.Deadline()
+	return nil, errors.New("refused, so the read-back below runs")
+}
+
+// Consumer is the read-back ensureDurableConsumer makes when a create fails,
+// and it refuses too: this case is about the DEADLINE the create carried, and
+// a read-back that answered would only add a second path to reason about.
+func (f *deadlineJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
+	return nil, errors.New("not there either")
+}
+
+// A DURABLE CONSUMER GETS THE PROVISIONING BUDGET, like every other replicated
+// create on this path.
+//
+// It did not. Nothing here set a deadline, so the caller's context reached
+// nats.go with none of its own — an engine boot's has none — and the client's
+// FIVE-SECOND default applied instead. That is a twenty-fourth of the clustered
+// budget, and shorter than [jsprovision.SlowAfter], so the slow-create
+// breadcrumb beside this call could never fire and the retry window it
+// describes did not exist.
+func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
+	t.Parallel()
+	js := &deadlineJS{}
+	// Replicas > 1 is the clustered case, whose budget is the long one.
+	q := &Queue{js: js, cfg: Config{Replicas: 3}, log: slog.Default()}
+
+	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what a boot passes.
+	_, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
+		jetstream.ConsumerConfig{Durable: "agent-ceo"})
+
+	if !js.had {
+		t.Fatal("the create ran with no deadline, so nats.go's 5s default " +
+			"applies and neither the budget nor the breadcrumb exists")
+	}
+	// It must be the CLUSTERED budget rather than the client's default.
+	if left := time.Until(js.until); left <= jsprovision.SlowAfter {
+		t.Errorf("the create got %v, which is inside the %v slow threshold — "+
+			"the breadcrumb could never fire", left, jsprovision.SlowAfter)
 	}
 }

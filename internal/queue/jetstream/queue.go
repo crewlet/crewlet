@@ -862,6 +862,17 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 			"given no durable name — an ephemeral consumer is this caller's "+
 			"alone and races nobody, so it does not belong here", stream)
 	}
+	// ITS OWN DEADLINE, for the reason ensureStream gives — and this call
+	// needed it more, not less. A durable consumer is a replicated object
+	// on the same metadata group, but nothing here set a budget, so the
+	// caller's context reached nats.go with no deadline of its own (an
+	// engine boot's has none) and the client's FIVE-SECOND default applied.
+	// That is shorter than the clustered budget by a factor of twenty-four,
+	// and shorter than [jsprovision.SlowAfter] — so the breadcrumb below
+	// could never fire and the retry window it describes did not exist.
+	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
+
 	// THE SAME BREADCRUMB the stream and bucket creates carry, and this
 	// call needs it for the same reason: a durable consumer is a replicated
 	// object too, and `open consumer …: context deadline exceeded` on a
