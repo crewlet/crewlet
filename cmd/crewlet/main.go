@@ -1775,6 +1775,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 
 	server, addr, err := listenAPI(ctx, boot, app, log)
 	if err != nil {
+		// THE PROJECTOR FIRST, in the order httpSurface.stop takes: it is
+		// already running, on a broadcast subscription to the engine's
+		// queue, and nothing else holds it once this returns.
 		projector.Stop(context.WithoutCancel(ctx))
 		app.Stop()
 		return nil, err
