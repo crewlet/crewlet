@@ -251,9 +251,11 @@ and each node logs `schedules_waiting_for_a_model`; the apply that adds a
 provider arms it, and its first tick catches up at most the most recent missed
 fire ([Scheduling](scheduling.md#when-the-loop-runs)).
 
-The learning workers that call a model (the persist decider, the skill
-synthesizer and refiner, and the counterparty profiler) are not built for such
-a company; the apply that adds a provider builds them.
+The learning work that calls a model is not built for such a company: the
+persist decider, the skill synthesizer and refiner and the counterparty
+profiler that run after each turn, and the background compaction, clustering
+and promotion passes. The apply that adds a provider builds all of them. The
+skill curator calls no model and runs as usual.
 
 A delivery is held rather than failed on purpose. A turn that cannot build its
 runner proves nothing reached outside the engine, so the dispatcher would hand
@@ -292,7 +294,8 @@ in a fixed order, and names each stage it got through:
 8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
 9. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
 10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
-11. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
+11. **`learning_passes`**: hand the background learning loops (episode compaction, the skill curator, clustered synthesis and promotion) the passes this revision turns on, built from its models, credentials and knobs. **After** the swap, because the loops walk the current company's seats: handed over earlier they would run the new revision's passes over the previous company's roster, and a refusal later in the same apply would leave them there for a revision this node never served. The loops themselves are armed once per process and keep their clocks across an apply (see [Agent Learning](agent-learning.md#trigger-threshold-gated-on-a-slow-loop)), so this is also where a node that booted with no company, or a company that gained its first provider, starts running them. Reported on every apply, including one on a node with no store or no worker role, which has no loops to hand anything to.
+12. **`scheduler`**: re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
 Then a `config_revision_applied` event is published on
 `crewlet.config.revision_applied` with `status`, the `applied_subsystems` list
@@ -310,26 +313,32 @@ detail lives on the event rather than on the operator surfaces reading the
 bucket. The active row stays active either way; the control plane records
 the outcome so peers can see it (see [Control Plane](control-plane.md)).
 
-**Read that list by name, never by number.** Two of the eleven stages are
+**Read that list by name, never by number.** Two of the twelve stages are
 conditional, so a successful apply on a node that booted without a sandbox
-reports ten names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
+reports eleven names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
 into what a node reports.
 
 > **"No rollback" is not "no mutation".** What the build-first ordering buys is
 > that a revision which cannot be *built* changes nothing: `NewCompany`
 > validates, resolves the org and constructs the providers without reaching the
 > network, so stage 2 is the cheapest place to refuse and the one that costs
-> nothing at all. Past it the guarantee narrows. **Stage 5 is the last stage
-> that can refuse** — stages 6 and 7 return no error, and stage 8 is the swap —
-> and by the time it runs, three things are already mutated: the resolver
-> snapshot (stage 1), any shared MCP child whose spec moved plus the skill
-> variables (stage 3), and the reflection workers (stage 4). So a sandbox-build
-> refusal leaves this node's tool surface and learning workers on the new
-> company while it still *serves* the previous epoch, and reports `error`. The
-> party index and the trackers are not among them: they are rebuilt after the
-> last failure point, which is why they are ordered there. Widening that window
-> is what would make `degraded` reachable, which is why everything an apply
-> cannot un-apply stays behind the swap.
+> nothing at all. Past it the guarantee narrows. On a node that already serves
+> a company, **stage 5 is the last stage that can refuse**: stages 6 and 7
+> return no error there, and stage 8 is the swap. By the time it runs, three
+> things are already mutated: the resolver snapshot (stage 1), any shared MCP
+> child whose spec moved plus the skill variables (stage 3), and the reflection
+> workers (stage 4). So a sandbox-build refusal leaves this node's tool surface
+> and learning workers on the new company while it still *serves* the previous
+> epoch, and reports `error`. The party index and the trackers are not among
+> them: they are rebuilt after the last failure point, which is why they are
+> ordered there. A node's **first** company is the one exception, on both sides
+> of stage 5: stage 4 refuses it when the reflect dispatcher cannot attach, and
+> stage 7 when the inbound edge cannot start. Neither refusal has a previous
+> epoch to protect, so what it leaves behind (the shared MCP children, an
+> attached dispatcher, the party index) serves nothing until the retry the
+> refusal earns rebuilds it. Widening that window is what would make `degraded`
+> reachable, which is why everything an apply cannot un-apply stays behind the
+> swap.
 
 Two knobs are refused rather than applied live, because applying them would
 corrupt data rather than merely disrupt it:

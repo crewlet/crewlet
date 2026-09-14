@@ -309,6 +309,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 		}
 		applied = append(applied, "mailboxes")
 	}
+	// THE BACKGROUND PASSES follow the revision too, and after the swap:
+	// their loops walk the CURRENT epoch's roster, and the passes handed to
+	// them hold this revision's models and knobs. The loops keep running
+	// and keep their clocks. See [Engine.reconfigureLearningPasses].
+	e.reconfigureLearningPasses(ctx, next)
+	applied = append(applied, "learning_passes")
 	// AFTER the epoch is published too, and for a sharper version of the
 	// same reason: the tick reads schedules off the CURRENT company, so
 	// arming from `next` before it is current would open a window in which

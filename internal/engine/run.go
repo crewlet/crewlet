@@ -221,10 +221,12 @@ type Engine struct {
 	// duty.go for why the lease alone is not the whole answer.
 	profile placement.NodeProfile
 
-	// learning is the two background passes no turn drives: episode
-	// compaction and skill ageing. On the ENGINE for the same reason the
-	// sandbox waiter is — they are loops this PROCESS runs, and rebuilding
-	// them on an apply would start a second one against the same rows.
+	// learning is the loops of the background passes no turn drives:
+	// episode compaction, skill ageing, clustered synthesis and promotion.
+	// On the ENGINE for the same reason the sandbox waiter is: they are
+	// loops this PROCESS runs, and rebuilding them on an apply would restart
+	// their clocks. What they run is the applied revision's, handed over by
+	// every apply. See [Engine.startLearningBackground].
 	learning *learning.Background
 
 	// notify is this node's inbound edge: the party registry, the
@@ -616,8 +618,8 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	if err := e.startReflection(ctx); err != nil {
 		return fail(err)
 	}
-	// The two background passes, after the node exists: both are fleet
-	// singletons claimed under its own incarnation.
+	// The background passes, after the node exists: each is a fleet
+	// singleton claimed under its own incarnation.
 	e.startLearningBackground(ctx)
 	if err := e.startNotifications(ctx, e.Company()); err != nil {
 		return fail(fmt.Errorf("engine: %w", err))

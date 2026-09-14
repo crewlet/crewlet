@@ -752,6 +752,14 @@ func TestAnApplyLeavesADurableTrail(t *testing.T) {
 	if !slices.Contains(got.AppliedSubsystems, "epoch") {
 		t.Errorf("subsystems = %v, want the epoch publish among them", got.AppliedSubsystems)
 	}
+	// The background learning passes are handed over AFTER the swap: their
+	// loops walk the current company's seats, and handed over before it a
+	// later refusal would leave them on a revision this node never served.
+	if at, swap := slices.Index(got.AppliedSubsystems, "learning_passes"),
+		slices.Index(got.AppliedSubsystems, "epoch"); at < swap {
+		t.Errorf("subsystems = %v, want learning_passes after the epoch swap",
+			got.AppliedSubsystems)
+	}
 }
 
 // A refused revision is the case the trail exists for, and the subsystem list

@@ -70,8 +70,9 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		// about a missing registry beside the line that says what to change.
 		log.Info("learning_models_absent",
 			"detail", "the company configures no providers.llm, so the persist "+
-				"decider, the skill synthesizer and refiner and the counterparty "+
-				"profiler are built by the apply that adds one")
+				"decider, the skill synthesizer and refiner, the counterparty "+
+				"profiler and the background compaction, clustering and "+
+				"promotion passes are built by the apply that adds one")
 	}
 
 	var workers []learning.Worker
@@ -304,62 +305,37 @@ func days(n int) time.Duration {
 	return time.Duration(n) * 24 * time.Hour
 }
 
-// startLearningBackground arms the passes no turn drives.
+// startLearningBackground arms the loops of the passes no turn drives, once
+// for the life of the process.
 //
-// LAST, like the sandbox waiter and the retention sweep, because both are
-// fleet singletons claimed under this node's own incarnation — which does
-// not exist until the node does.
+// LAST, like the sandbox waiter and the retention sweep, because every pass is
+// a fleet singleton claimed under this node's own incarnation, which does not
+// exist until the node does.
+//
+// ARMED WHATEVER THE COMPANY CONFIGURES, and with no company at all. The loops
+// are the process's and what they run is the revision's: this hands them the
+// passes of the company the node booted with, and every apply after it hands
+// them its own (see [Engine.reconfigureLearningPasses]). Built from the boot
+// company alone, as they were, a node that booted unconfigured (the node every
+// company created from the dashboard starts on) never compacted, curated,
+// clustered or promoted; one that booted without a model never compacted once
+// a provider was added; and every node ran its boot-time models, credentials
+// and cadences through every later edit and rotation until it restarted.
 func (e *Engine) startLearningBackground(ctx context.Context) {
-	db := e.backends.Store
-	if db == nil {
+	if e.backends.Store == nil {
+		// Every pass reads and writes this node's store, so no revision
+		// could turn one on here.
 		return
 	}
 	if !e.profile.RunsWorkers() {
 		// The operator said this node runs no singleton duties. The duty
 		// gate would refuse every tick anyway; not arming the loops at
-		// all is the same answer without two goroutines waking hourly to
-		// be told no.
+		// all is the same answer without four goroutines waking to be
+		// told no.
 		return
 	}
-	company := e.Company()
-	if company == nil || !company.Config.Learning.On() {
-		return
-	}
-	cfg := company.Config.Learning
-
-	var lifecycle *learning.Lifecycle
-	// A SUMMARIZER IS REQUIRED for compaction: the pass folds a cluster by
-	// asking a model to describe what its members had in common, and one
-	// without a model can only delete. Deleting is the half an operator
-	// least wants unsupervised, so no summarizer means no pass at all —
-	// the rows stay raw and readable rather than being dropped unfolded.
-	if summarize := e.auxSummarizer(company); summarize != nil {
-		lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize),
-			lifecycleOptions(&cfg.EpisodeLifecycle))
-	} else {
-		log.WarnContext(ctx, "episode_compaction_unavailable",
-			"reason", "no auxiliary model is configured for any seat",
-			"detail", "raw episodes accumulate and every recall scans all of "+
-				"them; nothing is deleted")
-	}
-
-	var skills *learning.Skills
-	if cfg.SkillCurator.Enabled.Or(true) {
-		skills = learning.NewSkills(db)
-	}
-
-	cluster := e.clusteringPass(company)
-	promoter := e.buildPromoter(company)
-
-	if lifecycle == nil && skills == nil && cluster == nil && promoter == nil {
-		return
-	}
-
 	e.learning = learning.NewBackground(learning.BackgroundOptions{
-		Lifecycle: lifecycle,
-		Skills:    skills,
-		Cluster:   cluster,
-		Promoter:  promoter,
+		Passes: e.learningPasses(ctx, e.Company()),
 		// FRESH through the epoch, like Seats below: a captured resolver
 		// would keep answering with the roles of the revision this call
 		// saw, and charge a renamed seat's clustering to a chain the
@@ -370,21 +346,13 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 		// epoch read could answer about a seat an apply renamed between
 		// the two.
 		AgentIDFor: e.seatAgentID,
-		Policy: learning.CuratorPolicy{
-			StaleAfter:   days(cfg.SkillCurator.StaleAfterDays),
-			ArchiveAfter: days(cfg.SkillCurator.ArchiveAfterDays),
-		},
 		// READ FRESH through the epoch, never bound to the company this
 		// call sees: an apply replaces the roster, and a captured list
 		// would keep compacting a seat the revision removed and never
 		// touch one it added.
-		Seats:             func() []string { return e.seatHandles() },
-		Publish:           e.publishLearning,
-		CuratorInterval:   hours(cfg.SkillCurator.IntervalHours),
-		ClusterInterval:   seconds(float64(cfg.SkillSynthesis.SchedulerIntervalSeconds)),
-		PromotionInterval: 0, // learning.PromotionInterval; no knob configures it
-		ClaimDuty:         e.workerDuty(skillCuratorDutyName, learningDutyTTL),
-		LifecycleInterval: 0,
+		Seats:     func() []string { return e.seatHandles() },
+		Publish:   e.publishLearning,
+		ClaimDuty: e.workerDuty(skillCuratorDutyName, learningDutyTTL),
 	})
 	// Detached, for the same reason the node's loops are: a loop bound to
 	// a signal context stops at SIGTERM, which would make its lifetime
@@ -393,18 +361,86 @@ func (e *Engine) startLearningBackground(ctx context.Context) {
 	e.learning.Start(context.WithoutCancel(ctx))
 }
 
+// reconfigureLearningPasses hands the background loops the passes c
+// configures. The loops keep running and keep their clocks; see
+// [learning.Background.Reconfigure].
+//
+// AFTER the epoch swap, unlike the reflect dispatcher's workers, which a turn
+// completing on the new epoch needs the moment it is current. Nothing needs
+// these that early, and the loops walk the CURRENT epoch's roster, so handed
+// over before the swap they would run this revision's models and knobs over
+// the previous company's seats, and a refusal later in the same apply would
+// leave them there for a revision the node never served.
+func (e *Engine) reconfigureLearningPasses(ctx context.Context, c *Company) {
+	if e.learning == nil {
+		return
+	}
+	e.learning.Reconfigure(e.learningPasses(ctx, c))
+}
+
+// learningPasses builds the background passes one revision configures. No
+// company, or one with learning off, gets none, and the loops tick without
+// claiming anything.
+func (e *Engine) learningPasses(ctx context.Context, c *Company) learning.BackgroundPasses {
+	db := e.backends.Store
+	if c == nil || db == nil || !c.Config.Learning.On() {
+		return learning.BackgroundPasses{}
+	}
+	cfg := c.Config.Learning
+	passes := learning.BackgroundPasses{
+		Policy: learning.CuratorPolicy{
+			StaleAfter:   days(cfg.SkillCurator.StaleAfterDays),
+			ArchiveAfter: days(cfg.SkillCurator.ArchiveAfterDays),
+		},
+		CuratorInterval: hours(cfg.SkillCurator.IntervalHours),
+		ClusterInterval: seconds(float64(cfg.SkillSynthesis.SchedulerIntervalSeconds)),
+		// LifecycleInterval and PromotionInterval stay zero, which each
+		// loop reads as its own default: no knob configures either.
+	}
+	if cfg.SkillCurator.Enabled.Or(true) {
+		passes.Skills = learning.NewSkills(db)
+	}
+	if c.Models == nil {
+		// THE THREE PASSES THAT CALL A MODEL wait for one. A company with
+		// no providers.llm is a valid one (see nomodels.go), and the apply
+		// that adds a provider hands them over. Said once per apply, by
+		// learning_models_absent in [Engine.buildReflectionWorkers], rather
+		// than as three warnings about a registry the company never had.
+		return passes
+	}
+	// A SUMMARIZER IS REQUIRED for compaction: the pass folds a cluster by
+	// asking a model to describe what its members had in common, and one
+	// without a model can only delete. Deleting is the half an operator
+	// least wants unsupervised, so no summarizer means no pass at all: the
+	// rows stay raw and readable rather than being dropped unfolded.
+	if summarize := e.auxSummarizer(c); summarize != nil {
+		passes.Lifecycle = learning.NewLifecycle(db, learning.NewSummarizer(summarize),
+			lifecycleOptions(&cfg.EpisodeLifecycle))
+	} else {
+		log.WarnContext(ctx, "episode_compaction_unavailable",
+			"reason", "no auxiliary model is configured for any seat",
+			"detail", "raw episodes accumulate and every recall scans all of "+
+				"them; nothing is deleted")
+	}
+	passes.Cluster = e.clusteringPass(c)
+	passes.Promoter = e.buildPromoter(c)
+	return passes
+}
+
 // stopLearning ends the background passes, waiting for an in-flight one.
 //
 // Called from [Engine.Stop] BEFORE the backends close, because every pass
 // queries the store and the compaction pass pays for a summarisation on the
 // way. The detached context Start was handed carries no cancellation, so
 // this is the only thing that ends them.
+//
+// The field is left set: an apply still finishing on the reconcile loop reads
+// it, and a Reconfigure after the loops have stopped hands passes to nothing.
 func (e *Engine) stopLearning() {
 	if e.learning == nil {
 		return
 	}
 	e.learning.Stop()
-	e.learning = nil
 }
 
 // synthesizerOptions carries the company's synthesis knobs to the worker.
@@ -621,10 +657,11 @@ func (e *Engine) compactionTokens(c *Company) int {
 // anySeatHasAuxiliary reports whether at least one seat can answer an
 // auxiliary call.
 //
-// Checked ONCE at start rather than per call, because the answer is a
-// property of the revision: a company with no auxiliary model anywhere gets
-// no compaction, and discovering that per cluster would mean a failed model
-// resolution logged for every seat on every tick, forever.
+// Checked ONCE per revision, when its passes are built, rather than per call,
+// because the answer is a property of the revision: a company with no
+// auxiliary model anywhere gets no compaction, and discovering that per
+// cluster would mean a failed model resolution logged for every seat on every
+// tick, forever.
 func anySeatHasAuxiliary(c *Company) bool {
 	for _, seat := range c.Seats() {
 		role := c.Org.AgentSeatByHandle(seat.Handle)

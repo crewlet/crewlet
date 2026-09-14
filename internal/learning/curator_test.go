@@ -58,13 +58,15 @@ func TestTheCuratorStalesAnUnusedSkillOnItsOwn(t *testing.T) {
 	var seen announced
 	now := base.Add(60 * 24 * time.Hour)
 	learning.NewBackground(learning.BackgroundOptions{
-		Skills: store,
-		Policy: learning.CuratorPolicy{
-			StaleAfter: 30 * 24 * time.Hour, ArchiveAfter: 90 * 24 * time.Hour,
+		Passes: learning.BackgroundPasses{
+			Skills: store,
+			Policy: learning.CuratorPolicy{
+				StaleAfter: 30 * 24 * time.Hour, ArchiveAfter: 90 * 24 * time.Hour,
+			},
+			CuratorInterval: time.Millisecond,
 		},
-		Publish:         seen.record,
-		CuratorInterval: time.Millisecond,
-		Now:             func() time.Time { return now },
+		Publish: seen.record,
+		Now:     func() time.Time { return now },
 	}).Start(t.Context())
 
 	events := seen.awaitEvents(t, 1)
@@ -90,11 +92,13 @@ func TestASeatUnderThresholdIsNotCompacted(t *testing.T) {
 
 	var seen announced
 	learning.NewBackground(learning.BackgroundOptions{
-		Lifecycle:         life,
-		Seats:             func() []string { return []string{"dev"} },
-		Publish:           seen.record,
-		LifecycleInterval: time.Millisecond,
-		Now:               func() time.Time { return base.Add(time.Hour) },
+		Passes: learning.BackgroundPasses{
+			Lifecycle:         life,
+			LifecycleInterval: time.Millisecond,
+		},
+		Seats:   func() []string { return []string{"dev"} },
+		Publish: seen.record,
+		Now:     func() time.Time { return base.Add(time.Hour) },
 	}).Start(t.Context())
 
 	time.Sleep(50 * time.Millisecond)
@@ -115,12 +119,14 @@ func TestABackgroundPassWithoutTheDutyDoesNothing(t *testing.T) {
 
 	var seen announced
 	learning.NewBackground(learning.BackgroundOptions{
-		Skills:          store,
-		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
-		Publish:         seen.record,
-		CuratorInterval: time.Millisecond,
-		ClaimDuty:       func(context.Context) (bool, error) { return false, nil },
-		Now:             func() time.Time { return base.Add(60 * 24 * time.Hour) },
+		Passes: learning.BackgroundPasses{
+			Skills:          store,
+			Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+			CuratorInterval: time.Millisecond,
+		},
+		Publish:   seen.record,
+		ClaimDuty: func(context.Context) (bool, error) { return false, nil },
+		Now:       func() time.Time { return base.Add(60 * 24 * time.Hour) },
 	}).Start(t.Context())
 
 	time.Sleep(50 * time.Millisecond)
@@ -142,10 +148,12 @@ func TestAnUnknownDutyIsTreatedAsNotHeld(t *testing.T) {
 
 	var seen announced
 	learning.NewBackground(learning.BackgroundOptions{
-		Skills:          store,
-		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
-		Publish:         seen.record,
-		CuratorInterval: time.Millisecond,
+		Passes: learning.BackgroundPasses{
+			Skills:          store,
+			Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+			CuratorInterval: time.Millisecond,
+		},
+		Publish: seen.record,
 		ClaimDuty: func(context.Context) (bool, error) {
 			return false, errors.New("the coordination store is unreachable")
 		},
@@ -169,9 +177,11 @@ func TestNeitherPassFiresOnStart(t *testing.T) {
 	var claims int64
 	var mu sync.Mutex
 	learning.NewBackground(learning.BackgroundOptions{
-		Skills:          store,
-		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
-		CuratorInterval: time.Hour,
+		Passes: learning.BackgroundPasses{
+			Skills:          store,
+			Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+			CuratorInterval: time.Hour,
+		},
 		ClaimDuty: func(context.Context) (bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -192,26 +202,28 @@ func TestNeitherPassFiresOnStart(t *testing.T) {
 	}
 }
 
-// A PASS WITH NOTHING WIRED IS NOT A LOOP AT ALL, which is what a node with
-// no store or a company with learning off produces.
+// A PASS THAT IS OFF CLAIMS NO DUTY, which is what every loop of a node with
+// no company, or of a company with learning off, looks like.
 //
-// The duty counter is what makes this able to fail: without it the test
-// constructs, sleeps and returns, and every guard in Start could be deleted
-// with the suite still green. ClaimDuty is the first thing any armed loop
-// touches, so a count above zero means a loop was armed that should not have
-// been. A millisecond interval means an armed loop reaches it well inside
-// the wait rather than sitting on a cadence measured in hours.
-func TestNothingWiredArmsNoLoop(t *testing.T) {
+// The loops are armed whatever is wired, because the next apply may turn a
+// pass on and a loop armed only then would start its clock at that apply. So
+// what an idle loop must not do is claim: that is a coordination round trip
+// on every tick for no work. The duty counter is what makes this able to
+// fail, and a millisecond interval means every loop ticks many times well
+// inside the wait rather than sitting on a cadence measured in hours.
+func TestAPassThatIsOffClaimsNoDuty(t *testing.T) {
 	t.Parallel()
 	var (
 		mu     sync.Mutex
 		claims int
 	)
 	b := learning.NewBackground(learning.BackgroundOptions{
-		CuratorInterval:   time.Millisecond,
-		LifecycleInterval: time.Millisecond,
-		ClusterInterval:   time.Millisecond,
-		PromotionInterval: time.Millisecond,
+		Passes: learning.BackgroundPasses{
+			CuratorInterval:   time.Millisecond,
+			LifecycleInterval: time.Millisecond,
+			ClusterInterval:   time.Millisecond,
+			PromotionInterval: time.Millisecond,
+		},
 		ClaimDuty: func(context.Context) (bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -219,8 +231,8 @@ func TestNothingWiredArmsNoLoop(t *testing.T) {
 			return true, nil
 		},
 	})
-	// It must not panic and must not spin: with every pass nil, Start has
-	// no goroutine to launch.
+	// It must not panic and must not spin: with every pass nil, each loop
+	// ticks and finds nothing to run.
 	b.Start(t.Context())
 	t.Cleanup(b.Stop)
 
@@ -229,6 +241,144 @@ func TestNothingWiredArmsNoLoop(t *testing.T) {
 	defer mu.Unlock()
 	if claims != 0 {
 		t.Fatalf("the duty was claimed %d times with no pass wired", claims)
+	}
+}
+
+// dutyCounter counts the duty claims the loops make, which is the first thing
+// a loop does for a pass that is on and the one thing it never does for a
+// pass that is off.
+type dutyCounter struct {
+	mu     sync.Mutex
+	claims int
+}
+
+func (d *dutyCounter) claim(context.Context) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.claims++
+	return true, nil
+}
+
+func (d *dutyCounter) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.claims
+}
+
+// A PASS AN APPLY TURNS ON RUNS WITHOUT A RESTART, at the cadence that apply
+// configured.
+//
+// The loops used to be built from whichever company the process started
+// with: a node that booted with no company, or with no model to compact on,
+// never ran the pass however its configuration changed afterwards. Started
+// here with nothing wired and the default daily cadence, the curator has to
+// run within the wait only if the Reconfigure both turned it on and moved its
+// clock to the new cadence.
+func TestAPassAReconfigureTurnsOnRuns(t *testing.T) {
+	t.Parallel()
+	store, _ := skillStore(t)
+	mustInsert(t, store, newSkill("dev", "triage", base))
+
+	var seen announced
+	b := learning.NewBackground(learning.BackgroundOptions{
+		Publish: seen.record,
+		Now:     func() time.Time { return base.Add(60 * 24 * time.Hour) },
+	})
+	b.Start(t.Context())
+	t.Cleanup(b.Stop)
+	// Long enough for every loop to have read the daily cadence it starts
+	// on, so what runs the pass is the wake rather than a loop that simply
+	// started after the Reconfigure.
+	time.Sleep(50 * time.Millisecond)
+
+	b.Reconfigure(learning.BackgroundPasses{
+		Skills:          store,
+		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+		CuratorInterval: time.Millisecond,
+	})
+	if _, ok := seen.awaitEvents(t, 1)[0].(types.SkillStaled); !ok {
+		t.Fatalf("events = %v, want the curator's stale transition", seen.all())
+	}
+}
+
+// AND A PASS AN APPLY TURNS OFF STOPS, claiming nothing further: a company
+// that turned learning off, or lost the model a pass runs on, must not go on
+// running it on the revision it replaced.
+func TestAPassAReconfigureTurnsOffStops(t *testing.T) {
+	t.Parallel()
+	store, _ := skillStore(t)
+	var duty dutyCounter
+	b := learning.NewBackground(learning.BackgroundOptions{
+		Passes: learning.BackgroundPasses{
+			Skills:          store,
+			Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+			CuratorInterval: time.Millisecond,
+		},
+		ClaimDuty: duty.claim,
+		Now:       func() time.Time { return base },
+	})
+	b.Start(t.Context())
+	t.Cleanup(b.Stop)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for duty.count() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the curator loop never claimed its duty")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	b.Reconfigure(learning.BackgroundPasses{CuratorInterval: time.Millisecond})
+	// A tick that raced the wake may still claim with the passes it last
+	// read, so the count is held to zero only once it has stopped moving.
+	// A loop that never heard the wake claims every millisecond and never
+	// settles.
+	after, settled := duty.count(), time.Now()
+	for time.Since(settled) < 30*time.Millisecond {
+		if time.Now().After(deadline) {
+			t.Fatal("the curator loop went on claiming a pass the reconfigure turned off")
+		}
+		time.Sleep(time.Millisecond)
+		if n := duty.count(); n != after {
+			after, settled = n, time.Now()
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := duty.count(); got != after {
+		t.Fatalf("a pass turned off was claimed %d more times", got-after)
+	}
+}
+
+// AN APPLY THAT LEAVES A CADENCE ALONE LEAVES ITS CLOCK ALONE.
+//
+// Every config apply reconfigures the loops, and a company being edited in the
+// org builder applies far more often than its daily curator ticks. Resetting
+// the clock on each one would push the next tick out every time, so the pass
+// would never run at all. Here the loops are reconfigured with identical
+// passes many times faster than the cadence, and the pass still has to run.
+func TestAReconfigureThatKeepsTheCadenceKeepsTheClock(t *testing.T) {
+	t.Parallel()
+	store, _ := skillStore(t)
+	var duty dutyCounter
+	passes := learning.BackgroundPasses{
+		Skills:          store,
+		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+		CuratorInterval: 40 * time.Millisecond,
+	}
+	b := learning.NewBackground(learning.BackgroundOptions{
+		Passes: passes, ClaimDuty: duty.claim,
+		Now: func() time.Time { return base },
+	})
+	b.Start(t.Context())
+	t.Cleanup(b.Stop)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for duty.count() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("a loop reconfigured every 2ms with an unchanged 40ms cadence " +
+				"never ticked, so its clock restarts on every apply")
+		}
+		b.Reconfigure(passes)
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 
@@ -248,9 +398,11 @@ func TestStopEndsTheLoops(t *testing.T) {
 	// WithoutCancel is what the engine hands Start, so this exercises the
 	// case where the context genuinely cannot end the loop.
 	b := learning.NewBackground(learning.BackgroundOptions{
-		Skills:          skills,
-		Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
-		CuratorInterval: time.Millisecond,
+		Passes: learning.BackgroundPasses{
+			Skills:          skills,
+			Policy:          learning.CuratorPolicy{StaleAfter: time.Hour, ArchiveAfter: 2 * time.Hour},
+			CuratorInterval: time.Millisecond,
+		},
 		ClaimDuty: func(context.Context) (bool, error) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -309,15 +461,17 @@ func TestTheRosterIsReadEveryTick(t *testing.T) {
 		asked int
 	)
 	learning.NewBackground(learning.BackgroundOptions{
-		Lifecycle: life,
+		Passes: learning.BackgroundPasses{
+			Lifecycle:         life,
+			LifecycleInterval: time.Millisecond,
+		},
 		Seats: func() []string {
 			mu.Lock()
 			defer mu.Unlock()
 			asked++
 			return nil
 		},
-		LifecycleInterval: time.Millisecond,
-		Now:               func() time.Time { return base },
+		Now: func() time.Time { return base },
 	}).Start(t.Context())
 
 	deadline := time.Now().Add(time.Second)
@@ -387,11 +541,13 @@ func TestASeatOverThresholdIsCompactedAndAnnounced(t *testing.T) {
 
 	var seen announced
 	learning.NewBackground(learning.BackgroundOptions{
-		Lifecycle:         life,
-		Seats:             func() []string { return []string{"dev"} },
-		Publish:           seen.record,
-		LifecycleInterval: time.Millisecond,
-		Now:               func() time.Time { return base.Add(90 * 24 * time.Hour) },
+		Passes: learning.BackgroundPasses{
+			Lifecycle:         life,
+			LifecycleInterval: time.Millisecond,
+		},
+		Seats:   func() []string { return []string{"dev"} },
+		Publish: seen.record,
+		Now:     func() time.Time { return base.Add(90 * 24 * time.Hour) },
 	}).Start(t.Context())
 
 	got := seen.awaitEvents(t, 2)

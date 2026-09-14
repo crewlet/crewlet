@@ -47,23 +47,35 @@ const LifecycleInterval = time.Hour
 type Seats func() []string
 
 // Background runs the passes no turn drives.
+//
+// ONE PER PROCESS, and what it runs follows the applied revision. The loops
+// are armed once, at [Background.Start], and every config apply hands them the
+// passes that revision configures through [Background.Reconfigure]. Built
+// instead from whichever company the process started with, a node that booted
+// with no company never ran a pass at all, one that booted without a model
+// never compacted after a provider was added, and every node kept compacting
+// on its boot-time models, credentials and knobs through every edit and
+// rotation until it restarted. Rebuilding the loops per apply would be worse
+// in the other direction: each apply would restart a daily clock, and a
+// company edited more often than a day would never curate at all.
 type Background struct {
-	lifecycle  *Lifecycle
-	skills     *Skills
-	cluster    *Synthesizer
-	promoter   *Promoter
 	roleFor    func(handle string) *org.Role
 	agentIDFor func(seat *org.Role) string
-	policy     CuratorPolicy
 	seats      Seats
 	publish    Announce
+	claimDuty  func(ctx context.Context) (bool, error)
+	now        func() time.Time
 
-	curatorEvery   time.Duration
-	lifecycleEvery time.Duration
-	clusterEvery   time.Duration
-	promoteEvery   time.Duration
-	claimDuty      func(ctx context.Context) (bool, error)
-	now            func() time.Time
+	// mu guards the passes and the wake channel.
+	mu sync.Mutex
+
+	// passes is what the loops run this tick, normalised: defaults
+	// applied, and a clustering pass dropped when nothing resolves a role.
+	passes BackgroundPasses
+
+	// wake is closed by every Reconfigure and replaced, which is how a
+	// loop hears that its cadence may have moved without polling for it.
+	wake chan struct{}
 
 	// cancel and running are the loops' OWNED lifetime, and they are not
 	// the context Start was handed. The caller detaches that context on
@@ -76,8 +88,11 @@ type Background struct {
 	running sync.WaitGroup
 }
 
-// BackgroundOptions configures the loops.
-type BackgroundOptions struct {
+// BackgroundPasses is what the loops run, as one revision configures them.
+//
+// A value swapped WHOLE by [Background.Reconfigure], so a tick reads one
+// revision's passes and never one pass from each side of an apply.
+type BackgroundPasses struct {
 	// Lifecycle compacts episodes; nil disables that pass.
 	Lifecycle *Lifecycle
 
@@ -89,10 +104,32 @@ type BackgroundOptions struct {
 	// — the default — resolves to.
 	Cluster *Synthesizer
 
+	// Promoter distils what several seats in a unit independently learned
+	// into a knowledge-base draft; nil disables that pass, which is what a
+	// company with no knowledge base resolves to.
+	Promoter *Promoter
+
+	// Policy is the disuse schedule. Zero values take the defaults.
+	Policy CuratorPolicy
+
+	// CuratorInterval, LifecycleInterval, ClusterInterval and
+	// PromotionInterval override the cadences above. Zero takes each one's
+	// default.
+	CuratorInterval   time.Duration
+	LifecycleInterval time.Duration
+	ClusterInterval   time.Duration
+	PromotionInterval time.Duration
+}
+
+// BackgroundOptions configures the loops.
+type BackgroundOptions struct {
+	// Passes is what the loops run until the first [Background.Reconfigure].
+	Passes BackgroundPasses
+
 	// RoleFor resolves a seat handle to the role whose auxiliary model the
-	// clustering pass runs on. Required alongside Cluster: a pass with no
-	// role cannot resolve a model, and answering with the first role in
-	// the org would charge one seat's work to another's chain.
+	// clustering pass runs on. Required alongside a clustering pass: a pass
+	// with no role cannot resolve a model, and answering with the first
+	// role in the org would charge one seat's work to another's chain.
 	RoleFor func(handle string) *org.Role
 
 	// AgentIDFor derives the seat's agent id, which the clustering pass
@@ -108,14 +145,6 @@ type BackgroundOptions struct {
 	// promoted agent_id column is empty rather than wrong.
 	AgentIDFor func(seat *org.Role) string
 
-	// Promoter distils what several seats in a unit independently learned
-	// into a knowledge-base draft; nil disables that pass, which is what a
-	// company with no knowledge base resolves to.
-	Promoter *Promoter
-
-	// Policy is the disuse schedule. Zero values take the defaults.
-	Policy CuratorPolicy
-
 	// Seats lists the handles to walk. Nil means no seats, which yields
 	// loops that tick and do nothing — the correct shape for a node with
 	// no active company.
@@ -127,13 +156,6 @@ type BackgroundOptions struct {
 	// company forgetting what it should forget.
 	Publish Announce
 
-	// CuratorInterval, LifecycleInterval and ClusterInterval override the
-	// cadences above.
-	CuratorInterval   time.Duration
-	LifecycleInterval time.Duration
-	ClusterInterval   time.Duration
-	PromotionInterval time.Duration
-
 	// ClaimDuty gates a tick in a fleet. Nil means single-node — there is
 	// nobody to be a singleton among.
 	ClaimDuty func(ctx context.Context) (bool, error)
@@ -144,44 +166,77 @@ type BackgroundOptions struct {
 // NewBackground builds the loops.
 func NewBackground(opts BackgroundOptions) *Background {
 	b := &Background{
-		lifecycle: opts.Lifecycle, skills: opts.Skills,
-		cluster: opts.Cluster, promoter: opts.Promoter, roleFor: opts.RoleFor,
-		agentIDFor: opts.AgentIDFor,
-		policy:     opts.Policy, seats: opts.Seats, publish: opts.Publish,
-		curatorEvery: opts.CuratorInterval, lifecycleEvery: opts.LifecycleInterval,
-		clusterEvery: opts.ClusterInterval, promoteEvery: opts.PromotionInterval,
+		roleFor: opts.RoleFor, agentIDFor: opts.AgentIDFor,
+		seats: opts.Seats, publish: opts.Publish,
 		claimDuty: opts.ClaimDuty, now: opts.Now,
-	}
-	if b.roleFor == nil {
-		// A clustering pass without one resolves no model and would fail
-		// per seat, per tick, forever. Refusing the pass is the honest
-		// answer and it is logged where NewBackground's caller sees it.
-		b.cluster = nil
-	}
-	if b.curatorEvery <= 0 {
-		b.curatorEvery = CuratorInterval
-	}
-	if b.lifecycleEvery <= 0 {
-		b.lifecycleEvery = LifecycleInterval
-	}
-	if b.clusterEvery <= 0 {
-		b.clusterEvery = ClusterInterval
-	}
-	if b.promoteEvery <= 0 {
-		b.promoteEvery = PromotionInterval
+		wake: make(chan struct{}),
 	}
 	if b.now == nil {
 		b.now = func() time.Time { return time.Now().UTC() }
 	}
+	b.passes = b.normalise(opts.Passes)
 	return b
 }
 
+// Reconfigure hands the loops the passes a new revision configures.
+//
+// The loops keep running, and each keeps its clock: a pass that was off and
+// is now on runs at its loop's next tick, and a cadence that moved takes
+// effect from now. An in-flight pass finishes on the passes it started with,
+// which is the same guarantee a turn gets about its config pin.
+func (b *Background) Reconfigure(p BackgroundPasses) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.passes = b.normalise(p)
+	close(b.wake)
+	b.wake = make(chan struct{})
+}
+
+// normalise applies the defaults and the one pass rule the wiring can break.
+func (b *Background) normalise(p BackgroundPasses) BackgroundPasses {
+	if b.roleFor == nil {
+		// A clustering pass without one resolves no model and would fail
+		// per seat, per tick, forever. Refusing the pass is the honest
+		// answer and it is logged where NewBackground's caller sees it.
+		p.Cluster = nil
+	}
+	if p.CuratorInterval <= 0 {
+		p.CuratorInterval = CuratorInterval
+	}
+	if p.LifecycleInterval <= 0 {
+		p.LifecycleInterval = LifecycleInterval
+	}
+	if p.ClusterInterval <= 0 {
+		p.ClusterInterval = ClusterInterval
+	}
+	if p.PromotionInterval <= 0 {
+		p.PromotionInterval = PromotionInterval
+	}
+	return p
+}
+
+// current is the passes this tick runs, and the channel the next Reconfigure
+// closes.
+func (b *Background) current() (BackgroundPasses, <-chan struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.passes, b.wake
+}
+
+// pick answers one loop's cadence and, when its pass is on, the pass itself.
+type pick func(BackgroundPasses) (time.Duration, func(context.Context))
+
 // Start arms the loops, which run until [Background.Stop] or ctx is done.
 //
+// ALL FOUR, whether or not the revision in force turns their pass on: the
+// next apply may, and a loop armed only then would start its clock at that
+// apply. A loop whose pass is off ticks without claiming its duty, so an idle
+// one costs a timer and never a coordination round trip.
+//
 // SEPARATE TICKERS rather than one at the shorter cadence with a counter:
-// the two passes have unrelated cadences for unrelated reasons, and a
-// counter would tie the curator's schedule to the lifecycle's — so tuning
-// one would silently move the other.
+// the passes have unrelated cadences for unrelated reasons, and a counter
+// would tie the curator's schedule to the lifecycle's, so tuning one would
+// silently move the other.
 //
 // Start derives its own cancellable context rather than ticking on the
 // caller's, because the engine hands this one a DETACHED context — these
@@ -190,21 +245,33 @@ func NewBackground(opts BackgroundOptions) *Background {
 func (b *Background) Start(ctx context.Context) {
 	loopCtx, cancel := context.WithCancel(ctx)
 	b.cancel = cancel
-	arm := func(name string, every time.Duration, pass func(context.Context)) {
-		b.running.Go(func() { b.loop(loopCtx, name, every, pass) })
+	arm := func(name string, choose pick) {
+		b.running.Go(func() { b.loop(loopCtx, name, choose) })
 	}
-	if b.lifecycle != nil {
-		arm("episode_lifecycle", b.lifecycleEvery, b.compactPass)
-	}
-	if b.skills != nil {
-		arm("skill_curator", b.curatorEvery, b.curatePass)
-	}
-	if b.cluster != nil {
-		arm("skill_clustering", b.clusterEvery, b.clusterPass)
-	}
-	if b.promoter != nil {
-		arm("skill_promotion", b.promoteEvery, b.promotePass)
-	}
+	arm("episode_lifecycle", func(p BackgroundPasses) (time.Duration, func(context.Context)) {
+		if p.Lifecycle == nil {
+			return p.LifecycleInterval, nil
+		}
+		return p.LifecycleInterval, func(ctx context.Context) { b.compactPass(ctx, p.Lifecycle) }
+	})
+	arm("skill_curator", func(p BackgroundPasses) (time.Duration, func(context.Context)) {
+		if p.Skills == nil {
+			return p.CuratorInterval, nil
+		}
+		return p.CuratorInterval, func(ctx context.Context) { b.curatePass(ctx, p.Skills, p.Policy) }
+	})
+	arm("skill_clustering", func(p BackgroundPasses) (time.Duration, func(context.Context)) {
+		if p.Cluster == nil {
+			return p.ClusterInterval, nil
+		}
+		return p.ClusterInterval, func(ctx context.Context) { b.clusterPass(ctx, p.Cluster) }
+	})
+	arm("skill_promotion", func(p BackgroundPasses) (time.Duration, func(context.Context)) {
+		if p.Promoter == nil {
+			return p.PromotionInterval, nil
+		}
+		return p.PromotionInterval, func(ctx context.Context) { b.promotePass(ctx, p.Promoter) }
+	})
 }
 
 // Stop ends the loops and waits for an in-flight pass.
@@ -231,8 +298,8 @@ func (b *Background) Stop() {
 // The pass walks every unit itself, so unlike the other three this is a
 // single call: a promotion is per UNIT rather than per seat, and the unit
 // list is the pass's own input.
-func (b *Background) promotePass(ctx context.Context) {
-	for _, payload := range b.promoter.Pass(ctx) {
+func (b *Background) promotePass(ctx context.Context, promoter *Promoter) {
+	for _, payload := range promoter.Pass(ctx) {
 		if b.publish != nil {
 			// SOURCED to nothing in particular. A promotion has several
 			// authors and no single seat, which is why its event carries a
@@ -249,7 +316,7 @@ func (b *Background) promotePass(ctx context.Context) {
 // reason: each seat's pass is a scan plus at most one auxiliary call, and
 // running the roster concurrently would turn one tick into a company-wide
 // spike against the auxiliary model for work that has a day to happen in.
-func (b *Background) clusterPass(ctx context.Context) {
+func (b *Background) clusterPass(ctx context.Context, cluster *Synthesizer) {
 	for _, handle := range b.handles() {
 		role := b.roleFor(handle)
 		if role == nil {
@@ -261,7 +328,7 @@ func (b *Background) clusterPass(ctx context.Context) {
 				"agent_handle", handle)
 			continue
 		}
-		payloads, err := b.cluster.ClusterPass(ctx, role, handle, b.agentID(role))
+		payloads, err := cluster.ClusterPass(ctx, role, handle, b.agentID(role))
 		if err != nil {
 			log.WarnContext(ctx, "skill_clustering_failed", "seat", handle, "error", err.Error())
 		}
@@ -283,16 +350,34 @@ func (b *Background) clusterPass(ctx context.Context) {
 // once and the winner runs a pass over a company that has not taken a turn
 // yet. Waiting one interval also means a crash-looping node cannot spend the
 // company's tokens compacting on every restart.
-func (b *Background) loop(ctx context.Context, name string, every time.Duration,
-	pass func(context.Context),
-) {
+//
+// A Reconfigure WAKES the loop, which re-reads its passes and its cadence;
+// only a cadence that actually moved resets the clock, so an apply that
+// changes nothing about this pass leaves its next tick where it was. A tick
+// that races the wake runs the passes it last read, the same answer a pass
+// that started a moment before the apply gets. And a pass that is off claims
+// no duty: a claim is a coordination round trip, and one made for no work
+// would be paid on every tick of every idle loop.
+func (b *Background) loop(ctx context.Context, name string, choose pick) {
+	passes, wake := b.current()
+	every, _ := choose(passes)
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-wake:
+			passes, wake = b.current()
+			if next, _ := choose(passes); next != every {
+				every = next
+				ticker.Reset(every)
+			}
 		case <-ticker.C:
+			_, pass := choose(passes)
+			if pass == nil {
+				continue
+			}
 			if !b.holdsDuty(ctx, name) {
 				continue
 			}
@@ -328,10 +413,10 @@ func (b *Background) holdsDuty(ctx context.Context, name string) bool {
 // calls. Running the roster concurrently would turn one tick into a
 // company-wide spike against the auxiliary model for work that has an hour
 // to happen in.
-func (b *Background) compactPass(ctx context.Context) {
+func (b *Background) compactPass(ctx context.Context, lifecycle *Lifecycle) {
 	now := b.now()
 	for _, handle := range b.handles() {
-		due, ok, err := b.lifecycle.RawCount(ctx, handle)
+		due, ok, err := lifecycle.RawCount(ctx, handle)
 		if err != nil {
 			log.WarnContext(ctx, "episode_lifecycle_count_failed", "seat", handle, "error", err.Error())
 			continue
@@ -350,10 +435,10 @@ func (b *Background) compactPass(ctx context.Context) {
 		if b.publish != nil {
 			b.publish(ctx, handle, types.CompactionRequested{
 				AgentHandle: handle, RawCount: due,
-				Threshold: b.lifecycle.Options().Threshold,
+				Threshold: lifecycle.Options().Threshold,
 			})
 		}
-		res, err := b.lifecycle.Pass(ctx, handle, now)
+		res, err := lifecycle.Pass(ctx, handle, now)
 		if err != nil {
 			// The partial result is still published: the deletes that
 			// committed are real, and reporting nothing would claim a
@@ -374,8 +459,8 @@ func (b *Background) compactPass(ctx context.Context) {
 // handle walks the table, and its unit of work is a guarded single-row
 // update rather than a model call — so there is no per-seat cost to spread
 // and a per-seat loop would be N table scans instead of one.
-func (b *Background) curatePass(ctx context.Context) {
-	res, err := b.skills.Curate(ctx, b.policy, "", b.now())
+func (b *Background) curatePass(ctx context.Context, skills *Skills, policy CuratorPolicy) {
+	res, err := skills.Curate(ctx, policy, "", b.now())
 	if err != nil {
 		log.WarnContext(ctx, "skill_curator_pass_failed", "error", err.Error(),
 			"applied", len(res.Applied), "scanned", res.Scanned)
