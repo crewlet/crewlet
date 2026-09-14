@@ -398,9 +398,22 @@ test-solo: require-node ## the packages that need a runner to themselves (ci: en
 # run. The documented "faster loop" was the exact arrangement the partition
 # exists to avoid, so it flaked for the reason the split was measured on and
 # looked like an unstable suite rather than a mis-stated target.
+#
+# BOTH HALVES RUN, and the status accumulates, for the reason test-cross states
+# below: as two separate recipe lines make stops at the first nonzero one, so a
+# failure in the parallel partition meant the solo partition — internal/e2e and
+# every cluster-forming package — was never run at all by a target documented
+# as the full suite. The gates cannot hit this (`check` invokes the two as
+# sub-makes, each of which must succeed), which is exactly why it went
+# unnoticed here: the escape hatch is the one place a partial run reports as a
+# whole one.
 test-norace: require-node ## the full suite without -race (faster; not a gate)
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS)
-	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS)
+	@status=0; \
+	echo "==> parallel partition"; \
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) $(PARALLEL_PKGS) || status=1; \
+	echo "==> solo partition"; \
+	$(GO) test -count=1 -timeout $(TEST_TIMEOUT) -p 1 $(SOLO_PKGS) || status=1; \
+	exit $$status
 
 # Every target reports in one run rather than stopping at the first failure —
 # ci.yml sets `fail-fast: false` on this matrix for the same reason: when a
