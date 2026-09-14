@@ -235,24 +235,25 @@ func (e *embeddedServer) budget(memory bool) (StorageBudget, error) {
 // it could not reserve the stream's byte ceiling.
 //
 // A SENTINEL rather than the broker's own error, because the broker says it in
-// three codes and none of them names the number it compared against: a caller
-// that wants to say what was needed, what was available and what to change has
-// to recognise the refusal first, and must not have to know this backend's
-// vocabulary to do it.
+// two codes, one per storage class, and neither names the number it compared
+// against: a caller that wants to say what was needed, what was available and
+// what to change has to recognise the refusal first, and must not have to know
+// this backend's vocabulary to do it.
 var ErrInsufficientStorage = errors.New("jetstream: the broker cannot reserve the stream's byte ceiling")
 
 // The broker's codes for a reservation it refused for want of room.
 //
-// Spelled here for the reason [jsErrCodeNoPeers] is: nats.go names none of
-// them. Placement is deliberately NOT one of them. A clustered create that no
-// member can place reports `no suitable peers for placement`, whose code is
-// shared by every placement failure and whose storage clause is prose, and
-// what it would be compared against is somebody else's disk, which this node
-// cannot read.
+// Spelled here for the reason [jsErrCodeNoPeers] is: nats.go names neither.
+// Placement is deliberately NOT one of them. A clustered create that no member
+// can place reports `no suitable peers for placement`, whose code is shared by
+// every placement failure and whose storage clause is prose, and what it would
+// be compared against is somebody else's disk, which this node cannot read.
+// Nor is `insufficient resources` (10023): the server answers a publish, a
+// catch-up or a consumer's placement with it, never a stream's create, so
+// naming it here would read some other failure as a ceiling nobody reserved.
 const (
-	jsErrCodeStorageExceeded       jetstream.ErrorCode = 10047
-	jsErrCodeMemoryExceeded        jetstream.ErrorCode = 10028
-	jsErrCodeInsufficientResources jetstream.ErrorCode = 10023
+	jsErrCodeStorageExceeded jetstream.ErrorCode = 10047
+	jsErrCodeMemoryExceeded  jetstream.ErrorCode = 10028
 )
 
 // refusedStorage reports whether err is the broker refusing a reservation.
@@ -262,7 +263,7 @@ func refusedStorage(err error) bool {
 		return false
 	}
 	switch apiErr.ErrorCode {
-	case jsErrCodeStorageExceeded, jsErrCodeMemoryExceeded, jsErrCodeInsufficientResources:
+	case jsErrCodeStorageExceeded, jsErrCodeMemoryExceeded:
 		return true
 	}
 	return false

@@ -137,6 +137,33 @@ func TestAGrowthBudgetIsTheRoomAnUpdateIsHeldTo(t *testing.T) {
 	}
 }
 
+// ONLY A CREATE'S RESERVATION CHECK IS READ AS ONE.
+//
+// The refusal is named with the numbers of a reservation, so a code the broker
+// uses for anything else would be reported as a ceiling that did not fit:
+// placement is about members this node cannot see, and `insufficient
+// resources` answers a publish or a consumer, never a stream's create.
+func TestOnlyAReservationCheckIsReadAsARefusedReservation(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"the file store's limit":   {&jetstream.APIError{ErrorCode: 10047}, true},
+		"the memory store's limit": {&jetstream.APIError{ErrorCode: 10028}, true},
+		"no suitable peers":        {&jetstream.APIError{ErrorCode: jsErrCodeNoPeers}, false},
+		"insufficient resources":   {&jetstream.APIError{ErrorCode: 10023}, false},
+		"not an API error":         {errors.New("connection closed"), false},
+		"no error":                 {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := refusedStorage(tc.err); got != tc.want {
+				t.Errorf("refusedStorage(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 // WHETHER A DOMAIN STREAM EXISTS IS THREE ANSWERS, and the ceiling it holds is
 // the one it was created with.
 func TestADomainStreamsCeilingIsReadBack(t *testing.T) {
