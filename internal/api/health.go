@@ -138,9 +138,16 @@ func (a *App) health(ctx context.Context) Health {
 	}
 	body.Seats = state.Seats
 
+	// IN THE PRECEDENCE THE STATUSES DECLARE. The posture case used to be
+	// reached whether or not the node was configured, so a node with no
+	// revision that had also concluded `shed` reported the posture, and the
+	// one fact that matters on such a node, that it refuses every
+	// delivery, was the one its status did not say.
 	switch {
 	case state.ShuttingDown:
 		body.Status = StatusShuttingDown
+	case !configured:
+		// Already StatusUnconfigured, above.
 	case state.Posture != "" && state.Posture != "serve" && state.Posture != "wait":
 		body.Status = state.Posture
 	}
