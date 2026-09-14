@@ -316,29 +316,50 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	// passing as an answer about an idle store.
 	settleForeign(t, &foreign)
 
-	var attempts int
+	// EVERY ATTEMPT'S CAUSE, not how many there were. The count alone cannot
+	// tell the two apart, which is what made this assertion flake: under load
+	// the driver refuses the WRITE LOCK inside busy_timeout and the attempt
+	// retries having written nothing, and that is a fact about how much CPU
+	// the box had — not about this driver's conflict detection. It failed CI
+	// at two attempts on a runner measured 2.5-3.6x slower than the one the
+	// suite normally gets, while passing here with 177 foreign commits landing
+	// during the transaction, which is 3.4x the contention of the run that
+	// failed. No threshold separates those, because the quantity being
+	// thresholded is the scheduler's.
+	var causes []store.Conflict
 	var during int64
 	err := w.Tx(ctx, func(tx *sql.Tx) error {
-		attempts++
 		before := foreign.Load()
 		insertErr := insertUnprepared(ctx, tx, benchItems(benchRows))
 		during = foreign.Load() - before
+		if insertErr != nil {
+			causes = append(causes, store.Classify(insertErr))
+		}
 		return insertErr
 	})
 	close(stop)
 	wg.Wait()
+	// EXHAUSTION IS STILL FATAL whatever caused it: a batch that cannot land
+	// after [store.TxAttempts] tries is the fleet-stops-applying symptom this
+	// case exists for, and it is reached the same way from either cause.
 	if err != nil {
-		t.Fatalf("the apply failed under a concurrent writer: %v", err)
+		t.Fatalf("the apply failed under a concurrent writer after %d attempt(s) "+
+			"(%v): a batch that cannot land is the failure this case guards, "+
+			"whichever conflict produced it", len(causes)+1, causes)
 	}
-	if attempts != 1 {
-		t.Errorf("the applier's transaction ran %d times against a writer that "+
-			"committed %d times to a table it never touches: this driver aborts "+
-			"a write transaction because of commits elsewhere in the file, and "+
-			"every apply under load will burn its retry budget",
-			attempts, foreign.Load())
+	for i, cause := range causes {
+		if cause == store.ConflictAbort {
+			t.Errorf("attempt %d was aborted with a stale snapshot against a writer "+
+				"committing only to bench_foreign, a table this transaction never "+
+				"touches: this driver's conflict detection is now DATABASE-scoped "+
+				"rather than row-scoped, so every apply under load will burn its "+
+				"retry budget and the batch will fail exactly when the fleet is "+
+				"busiest. %d foreign commit(s) in total.", i, foreign.Load())
+		}
 	}
-	t.Logf("%d foreign commit(s) in total, %d of them while the applier's "+
-		"transaction was open; %d attempt(s)", foreign.Load(), during, attempts)
+	t.Logf("%d foreign commit(s) in total, %d queued while the applier's "+
+		"transaction was open; %d attempt(s), causes %v",
+		foreign.Load(), during, len(causes)+1, causes)
 }
 
 // settleForeign waits until the concurrent writer has committed at least once,
