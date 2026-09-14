@@ -26,6 +26,33 @@ A body that does not arrive inside its deadline fails the read like any other tr
 
 ---
 
+## During a drain
+
+A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP for the whole of its [drain](../concepts/agent-runtime.md#graceful-shutdown), and closes its listener only once the drain has completed. What changes from the drain's first moment is which requests it will still take:
+
+| Request | During a drain | Why |
+|---|---|---|
+| `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
+| `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
+| Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
+| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain, which is the work the drain is waiting for. |
+| Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work. The two `GET` landings act too: the GitHub App return seals a credential and writes a config revision. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `/operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+
+A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
+
+```json
+{
+  "error": "draining",
+  "detail": "this node is draining for a shutdown: the turns already running finish, and nothing new is started here",
+  "hint": "retry against another node, or once this one has restarted; /ready answers 503 for as long as the drain lasts"
+}
+```
+
+A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close.
+
+---
+
 ## Routes
 
 | Method | Path | Description |
@@ -68,7 +95,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
 | `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
@@ -1394,9 +1421,9 @@ reconnect restores every field without a second round trip.
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, `shutting_down`, or the config posture when it is `shed`, `stuck` or `isolated`. A draining engine reports `shutting_down` whatever else is true of it. |
+| `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence. A draining engine is draining first, whatever else is true of it, and a node with no active revision is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. |
 | `node` | This process's `node.id`. |
-| `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
+| `configured` | Whether a company revision is active. When `false` the node **refuses** every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
 | `engine` | Whether this process has an engine to ask. Always `true` from `crewlet run`, which runs the engine in every process that serves the API, the `ingress`-only node of a split deployment included. The API contract keeps the flag and leaves the engine's fields (`in_flight`, `shutting_down`, `posture`, `applied_epoch`, `engine_started_at`, `seats`) absent when it is `false`, so a client can tell "nothing is running" from "this process cannot know" instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
 | `started_at` | When the **API** was built. Deliberately separate from `engine_started_at`: the listener binds before the engine starts, so the two differ even in one process, and one merged "uptime" would be wrong for at least one of them. |
@@ -1404,7 +1431,7 @@ reconnect restores every field without a second round trip.
 | `clients` | Dashboards currently connected to this API process. |
 | `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. Carried by `GET /health`, the snapshot's `health` section and the `stream` query; the 5-second push does not repeat it, because it does not change. |
 | `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens; the API server keeps serving until the engine has fully stopped. |
+| `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck` (embedded API only). |
 | `applied_epoch` | The activation epoch this node last applied (embedded API only). |
 | `seats` | The handles of the seats this node holds (embedded API only). |
@@ -1417,8 +1444,9 @@ would force one encode per client per tick; they are answered on demand
 by the `stream` query instead.
 
 `GET /health` always returns **200**, including when `status` is
-`unconfigured`: the status code is liveness, and an engine waiting for a
-configuration is alive. A readiness probe should read `configured`.
+`unconfigured` or a diverged posture: the status code is liveness, and an
+engine waiting for a configuration is alive. Steer traffic with
+[`GET /ready`](#routes) instead, which answers `503` and names the reason.
 
 ### Paging the event history
 

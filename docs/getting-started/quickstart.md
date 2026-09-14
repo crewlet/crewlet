@@ -334,17 +334,20 @@ crewlet run                             # boots from the store
 Both flags default to files in the working directory — `crewlet.yaml` and
 `company.yaml` — so a node whose files are named that way needs neither.
 
-**Stopping:** press `Ctrl+C` once for a graceful drain — running agent turns
-finish, and the HTTP surface (dashboard included) closes immediately so
-nothing new arrives while it converges, which means you watch the drain in the
-logs rather than on a screen. Press it a **second** time to exit at once; the
-first press hands signal handling back to the OS precisely so that works.
+**Stopping:** press `Ctrl+C` once for a graceful drain. Running agent turns
+finish, and the HTTP surface stays up until they have: the dashboard shows the
+node draining, `/health` stays `200` and `/ready` answers `503`, while every
+route that would start new work (a webhook, a config write) answers `503`
+naming the drain, so nothing new arrives while it converges. The listener
+closes once the drain completes. Press it a **second** time to exit at once;
+the first press hands signal handling back to the OS precisely so that works.
 There is no third tier. See
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown). Want to
-keep those logs? The `logging.file` block above already has them — the engine
-writes the file itself, so the drain is recorded whatever happens to the
-terminal. Piping instead? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`) —
-a plain `tee` dies on the first Ctrl+C and the drain logs have nowhere to go.
+keep the drain's log? The `logging.file` block above already has it: the
+engine writes the file itself, so the drain is recorded whatever happens to the
+terminal. Piping instead? Use `tee -i` (`crewlet run 2>&1 | tee -i run.log`),
+because a plain `tee` dies on the first Ctrl+C and the drain's log has nowhere
+to go.
 
 ## 4. Watch the first turn
 

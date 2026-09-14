@@ -233,56 +233,66 @@ exactly that reason.
 
 ### Graceful shutdown
 
-SIGINT / SIGTERM trigger a **close-the-door-then-drain** shutdown, designed so a restart picks up cleanly without a half-finished turn. The engine owns the process signals exclusively — nothing else in the process may install a handler, the embedded API server included.
+SIGINT / SIGTERM trigger a **drain with the probes up**, designed so a restart picks up cleanly without a half-finished turn: the node stops taking new work, lets the turns already running finish, hands its seats back, and only then closes its HTTP listener and its backends. The engine owns the process signals exclusively. Nothing else in the process may install a handler, the embedded API server included.
 
-**The HTTP surface comes down first, before the drain — not after it.** The drain waits for in-flight turns to finish, and a listener still accepting webhooks throughout would keep minting new ones; closing the door first is what makes the drain converge at all. The cost is real and worth knowing: the dashboard, the REST API and every webhook endpoint stop answering the moment you press Ctrl+C, so the drain is watched in the **logs** (`drain_in_progress`, every 10 s) rather than on a screen.
+**The listener stays up for the whole drain, and the door is a refusal rather than a closed port.** An orchestrator watches a node precisely while it drains, so `GET /health` keeps answering `200` with `status: "shutting_down"`, and `GET /ready` answers `503` with `reason: "draining"`. Traffic moves elsewhere, and nothing kills the node in the middle of the turns the drain exists to finish. What the drain must not do is keep making work for itself, so from its first moment every route that would start new work answers `503` with `{"error": "draining"}` and a `Retry-After`: the webhook edge, the `/config`, `/secrets` and `/setup` writes, the operator's writes and `/operator/mcp`, and backups. Reads keep being served, the dashboard included, and so do the sandbox bridge (`/mcp/{token}`) and the telemetry edge (`/otlp/{token}`), because those carry the tool calls and spans of the coding runs the drain is waiting for. See [During a drain](../reference/api-endpoints.md#during-a-drain) for the exact rule.
 
 ```mermaid
 flowchart TD
-    SIG["Signal arrives (1st)<br/><i>signals handed back to the OS</i>"] --> S0
-    S0["1. HTTP surface stops<br/>dashboard · REST · webhooks"] --> S1
-    S1["2. Watchdog disarmed; the seat host starts draining<br/>close the concurrency gate · quiesce every held seat"] --> S2
-    S2["3. Wait for in-flight handlers"] --> S3
-    S3["4. Release every seat"] --> S4
-    S4["5. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S5
-    S5["6. Reap shared MCP servers; close stream + store"]
+    SIG["Signal arrives (1st)<br/><i>signals handed back to the OS</i>"] --> S1
+    S1["1. The drain begins<br/>/health 200 · /ready 503 · work routes 503"] --> S2
+    S2["2. Stop claiming, give up presence"] --> S3
+    S3["3. Close the concurrency gate"] --> S4
+    S4["4. Quiesce every held seat"] --> S5
+    S5["5. Wait for in-flight handlers"] --> S6
+    S6["6. Release every seat"] --> S7
+    S7["7. Close the HTTP listener<br/>dashboard · REST · webhooks · probes"] --> S8
+    S8["8. Stop the duties<br/>sandbox waiter · notifications · maintenance<br/>integrations · memory sync · learning · scheduler"] --> S9
+    S9["9. Reap shared MCP servers; close stream + store"]
     SIG -.->|"2nd signal:<br/>immediate exit"| X["Process dies"]
 ```
 
-1. **The HTTP surface stops.** The listener is closed before anything is
-   drained, so no new webhook, REST call or dashboard socket can arrive to
-   create work the drain would then have to wait for.
-2. **The node starts draining.** The watchdog is disarmed first, because a
-   drain legitimately blocks for a long time and an armed watchdog would read
-   that as a wedge. The seat host stops claiming and gives up its presence
-   lease, and the concurrency gate closes: turns parked at it are released at
+1. **The drain begins.** The engine reports that it is shutting down from this
+   moment, before anything that can block: the HTTP surface starts refusing
+   new work and both probes report the drain. The watchdog is disarmed, since
+   the drain and the teardown legitimately block for longer than it would
+   tolerate; no further config revision is applied, because everything one
+   would build is about to be torn down; and the stop is announced in the
+   audit log (`org_stopped`).
+2. **Stop claiming and give up presence**, so peers stop reserving a share of
+   the company for a node that will never claim again.
+3. **Close the concurrency gate.** Turns still parked at it are released at
    once and their deliveries deferred (left unacked, so a peer picks them up
    rather than waiting out a redelivery timer) instead of starting fresh LLM
-   rounds mid-drain. Then every held seat is **quiesced**: it stays attached
-   and stops taking new deliveries. The gate closes *before* the quiesce,
-   because quiescing stops new deliveries while a turn already delivered and
-   parked behind a slot is past that point. Quiescing is what makes the wait
-   below terminate: without it the mailbox keeps feeding this node work for as
-   long as its peers keep publishing. Both steps are reversible, so a node that
-   drained on a config posture and then converged serves again rather than
-   holding its seats and refusing every turn.
-3. **Wait for in-flight handlers**, indefinitely: running turns finish their
+   rounds mid-drain. The gate closes *before* the mailboxes quiesce:
+   quiescing stops new deliveries, but a turn already delivered and parked
+   behind a slot is past that point.
+4. **Quiesce every held seat.** The node stops taking new work while staying
+   attached. This is what makes the wait below terminate: without it the
+   mailbox keeps feeding this node work for as long as its peers keep
+   publishing, and "wait until nothing is running" never comes true.
+5. **Wait for in-flight handlers**, indefinitely: running turns finish their
    rounds until the count hits 0, with `drain_in_progress` logging the
    in-flight count every 10 s.
-4. **Release every seat**, on a bounded budget of one heartbeat interval, so
+6. **Release every seat**, on a bounded budget of one heartbeat interval, so
    peers can claim them at once rather than waiting out the lease TTL. The
    drain then logs `drain_complete`.
-5. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
+7. **Close the HTTP listener**, and not before: until now the probes are what
+   the orchestrator reads, and they read the stream and the coordination
+   store the next steps close. Requests still running get a five-second grace
+   and are then cut, the live feed stops, and every dashboard socket is
+   closed (`api_stopped`).
+8. **Stop the duties**: the sandbox waiter first (its keepalive is what stops
    a running box being reaped while turns are still finishing), then the
    notification transports, the maintenance duties, the integration reconcile
    loop, memory sync, the learning passes, the cron scheduler and the
    credential cooldown refresh.
-6. **Close the backends**: the shared MCP servers are reaped, then the
-   stream connection and the store file are closed.
+9. **Close the backends**: the shared MCP servers are reaped, then the stream
+   connection and the store file are closed (`engine_stopped`).
 
 **Let LLMs finish their rounds — but only the running ones.** The drain distinguishes two kinds of in-flight turn. Turns already past the concurrency gate (model rounds under way) run to completion: they may have fired side effects, and abandoning that work buys a faster deploy by throwing away what was nearly done. Turns delivered before the quiesce but still *waiting* for a slot abort immediately — they have called no model and fired nothing, so their trigger is simply deferred. Without this split, a backlog parked behind `max_concurrent` would run full multi-minute executor → reviewer turns one after another during a shutdown that waits for them indefinitely.
 
-**No engine-level timeout on the drain.** Step 3 waits as long as in-flight turns need. We don't try to second-guess "too long" — the host already provides that cutoff:
+**No engine-level timeout on the drain.** Step 5 waits as long as in-flight turns need, and the listener stays up for all of it. We don't try to second-guess "too long", because the host already provides that cutoff:
 
 - **Interactive:** a second Ctrl+C tells us you're done waiting.
 - **Kubernetes:** `terminationGracePeriodSeconds` (default 30 s) — after which the kubelet sends SIGKILL.
@@ -310,18 +320,14 @@ duplicate — the [completion ledger](seat-ownership.md#the-completion-ledger)
 covers a turn that *finished*, and this one did not. That is the trade-off
 you opted into by sending the second signal.
 
-**Watching the drain.** Not on the dashboard: the embedded API server is stopped *first*, before the drain begins, so the dashboard, the REST API and `GET /health` all stop answering on the first Ctrl+C. **The logs are the drain's only live view** — the engine writes `drain_in_progress` with the in-flight count every 10 seconds until `drain_complete`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that view to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `drain_complete` is in it.
+**Watching the drain.** On the dashboard and over the API, for as long as it lasts: the listener closes only once the drain has completed, so the dashboard shows the node as draining with its in-flight count, `GET /health` reports it, and `GET /ready` names the reason. The log says the same and outlives the process: `engine_draining` on the first signal, with what is being waited for and how to stop waiting, then `drain_in_progress` with the in-flight count every 10 seconds, then `drain_complete`, `api_stopped` and `engine_stopped`. Set [`logging.file`](../guides/deployment.md#the-log-file) if you want that record to survive the terminal it was watched in: the file is closed last of everything, after the drain and after the trace flush, so `engine_stopped` is in it.
 
-On a **split deployment** a node with the `ingress` role keeps serving while a seats node drains, but it answers for itself: its own `/health` carries its own in-flight count, and the draining node has already left the fleet view, because a drain gives up its presence lease at once. The draining node's logs are the view of its drain.
+A node's drain is reported **by that node**: its own probes, its own dashboard and its own log. It gives up its presence at step 2, so a peer's **Fleet** screen stops listing it rather than showing it draining. On a split deployment a `-roles ingress` node drains the same way; it holds no seats and runs no turns, so its drain is short.
 
-The same facts are on `GET /health` whenever the embedded API is still answering, which is the case when a node drains on a [config posture](control-plane.md) rather than on a signal:
+The drain is available programmatically up to the moment the listener closes:
 
-- `in_flight`: the deliveries this node's handlers are working on
-- `shutting_down`: true from the moment the seat host starts draining
-- `status` reads `"shutting_down"` during the drain
-
-Every process that serves the API runs an engine beside it, so these fields are always present.
-
-The console shows the same story: the first Ctrl+C prints what is being waited for and how to escalate, and the engine logs `drain_in_progress` with the in-flight count every 10 seconds until the drain converges (`drain_complete`).
+- `Engine.ShuttingDown`: `true` from the first moment of the drain and never `false` again. The HTTP surface refuses work on it and both probes report it.
+- `GET /health`: `200` throughout, with `status: "shutting_down"`, `shutting_down: true` and the in-flight count as `in_flight`.
+- `GET /ready`: `503` throughout, with `draining: true` and `reason: "draining"`.
 
 Per-agent visibility is finer-grained: each working agent's row carries `current_phase` (`onboarding`, `execute`, `review`, or `subagent` for a worker) plus the round number, derived from the `agent_phase_started` events the runner publishes at the top of each phase.
