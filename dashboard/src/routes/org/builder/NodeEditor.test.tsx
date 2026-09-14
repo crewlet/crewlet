@@ -19,6 +19,7 @@ import { locate } from "./model/draft.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { builderReducer } from "./model/reducer.ts";
+import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
 import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
 import {
@@ -866,6 +867,9 @@ describe("the charter", () => {
     type("Company name", "Acme Labs");
     const applyButton = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
     expect(applyButton.disabled).toBe(true);
+    // The same sentence the review asks the operator to accept before a save,
+    // so the two cannot come to describe one consequence two ways.
+    expect(screen.getByText(ACKNOWLEDGEMENT_TEXT.company_rename)).toBeDefined();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "I understand what renaming the company does" }),
     );

@@ -240,7 +240,7 @@ describe("the review", () => {
     // (and with it the mailbox) does not.
     fireEvent.click(
       within(dialog).getByRole("checkbox", {
-        name: "Renaming the company gives every agent seat a new id: each seat's diary and onboarding progress are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
+        name: "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
       }),
     );
     expect(save.disabled).toBe(false);

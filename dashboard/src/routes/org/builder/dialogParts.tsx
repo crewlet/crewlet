@@ -13,6 +13,7 @@ import { href } from "~/app/router.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { Banner } from "~/ui/primitives.tsx";
 import { Problems } from "~/ui/Problems.tsx";
+import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
@@ -145,6 +146,30 @@ export const UNIQUE_NAME_HELP = {
   seat: "Seat names are unique: a lead or a manages entry names exactly one seat.",
   unit: "Unit names are unique: a manages entry or a unit reference names exactly one unit.",
 } as const;
+
+/**
+ * The sentence each acknowledgement asks the operator to accept, wherever it
+ * is asked: the review asks for every one, and the charter editor asks for
+ * the company rename before it records one, so the two can never describe
+ * one consequence two ways.
+ *
+ * EACH STATES WHAT THE ENGINE KEYS ON, because that is what is lost. An agent
+ * seat's id is a UUIDv5 over the company name and the seat's handle
+ * (`org.DeriveAgentID`): the diary and the onboarding marker are keyed by
+ * that id, while the mailbox (`topics.AgentInbox`) and the episodes are keyed
+ * by the handle. So a company rename orphans the first two and keeps the
+ * rest, and a handle change loses all of them.
+ */
+export const ACKNOWLEDGEMENT_TEXT: Readonly<Record<Acknowledgement, string>> = {
+  company_rename:
+    "An agent seat's id is derived from the company name and its handle, so renaming the company gives every agent seat a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
+  handle_change:
+    "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
+  kind_change:
+    "Changing a seat's kind removes the fields listed above, and a removed credential cannot be recovered from the dashboard.",
+  credential_servers: "The tool credentials the seats listed above receive will change.",
+  mass_removal: "This removes more than half of the company's seats.",
+};
 
 /** The unit types the engine knows by name. Any other string is accepted as a custom type. */
 export const UNIT_TYPES = [

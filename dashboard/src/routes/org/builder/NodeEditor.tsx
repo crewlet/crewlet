@@ -67,6 +67,7 @@ import {
   type UnitForm,
 } from "./editorForm.ts";
 import {
+  ACKNOWLEDGEMENT_TEXT,
   EditorSection,
   LeaveGuardProvider,
   NodeProblems,
@@ -463,7 +464,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
           framed
           tone="critical"
           label="I understand what renaming the company does"
-          description="An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged."
+          description={ACKNOWLEDGEMENT_TEXT.company_rename}
           checked={acknowledged}
           onChange={setAcknowledged}
           disabled={disabled}
