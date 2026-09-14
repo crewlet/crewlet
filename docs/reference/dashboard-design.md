@@ -231,6 +231,21 @@ arrives with the data after the route is revealed when it appears, unless the
 reader has already started reading. The ring is static: nothing on a live
 screen animates for data.
 
+**Work that exists nowhere else is not left behind unasked.** A surface holding
+it registers a leave guard (`useLeaveGuard`, the org builder's node editor
+while it has typed changes), and every move to another entry is put to that
+guard first: a push from code, a link, and Back or Forward. A replace is never
+held, because by the table above it stays on the entry. Back has already
+happened by the time a page hears of it, so a held one is undone at once and
+made again only when the reader agrees to lose the work; every entry carries
+its place in the session (`crewletIndex`) beside its scroll key, which is how
+the router knows which way to undo it. The guard that began to hold last is
+asked first, and agreeing to it asks the next one before the move is made. A
+reload or a closed tab gets the browser's own prompt while any guard holds,
+and `useUnloadGuard` asks for that prompt alone, for work a move within the
+page keeps but a closed tab does not (the builder's draft, kept in session
+storage).
+
 ### The attention queue
 
 `dashboard/src/lib/attention.ts` is one list because it is one question, and it
@@ -1060,7 +1075,10 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   restores through the update flow for another, and discards one kept for the
   other mode. It writes nothing before that decision, because the plan for an
   empty log is to clear. A token change or a refused token clears it and
-  withdraws an offer.
+  withdraws an offer. A draft with changes asks the browser's prompt before
+  the tab goes (session storage does not outlive the tab), and one that
+  storage cannot keep at all asks before the lens is left, since that loses it
+  too; a move within the lens keeps the Builder and asks nothing.
 - **A save is the checked write, signed, and never believed blindly.**
   `useSave.ts` sends the model's save request with the audit summary signed by
   a write id minted when the review opens and kept for as long as the draft

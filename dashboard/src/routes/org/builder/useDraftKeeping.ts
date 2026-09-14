@@ -53,6 +53,11 @@ export interface KeepNotice {
 export interface DraftKeeping {
   /** A kept draft of this revision, waiting for Keep or Discard. */
   readonly offer: KeptDraft | null;
+  /**
+   * Whether the draft as it stands is found again after a reload or a trip
+   * off the lens: false while storage refuses it or it is over the cap.
+   */
+  readonly survives: boolean;
   /** True until the kept draft, if any, is decided. */
   readonly pending: boolean;
   readonly notice: KeepNotice | null;
@@ -65,7 +70,8 @@ export interface DraftKeeping {
 
 const REFUSED: KeepNotice = {
   tone: "caution",
-  message: "This browser refuses to keep a draft, so unsaved changes will not survive a reload.",
+  message:
+    "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
 };
 
 export function useDraftKeeping({
@@ -194,7 +200,7 @@ export function useDraftKeeping({
           ? {
               tone: "caution",
               message:
-                "This draft holds more changes than can be kept across a reload. Save it in steps, or it is lost if the tab reloads.",
+                "This draft holds more changes than can be kept across a reload. Save it in steps, or it is lost if the tab reloads or you leave the builder.",
             }
           : null,
     );
@@ -225,6 +231,7 @@ export function useDraftKeeping({
 
   return {
     offer,
+    survives: storageNotice === null,
     pending: !decided,
     notice: storageNotice ?? decisionNotice,
     keep,

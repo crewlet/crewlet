@@ -141,8 +141,10 @@ Choose **Edit** on the company, a unit or a seat to open its editor at the side
 of the chart. The editor holds your changes in its own form until you press
 **Apply**, which adds them to the draft as **one step**: one Undo takes the
 whole edit back. Closing an editor that holds changes (Cancel, Close, Escape or
-a click outside it), or following one of its links to another screen, asks
-before discarding them.
+a click outside it) asks before discarding them, and so does anything that
+would leave the page under it: one of its links, the browser's Back or
+Forward, or a reload. **Keep editing** leaves you where you were, form and
+all.
 
 If the engine refused something about the node at the last check, the problem
 is shown beside the field it names. Problems that name no field in the editor
@@ -469,10 +471,13 @@ opens and finds a kept draft:
 
 The kept draft is removed when you save, when you discard, when the operator
 token changes, and when the engine refuses the token, because each of those
-may mean the tab has changed hands. A browser that refuses session storage (a
-private window, blocked site data) shows a caution: editing works, but the
-draft will not survive a reload. A draft of more than 500 changes is not kept
-either; save it in steps.
+may mean the tab has changed hands. Session storage does not outlive the tab,
+so closing a tab that holds a draft with changes asks first.
+
+A browser that refuses session storage (a private window, blocked site data)
+shows a caution: editing works, but the draft will not survive a reload or
+leaving the builder, and leaving the builder asks before it discards the
+draft. A draft of more than 500 changes is not kept either; save it in steps.
 
 ## When somebody else saves first
 

@@ -7,7 +7,7 @@
  * in `ui/`, and they are built only from `ui/` components and tokens.
  */
 
-import { createContext, useContext, useId, useState, type MouseEvent, type ReactNode } from "react";
+import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
@@ -60,33 +60,17 @@ export function EditorSection({
 }
 
 /**
- * What a form whose changes exist nowhere else does when a link inside it is
- * followed: `true` when it took the navigation over (to ask first), `false`
- * to let the link go. No guard lets every link go.
- */
-const LeaveGuard = createContext<((target: string) => boolean) | null>(null);
-export const LeaveGuardProvider = LeaveGuard.Provider;
-
-/**
  * A link to another screen, in the caption register that keeps reading as a
  * link.
  *
- * INSIDE A CHANGED FORM IT ASKS FIRST. Following it replaces the screen, and
- * with it a form whose changes exist nowhere else, so a plain click goes
- * through the form's [LeaveGuard]. A click that opens another tab or window
- * leaves the form where it is, and is left alone.
+ * A PLAIN LINK, EVEN INSIDE A CHANGED FORM. Following it moves to another
+ * entry, which the router puts to the form's leave guard first
+ * (`useLeaveGuard`), the same as Back; a click that opens another tab or
+ * window moves nothing here and is left alone by the browser itself.
  */
 export function ScreenLink({ to, children }: { to: string[]; children: ReactNode }) {
-  const guard = useContext(LeaveGuard);
-  const target = href(to);
-  const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
-    const elsewhere =
-      event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
-    if (guard === null || event.defaultPrevented || elsewhere) return;
-    if (guard(target)) event.preventDefault();
-  };
   return (
-    <a className="t-link" href={target} onClick={onClick}>
+    <a className="t-link" href={href(to)}>
       {children}
     </a>
   );

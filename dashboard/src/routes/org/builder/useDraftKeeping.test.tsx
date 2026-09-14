@@ -229,7 +229,7 @@ test("storage that refuses says the draft will not survive a reload", async () =
   fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
   expect(
     await screen.findByText(
-      "This browser refuses to keep a draft, so unsaved changes will not survive a reload.",
+      "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
     ),
   ).toBeDefined();
   // The work goes on.
@@ -250,9 +250,67 @@ test("no storage at all says the draft will not survive a reload", async () => {
   );
   expect(
     screen.getByText(
-      "This browser refuses to keep a draft, so unsaved changes will not survive a reload.",
+      "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
     ),
   ).toBeDefined();
+});
+
+// A CLOSED TAB TAKES THE DRAFT WITH IT: session storage survives a reload and
+// a trip to another screen, never the tab itself.
+test("a draft with changes asks before the tab goes, and one without does not", async () => {
+  const unload = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  mountBuilder({ engine: new Engine(company()) });
+  await screen.findByText("No problems");
+  expect(unload()).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await waitFor(() => expect(unload()).toBe(true));
+});
+
+// WHERE NOTHING KEEPS THE DRAFT, leaving the lens loses it like a reload, so
+// that move is asked about first; a move within the lens keeps the Builder
+// and the draft, and is not.
+test("a draft this browser cannot keep asks before the lens is left, not before a view changes", async () => {
+  const refusing: DraftStorage = {
+    getItem: () => null,
+    setItem: () => {
+      throw new DOMException("quota", "QuotaExceededError");
+    },
+    removeItem: () => {},
+  };
+  mountBuilder({ engine: new Engine(company()), storage: refusing });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+  await screen.findByText(/This browser refuses to keep a draft/);
+  const start = location.hash;
+
+  act(() => {
+    location.hash = "#/org?lens=builder&view=outline";
+  });
+  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=outline"));
+  expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
+
+  act(() => {
+    location.hash = "#/people";
+  });
+  const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
+  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=outline"));
+  fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
+  expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
+
+  act(() => {
+    location.hash = "#/people";
+  });
+  fireEvent.click(
+    within(await screen.findByRole("dialog", { name: "Leave the builder?" })).getByRole("button", {
+      name: "Leave without the draft",
+    }),
+  );
+  await waitFor(() => expect(location.hash).toBe("#/people"));
+  expect(start).toContain("lens=builder");
 });
 
 test("coming back to the lens restores this page's own draft without asking", async () => {

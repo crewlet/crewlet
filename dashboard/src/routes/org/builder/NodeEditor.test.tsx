@@ -10,7 +10,7 @@
  * credential, masked or referenced, reaches the page.
  */
 
-import { cleanup, fireEvent, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
@@ -220,34 +220,46 @@ describe("the unsaved-changes prompt", () => {
     expect(view.state().log.ops).toHaveLength(0);
   });
 
-  // A link in the form replaces the screen, and the form with it, so a changed
-  // form asks first, and discarding then follows the link. A click meant for
-  // another tab leaves the form where it is.
-  test("a link to another screen asks before it leaves a changed form", () => {
-    const hash = window.location.hash;
-    try {
-      const view = edit(keyedState(fixtureCompany()), "seat:dev");
-      const link = () =>
-        within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
-      // Untouched: the link simply goes.
-      expect(fireEvent.click(link())).toBe(true);
-      expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+  // A MOVE TO ANOTHER ENTRY takes the form with it, whatever makes it: one of
+  // the form's own links, Back or Forward, or a push from code. So a changed
+  // form holds every move and asks first; keeping the changes undoes the
+  // move, and discarding them makes it.
+  test("a link, Back and a push each ask before they leave a changed form", async () => {
+    history.replaceState(null, "", "#/org?lens=builder");
+    const view = edit(keyedState(fixtureCompany()), "seat:dev");
+    const link = () =>
+      within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
+    const prompt = () => screen.findByRole("dialog", { name: "Discard your changes?" });
+    // Untouched: the link simply goes.
+    fireEvent.click(link());
+    await waitFor(() => expect(location.hash).toBe("#/integrations"));
+    expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+    act(() => {
+      location.hash = "#/org?lens=builder";
+    });
+    await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
 
-      window.location.hash = "#/org";
-      type("Goal", "Ship");
-      expect(fireEvent.click(link(), { ctrlKey: true })).toBe(true);
-      expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+    type("Goal", "Ship");
+    fireEvent.click(link());
+    const asked = await prompt();
+    expect(asked.textContent).toContain("you are leaving this page");
+    // Held, and undone: the page is where it was, and so is the form.
+    await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
+    fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
+    expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
-      expect(fireEvent.click(link())).toBe(false);
-      const prompt = screen.getByRole("dialog", { name: "Discard your changes?" });
-      expect(prompt.textContent).toContain("follows the link");
-      expect(window.location.hash).toBe("#/org");
-      fireEvent.click(within(prompt).getByRole("button", { name: "Discard changes" }));
-      expect(view.onClose).toHaveBeenCalledTimes(1);
-      expect(window.location.hash).toBe("#/integrations");
-    } finally {
-      window.location.hash = hash;
-    }
+    act(() => history.back());
+    fireEvent.click(within(await prompt()).getByRole("button", { name: "Keep editing" }));
+    await waitFor(() => expect(location.hash).toBe("#/org?lens=builder"));
+    expect(view.onClose).not.toHaveBeenCalled();
+
+    act(() => history.back());
+    fireEvent.click(within(await prompt()).getByRole("button", { name: "Discard changes" }));
+    expect(view.onClose).toHaveBeenCalledTimes(1);
+    // The move the reader asked for is made: back past the entry they were on.
+    await waitFor(() => expect(location.hash).toBe("#/integrations"));
+    cleanup();
+    history.replaceState(null, "", "#/");
   });
 
   test("a schedule toggle is a change too", () => {

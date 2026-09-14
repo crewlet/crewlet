@@ -61,7 +61,7 @@ export const DRAFT_STORAGE_KEY = "crewlet_org_draft";
  * handful of unusually large removals. It is also far beyond a coherent
  * session of edits: a draft that size is a restructuring better saved in
  * steps. A draft over the cap keeps working; it is removed from storage and
- * the operator is told it will not survive a reload.
+ * the operator is told it will not survive a reload or leaving the builder.
  */
 export const MAX_KEPT_OPERATIONS = 500;
 

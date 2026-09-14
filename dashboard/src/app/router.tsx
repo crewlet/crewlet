@@ -41,6 +41,15 @@
  * `history.state` and files the outgoing position under it; an entry with NO
  * key is exactly the test for "somewhere new", which is the only case that
  * starts at the top.
+ *
+ * WORK THAT EXISTS NOWHERE ELSE IS NOT LEFT BEHIND UNASKED. A surface holding
+ * it (an editor with typed changes) registers a leave guard, and every move
+ * to ANOTHER ENTRY is put to it first: a push from code, a link, and Back or
+ * Forward. A replace is never held, by the table above: it stays on the
+ * entry. Back has already happened by the time a page hears of it, so a held
+ * one is undone at once and made again only if the reader agrees, which is
+ * why each entry carries its place in the session (`crewletIndex`) as well as
+ * its key. A reload or a closed tab gets the browser's own prompt.
  */
 
 import {
@@ -222,6 +231,41 @@ function stampKey(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Where the reader stands in the session
+// ---------------------------------------------------------------------------
+
+/** An entry's place among the session's entries, as the router stamped it; `null` for none. */
+function entryIndex(): number | null {
+  const index = (history.state as { crewletIndex?: unknown } | null)?.crewletIndex;
+  return typeof index === "number" ? index : null;
+}
+
+/**
+ * The entry the router is on. Module state beside the scroll positions,
+ * because both describe the one session history a page has, whichever
+ * Router is mounted.
+ */
+let settled = { hash: "", index: 0 };
+
+/** Whether a held Back or Forward is being undone, and the move it was should be ignored. */
+let reverting = false;
+
+/** Whether the reader agreed to a held Back or Forward, which the next move makes. */
+let bypassing = false;
+
+/** Adopts the entry the page loaded on, stamping its place if the router never has. */
+function adoptEntry(): void {
+  let index = entryIndex();
+  if (index === null) {
+    index = 0;
+    history.replaceState({ ...(history.state as object), crewletIndex: index }, "");
+  }
+  settled = { hash: location.hash, index };
+  reverting = false;
+  bypassing = false;
+}
+
+// ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
 
@@ -229,17 +273,150 @@ function scrollTarget(): HTMLElement | null {
   return document.getElementById("screen-scroll");
 }
 
-function go(hash: string, replace: boolean): void {
+function go(hash: string, replace: boolean, agreed = false): void {
+  // A PUSH IS A MOVE TO ANOTHER ENTRY, which a surface holding work may hold
+  // until the reader agrees. A replace stays on the entry, and is never held.
+  if (!replace && !agreed && held(parseHash(hash), () => go(hash, false, true))) return;
+
   // File the outgoing position under the entry we are leaving, before the
   // entry changes.
   const from = stateKey();
   const el = scrollTarget();
   if (from && el) positions.set(from, el.scrollTop);
 
-  if (replace) history.replaceState({ crewletKey: from }, "", hash);
-  else history.pushState({}, "", hash);
+  const index = replace ? settled.index : settled.index + 1;
+  if (replace) history.replaceState({ crewletKey: from, crewletIndex: index }, "", hash);
+  else history.pushState({ crewletIndex: index }, "", hash);
+  settled = { hash: location.hash, index };
   // `pushState` does not fire `hashchange`, so the router is told directly.
   window.dispatchEvent(new Event("crewlet:route"));
+}
+
+/**
+ * Reads a move the BROWSER made (Back, Forward, a link, a URL typed into the
+ * address bar) and answers whether the router follows it.
+ *
+ * A browser fires two events for one such move (`popstate`, then
+ * `hashchange`), and one more pair when a held move is undone; the second of
+ * a pair, and the pair of the undo, find the router already where the entry
+ * is and change nothing. An entry the browser made itself (a link, a typed
+ * URL) carries no place yet: it is the one after the entry the reader was
+ * on, and is stamped so.
+ */
+function traversed(): boolean {
+  const hash = location.hash;
+  const stamped = entryIndex();
+  if (stamped === settled.index && hash === settled.hash) {
+    reverting = false;
+    return false;
+  }
+  if (reverting) return false;
+  const index = stamped ?? settled.index + 1;
+  if (stamped === null) {
+    history.replaceState({ ...(history.state as object), crewletIndex: index }, "");
+  }
+  const delta = index - settled.index;
+  if (delta !== 0 && !bypassing) {
+    const leave = () => {
+      bypassing = true;
+      history.go(delta);
+    };
+    if (held(parseHash(hash), leave)) {
+      reverting = true;
+      history.go(-delta);
+      return false;
+    }
+  }
+  bypassing = false;
+  settled = { hash, index };
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Leave guards
+// ---------------------------------------------------------------------------
+
+/**
+ * Asked before the reader moves to another entry, with the route the move
+ * goes to. Answering true holds the move: the guard asks the reader, and
+ * calls `leave` to make the move once they agree to lose what it holds.
+ * Answering false lets the move go.
+ */
+export type LeaveGuard = (to: Route, leave: () => void) => boolean;
+
+/**
+ * The guards that hold moves, in the order they began to hold. The one that
+ * began last is asked first: it is the surface the reader opened last (an
+ * editor over the lens that holds a draft), so its question is the one on
+ * top.
+ */
+const guards: { readonly ask: LeaveGuard }[] = [];
+
+/** Whatever a reload or a closed tab would lose, for the browser's own prompt. */
+const unloadHolders = new Set<object>();
+
+/**
+ * Whether a guard holds a move to `to`, asking from the last guard down.
+ * EVERY GUARD IS ASKED BEFORE THE MOVE IS MADE: the `leave` a guard is handed
+ * asks the guards below it, and only the last agreement makes the move, so an
+ * editor agreeing to lose its form never also loses the lens's work unasked.
+ * The guards are the ones holding when the move was asked for, because
+ * agreeing can close a surface and take its guard off the list.
+ */
+function held(to: Route, move: () => void): boolean {
+  const asking = [...guards];
+  const from = (i: number): boolean => {
+    for (let at = i; at >= 0; at--) {
+      if (asking[at]!.ask(to, () => from(at - 1) || move())) return true;
+    }
+    return false;
+  };
+  return from(asking.length - 1);
+}
+
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  if (unloadHolders.size === 0) return;
+  // The browser shows its own sentence; the page only says that it holds
+  // something. Both halves, because browsers honour one or the other.
+  e.preventDefault();
+  e.returnValue = "";
+}
+
+/**
+ * Holds every move to another entry while `guard` is set, and a reload or a
+ * closed tab asks first: for work that exists nowhere else, such as an
+ * editor's typed changes. `null` holds nothing.
+ */
+export function useLeaveGuard(guard: LeaveGuard | null): void {
+  const latest = useRef(guard);
+  latest.current = guard;
+  const holding = guard !== null;
+  useEffect(() => {
+    if (!holding) return;
+    const entry = { ask: (to: Route, leave: () => void) => latest.current?.(to, leave) ?? false };
+    guards.push(entry);
+    unloadHolders.add(entry);
+    return () => {
+      guards.splice(guards.indexOf(entry), 1);
+      unloadHolders.delete(entry);
+    };
+  }, [holding]);
+}
+
+/**
+ * A reload or a closed tab asks first while `holding`: for work that
+ * survives a move within the page (it is kept elsewhere, such as the org
+ * builder's draft in session storage) but not the tab going away.
+ */
+export function useUnloadGuard(holding: boolean): void {
+  useEffect(() => {
+    if (!holding) return;
+    const entry = {};
+    unloadHolders.add(entry);
+    return () => {
+      unloadHolders.delete(entry);
+    };
+  }, [holding]);
 }
 
 export interface Navigator {
@@ -361,14 +538,20 @@ export function Router({ children }: { children: ReactNode }) {
   const arrivals = useMemo<Arrivals>(() => ({ current: { value: null }, attempts: new Set() }), []);
 
   useEffect(() => {
+    adoptEntry();
     const read = () => setRoute(parseHash(location.hash));
-    window.addEventListener("hashchange", read);
-    window.addEventListener("popstate", read);
+    const follow = () => {
+      if (traversed()) read();
+    };
+    window.addEventListener("hashchange", follow);
+    window.addEventListener("popstate", follow);
     window.addEventListener("crewlet:route", read);
+    window.addEventListener("beforeunload", onBeforeUnload);
     return () => {
-      window.removeEventListener("hashchange", read);
-      window.removeEventListener("popstate", read);
+      window.removeEventListener("hashchange", follow);
+      window.removeEventListener("popstate", follow);
       window.removeEventListener("crewlet:route", read);
+      window.removeEventListener("beforeunload", onBeforeUnload);
     };
   }, []);
 

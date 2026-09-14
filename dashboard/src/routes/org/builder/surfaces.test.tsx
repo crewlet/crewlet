@@ -8,7 +8,7 @@
  * canvas's tree, the outline's treegrid and the node editor.
  */
 
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AddNodeDialog } from "./AddNodeDialog.tsx";
 import { ChangeKindDialog } from "./ChangeKindDialog.tsx";
@@ -158,4 +158,26 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   await waitFor(() =>
     expect(document.activeElement).toBe(within(editor).getByRole("combobox", { name: /^Manages/ })),
   );
+});
+
+// BACK HAS ALREADY HAPPENED by the time the page hears of it, and it used to
+// take the lens and the editor with it, typed changes and all.
+test("Back over a changed editor asks first, and keeping the changes keeps the page", async () => {
+  mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
+  const onOutline = location.hash;
+  const row = within(grid)
+    .getAllByRole("row")
+    .find((r) => r.getAttribute("data-row-id") === "seat:ceo")!;
+  fireEvent.keyDown(row, { key: "Enter" });
+  const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
+  fireEvent.change(within(editor).getByLabelText(/^Goal/), { target: { value: "Grow" } });
+
+  act(() => history.back());
+  const asked = await screen.findByRole("dialog", { name: "Discard your changes?" });
+  await waitFor(() => expect(location.hash).toBe(onOutline));
+  fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
+  expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });

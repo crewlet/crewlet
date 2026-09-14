@@ -48,7 +48,7 @@ import {
   type ComponentType,
   type RefObject,
 } from "react";
-import { href, useNavigator, useParam } from "~/app/router.tsx";
+import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
@@ -848,6 +848,26 @@ function Lens({
   const [reviewing, setReviewing] = useState(false);
   const reviewAfterUpdate = useRef(false);
   const changed = useMemo(() => hasChanges(state), [state]);
+
+  // ---- Leaving with work --------------------------------------------------------
+
+  // A CLOSED TAB TAKES THE DRAFT WITH IT. The log is kept in the tab's own
+  // session storage, which a reload or a trip to another screen of this page
+  // finds again and a closed tab does not, so while the draft has changes the
+  // browser asks before the tab goes. Where storage cannot keep the draft at
+  // all, leaving the lens loses it as well, and that move is asked about
+  // first; moving within the lens (a view, a chart, a selection) keeps it.
+  useUnloadGuard(changed);
+  const [leaving, setLeaving] = useState<{ leave: () => void } | null>(null);
+  useLeaveGuard(
+    changed && !keeping.survives
+      ? (to, leave) => {
+          if (to.path[0] === "org" && to.query.get("lens") === "builder") return false;
+          setLeaving({ leave });
+          return true;
+        }
+      : null,
+  );
   const rules = saveRules(status, changed);
   const openReview = useCallback(() => {
     save.prepare();
@@ -1385,6 +1405,34 @@ function Lens({
             onConfirm={confirmUpdate}
             onCancel={cancelUpdate}
           />
+        )}
+
+        {leaving && (
+          <Dialog
+            title="Leave the builder?"
+            icon="alert"
+            onClose={() => setLeaving(null)}
+            footer={
+              <>
+                <Button onClick={() => setLeaving(null)}>Stay</Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    const { leave } = leaving;
+                    setLeaving(null);
+                    leave();
+                  }}
+                >
+                  Leave without the draft
+                </Button>
+              </>
+            }
+          >
+            <p>
+              This browser cannot keep the draft, so leaving the builder discards every change in
+              it. Save it first, or leave without it.
+            </p>
+          </Dialog>
         )}
 
         {companyExists && (

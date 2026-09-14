@@ -6,9 +6,10 @@
  * `editorForm.ts`): nothing reaches the draft while a sentence is half
  * typed, a refusal keeps the form open with the engine's reason on screen,
  * and Undo takes back the whole of what Apply did. Closing a form with
- * changes in it, by Cancel, Close, Escape or the veil, or following one of
- * its links to another screen, asks first, because a form's changes exist
- * nowhere else.
+ * changes in it, by Cancel, Close, Escape or the veil, asks first, because a
+ * form's changes exist nowhere else, and so does every move away from the
+ * page it is on (one of its links, Back or Forward, a reload): the form holds
+ * a leave guard (`app/router.useLeaveGuard`) for as long as it has changes.
  *
  * WHAT IS EDITABLE IS DECIDED FIELD BY FIELD (the field coverage of the
  * builder's spec). A field the builder can write is a field. A field it shows
@@ -40,6 +41,7 @@
  */
 
 import { useState, type ReactNode } from "react";
+import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
@@ -69,7 +71,6 @@ import {
 import {
   ACKNOWLEDGEMENT_TEXT,
   EditorSection,
-  LeaveGuardProvider,
   NodeProblems,
   NotConnected,
   ReadOnlyFact,
@@ -208,23 +209,27 @@ function EditorShell({
   onClose: () => void;
   children: ReactNode;
 }) {
-  // `leaving` is where a link in the form was going when it asked, so the
-  // same question serves a close and a link, and discarding then follows it.
-  const [confirming, setConfirming] = useState<{ leaving: string | null } | null>(null);
-  const requestClose = () => (dirty ? setConfirming({ leaving: null }) : onClose());
-  const guardLeaving = (target: string) => {
-    if (!dirty) return false;
-    setConfirming({ leaving: target });
-    return true;
-  };
+  // `leave` is the move the router held (a link, Back or Forward) when the
+  // question came from one, so the same question serves a close and a move,
+  // and discarding then makes the move.
+  const [confirming, setConfirming] = useState<{ leave: (() => void) | null } | null>(null);
+  const requestClose = () => (dirty ? setConfirming({ leave: null }) : onClose());
+  useLeaveGuard(
+    dirty
+      ? (_to, leave) => {
+          setConfirming({ leave });
+          return true;
+        }
+      : null,
+  );
   const discard = () => {
-    const leaving = confirming?.leaving ?? null;
+    const leave = confirming?.leave ?? null;
     onClose();
-    if (leaving !== null) window.location.hash = leaving;
+    leave?.();
   };
   const disabled = readOnly || blocked !== null;
   return (
-    <LeaveGuardProvider value={guardLeaving}>
+    <>
       <Drawer
         title={title}
         icon="pencil"
@@ -274,13 +279,13 @@ function EditorShell({
           }
         >
           <p className="t-body">
-            {confirming.leaving === null
+            {confirming.leave === null
               ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
-              : `The changes to ${name} have not been applied to the draft, and the link opens another screen. Discarding them leaves the draft as it was and follows the link.`}
+              : `The changes to ${name} have not been applied to the draft, and you are leaving this page. Discarding them leaves the draft as it was and goes on to where you were going.`}
           </p>
         </Dialog>
       )}
-    </LeaveGuardProvider>
+    </>
   );
 }
 

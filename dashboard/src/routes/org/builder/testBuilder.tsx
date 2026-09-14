@@ -11,6 +11,7 @@
 
 import { render } from "@testing-library/react";
 import { useReducer, type ReactNode } from "react";
+import { Router } from "~/app/router.tsx";
 import { vi } from "vitest";
 import type { AgentRow, ConfigProblem, ConfigWarning, SandboxEntry } from "~/protocol/index.ts";
 import { BuilderContext, type BuilderApi } from "./BuilderContext.tsx";
@@ -96,6 +97,12 @@ export function renderInBuilder(
     };
     return <BuilderContext.Provider value={api}>{children}</BuilderContext.Provider>;
   }
-  const rendered = render(<Host>{ui}</Host>);
+  // Under a Router, as the lens always is: a form's leave guard is the
+  // router's to consult.
+  const rendered = render(
+    <Router>
+      <Host>{ui}</Host>
+    </Router>,
+  );
   return { ...rendered, state: () => current, spies };
 }
