@@ -179,9 +179,14 @@ export function Shell({ children }: { children: ReactNode }) {
             )}
           </button>
           <div className="row" style={{ gap: 4 }}>
+            {/* AUTOMATIC, unlike every other group on the dashboard: theme and
+                density write `localStorage` and a `data-` attribute, so
+                arrowing across them costs one repaint and nothing else — no
+                query, no history entry, nothing a reader has to undo. */}
             <Segmented<ThemeChoice>
               size="sm"
               ariaLabel="Theme"
+              activate="automatic"
               value={theme}
               onChange={setTheme}
               options={[
@@ -194,6 +199,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <Segmented
               size="sm"
               ariaLabel="Density"
+              activate="automatic"
               value={density}
               onChange={setDensity}
               options={[

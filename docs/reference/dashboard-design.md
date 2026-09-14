@@ -535,9 +535,37 @@ not, which is the class of defect that never shows up in a screenshot:
   arrow keys — neither behaviour, rather than one or the other. The shell's
   theme and density controls alone put six stops in front of the page on
   every screen. One shared roving-focus hook gives both of them the contract
-  their role implies: `tabIndex` 0 on the selected option only, arrows (both
-  axes) and Home/End moving the selection, focus moving with it, and every
-  other key — Tab above all — left to the browser.
+  their role implies: arrows (both axes) and Home/End move within the group,
+  `tabIndex` 0 travels with them, and every other key — Tab above all — is
+  left to the browser.
+- **The arrows move focus; Enter and Space choose.** That is manual
+  activation, and it is the default on both controls because of what they are
+  wired to: seven of the nine groups on the dashboard drive a `useParam`,
+  five of those push a history entry, and every one of them re-runs its
+  screen's query — which the socket mints fresh, with no cache, no dedupe and
+  no coalescing behind it. Under selection-follows-focus, one reader arrowing
+  across the five options of a group to hear what is there is four queries
+  nobody asked for and four history entries they then have to press Back
+  through, and the reader most likely to arrow across every option is the one
+  using a screen reader. That is the trade the pattern names by its own
+  terms: selection follows focus only while the result is displayed without
+  noticeable latency and is not costly to undo, and a query behind a pushed
+  history entry satisfies neither clause. Two groups do satisfy both — the
+  shell's theme and density, which write `localStorage` and a `data-`
+  attribute — and those pass `activate="automatic"`, where selection
+  following focus is the better control and there is nothing to undo.
+  Nothing in the hook handles Enter or Space: every option is a real
+  `<button>`, so the browser's own activation fires the click the group
+  already listens for, and a second handler would commit one keypress twice.
+- **The tab stop is under the reader's feet, not on the selection.** The two
+  stop being the same question is what ends when arrows stop selecting: a
+  reader stands on an option they have not chosen for as long as they are
+  still deciding, and a stop left behind on the checked option means tabbing
+  out and back drops them somewhere they did not leave. A change from
+  outside the group — a click elsewhere, the browser's Back button, a pasted
+  URL — retires whatever the arrows were pointing at and takes the stop back,
+  and so does an option disappearing from `options`, which would otherwise
+  leave the group carrying no tab stop at all and reachable by no key.
 - **A meter needs a name, and a value inside its own range.** `role="meter"`
   with no accessible name announces as a bare number on screens that render
   several, and the visible legend is not the name: two call sites pass none

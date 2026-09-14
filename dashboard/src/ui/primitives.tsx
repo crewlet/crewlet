@@ -214,46 +214,82 @@ export function PhaseTag({ phase, children }: { phase: string; children?: ReactN
  *
  * BOTH `Segmented` and `Tabs` need it, and it is the half each of them was
  * missing. A radio group and a tab list share one keyboard contract — the
- * group is ONE stop in the page's tab order, arrows move the selection inside
- * it, Home and End jump to the ends — and a group of plain buttons has the
- * opposite behaviour: every option is its own tab stop, and arrow keys do
- * nothing. On the density control in the shell that is three extra stops
- * before a keyboard reader reaches the page content, on every screen.
+ * group is ONE stop in the page's tab order, arrows move within it, Home and
+ * End jump to the ends — and a group of plain buttons has the opposite
+ * behaviour: every option is its own tab stop, and arrow keys do nothing. On
+ * the density control in the shell that is three extra stops before a
+ * keyboard reader reaches the page content, on every screen.
  *
- * SELECTION FOLLOWS FOCUS, which is what a radio group does by definition and
- * what the tab-list pattern calls automatic activation. It is the right choice
- * for both here because every one of these switches a rendered view with no
- * fetch behind it, so arrowing through the options costs nothing a reader has
- * to undo.
+ * ARROWS MOVE FOCUS AND COMMIT NOTHING, which is what the pattern calls
+ * MANUAL activation, and it is the default here because of what these groups
+ * are wired to. Seven of the nine sites drive a `useParam`: five push a
+ * history entry and every one of them re-runs the screen's query, which
+ * `socket.query` mints fresh with no cache, no dedupe and no coalescing. So
+ * under selection-follows-focus, arrowing from the first option of Seat's tab
+ * strip to the last is four queries nobody asked for and four history entries
+ * a reader then has to press Back through — and the reader most likely to
+ * arrow through every option to hear what is there is the one using a screen
+ * reader. That is exactly the trade the pattern names: selection follows
+ * focus only while the result is displayed without noticeable latency and is
+ * not costly to undo, and neither clause holds for a query behind a push.
  *
- * Returns the props each option needs, so neither component keeps a second
- * idea of which option is current: `tabIndex` is 0 on exactly the selected
- * one, and focus is MOVED rather than requested, because changing tabIndex
- * alone leaves the browser's focus where it was.
+ * `automatic` is for a group whose options cost nothing — the shell's theme
+ * and density, which write `localStorage` and a `data-` attribute — where
+ * selection following focus is the better control and there is nothing to
+ * undo.
+ *
+ * ENTER AND SPACE ARE NOT HANDLED HERE, and their absence is the design
+ * rather than the gap it looks like: every option is a real `<button>`, so
+ * the browser's own activation fires the click this already listens for. A
+ * second handler would commit the same option twice on one keypress.
  */
 function useRovingGroup<T extends string>(
   values: readonly T[],
   value: T,
   onChange: (value: T) => void,
+  activate: "manual" | "automatic",
 ) {
   const box = useRef<HTMLDivElement>(null);
 
+  // WHERE THE GROUP'S ONE TAB STOP IS, which stops being the same question as
+  // which option is selected the moment arrows stop selecting: under manual
+  // activation a reader stands on an option they have not chosen yet, and the
+  // tab stop has to be under their feet or tabbing out and back drops them
+  // somewhere else and loses the place they were holding.
+  const [held, setHeld] = useState<T>(value);
+
+  // An outside change to `value` retires whatever the arrows were pointing
+  // at — a click elsewhere, the browser's Back button, a pasted URL. Adjusted
+  // during render rather than from an effect, because an effect commits one
+  // render first, and that render is the one a reader tabs into.
+  const seen = useRef(value);
+  if (seen.current !== value) {
+    seen.current = value;
+    if (held !== value) setHeld(value);
+  }
+  // And an option that left the group takes the tab stop with it, which would
+  // otherwise leave `indexOf` at -1 and the group with no stop at all.
+  const stop = values.includes(held) ? held : value;
+
   const step = (from: number, by: number) => {
-    // WRAPS, which is the pattern's own rule for both roles: a reader
-    // holding the arrow key gets the whole group rather than stopping at an
-    // end they cannot see.
+    // WRAPS, which is the pattern's own rule for both roles: a reader holding
+    // the arrow key gets the whole group rather than stopping at an end they
+    // cannot see.
     const next = values[(from + by + values.length) % values.length];
-    if (next === undefined || next === value) return;
-    onChange(next);
-    // The newly selected option is the one that will carry tabIndex 0 on the
-    // next render, and focus has to follow it there or the reader is left
-    // focused on an option that is no longer in the tab order.
+    if (next === undefined) return;
+    setHeld(next);
+    if (activate === "automatic" && next !== value) onChange(next);
+    // Focus is MOVED rather than requested, because `tabIndex` decides where
+    // a LATER Tab lands and says nothing about where the browser's focus is
+    // now. Read from the DOM rather than a ref array: the buttons are this
+    // hook's own `[data-roving]` children and there is exactly one list of
+    // them, so a ref array would be a second copy to keep in step.
     const buttons = box.current?.querySelectorAll<HTMLElement>("[data-roving]");
     buttons?.[values.indexOf(next)]?.focus();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    const at = values.indexOf(value);
+    const at = values.indexOf(stop);
     // BOTH AXES. These render as a horizontal row today, but a group that
     // wraps to two lines is the same control and a reader pressing Down on
     // it is asking for the next option either way.
@@ -274,7 +310,8 @@ function useRovingGroup<T extends string>(
         break;
       default:
         // Everything else is the browser's — Tab above all, which is how a
-        // reader LEAVES the group.
+        // reader LEAVES the group, and Enter and Space, which are how the
+        // focused button commits.
         return;
     }
     // Only for a key this handled: the arrows scroll the page otherwise, and
@@ -283,7 +320,7 @@ function useRovingGroup<T extends string>(
     e.preventDefault();
   };
 
-  return { box, onKeyDown };
+  return { box, onKeyDown, stop };
 }
 
 /**
@@ -305,17 +342,21 @@ export function Segmented<T extends string>({
   onChange,
   size,
   ariaLabel,
+  activate = "manual",
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; title?: string }[];
   onChange: (value: T) => void;
   size?: "sm";
   ariaLabel: string;
+  /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
+  activate?: "manual" | "automatic";
 }) {
-  const { box, onKeyDown } = useRovingGroup(
+  const { box, onKeyDown, stop } = useRovingGroup(
     options.map((o) => o.value),
     value,
     onChange,
+    activate,
   );
   return (
     <div
@@ -334,8 +375,11 @@ export function Segmented<T extends string>({
           aria-checked={o.value === value}
           // The GROUP is one tab stop. Without this every option is its own,
           // and the shell's two controls alone put six of them in front of
-          // the page on every screen.
-          tabIndex={o.value === value ? 0 : -1}
+          // the page on every screen. It sits on the option the arrows are
+          // HOLDING rather than the one that is checked, because under manual
+          // activation those are different options for as long as a reader is
+          // still deciding.
+          tabIndex={o.value === stop ? 0 : -1}
           title={o.title}
           onClick={() => onChange(o.value)}
         >
@@ -356,16 +400,20 @@ export function Tabs<T extends string>({
   options,
   onChange,
   ariaLabel,
+  activate = "manual",
 }: {
   value: T;
   options: { value: T; label: ReactNode; icon?: IconName; count?: number | null }[];
   onChange: (value: T) => void;
   ariaLabel: string;
+  /** See [useRovingGroup]. Defaults to manual; `automatic` needs a reason. */
+  activate?: "manual" | "automatic";
 }) {
-  const { box, onKeyDown } = useRovingGroup(
+  const { box, onKeyDown, stop } = useRovingGroup(
     options.map((o) => o.value),
     value,
     onChange,
+    activate,
   );
   return (
     <div ref={box} className="tabs" role="tablist" aria-label={ariaLabel} onKeyDown={onKeyDown}>
@@ -376,7 +424,7 @@ export function Tabs<T extends string>({
           data-roving
           role="tab"
           aria-selected={o.value === value}
-          tabIndex={o.value === value ? 0 : -1}
+          tabIndex={o.value === stop ? 0 : -1}
           onClick={() => onChange(o.value)}
         >
           {o.icon && <Icon name={o.icon} size="sm" />}
