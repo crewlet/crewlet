@@ -738,9 +738,6 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 // structured half every surface shares ([RefusalFields]).
 func refuseDocument(w http.ResponseWriter, code httpjson.Code, detail, hint string, err error) {
 	fields := RefusalFields(err)
-	if fields == nil {
-		fields = map[string]any{}
-	}
 	fields["detail"] = detail
 	if hint != "" {
 		fields["hint"] = hint

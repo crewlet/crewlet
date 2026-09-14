@@ -132,7 +132,13 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 //
 // ONE MAPPING for every surface a document refusal reaches, so a dashboard
 // placing problems on the chart reads the same shape from /config and from
-// /setup. Nil for an error that is not about a document.
+// /setup.
+//
+// EMPTY, NEVER NIL, for an error that is not about a document. Every caller
+// adds its own words to what comes back — a detail, a hint, an id — and a nil
+// map is the one value in Go that reads fine and panics on the write. The
+// caller that needs to know whether there was a structured half reads its
+// length.
 func RefusalFields(err error) map[string]any {
 	var invalid *ValidationError
 	var patchErr *PatchError
@@ -145,7 +151,7 @@ func RefusalFields(err error) map[string]any {
 	case errors.As(err, &docErr):
 		return map[string]any{"problems": config.Problems(docErr.Err)}
 	}
-	return nil
+	return map[string]any{}
 }
 
 // ApplyRequest is one merge-patch write.

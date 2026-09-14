@@ -2,6 +2,7 @@ package configapi_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -240,5 +242,35 @@ func TestNoRefusalRepeatsARestoredCredentialOrItsLength(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A REFUSAL'S STRUCTURED HALF IS ALWAYS A MAP A CALLER CAN WRITE INTO.
+//
+// [configapi.RefusalFields] exists so a second surface can answer a document
+// refusal in its own words, which means every caller adds a detail, a hint or
+// an id to what it gets back. A nil map reads like an empty one and PANICS on
+// the first write, so an error with no structured half hands back an empty map
+// rather than none: the caller that wants to know asks its length.
+func TestRefusalFieldsIsAlwaysWritable(t *testing.T) {
+	t.Parallel()
+	for name, err := range map[string]error{
+		"an error about no document at all": errors.New("the coordination store is unreachable"),
+		"a race":                            &configapi.RacedError{Base: "a", Current: "b"},
+		"no active revision":                configapi.ErrNoActiveRevision,
+	} {
+		fields := configapi.RefusalFields(err)
+		if fields == nil {
+			t.Fatalf("%s: RefusalFields is nil, so a caller adding a detail panics", name)
+		}
+		if len(fields) != 0 {
+			t.Errorf("%s: RefusalFields = %v, want nothing structured", name, fields)
+		}
+		fields["detail"] = err.Error()
+	}
+	// And a refusal that IS about a document still carries its problems.
+	document := configapi.RefusalFields(&configapi.DocumentError{Err: errors.New("not a company")})
+	if len(document) == 0 {
+		t.Errorf("a document refusal carries nothing: %v", document)
 	}
 }
