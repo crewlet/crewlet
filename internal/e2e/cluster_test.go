@@ -372,8 +372,14 @@ func buildMember(ctx context.Context, t *testing.T, relays *jetstreamtest.Relays
 	// belongs in this member's list, after the engine's, so a failed
 	// attempt stops the listener, the projector and the app before the
 	// engine they read from, and before the next attempt starts.
-	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot,
-		func() *config.Company { return cfg }, nil)
+	//
+	// THE SUPPRESSION BELOW: the context handed over is deliberately NOT
+	// this attempt's. `ctx` is cancelled the moment the bring-up ends, and
+	// what wireAPI starts under it — the app's push ticks and the live
+	// projector — serves for the whole case. The test's own context is
+	// that lifetime exactly: longer than the attempt, and still ended when
+	// the case is over, which [context.WithoutCancel] would not be.
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot, nil) //nolint:contextcheck // see above
 	stops = append(stops, apiStops...)
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))

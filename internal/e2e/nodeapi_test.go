@@ -27,11 +27,10 @@ import (
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap,
-	company func() *config.Company, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, company, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -63,8 +62,7 @@ func serveAPI(
 // surface and the native tracker and knowledge readers, each of which has its
 // own suite.
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
-	company func() *config.Company, amend func(*api.Options),
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -72,9 +70,15 @@ func wireAPI(
 	}
 
 	backends := e.Backends()
-	nodeID, err := config.ResolveNodeID(boot, nil)
-	if err != nil {
-		return fail("node identity", err)
+	// The name the engine runs under and the document its live epoch holds,
+	// as cmd/crewlet reads them: an apply replaces the epoch, so a document
+	// captured here would describe a company the node no longer runs.
+	nodeID := e.Node().ID()
+	company := func() *config.Company {
+		if current := e.Company(); current != nil {
+			return current.Config
+		}
+		return nil
 	}
 	// THE RECONCILER, because the health surface reports this node's config
 	// posture and its applied epoch, and the reconciler is what knows both.

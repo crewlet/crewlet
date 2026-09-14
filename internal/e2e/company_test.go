@@ -130,7 +130,7 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, func() *config.Company { return cfg }, nil)
+	app, srv := serveAPI(t, e, &boot, nil)
 
 	return &node{engine: e, app: app, server: srv, model: model, id: boot.Node.ID}
 }
