@@ -5,7 +5,9 @@
  *
  *  - the **spend rollup** is a WINDOW (24 hours by default, up to 30 days) over
  *    what was actually billed;
- *  - a **meter** is PROCESS-LIFETIME — it resets when the engine restarts.
+ *  - a **meter** is the fleet's shared counter as the budget gate enforces it:
+ *    every node's spend since the last deliberate reset, against the cap in the
+ *    company revision. It is the one figure a cap can be divided into.
  *
  * They are never comparable, and every number here says which it is.
  */
@@ -140,7 +142,7 @@ export function Spend() {
         <Panel
           title="Company budget meter"
           icon="target"
-          subtitle="process-lifetime — not the window above"
+          subtitle="spend since the last reset, not the window above"
           actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
         >
           <Meter
@@ -303,7 +305,7 @@ export function Spend() {
       <Panel
         title="Durable budget counters"
         icon="database"
-        subtitle="the fleet's shared ledger, not this process's meter"
+        subtitle="per seat, from the same shared ledger the meter above reads"
         padding="none"
       >
         {budgets.loading && !budgets.data && <Skeleton rows={3} />}

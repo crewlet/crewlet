@@ -304,7 +304,10 @@ export function SeatScreen({ handle }: { handle: string }) {
                 />
                 <Stat
                   icon="coin"
-                  label="Tokens · 7d"
+                  // The PUSHED rollup's window, which is the live one, not the
+                  // seven days the Cost tab asks for: this tile read its total
+                  // off the push and labelled it 7d.
+                  label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
                   value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
                   sub={
                     seatSpend
@@ -776,7 +779,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Panel
                 title="Live budget meter"
                 icon="target"
-                subtitle="process-lifetime, not the 7-day window"
+                subtitle="spend since the last reset, not the 7-day window"
               >
                 <Meter
                   used={agent.budget.used}
