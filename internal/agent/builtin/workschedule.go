@@ -65,8 +65,9 @@ func scheduleSchema(update bool) map[string]any {
 			"type": "string",
 			"description": "When this is due: a date (2031-04-16), an instant, " +
 				"or one of the relative words `due=` filters on — today, " +
-				"tomorrow, eow (this Friday's end), eom, or an offset like " +
-				"+7d." + clears,
+				"tomorrow, eow (the week's end: midnight ending Sunday, " +
+				"since a week starts on Monday), eom (midnight ending the " +
+				"month), or an offset like +7d." + clears,
 		},
 		"start": map[string]any{
 			"type": "string",
