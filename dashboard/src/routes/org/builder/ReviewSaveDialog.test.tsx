@@ -312,7 +312,8 @@ describe("a save whose answer never arrives", () => {
       await waitFor(() => expect(screen.getByText("editable")).toBeDefined());
       expect(screen.queryByRole("dialog", { name: "Update my draft and review" })).toBeNull();
       expect(engine.requests.filter(isWrite)).toHaveLength(1);
-      expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"');
+      // Standing on the saved revision, with nothing left to carry onto it.
+      await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"'));
       expect(JSON.stringify(engine.checks().at(-1)!.body)).not.toContain("Lead and more");
     });
 
