@@ -31,8 +31,9 @@ import (
 // Every other test in this tree stops at a seam. This one starts a real engine
 // on a real broker, wakes a real seat with a real trigger, drives a real
 // executor and reviewer loop against a scripted vendor endpoint, and reads the
-// result off a WebSocket dialled the way the dashboard dials it — then feeds
-// those exact frames through the dashboard's OWN store.js and socket.js.
+// result off a WebSocket dialled the way the dashboard dials it, then feeds
+// those exact frames through the dashboard's OWN protocol module (the store
+// and the socket, built as static/dashboard/protocol.js).
 //
 // It is the only test that can catch the class of bug it was written for. The
 // turn engine emitted NO events at all when this was written: every payload
@@ -448,8 +449,9 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 
 // --- the client's half ----------------------------------------------------- //
 
-// replayScript drives the dashboard's own store.js and socket.js over the
-// frames this server produced. See tests/dashboard/js/replay.mjs.
+// replayScript drives the dashboard's own protocol module, the store and the
+// socket built as static/dashboard/protocol.js, over the frames this server
+// produced. See tests/dashboard/js/replay.mjs.
 const (
 	replayScript  = "../../tests/dashboard/js/replay.mjs"
 	dashboardTree = "../../static/dashboard"
@@ -466,7 +468,7 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// The `agents` push was going out as an object keyed by role. Every
 	// field in it was correct. The server's tests asserted that shape and
 	// passed; the dashboard's own suites passed; the socket delivered every
-	// frame. And store.js guards applyAgents with Array.isArray, so it
+	// frame. And the store guards applyAgents with Array.isArray, so it
 	// dropped all of them, and a company running a full turn rendered idle
 	// from the first phase to the last. Nothing on either side could see
 	// it, because nothing on either side ran both.
