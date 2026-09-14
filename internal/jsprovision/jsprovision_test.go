@@ -861,3 +861,125 @@ func TestUnansweredTellsThisPackagesDeadlineFromTheCallers(t *testing.T) {
 		}
 	}
 }
+
+// A READ-BACK NOBODY ANSWERED IS ASKED AGAIN, and it is asked at the cadence a
+// destroyed request gets rather than the one a refusal the server ANSWERED
+// gets.
+//
+// [Settle] serves two conditions now. A not-found is an ANSWER and clears on
+// this member's next metadata update, which is worth polling four times a
+// second. A request nobody replied to was DESTROYED, and what has to change is
+// which member holds the group — [ReAsk] is that interval, and the two must not
+// share one cadence: `nats.ErrNoResponders` comes back in microseconds, so at
+// the placement cadence a broker whose JetStream is not serving yet is asked
+// four times a second, for each of the objects a boot provisions, which is the
+// load ReAsk exists to remove.
+func TestAnUnansweredReadBackIsReAskedAtItsOwnCadence(t *testing.T) {
+	t.Parallel()
+
+	// A REPLY THAT NEVER CAME, then the object. The answer is the later
+	// one: silence is not "absent".
+	calls := 0
+	err := Settle(t.Context(), func(context.Context) error {
+		calls++
+		if calls < 3 {
+			return nats.ErrNoResponders
+		}
+		return nil
+	})
+	if err != nil {
+		t.Errorf("an object found after two unanswered asks reported %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("asked %d times, want 3", calls)
+	}
+
+	// AND THE GAP IS [ReAsk], NOT [PlacementRetry]. Two unanswered asks
+	// that each return at once must still be at least one ReAsk apart:
+	// measured against the elapsed time rather than the constant, so
+	// swapping the cadence back is what turns this red.
+	calls = 0
+	start := time.Now()
+	_ = Settle(t.Context(), func(context.Context) error {
+		calls++
+		if calls < 2 {
+			return nats.ErrNoResponders
+		}
+		return nil
+	})
+	if waited := time.Since(start); waited < ReAsk {
+		t.Errorf("an unanswered ask was re-issued after %v, inside the %v a "+
+			"destroyed request gets; the placement cadence is for a refusal "+
+			"the server answered", waited, ReAsk)
+	}
+}
+
+// AND WHEN NOBODY EVER ANSWERS, THE CALLER IS TOLD THAT rather than handed
+// this function's own patience.
+//
+// The last ask is the one the window interrupts, so it comes back as a bare
+// [context.DeadlineExceeded] — which is what [Settle] promises never to
+// return, and the undiagnosable shape [LookupBudget] records having produced.
+// What the object last said is the honest answer, and when it never said
+// anything, the silence is.
+func TestAReadBackNobodyEverAnsweredNamesTheSilence(t *testing.T) {
+	t.Parallel()
+
+	// EVERY ASK UNANSWERED, and the LAST one cut off mid-flight by the
+	// window rather than returning: that attempt comes back as the
+	// window's own deadline, which is not an answer and must not be
+	// reported as one.
+	calls := 0
+	err := Settle(t.Context(), func(ctx context.Context) error {
+		calls++
+		if calls <= 2 {
+			return nats.ErrNoResponders
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if !errors.Is(err, nats.ErrNoResponders) {
+		t.Errorf("a read-back nobody ever answered reported %v, want the "+
+			"no-responders that says the broker is not serving yet", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("the caller was handed this function's own deadline: %v", err)
+	}
+
+	// A NOT-FOUND STILL OUTRANKS IT: the object DID answer once, and what
+	// it said names it.
+	err = Settle(t.Context(), func(ctx context.Context) error {
+		return jetstream.ErrStreamNotFound
+	})
+	if !errors.Is(err, jetstream.ErrStreamNotFound) {
+		t.Errorf("an absent object reported %v, want its own not-found", err)
+	}
+}
+
+// THE READ-BACK'S OWN ARITHMETIC, held against the window rather than restated
+// in a comment.
+//
+// [SettleAsk] bounds ONE attempt so a request that hangs cannot spend the whole
+// window, and [ReadBack] bounds the run of them. A term at or above the window
+// makes the first hung ask the entire read-back, which is the single lookup
+// this re-asking replaced.
+func TestAReadBacksAttemptIsBoundedWellInsideItsWindow(t *testing.T) {
+	t.Parallel()
+	if SettleAsk >= ReadBack {
+		t.Errorf("one attempt gets %v of a %v window, so a hung ask is the "+
+			"whole read-back", SettleAsk, ReadBack)
+	}
+	// AT LEAST TWO UNANSWERED ASKS FIT, or the re-asking never happens on
+	// the condition it was written for: an ask that hangs costs SettleAsk
+	// and then waits ReAsk before the next one.
+	if SettleAsk+ReAsk >= ReadBack {
+		t.Errorf("a hung ask plus its %v pause is %v of a %v window, leaving "+
+			"room for no second ask", ReAsk, SettleAsk+ReAsk, ReadBack)
+	}
+	// AND AN ANSWERED NOT-FOUND IS POLLED MANY TIMES OVER, which is the
+	// propagation delay this window was sized for.
+	if PlacementRetry*10 > ReadBack {
+		t.Errorf("a %v read-back holds fewer than ten %v polls",
+			ReadBack, PlacementRetry)
+	}
+}
