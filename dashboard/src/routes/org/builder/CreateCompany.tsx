@@ -215,10 +215,10 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         <div className="col gap-1">
           <strong>Add a model provider</strong>
           <span className="t-caption">
-            No agent seat runs without one, and no dashboard screen writes{" "}
-            <code className="inline">providers.llm</code>. Seal the key first with{" "}
-            <code className="inline">crewlet secrets set ANTHROPIC_API_KEY</code>, then either
-            import a company file or patch the configuration:
+            Until one is configured every node refuses to apply the company, so nothing in it runs,
+            and no dashboard screen writes <code className="inline">providers.llm</code>. Seal the
+            key first with <code className="inline">crewlet secrets set ANTHROPIC_API_KEY</code>,
+            then either import a company file or patch the configuration:
           </span>
           <Code>{PROVIDER_SNIPPET}</Code>
         </div>

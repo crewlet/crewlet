@@ -372,9 +372,10 @@ Or create the company from the dashboard: open **Org chart** and its
 on a form that starts the company from a template, has the engine check it,
 and creates it with `PUT /config`. The builder reads and writes `/config`, so
 it asks for an operator token: paste `$CREWLET_API_TOKEN_FOUNDER`. The
-dashboard writes no model provider, so one step stays outside it: add
-`providers.llm` afterwards with `crewlet config import` or `PATCH /config`,
-as the builder's next steps show
+dashboard writes no model provider, so one step stays outside it, and until
+it is done the engine refuses to apply the company: add `providers.llm`
+afterwards with `crewlet config import` or `PATCH /config`, as the builder's
+next steps show
 ([The Org Builder](../guides/org-builder.md#creating-the-company)).
 
 ## Split deployment (optional)

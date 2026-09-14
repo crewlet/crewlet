@@ -985,6 +985,9 @@ function Lens({
   const fill = view === "canvas";
   const providers = state.base.document?.providers;
   const llm = isRecord(providers) ? providers.llm : undefined;
+  // THE WHOLE COMPANY WAITS ON A PROVIDER, not only its agent seats: the
+  // engine builds the phase registry for every apply and refuses an empty one
+  // (`phase.NewRegistry`), so a node keeps its previous epoch until one exists.
   const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
@@ -1393,8 +1396,9 @@ function Lens({
         )}
         {noProvider && (
           <Banner tone="caution" icon="cpu">
-            No model provider is configured, so no agent seat can run. The dashboard does not write
-            providers: add one with <code className="inline">crewlet config import</code> or{" "}
+            No model provider is configured, so every node refuses to apply this company and nothing
+            in it runs. The dashboard does not write providers: add one with{" "}
+            <code className="inline">crewlet config import</code> or{" "}
             <code className="inline">PATCH /config</code>.
           </Banner>
         )}

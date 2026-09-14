@@ -306,7 +306,10 @@ test("a company with no model provider is told so, and one with a provider is no
   delete without.providers;
   const engine = new Engine(without);
   mountBuilder({ engine });
-  expect(await screen.findByText(/No model provider is configured/)).toBeDefined();
+  // The whole company, not only its agents: no node applies it.
+  expect(
+    await screen.findByText(/every node refuses to apply this company and nothing in it runs/),
+  ).toBeDefined();
   cleanup();
 
   const engineWith = new Engine(company());

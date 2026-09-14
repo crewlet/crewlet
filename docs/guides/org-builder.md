@@ -66,15 +66,17 @@ creates the company with `PUT /config` and `If-None-Match: *`, which is
 refused if a company exists anywhere in the fleet. If one was created while
 you were writing yours (the builder hears of it as soon as the node reports
 the new organization, not only when you save), the builder says so and
-offers to discard your draft
-and open the company: a draft that starts a company is never applied to one
-that exists, and never replayed onto it. **Keep my draft** leaves it on screen
-to read, read-only, with the same offer beside it.
+offers to discard your draft and open the company: a draft that starts a
+company is never applied to one that exists, and never replayed onto it.
+**Keep my draft** leaves it on screen to read, read-only, with the same offer
+beside it.
 
 After a successful create, two steps remain that the dashboard cannot take:
 connecting chat and trackers on the Integrations screen, and adding a model
-provider, which no dashboard screen writes. The panel gives the exact
-`crewlet config import` and `PATCH /config` commands for it.
+provider, which no dashboard screen writes. Until the provider is added every
+node refuses to apply the new company (the strip after the save says so), and
+the panel gives the exact `crewlet config import` and `PATCH /config` commands
+for it.
 
 ## Views and the check
 
@@ -87,13 +89,13 @@ Selecting a unit or a seat names it in the URL (`unit=` and `seat=`), and the
 toolbar carries that node's own actions, the same ones in the same order as
 its card, so every one of them is reachable from the keyboard. **Open seat**
 is offered only for a seat the saved company has: a seat added in the draft
-has no screen until it is saved. A rename rewrites the name in the URL rather than leaving a
-link pointing at something that no longer exists. Selecting the company itself
-carries the charter's **Edit** and the same **Add** menu; it names no filter,
-because the lens is already about that company. Where the builder cannot
-write (a guarded or read-only posture, or a draft waiting to be updated) the
-actions stay in the menu and are marked unavailable, so what the builder does
-is still legible.
+has no screen until it is saved. A rename rewrites the name in the URL rather
+than leaving a link pointing at something that no longer exists. Selecting
+the company itself carries the charter's **Edit** and the same **Add** menu;
+it names no filter, because the lens is already about that company. Where the
+builder cannot write (a guarded or read-only posture, or a draft waiting to be
+updated) the actions stay in the menu and are marked unavailable, so what the
+builder does is still legible.
 
 The check status beside the view controls says what the engine made of the
 current draft:
@@ -112,9 +114,11 @@ current draft:
 A change is checked about a third of a second after it is made, so a burst
 of changes (a held key, several undos) is checked once.
 
-When the company has no model provider configured, a caution says so: no
-agent seat can run without one, and the dashboard does not write providers.
-Add one with `crewlet config import` or `PATCH /config`
+When the company has no model provider configured, a caution says so. The
+engine builds the models for every apply and refuses a company with none, so
+until a provider exists every node keeps the revision it had and nothing in
+this company runs; the dashboard does not write providers. Add one with
+`crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
 
 ## Reviewing and saving
