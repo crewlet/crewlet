@@ -32,10 +32,19 @@ import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 
-/** The sentence each acknowledgement asks the operator to accept. */
+/**
+ * The sentence each acknowledgement asks the operator to accept.
+ *
+ * EACH STATES WHAT THE ENGINE KEYS ON, because that is what is lost. An agent
+ * seat's id is a UUIDv5 over the company name and the seat's handle
+ * (`org.DeriveAgentID`): the diary and the onboarding marker are keyed by
+ * that id, while the mailbox (`topics.AgentInbox`) and the episodes are keyed
+ * by the handle. So a company rename orphans the first two and keeps the
+ * rest, and a handle change loses all of them.
+ */
 export const ACKNOWLEDGEMENT_TEXT: Record<Acknowledgement, string> = {
   company_rename:
-    "Renaming the company gives every seat a new identity: memory, inboxes and onboarding start over.",
+    "Renaming the company gives every agent seat a new id: each seat's diary and onboarding progress are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
   handle_change:
     "A seat whose handle changes is a new identity to the engine: its memory, inbox and onboarding start over.",
   kind_change:

@@ -225,9 +225,11 @@ describe("the review", () => {
     expect(within(dialog).getByText("Renames the company from Acme to Acme Labs.")).toBeDefined();
     const save = within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
+    // The consequence as the engine keys it: the agent id moves, the handle
+    // (and with it the mailbox) does not.
     fireEvent.click(
       within(dialog).getByRole("checkbox", {
-        name: "Renaming the company gives every seat a new identity: memory, inboxes and onboarding start over.",
+        name: "Renaming the company gives every agent seat a new id: each seat's diary and onboarding progress are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged.",
       }),
     );
     expect(save.disabled).toBe(false);
