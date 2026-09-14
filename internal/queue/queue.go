@@ -253,8 +253,9 @@ type EventQueue interface {
 	// quiesces and must be able to come back, or it holds the seat,
 	// stays attached, and consumes nothing for the rest of its life.
 	//
-	// Does NOT touch pause holds — a seat resuming from a stale-renew
-	// window may still be legitimately paused for a running sandbox.
+	// Does NOT touch pause holds: a seat resuming from a stale-renew
+	// window may still be legitimately held by another subsystem (the
+	// engine's own is the park of a node with no turn engine).
 	Unquiesce(ctx context.Context, topic, group string) (bool, error)
 
 	// Detach closes this process's consumers, leaving the subscription.

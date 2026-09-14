@@ -13,13 +13,13 @@ import "strconv"
 //
 // Structure is everything else: the round's own account of what it set out to
 // do, the draft under review, the reviewer's correction, the trigger, the
-// reply that was sent. That is exactly
-// what the next round has to act on, and it is now carried VERBATIM. It used
-// not to be — six further limits sat here cutting each of those at 400 to 2000
-// runes, which is the principle above applied to the half it excludes. A
-// reviewer's correction trimmed mid-instruction loses the engine-critical part
-// of the only carrier it has, and the ledger is not re-readable from anywhere:
-// unlike a chat message or an issue comment, there is no surface to go back to.
+// reply that was sent. That is exactly what the next round has to act on, and
+// it is now carried VERBATIM. It used not to be: six further limits sat here
+// cutting each of those at 400 to 2000 runes, which is the principle above
+// applied to the half it excludes. A reviewer's correction trimmed
+// mid-instruction loses the engine-critical part of the only carrier it has,
+// and the ledger is not re-readable from anywhere: unlike a chat message or an
+// issue comment, there is no surface to go back to.
 //
 // What is left bounds ARGUMENTS and the read-call list, and both say when they
 // cut. Prompt caching keys on the system+tools prefix, which the ledger never
@@ -55,8 +55,8 @@ const (
 	// round's tool loop concatenated, thinking included — so its size is the
 	// round cap times the phase's max_tokens, PER ITERATION, and the block
 	// accumulates one of those per self_iterate and is re-sent on every round
-	// of all three phases that follow. That product, not the single value, is
-	// what a bound has to answer.
+	// of both phases that follow, the executor and the reviewer. That product,
+	// not the single value, is what a bound has to answer.
 	//
 	// 4000 runes is twice what the deleted write-time cut allowed and holds a
 	// full draft; the TAIL is kept, because a round's deliverable is what it

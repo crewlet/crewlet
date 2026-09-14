@@ -1,4 +1,5 @@
-// Package runner drives the three phases against real models and real tools.
+// Package runner drives a turn's phases (onboarding, the executor and the
+// reviewer) against real models and real tools.
 //
 // It is the wiring between four things that each know nothing about the
 // others: the prompt builder, the tool registry, the provider chain, and the

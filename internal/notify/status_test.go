@@ -296,8 +296,8 @@ func TestAPhaseChangeChangesTheWords(t *testing.T) {
 	// A REVISITED phase must not repeat its own earlier line — Execute,
 	// Review, then Execute again after a self-iterate is an ordinary turn,
 	// and repeating reads as though nothing moved. That is what the
-	// rotation is for, and it is invisible in a plan/execute/review walk
-	// because those draw from different pools anyway.
+	// rotation is for, and it is invisible in a walk that never revisits a
+	// phase, because different phases draw from different pools anyway.
 	s.Phase(t.Context(), "execute")
 	shown = p.shown()
 	if shown[len(shown)-1] == shown[1] {

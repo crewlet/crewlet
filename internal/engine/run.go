@@ -432,9 +432,9 @@ type Options struct {
 // A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
 // two subsystems gating one inbox cannot release each other's hold, which
 // means the pause and the resume must spell it identically. It is the one
-// reason the engine takes today. Deriving
-// it from the human-readable reason would make an edit to a log message
-// silently strand every seat that was parked under the old wording.
+// reason the engine takes today. Deriving it from the human-readable reason
+// would make an edit to a log message silently strand every seat that was
+// parked under the old wording.
 const pauseReasonNoTurnEngine = "no_turn_engine"
 
 // New assembles an engine.

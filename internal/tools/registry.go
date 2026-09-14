@@ -574,10 +574,9 @@ func (s Snapshot) Entries() []Entry { return slices.Clone(s.entries) }
 //
 // A COPY, because the extra tool is per-phase state: the executor's
 // submission tool and the reviewer's are different objects belonging to
-// different phases of one
-// turn, and registering either into the shared registry would leave it visible
-// to the other — or, worse, to the next turn, still holding the last one's
-// answer.
+// different phases of one turn, and registering either into the shared
+// registry would leave it visible to the other or, worse, to the next turn,
+// still holding the last one's answer.
 //
 // A name already in the snapshot is refused for the same reason Register
 // refuses it: silently shadowing a real tool with a phase-local one means the

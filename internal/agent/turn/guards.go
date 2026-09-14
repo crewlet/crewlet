@@ -12,10 +12,9 @@
 // A TURN RUNS UNDER ONE CONFIG SNAPSHOT, taken as a value at Run. Reading each
 // of ~18 settings from a live cell on every access lets a hot reload landing
 // mid-turn run the executor under one round cap and the reviewer under
-// another, or size a
-// sub-agent's budget from a fraction the parent never saw — and then needs a
-// context-local "pin" to paper over it. Passing the snapshot makes
-// the bug unrepresentable, so there is nothing to pin.
+// another, or size a sub-agent's budget from a fraction the parent never saw,
+// and then needs a context-local "pin" to paper over it. Passing the snapshot
+// makes the bug unrepresentable, so there is nothing to pin.
 package turn
 
 import (
