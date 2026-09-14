@@ -276,6 +276,28 @@ export const PHASE_MODEL_FIELDS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------
+
+/**
+ * Which nodes may run a seat, as the configuration document says it: a node
+ * it is pinned to, and labels a node must carry, every one of them
+ * (`config.RolePlacement`). A block that names neither constrains nothing.
+ */
+export function placementSummary(placement: Readonly<Record<string, unknown>>): string {
+  const node = typeof placement.node === "string" ? placement.node.trim() : "";
+  const labels = isRecord(placement.labels)
+    ? Object.entries(placement.labels).map(([key, value]) => `${key}=${String(value)}`)
+    : [];
+  if (node !== "" && labels.length > 0) {
+    return `Pinned to node ${node}, which must be labelled ${labels.join(", ")}`;
+  }
+  if (node !== "") return `Pinned to node ${node}`;
+  if (labels.length > 0) return `Nodes labelled ${labels.join(", ")}`;
+  return "Any node that runs seats";
+}
+
+// ---------------------------------------------------------------------------
 // Names a document uses for credentials
 // ---------------------------------------------------------------------------
 

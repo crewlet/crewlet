@@ -398,6 +398,15 @@ describe("seat fields", () => {
     ).toBe(true);
   });
 
+  test("a seat's placement is shown as the node and labels it names", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1]!.placement = { labels: { region: "eu" } };
+    edit(keyedState(doc), "seat:dev");
+    const fact = screen.getByText("Placement").closest(".builder-fact") as HTMLElement;
+    expect(fact.textContent).toContain("Nodes labelled region=eu");
+    expect(fact.textContent).not.toContain("[object Object]");
+  });
+
   test("a human seat shows contact and availability, and no agent-only field", () => {
     const doc = fixtureCompany();
     doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };

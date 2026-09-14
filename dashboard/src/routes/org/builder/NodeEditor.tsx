@@ -99,6 +99,7 @@ import {
   isWholeReference,
   mattermostBotUsername,
   nameOfHandle,
+  placementSummary,
   providerOrder,
   toolCredentialNames,
   unpinnedProvider,
@@ -1374,9 +1375,7 @@ function DocumentFacts({ data, handle }: { data: ConfigRole; handle: string | un
         reason="Placement is a fleet setting for which nodes run this seat, edited in the configuration document."
         link={configLink}
       >
-        {Object.entries(data.placement)
-          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(", ") : String(v)}`)
-          .join("; ")}
+        {placementSummary(data.placement)}
       </ReadOnlyFact>,
     );
   }

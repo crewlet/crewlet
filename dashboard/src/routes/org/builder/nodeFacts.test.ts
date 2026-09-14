@@ -26,6 +26,7 @@ import {
   isWorking,
   mattermostBotUsername,
   nameOfHandle,
+  placementSummary,
   providerOrder,
   referenceNames,
   toolCredentialNames,
@@ -217,6 +218,18 @@ describe("credentials", () => {
     });
     const qa = locate(added.draft, "new:qa");
     expect(qa?.kind === "seat" && vendorIdentities(added, qa.node)).toEqual([]);
+  });
+
+  // The labels are a map, which the fact once printed as "[object Object]".
+  test("a placement reads as the node it pins and the labels a node must carry", () => {
+    expect(placementSummary({ node: "node-a" })).toBe("Pinned to node node-a");
+    expect(placementSummary({ labels: { region: "eu", gpu: "true" } })).toBe(
+      "Nodes labelled region=eu, gpu=true",
+    );
+    expect(placementSummary({ node: "node-a", labels: { region: "eu" } })).toBe(
+      "Pinned to node node-a, which must be labelled region=eu",
+    );
+    expect(placementSummary({})).toBe("Any node that runs seats");
   });
 
   test("tool credentials are server and variable names only", () => {
