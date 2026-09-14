@@ -461,7 +461,7 @@ The ingress node exposes the same REST endpoints, webhook handlers
 [API Endpoints](../reference/api-endpoints.md)). Mattermost is deliberately
 absent from that list — it has no usable inbound webhook, so the **engine**
 holds one outbound websocket per agent seat instead, and its inbound path
-does not go through the API process at all.
+does not go through an HTTP route at all.
 
 ## There is no programmatic setup
 

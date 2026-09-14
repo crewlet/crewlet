@@ -230,8 +230,8 @@ listener, so the node also needs `api.port`: a node that binds none
 (`api.port: 0`) refuses agent mode by naming `api.port`, rather than
 handing a box an endpoint nothing answers.
 
-> **In a fleet, that URL must address the node itself — not a load
-> balancer in front of several, and not a standalone API process.** A
+> **In a fleet, that URL must address the node itself, not a load
+> balancer in front of several.** A
 > session is a live tool surface: the seat's MCP children, its skill
 > guard, its per-turn recording, all objects in the process that claimed
 > the seat. Signing shares *authentication* across a fleet; it does not

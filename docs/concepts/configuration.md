@@ -145,7 +145,7 @@ The engine boots in this order:
    record of it, `logging.stderr` notwithstanding
 4. Open the store file and start or dial the stream
 5. Run migrations — every file, in one pass. There is no lock and no phase ordering to serialize: this process owns its file, so nothing can be racing it, and no DDL depends on a value only the config knows. Embedding columns are declared as plain blobs and the vector width is validated in Go against the active revision at write time, so a schema step never has to read the config first (see [`crewlet migrate`](../reference/cli.md#crewlet-migrate)).
-6. Start the API process (or embedded API) bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
+6. Start the API inside this process, bound to `api.host:api.port`, wire up auth middleware, register `/config/*` routes
 7. Start the [control plane](control-plane.md) — the reconcile loop that polls the activation pointer, plus a broadcast `crewlet.config.revision_activated` nudge that wakes it early
 8. `SELECT payload FROM company_config WHERE is_active <> 0`
    - **Row present**: apply the payload, which spawns the full company
@@ -420,19 +420,17 @@ secrets are re-read per delivery the same way. So a rotated signing secret is
 picked up by the epoch swap itself; there is nothing that could drift stale and
 nothing to refresh.
 
-That is the point of there being one wiring for the embedded and standalone
-topologies: what differs between them is only what the node can *see*, through
-a single seam, never how many loops are chasing the pointer. Every node runs
-exactly one reconciler whatever its `node.roles`, so the two halves cannot
-disagree about which epoch they are on.
+There is one wiring, because there is one process: the API is served inside the
+engine's, over the engine's own backends, and every node runs exactly one
+reconciler whatever its `node.roles`. So the two halves cannot disagree about
+which epoch they are on.
 
-`configured` is the one field that is not derived per read. It is set **true at
-construction and stays true for the life of the process**: the engine only
-exists because a company config parsed, validated and built an epoch, and a
-failed apply leaves the node serving the previous epoch — which is still a
-configured node. What a failed apply changes is the **posture**, and `/ready`
-reads that. Collapsing the two would take a correctly-serving node out of a
-load balancer's rotation for being behind.
+`configured` is derived the same way as everything else: it is true when the
+engine's current epoch holds a company, and it flips the moment an apply brings
+a node its first revision. A failed apply leaves the node serving the previous
+epoch, which is still a configured node. What a failed apply changes is the
+**posture**, and `/ready` reads that. Collapsing the two would take a
+correctly-serving node out of a load balancer's rotation for being behind.
 
 ---
 
@@ -616,7 +614,7 @@ secrets:
 The whole document is stored as `{"__encrypted__": "enc:v1:<key_id>:<base64>"}` — nothing about the config's structure (org chart, policies, model choices, or secrets) is visible in the database. A stolen DB reveals nothing.
 
 - **Encrypt on write.** Every write path (`PUT /config`, per-entity `PUT`, `crewlet config import`, `crewlet run -company` / `-import-company`) encrypts the whole document before the payload reaches the DB.
-- **Decrypt at the read boundary.** The engine, API process, migrations, and CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
+- **Decrypt at the read boundary.** The engine and the API it serves, migrations, and the CLI each decrypt the blob (`secrets.Open`, then `config.DecodeCompany`) into the plaintext structure before use, so the Tier A key is required for **every** config read. `${VAR}` references *inside* the config are kept verbatim in the blob and still resolve from the environment at construction time.
 - **Fail closed.** If an activated revision is stored encrypted but no keyring is configured (or the key is missing), the engine refuses to boot rather than run with an opaque blob it can't read.
 - **One key, not N env vars.** After encrypting, the engine needs only the Tier A key in its environment — not a per-secret env var for every LLM key, MCP token, and webhook secret.
 

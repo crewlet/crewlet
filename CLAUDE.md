@@ -356,7 +356,7 @@ The implementation must follow the architecture docs in `docs/concepts/`. Key su
 13. **Tool Registry** — builtins + MCP tools + A2A tools, each recording its origin
 14. **Tool Skills** — knowledge-base-sourced prompt fragments injected per phase
 15. **Code Sandbox** — a per-role coding-agent Execute backend; a run is detached and resumes a suspended loop. E2B for a remote VM, the engine host for a local one
-16. **API + Dashboard**: one wiring, always beside the engine in one process; the websocket is the dashboard's only data channel
+16. **API + Dashboard** — one wiring, always beside the engine in one process; the websocket is the dashboard's only data channel
 17. **Scheduler** — role/unit-scoped cron work with at-most-once delivery, catchup and a wall-clock cap
 18. **Control Plane** — the config activation pointer and per-node apply status; lag alone never sheds
 19. **State Log** — the durable-state framework: one ordered stream per domain is the write-ahead log, N identical SQL copies are the state, and the checkpoint commits in the same transaction as the rows. One write authority (take ONE snapshot, decide and form the expectation inside it, publish, let the broker arbitrate, never guess), three write outcomes, four read levels, and a read index that is a quorum-committed barrier append rather than a leader check
