@@ -436,6 +436,52 @@ describe("DownloadButton", () => {
     expect(seen.clicked[0]!.download).toBe("日本語-résumé.json");
   });
 
+  test("cuts a long name to a byte budget, not a code-unit one", async () => {
+    // MAX_FILENAME is 120 BYTES — every filesystem in its comment counts
+    // bytes — and `slice` counts UTF-16 code units, which agree only for
+    // ASCII. The sanitizer deliberately keeps letters in every script (the
+    // case above exists for that), so this is reachable rather than
+    // hypothetical: 120 units of Japanese is 360 bytes, past ext4's 255 and
+    // well past eCryptfs's 143.
+    render(<DownloadButton text="x" filename={"日".repeat(400) + ".json"} />);
+
+    await click("download");
+
+    const name = seen.clicked[0]!.download as string;
+    expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(120);
+    // The extension SURVIVES the cut — a name that loses `.json` opens in the
+    // wrong application — and what was cut is the stem.
+    expect(name.endsWith(".json")).toBe(true);
+    expect(name.startsWith("日")).toBe(true);
+  });
+
+  // A cut between the halves of a surrogate pair leaves a lone surrogate, which
+  // is not valid UTF-8: it reaches the disk as U+FFFD, so the name the reader
+  // sees is not the name that was cut.
+  //
+  // SEVERAL EXTENSIONS, because one is not a test. `𠮷` is two UTF-16 units and
+  // four UTF-8 bytes, so a cut that walks units lands between the halves only
+  // when the budget divides to an ODD count — with `.json` it happens to come
+  // out even and reassembles into whole characters by luck. Varying the
+  // extension varies the budget, so the boundary falls both ways.
+  test.each([".json", ".md", ".txt", ".yaml"])(
+    "never cuts a character in half (%s)",
+    async (ext) => {
+      render(<DownloadButton text="x" filename={"𠮷".repeat(200) + ext} />);
+
+      await click("download");
+
+      const name = seen.clicked[0]!.download as string;
+      expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(120);
+      // With the `u` flag a well-formed pair is ONE code point, so this class
+      // matches only a surrogate left on its own.
+      expect(/\p{Surrogate}/u.test(name)).toBe(false);
+      // And the round trip is lossless, which a lone surrogate would not be:
+      // encoding one yields U+FFFD and decoding gives back a different string.
+      expect(new TextDecoder().decode(new TextEncoder().encode(name))).toBe(name);
+    },
+  );
+
   test("gives a name with no stem left one, rather than a bare extension", async () => {
     render(<DownloadButton text="x" filename={"../.json"} />);
 

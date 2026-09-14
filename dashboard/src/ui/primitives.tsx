@@ -1416,5 +1416,41 @@ function safeFilename(name: string): string {
   // a hidden file, and they can only ever be in the stem.
   const stem = (ext ? cleaned.slice(0, dot) : cleaned).replace(/^[-.]+/, "");
   if (!stem) return `download${ext}`;
-  return stem.slice(0, MAX_FILENAME - ext.length) + ext;
+  return cutToBytes(stem, MAX_FILENAME - bytes(ext)) + ext;
+}
+
+const encoder = new TextEncoder();
+
+/** How many BYTES a string takes on a filesystem, which is what limits it. */
+function bytes(s: string): number {
+  return encoder.encode(s).length;
+}
+
+/**
+ * Cut to a byte budget, on whole characters.
+ *
+ * `MAX_FILENAME` is a BYTE limit — every filesystem in the comment above
+ * counts bytes — and `slice` counts UTF-16 code units, which are the same
+ * thing only for ASCII. The sanitizer above deliberately keeps letters in
+ * every script (a name of `日本語.json` must not come out as `json`), so the
+ * gap is not hypothetical: 120 units of Japanese is 360 bytes, past ext4's 255
+ * and well past eCryptfs's 143 — and what the browser does with a name over
+ * the limit is its own business, which may include losing the extension.
+ *
+ * Iterated with `for…of`, which walks CODE POINTS rather than units: a cut
+ * that lands between the halves of a surrogate pair leaves a lone surrogate,
+ * which is not valid UTF-8 and reaches the disk as a replacement character.
+ */
+function cutToBytes(s: string, max: number): string {
+  if (max <= 0) return "";
+  if (bytes(s) <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = bytes(ch);
+    if (used + n > max) break;
+    out += ch;
+    used += n;
+  }
+  return out;
 }
