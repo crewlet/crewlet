@@ -15,6 +15,8 @@ import { builderReducer } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import {
   datadogFallback,
+  derivedSeatOf,
+  derivedUnitOf,
   gitLabAccessLevel,
   handleOf,
   hasGitLabProvisioning,
@@ -49,6 +51,37 @@ describe("handles", () => {
     expect(handleOf(checked, "new:qa")).toBe("qa-engine");
     expect(nameOfHandle(checked, "qa-engine")).toBe("Quality Lead");
     expect(nameOfHandle(checked, "nobody")).toBe("nobody");
+  });
+
+  // A check of an older draft described a company the operator has since
+  // changed, and the reducer records nothing against its handles either, so
+  // a screen reading it would offer what the operation then refuses.
+  test("a check of an older draft answers nothing about the draft as it stands", () => {
+    const added = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "Quality Lead" },
+      },
+    });
+    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa-engine" } } });
+    expect(derivedUnitOf(checked, "unit:Sales")).toBeDefined();
+    const later = builderReducer(checked, {
+      type: "record",
+      intent: {
+        type: "updateUnit",
+        target: "unit:Sales",
+        set: [{ path: ["purpose"], value: "Sell" }],
+      },
+    });
+    expect(handleOf(later, "new:qa")).toBeUndefined();
+    expect(derivedSeatOf(later, "new:qa")).toBeUndefined();
+    expect(derivedUnitOf(later, "unit:Sales")).toBeUndefined();
+    expect(nameOfHandle(later, "qa-engine")).toBe("qa-engine");
+    // A seat of the base carries its handle in its key, which no check dates.
+    expect(handleOf(later, "seat:dev")).toBe("dev");
   });
 
   test("a declared handle is the seat's own even before a check", () => {

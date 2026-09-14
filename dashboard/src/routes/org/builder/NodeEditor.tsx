@@ -83,6 +83,7 @@ import { recordIntent } from "./model/reducer.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import {
   PHASE_MODEL_FIELDS,
+  currentCheck,
   datadogFallback,
   defaultGitLabAccessLevel,
   derivedSeatOf,
@@ -772,8 +773,10 @@ function SeatEditor({ seat, onClose }: { seat: DraftSeat; onClose: () => void })
           help={
             form.handle.trim() !== ""
               ? "The handle this seat's memory, mailbox and mentions attach to."
-              : derived?.handle
-                ? `Empty uses the handle the engine derives from the name: ${derived.handle}, at the last check.`
+              : // The engine derived that handle from the name the draft
+                // holds, so a name typed here since is not what it names.
+                derived?.handle && !renames(initial.name, form.name)
+                ? `Empty uses the handle the engine derives from the name: ${derived.handle}.`
                 : "Empty uses the handle the engine derives from the name, shown here after the next check."
           }
           error={errorFor(["handle"])}
@@ -997,7 +1000,7 @@ function Reports({
 
   const derived = derivedSeatOf(state, seat.key);
   const automatic = new Set(derived?.auto_reports ?? []);
-  const groups = (state.check.derived?.units ?? [])
+  const groups = (currentCheck(state)?.derived.units ?? [])
     .filter((u) => derived?.handle && u.lead === derived.handle)
     .map((u) => ({
       unit: u.name,

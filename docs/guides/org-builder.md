@@ -250,7 +250,9 @@ grant access to everything (an empty repository list already does).
 **Move to** moves a seat or a unit (with everything inside it) to the end of
 another unit, or to the top level of the company. A unit is never offered a
 destination inside itself. Before you confirm, the dialog shows what the move
-changes, read from the engine's last check of your draft:
+changes, read from the engine's check of the draft as it stands. While that
+check is still on its way (just after another change, say), the dialog says
+so rather than reading an older answer:
 
 - who a moved seat reports to now, and the lead of the destination, who
   manages a unit's direct members unless another member manages the seat;

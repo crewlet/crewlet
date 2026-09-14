@@ -13,9 +13,10 @@
 import { describe, expect, test } from "vitest";
 import { COMPANY_KEY } from "./model/keys.ts";
 import { builderReducer, INITIAL_BUILDER } from "./model/reducer.ts";
-import { fixtureCompany } from "./model/testkit.ts";
+import { toDocument } from "./model/document.ts";
+import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
 import { movePreview } from "./movePreview.ts";
-import { keyedState } from "./testState.ts";
+import { keyedState, recheck } from "./testState.ts";
 
 const engineering = "units[0]";
 const platform = "units[0].children[0]";
@@ -90,6 +91,60 @@ describe("a unit", () => {
       onboarding: ["VP Engineering", "Dev", "SRE"],
     });
   });
+});
+
+// A check of an older draft described a company the operator has since
+// changed. Read through it, a destination added since is a unit with no lead
+// and no channel, and the dialog would say the moved unit loses both.
+test("a destination the current check has not described previews nothing, not a unit with no lead", () => {
+  const added = builderReducer(state(), {
+    type: "record",
+    intent: {
+      type: "addUnit",
+      key: "new:ops",
+      placement: { parent: COMPANY_KEY, after: "unit:Sales" },
+      data: { name: "Ops", lead: "SRE", channel: "ops" },
+    },
+  });
+  expect(movePreview(added, "unit:Platform", "new:ops").known).toBe(false);
+  expect(movePreview(added, "seat:dev", "unit:Sales").known).toBe(false);
+
+  const checked = recheck(added, {
+    units: {
+      [platform]: {
+        lead: "vp-engineering",
+        lead_inherited: true,
+        channel: "eng",
+        channel_inherited: true,
+      },
+      "units[2]": { lead: "sre", channel: "ops" },
+    },
+  });
+  expect(movePreview(checked, "unit:Platform", "new:ops")).toMatchObject({
+    known: true,
+    leads: [{ unit: "Platform", before: "VP Engineering", after: "SRE" }],
+    channels: [{ unit: "Platform", before: "eng", after: "ops" }],
+  });
+
+  // And a check of this draft whose derivation leaves the destination out
+  // has not described it either.
+  const sent = toDocument(added.draft);
+  const derived = fixtureDerived(sent.document);
+  const partial = builderReducer(added, {
+    type: "checked",
+    settled: {
+      generation: added.generation,
+      sent,
+      baseRevision: added.base.revision,
+      outcome: {
+        status: "clean",
+        warnings: [],
+        derived: { ...derived, units: (derived.units ?? []).filter((u) => u.name !== "Ops") },
+      },
+    },
+  });
+  expect(movePreview(partial, "unit:Platform", "new:ops").known).toBe(false);
+  expect(movePreview(partial, "unit:Platform", COMPANY_KEY).known).toBe(true);
 });
 
 test("a draft no check has described previews nothing", () => {

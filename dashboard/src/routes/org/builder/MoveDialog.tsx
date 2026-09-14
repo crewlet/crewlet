@@ -6,9 +6,9 @@
  * a moved unit inherits (a lead and a channel it does not declare), which
  * agent seats onboard again (the unit names above them changed) and which
  * tool credentials a seat receives from its home unit. The dialog previews
- * those from what the last check reported at both ends (`movePreview.ts`),
- * and the check after the move, and the review before the save, show the
- * engine's own result.
+ * those from what the check of the draft as it stands reported at both ends
+ * (`movePreview.ts`), and the check after the move, and the review before the
+ * save, show the engine's own result.
  *
  * A LEAD STAYS A LEAD. A unit's lead is a seat NAME, not a position, so a
  * seat that leads a unit keeps leading it from anywhere in the chart. That is
@@ -253,7 +253,7 @@ function MoveChanges({
   return (
     <EditorSection
       title="What changes"
-      hint="From the last check. The next check confirms it, and the review lists it before you save."
+      hint="From the engine's check of the draft as it stands. The check after the move confirms it, and the review lists it before you save."
     >
       <ul className="builder-list">
         {lines.map((line) => (

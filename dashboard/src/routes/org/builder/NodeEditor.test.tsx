@@ -21,7 +21,7 @@ import { fixtureCompany } from "./model/testkit.ts";
 import { builderReducer } from "./model/reducer.ts";
 import { NodeEditor } from "./NodeEditor.tsx";
 import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
-import { checkWithProblems, keyedState, problemAt } from "./testState.ts";
+import { checkWithProblems, keyedState, problemAt, recheck } from "./testState.ts";
 
 afterEach(cleanup);
 
@@ -263,6 +263,50 @@ describe("seat fields", () => {
     });
     edit(state, "new:qa");
     expect(field("Handle")).toBeDefined();
+  });
+
+  // The engine derived the handle from the name the checked draft holds, and
+  // only a check of the draft as it stands says anything about it: an access
+  // level offered on an older check's handle is one the reducer refuses.
+  test("a new seat's derived handle is the current check's, for the name that check saw", () => {
+    const added = builderReducer(keyedState(fixtureCompany()), {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: "unit:Sales", after: null },
+        data: { name: "QA" },
+      },
+    });
+    const checked = recheck(added, { seats: { "units[1].roles[0]": { handle: "qa" } } });
+    edit(checked, "new:qa");
+    expect(
+      screen.getByText("Empty uses the handle the engine derives from the name: qa."),
+    ).toBeDefined();
+    expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
+    type("Name", "Quality");
+    expect(
+      screen.getByText(
+        "Empty uses the handle the engine derives from the name, shown here after the next check.",
+      ),
+    ).toBeDefined();
+    cleanup();
+
+    const later = builderReducer(checked, {
+      type: "record",
+      intent: {
+        type: "updateUnit",
+        target: "unit:Sales",
+        set: [{ path: ["purpose"], value: "Sell" }],
+      },
+    });
+    edit(later, "new:qa");
+    expect((field("Access level") as HTMLSelectElement).disabled).toBe(true);
+    expect(
+      screen.getByText(
+        "Access levels are kept by handle, so this is available once the check reports this seat's handle.",
+      ),
+    ).toBeDefined();
   });
 
   test("automatic reports are their own read-only group beside the manages list", () => {
