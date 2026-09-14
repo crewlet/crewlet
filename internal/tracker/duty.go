@@ -462,14 +462,12 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // record, so a record clearing it would be a record about a column no record
 // owns. Every node clears its own the next time it applies a rank move that
 // finds no duplicate; this is what stops the duty spinning in the meantime.
+//
+// A POOLED TRANSACTION, NOT A PIN, for the reason purgeInbox carries: every
+// declared pin belongs to an applier for the life of the process, and asking
+// for one here was refused on every tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
-	w, err := d.deps.DB.Replicated().Writer(ctx)
-	if err != nil {
-		return fmt.Errorf("tracker: take the writer to clear %s's duplicate "+
-			"flag: %w", project, err)
-	}
-	defer func() { _ = w.Close() }()
-	return w.Tx(ctx, func(tx *sql.Tx) error {
+	return d.deps.DB.Replicated().Tx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
 			UPDATE tracker_projects SET rank_duplicate_pending = 0
 			WHERE key = ? AND NOT EXISTS (

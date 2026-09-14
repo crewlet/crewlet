@@ -144,6 +144,10 @@ func TestTheDutyClearsADuplicateRank(t *testing.T) {
 			"rank, so nothing hands the repair to the duty")
 	}
 
+	// THE TICK RUNS BESIDE A LIVE APPLIER, which holds the estate's pin for
+	// the life of the process: a repair that asked for one of its own was
+	// refused on every tick of a running node.
+	holdTheAppliersPin(t, r)
 	if _, err := trackerWorker(t, r).Tick(t.Context()); err != nil {
 		t.Fatalf("Tick: %v", err)
 	}
