@@ -301,7 +301,7 @@ func (e *Engine) publishFailure(ctx context.Context, t turnTelemetry,
 		e.publishEvent(ctx, events.New(types.TurnGuardBreach{
 			Agent:    t.agentID,
 			RoleName: t.role,
-			Kind:     types.GuardKind(res.Breach.Kind),
+			Kind:     res.Breach.Kind,
 			Detail:   events.ClipDiagnostic(res.Breach.Detail),
 			TurnID:   t.runID,
 			WorkKey:  t.workKey,

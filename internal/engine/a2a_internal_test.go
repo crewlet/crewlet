@@ -369,7 +369,7 @@ func TestTheAnswerSaysWhatTheTurnActuallyDid(t *testing.T) {
 	}
 	breached := answerContent(turn.Result{
 		Decision: phase.Failed,
-		Breach:   &turn.Breach{Kind: turn.BreachDepth},
+		Breach:   &turn.Breach{Kind: types.GuardDepthCap},
 	})
 	if !strings.Contains(breached, "depth") {
 		t.Errorf("a breach did not say which guard stopped it: %q", breached)
