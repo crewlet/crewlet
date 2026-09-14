@@ -42,6 +42,10 @@ func Run(t *testing.T, newStore func(t *testing.T) sandbox.PendingStore) {
 		{"AClaimReportsWhereItCameFrom", testAClaimReportsWhereItCameFrom},
 		{"AReseedIsStillClaimable", testAReseedIsStillClaimable},
 		{"ATerminalRunIsNotClaimable", testATerminalRunIsNotClaimable},
+		{"EveryLaunchIsNamedAnew", testEveryLaunchIsNamedAnew},
+		{"AClaimForAnotherLaunchIsRefused", testAClaimForAnotherLaunchIsRefused},
+		{"ACompletionDoesNotClaimAParkedRun", testACompletionDoesNotClaimAParkedRun},
+		{"AnAnswerDoesNotClaimARunningRun", testAnAnswerDoesNotClaimARunningRun},
 		{"AChargeIsRecordedOnce", testAChargeIsRecordedOnce},
 		{"OnlyAClaimedRunRecordsACharge", testOnlyAClaimedRunRecordsACharge},
 		{"AChargeRecordComesBackOnTheRetrysClaim", testAChargeRecordComesBackOnTheRetrysClaim},
@@ -218,8 +222,16 @@ func testALaunchingRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 	// nothing to resume into and fail the whole turn.
 	mustBeginLaunch(t, s, run("t1"))
 
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1")); err != nil || won {
 		t.Fatalf("a launching run was claimed: won=%v err=%v", won, err)
+	}
+	// Nor by a tail that names the status outright: the closed set is the
+	// store's to keep, not the caller's to widen.
+	widened := sandbox.Tail{
+		Launch: mustGet(t, s, "t1").LaunchID, From: []string{sandbox.StatusLaunching},
+	}
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", widened); err != nil || won {
+		t.Fatalf("a tail naming launching claimed it: won=%v err=%v", won, err)
 	}
 	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusLaunching {
 		t.Errorf("a refused claim moved the row to %q", got.Status)
@@ -243,7 +255,7 @@ func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
 	if len(got.ExecuteState) == 0 {
 		t.Error("the run opened to the poll with no conversation on it")
 	}
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1")); err != nil || !won {
 		t.Errorf("a suspended run was not claimable: won=%v err=%v", won, err)
 	}
 }
@@ -254,9 +266,7 @@ func testOnlyALaunchingRunCanSuspend(t *testing.T, s sandbox.PendingStore) {
 	// second resume of a turn that is over. Reported rather than written,
 	// so the caller fails the run instead of stranding it.
 	mustLaunched(t, s, run("t1"))
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
-		t.Fatalf("claim: won=%v err=%v", won, err)
-	}
+	mustClaim(t, s, "t1")
 
 	suspended, err := s.MarkSuspended(t.Context(), "t1", suspension())
 	if err != nil {
@@ -299,10 +309,11 @@ func testTheTailIsClaimedExactlyOnce(t *testing.T, s sandbox.PendingStore) {
 	// suspended loop produce two turns from one job — which the seat sees
 	// as its own work arriving twice.
 	mustLaunched(t, s, run("t1"))
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
+	tail := completionOf(t, s, "t1")
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", tail); err != nil || !won {
 		t.Fatalf("first claim: won=%v err=%v", won, err)
 	}
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", tail); err != nil || won {
 		t.Errorf("a second claim won: won=%v err=%v", won, err)
 	}
 }
@@ -311,6 +322,7 @@ func testAClaimIsExclusiveUnderContention(t *testing.T, s sandbox.PendingStore) 
 	// The property a fake cannot have. Ten goroutines racing one tail:
 	// exactly one may win.
 	mustLaunched(t, s, run("t1"))
+	tail := completionOf(t, s, "t1")
 	var (
 		wg   sync.WaitGroup
 		mu   sync.Mutex
@@ -318,7 +330,7 @@ func testAClaimIsExclusiveUnderContention(t *testing.T, s sandbox.PendingStore) 
 	)
 	for range 10 {
 		wg.Go(func() {
-			if _, won, err := s.ClaimForResume(t.Context(), "t1"); err == nil && won {
+			if _, won, err := s.ClaimForResume(t.Context(), "t1", tail); err == nil && won {
 				mu.Lock()
 				wins++
 				mu.Unlock()
@@ -341,7 +353,7 @@ func testAClaimReportsWhereItCameFrom(t *testing.T, s sandbox.PendingStore) {
 		sandbox.Clarification{Question: "which branch?", Audience: "requester"}); err != nil {
 		t.Fatalf("park: %v", err)
 	}
-	got, won, err := s.ClaimForResume(t.Context(), "t1")
+	got, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1"))
 	if err != nil || !won {
 		t.Fatalf("claim: won=%v err=%v", won, err)
 	}
@@ -361,7 +373,7 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 	if err := s.SetStatus(t.Context(), "t1", sandbox.StatusReseed, sandbox.Fence{}); err != nil {
 		t.Fatalf("set reseed: %v", err)
 	}
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1")); err != nil || !won {
 		t.Errorf("a reseeded run could not be claimed: won=%v err=%v", won, err)
 	}
 }
@@ -372,16 +384,97 @@ func testATerminalRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 		if err := s.SetStatus(t.Context(), status, status, sandbox.Fence{}); err != nil {
 			t.Fatalf("set %s: %v", status, err)
 		}
-		if _, won, _ := s.ClaimForResume(t.Context(), status); won {
-			t.Errorf("a %s run was claimed", status)
+		for _, tail := range []sandbox.Tail{completionOf(t, s, status), answerTo(t, s, status)} {
+			if _, won, _ := s.ClaimForResume(t.Context(), status, tail); won {
+				t.Errorf("a %s run was claimed out of %v", status, tail.From)
+			}
 		}
 	}
 }
 
-// mustClaim takes the run's tail, as a completion or an answer would.
+func testEveryLaunchIsNamedAnew(t *testing.T, s sandbox.PendingStore) {
+	// The name is what tells a completion's job from the one that replaced
+	// it, so it has to change on every launch under one turn id, and it is
+	// the store's to mint: a caller that could choose it could reuse one.
+	chosen := run("t1")
+	chosen.LaunchID = "chosen-by-the-caller"
+	mustBeginLaunch(t, s, chosen)
+	first := mustGet(t, s, "t1").LaunchID
+	if first == "" || first == chosen.LaunchID {
+		t.Fatalf("launch id = %q, want one the store minted", first)
+	}
+	mustBeginLaunch(t, s, run("t1"))
+	if second := mustGet(t, s, "t1").LaunchID; second == "" || second == first {
+		t.Errorf("a second launch under one turn id kept the name %q", second)
+	}
+}
+
+func testAClaimForAnotherLaunchIsRefused(t *testing.T, s sandbox.PendingStore) {
+	// A completion that outlived its job arrives at a row holding the next
+	// one. The status alone cannot tell them apart, since both are running;
+	// only the name can.
+	mustLaunched(t, s, run("t1"))
+	stale := completionOf(t, s, "t1")
+	mustBeginLaunch(t, s, run("t1"))
+	if suspended, err := s.MarkSuspended(t.Context(), "t1", suspension()); err != nil || !suspended {
+		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
+	}
+
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", stale); err != nil || won {
+		t.Fatalf("the previous job's completion claimed the next job: won=%v err=%v", won, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
+		t.Fatalf("a refused claim moved the row to %q", got.Status)
+	}
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1")); err != nil || !won {
+		t.Errorf("the next job's own completion could not claim it: won=%v err=%v", won, err)
+	}
+}
+
+func testACompletionDoesNotClaimAParkedRun(t *testing.T, s sandbox.PendingStore) {
+	// A parked run is waiting on a person, and only their answer may take
+	// it. A completion that finds it there is a duplicate of the one that
+	// parked it.
+	mustLaunched(t, s, run("t1"))
+	if err := s.MarkAwaiting(t.Context(), "t1", sandbox.Clarification{Question: "which branch?"}); err != nil {
+		t.Fatalf("park: %v", err)
+	}
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1")); err != nil || won {
+		t.Fatalf("a completion claimed a parked run: won=%v err=%v", won, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusAwaiting {
+		t.Errorf("status = %q, want the run still waiting on its answer", got.Status)
+	}
+}
+
+func testAnAnswerDoesNotClaimARunningRun(t *testing.T, s sandbox.PendingStore) {
+	// And the other way round: a running job asked nothing, so an answer
+	// that finds one has nothing to answer.
+	mustLaunched(t, s, run("t1"))
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1")); err != nil || won {
+		t.Fatalf("an answer claimed a running job: won=%v err=%v", won, err)
+	}
+	if got := mustGet(t, s, "t1"); got.Status != sandbox.StatusRunning {
+		t.Errorf("status = %q, want the job still running", got.Status)
+	}
+}
+
+// completionOf is the tail a completion of the run's current job claims.
+func completionOf(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Tail {
+	t.Helper()
+	return sandbox.CompletionTail(mustGet(t, s, turnID).LaunchID)
+}
+
+// answerTo is the tail an answer to the run's current question claims.
+func answerTo(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.Tail {
+	t.Helper()
+	return sandbox.AnswerTail(mustGet(t, s, turnID).LaunchID)
+}
+
+// mustClaim takes a running run's tail, as its job's completion would.
 func mustClaim(t *testing.T, s sandbox.PendingStore, turnID string) sandbox.PendingRun {
 	t.Helper()
-	got, won, err := s.ClaimForResume(t.Context(), turnID)
+	got, won, err := s.ClaimForResume(t.Context(), turnID, completionOf(t, s, turnID))
 	if err != nil || !won {
 		t.Fatalf("claim %s: won=%v err=%v", turnID, won, err)
 	}
@@ -459,6 +552,7 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 	// the launch that follows is a new job, and must not inherit it.
 	ctx := t.Context()
 	mustLaunched(t, s, run("t1"))
+	tail := completionOf(t, s, "t1")
 	mustClaim(t, s, "t1")
 	mustCharge(t, s, "t1")
 	for _, step := range []struct {
@@ -474,7 +568,7 @@ func testOnlyALaunchClearsAChargeRecord(t *testing.T, s sandbox.PendingStore) {
 			return err
 		}},
 		{"claim the tail", func() error {
-			_, _, err := s.ClaimForResume(ctx, "t1")
+			_, _, err := s.ClaimForResume(ctx, "t1", tail)
 			return err
 		}},
 		{"park on a question", func() error {
@@ -643,9 +737,7 @@ func testActiveIncludesResumed(t *testing.T, s sandbox.PendingStore) {
 	// engine. Nothing else would ever look at that row again, and its paused
 	// box would leak for ever.
 	mustLaunched(t, s, run("t1"))
-	if _, _, err := s.ClaimForResume(t.Context(), "t1"); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	mustClaim(t, s, "t1")
 	got, err := s.ListActive(t.Context())
 	if err != nil {
 		t.Fatalf("list: %v", err)
@@ -840,7 +932,7 @@ func testAnAnsweredRunCannotBeExpiredUnderTheResume(t *testing.T, s sandbox.Pend
 	mustLaunched(t, s, run("t1"))
 	park(t, s, "t1")
 
-	if _, won, err := s.ClaimForResume(t.Context(), "t1"); err != nil || !won {
+	if _, won, err := s.ClaimForResume(t.Context(), "t1", answerTo(t, s, "t1")); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	won, err := s.ExpirePause(t.Context(), "t1")

@@ -69,6 +69,42 @@ const (
 // is exactly the mistake [StatusLaunching] exists to make impossible.
 var Claimable = []string{StatusRunning, StatusAwaiting, StatusReseed}
 
+// Tail is what a claim expects to find on a run: the job the signal is about,
+// and the statuses that signal may take the tail out of.
+//
+// A CLAIM NAMES WHAT IT CLAIMS, because the two signals that take a tail are
+// about different moments of one row. A completion says a job finished, which
+// is only ever true of a RUNNING row still holding that job; an answer says a
+// parked question was answered, which is only ever true of an [Awaiting] row
+// holding the job that asked it. A claim that took any claimable status took
+// whichever the row happened to be in when the signal arrived. A duplicate
+// completion therefore re-collected a run that had parked on its question and
+// asked it again, and one that outlived its own job claimed the next job
+// while that one was still running: the turn resumed on a half-written result
+// and the settle tore the box down under the job.
+type Tail struct {
+	// Launch is the [PendingRun.LaunchID] the signal was raised for,
+	// matched exactly, the empty value included.
+	Launch string
+
+	// From is the statuses the signal may claim out of. A status outside
+	// [Claimable] is never claimed, whatever this says.
+	From []string
+}
+
+// CompletionTail is what a completion of one job claims: that job, while it
+// is running. The poll only fires on a running row, so a completion that
+// finds its job in any other status is a duplicate of one that already took
+// it.
+func CompletionTail(launch string) Tail {
+	return Tail{Launch: launch, From: []string{StatusRunning}}
+}
+
+// AnswerTail is what an answer claims: the job that asked, while it waits.
+func AnswerTail(launch string) Tail {
+	return Tail{Launch: launch, From: Awaiting}
+}
+
 // Holding are the statuses in which a run holds its seat, so the seat takes no
 // new turn while it is in one.
 //
@@ -165,6 +201,22 @@ type PendingRun struct {
 	Placement string `json:"placement,omitempty"`
 	CommandID string `json:"command_id"`
 	Status    string `json:"status"`
+
+	// LaunchID names the job this row currently holds.
+	//
+	// The row is the TURN's, and a turn can run more than one job: a
+	// resumed executor that calls run_sandbox again reuses it, and
+	// [PendingStore.BeginLaunch] names each launch anew. A completion
+	// carries the name of the job it saw finish, which is what lets a
+	// claim tell the job it was raised for from one that has replaced it.
+	// See [Tail].
+	//
+	// Minted by the store and never by the caller, for the reason the
+	// status is: a caller that could choose it could reuse one. Empty on a
+	// row a build that predates it wrote, and a completion from such a
+	// build carries none, so the two still match each other and nothing
+	// else.
+	LaunchID string `json:"launch_id,omitempty"`
 
 	// Owner is the process INCARNATION that owns this run's seat, and
 	// OwnerEpoch the seat lease's epoch at the moment of the claim.
@@ -299,7 +351,8 @@ type PendingStore interface {
 	// when there is none, and RESETS an existing one to launching —
 	// clearing the previous job's suspended conversation, the question
 	// it was parked on and the record of its charge, while keeping the
-	// row's identity and its box.
+	// row's identity and its box. Either way the launch gets a new
+	// [PendingRun.LaunchID].
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
 	// run_sandbox call in one turn presents the same turn id as the first
@@ -312,12 +365,14 @@ type PendingStore interface {
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
 
-	// ClaimForResume atomically flips a claimable status to resumed.
+	// ClaimForResume atomically flips a run to resumed, when it holds the
+	// tail's launch in one of the tail's statuses.
 	//
-	// Reports the row IFF THIS CALL WON — the at-most-once tail guard.
-	// The returned row carries ClaimedFrom, so a failed dispatch can put
-	// it back exactly where it was.
-	ClaimForResume(ctx context.Context, turnID string) (PendingRun, bool, error)
+	// Reports the row IFF THIS CALL WON: the at-most-once tail guard, and
+	// the reason a claim names its launch (see [Tail]). The returned row
+	// carries ClaimedFrom, so a failed dispatch can put it back exactly
+	// where it was.
+	ClaimForResume(ctx context.Context, turnID string, tail Tail) (PendingRun, bool, error)
 
 	// MarkCharged records that a claimed run's collected tokens are on
 	// the token counter, reporting whether THIS call recorded it.

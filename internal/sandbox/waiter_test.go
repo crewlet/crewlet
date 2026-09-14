@@ -241,6 +241,10 @@ func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
 	if payload.TurnID != "t1" || payload.SandboxID != run.SandboxID {
 		t.Fatalf("payload = %+v, want the run's identity", payload)
 	}
+	// And WHICH job finished, the only one the completion may claim.
+	if run.LaunchID == "" || payload.LaunchID != run.LaunchID {
+		t.Fatalf("launch = %q, want the job the tick saw finish, %q", payload.LaunchID, run.LaunchID)
+	}
 	if payload.AgentHandle != "swe" || payload.CodingAgent != "claude-code" {
 		t.Fatalf("payload = %+v", payload)
 	}
@@ -587,7 +591,7 @@ func TestAnAnsweredRunIsNotReclaimedUnderTheResume(t *testing.T) {
 	rig.park("t1")
 
 	// The answer arrives between the reaper's snapshot and its flip.
-	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1"); err != nil || !won {
+	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", AnswerTail(rig.get("t1").LaunchID)); err != nil || !won {
 		t.Fatalf("ClaimForResume = %v, %v", won, err)
 	}
 	rig.now = rig.now.Add(DefaultPauseTTL + time.Second)

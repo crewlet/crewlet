@@ -523,12 +523,16 @@ func newChargeRig(t *testing.T, tokens, orgCap, seatCap int, resume sandbox.Resu
 		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
 	}
 	runner.Finish(sandbox.Result{Success: true, Text: "done", InputTokens: tokens})
+	run, found, err := store.Get(ctx, "t1")
+	if err != nil || !found {
+		t.Fatalf("Get = %v, %v", found, err)
+	}
 
 	return &chargeRig{
 		fleet: fleet, coordinator: coordinator,
 		completion: types.SandboxRunCompleted{
-			TurnID: "t1", AgentHandle: "swe", Agent: chargeAgent, RoleName: "SWE",
-			SandboxID: box.ID(), CodingAgent: "claude-code",
+			TurnID: "t1", LaunchID: run.LaunchID, AgentHandle: "swe", Agent: chargeAgent,
+			RoleName: "SWE", SandboxID: box.ID(), CodingAgent: "claude-code",
 		},
 	}
 }
