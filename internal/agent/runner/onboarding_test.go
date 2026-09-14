@@ -3,6 +3,7 @@ package runner_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -299,6 +300,30 @@ func TestTheOnboardingSurfaceCannotSubmitAPlan(t *testing.T) {
 	for _, def := range reqs[0].Tools {
 		if def.Name == runner.SubmitWorkTool || def.Name == runner.SubmitReviewTool {
 			t.Errorf("the onboarding surface offers %s", def.Name)
+		}
+	}
+}
+
+// ONBOARDING DISCOVERS. Its prompt carries the slim catalogue and tells the
+// seat to find its knowledge-base server's page tools, which it can reach only
+// through the discovery pair. The gate that keeps the pair off the reviewer
+// must not take it off this pass.
+func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
+	t.Parallel()
+	prov := marking()
+	r := onboardingRunner(t, &markers{claimHeld: true}, runner.NewLatch(), prov)
+	if _, err := r.Onboard(context.Background()); err != nil {
+		t.Fatalf("Onboard: %v", err)
+	}
+	reqs := prov.requestsFor("onboarding")
+	if len(reqs) == 0 {
+		t.Fatal("the pass never called the model")
+	}
+	offered := toolNames(reqs[0].Tools)
+	for _, want := range []string{runner.ListMCPToolsTool, runner.ActivateTool} {
+		if !slices.Contains(offered, want) {
+			t.Errorf("the onboarding surface offers %v, without %s: the pass "+
+				"cannot reach the knowledge-base tools its prompt sends it to", offered, want)
 		}
 	}
 }

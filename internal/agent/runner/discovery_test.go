@@ -248,3 +248,41 @@ func TestDiscoveryRefusesAnEmptyArgument(t *testing.T) {
 		t.Errorf("an empty tool name reported %q", got)
 	}
 }
+
+// THE REVIEWER CANNOT DISCOVER A TOOL.
+//
+// It grades the round from the evidence in front of it, and its prompt promises
+// it no domain tools. activate_tool reaches every tool in the registry, MCP
+// writes included, so a reviewer offered the discovery pair could post to the
+// thread in the middle of judging whether the executor should have. Every
+// phase surface used to get the pair, the reviewer's included. A reviewer that
+// asks for activate_tool anyway is refused, and slack_post never reaches it.
+func TestTheReviewerIsOfferedOnlyItsSubmission(t *testing.T) {
+	t.Parallel()
+	r, prov, _ := fixture(t, &scriptedProvider{
+		execute: []llm.Completion{submitWork(t)},
+		review: []llm.Completion{
+			{ToolCalls: []llm.ToolCall{{ID: "a", Name: runner.ActivateTool,
+				Arguments: map[string]any{"name": "slack_post"}}}},
+			submitCall(t, runner.SubmitReviewTool, `{"decision":"done","final_artifact":"a"}`),
+		},
+	})
+	w, _, err := r.Execute(context.Background(), 1, "", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	reqs := prov.requestsFor("review")
+	if len(reqs) < 2 {
+		t.Fatalf("the reviewer made %d model calls, want the refused activation and its answer", len(reqs))
+	}
+	for i, req := range reqs {
+		if got := toolNames(req.Tools); !slices.Equal(got, []string{runner.SubmitReviewTool}) {
+			t.Errorf("review call %d offered %v, want only %s: the discovery pair "+
+				"puts every tool in the registry within the reviewer's reach",
+				i+1, got, runner.SubmitReviewTool)
+		}
+	}
+}
