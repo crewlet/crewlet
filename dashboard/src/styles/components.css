@@ -1626,6 +1626,14 @@ kbd {
 .menu-item > svg {
   color: var(--text-muted);
 }
+/* The check column of a choice: as wide as the glyph whether or not this
+   answer is the checked one, so every answer's label starts on one line. */
+.menu-item-check {
+  display: inline-flex;
+  flex: none;
+  width: var(--space-4);
+  color: var(--text-muted);
+}
 /* Focus is the highlight: the keyboard moves it, and the pointer's hover
    draws the same tint so the two never show two different rows. */
 .menu-item:hover,

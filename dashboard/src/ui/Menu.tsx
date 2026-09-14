@@ -42,6 +42,12 @@
  *   Escape and Tab still travel, because the layer stack acts on them at the
  *   document, and so does a chord with Ctrl, Command or Alt, which is an
  *   application shortcut rather than a key of the menu's.
+ * - A CHOICE IS A RADIO ITEM. An item given `checked` is a `menuitemradio`
+ *   that says whether it is the current value (`aria-checked`) and draws a
+ *   check where the others draw nothing, so a menu that picks one value (a
+ *   unit's lead) reads as a choice with an answer rather than a list of
+ *   actions that all look alike. Every item of such a menu should say
+ *   `checked`, true or false, so the check column lines up.
  * - IT CAN BE OPENED FROM OUTSIDE (`open`, `onOpenChange`), because a tree item
  *   that holds focus opens its card's menu from the keyboard while the
  *   trigger itself is out of the tab order (`triggerTabIndex={-1}`).
@@ -74,6 +80,11 @@ export interface MenuItem {
   danger?: boolean;
   /** A shortcut or a short note, shown at the end of the row. */
   hint?: ReactNode;
+  /**
+   * Makes the item one answer of a single choice: a `menuitemradio` that is
+   * the current value when true. Left out, the item is an action.
+   */
+  checked?: boolean;
 }
 
 export interface MenuSeparator {
@@ -85,6 +96,9 @@ export type MenuEntry = MenuItem | MenuSeparator;
 
 /** Space between the trigger and the menu, and between the menu and a layer's edge. */
 const GAP = 4;
+
+/** Every item the arrows walk: actions and the answers of a choice alike. */
+const ITEM_SELECTOR = "[role='menuitem'],[role='menuitemradio']";
 
 export function Menu({
   label,
@@ -156,7 +170,7 @@ export function Menu({
   });
 
   const entries = () =>
-    menu.current ? [...menu.current.querySelectorAll<HTMLElement>("[role='menuitem']")] : [];
+    menu.current ? [...menu.current.querySelectorAll<HTMLElement>(ITEM_SELECTOR)] : [];
 
   // ON OPEN: remember what held focus.
   useLayoutEffect(() => {
@@ -310,12 +324,18 @@ export function Menu({
           <button
             key={entry.key}
             type="button"
-            role="menuitem"
+            role={entry.checked === undefined ? "menuitem" : "menuitemradio"}
+            aria-checked={entry.checked}
             tabIndex={-1}
             className={cx("menu-item", entry.danger && "danger")}
             aria-disabled={entry.disabled || undefined}
             onClick={() => activate(entry)}
           >
+            {entry.checked !== undefined && (
+              <span className="menu-item-check" aria-hidden="true">
+                {entry.checked && <Icon name="check" size="sm" />}
+              </span>
+            )}
             {entry.icon && <Icon name={entry.icon} size="sm" />}
             <span className="menu-item-label">{entry.label}</span>
             {entry.hint && <span className="menu-item-hint">{entry.hint}</span>}

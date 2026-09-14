@@ -978,7 +978,13 @@ rendered idle from the first phase to the last.
   completion in `Field` uses, so the two lists cannot drift apart. Search's
   results take those keys too: its input is a combobox naming the highlighted
   result, and the list is the modal's whole body rather than a popup over it
-  (`popup: false`), so Escape and the veil stay the modal's.
+  (`popup: false`), so Escape and the veil stay the modal's. The one single
+  choice that is not a `<select>` is a value picked IN PLACE from a menu an
+  item already opens, such as a unit's lead chosen from its chart card: a
+  select there would be a second control inside the item and a second click
+  after the first. Its answers are `menuitemradio` entries (`checked` on a
+  `ui/Menu.tsx` item) that say which one is current, and the form that edits
+  the same value still uses the select.
 - **The layout is measured, never assumed.** A chart card's width is the
   `--org-card-w` token; its height is measured in the browser
   (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout

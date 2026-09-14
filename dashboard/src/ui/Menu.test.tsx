@@ -60,6 +60,34 @@ test("ArrowUp on the trigger opens on the last item; arrows wrap, Home and End j
   expect(item("Open seat").getAttribute("aria-disabled")).toBe("true");
 });
 
+test("a choice's answers are radio items that say which one is current, and the arrows walk them", () => {
+  const chosen = vi.fn();
+  const items: MenuEntry[] = [
+    { key: "none", label: "No lead", checked: false, onSelect: () => chosen("none") },
+    { key: "vpe", label: "VP Engineering", checked: true, onSelect: () => chosen("vpe") },
+    { kind: "separator", key: "sep" },
+    { key: "other", label: "Choose another seat", onSelect: () => chosen("other") },
+  ];
+  render(<Menu label="Lead of Engineering" items={items} />);
+  fireEvent.click(screen.getByRole("button", { name: "Lead of Engineering" }));
+  const none = screen.getByRole("menuitemradio", { name: "No lead" });
+  const vpe = screen.getByRole("menuitemradio", { name: "VP Engineering" });
+  expect(none.getAttribute("aria-checked")).toBe("false");
+  expect(vpe.getAttribute("aria-checked")).toBe("true");
+  // An item that says nothing about `checked` stays an action.
+  expect(item("Choose another seat")).toBeDefined();
+
+  expect(document.activeElement).toBe(none);
+  press("ArrowDown");
+  expect(document.activeElement).toBe(vpe);
+  press("ArrowDown");
+  expect(document.activeElement).toBe(item("Choose another seat"));
+  press("ArrowDown");
+  expect(document.activeElement).toBe(none);
+  fireEvent.click(vpe);
+  expect(chosen).toHaveBeenCalledWith("vpe");
+});
+
 test("Escape closes the menu and returns focus to the trigger, even inside a dialog", () => {
   const closed = vi.fn();
   render(
