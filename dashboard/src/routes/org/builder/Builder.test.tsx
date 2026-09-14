@@ -442,6 +442,13 @@ describe("a token change mid-edit", () => {
       ),
     ).toBeDefined();
     expect(screen.getByText("read only")).toBeDefined();
+    // The status names what is missing: no token was refused, none is set.
+    expect(await screen.findByText("Needs an operator token")).toBeDefined();
+    expect(screen.queryByText("The engine refused the token")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(liveRegion().textContent).toBe("Editing is paused because no operator token is set."),
+    );
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();
   });

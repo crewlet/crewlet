@@ -104,6 +104,7 @@ current draft:
 | Read-only here | this process cannot write the configuration |
 | The configuration changed | another revision was activated after this draft was started |
 | The engine refused the token | set a token the engine accepts to continue |
+| Needs an operator token | the engine asks for a token and none is set; set one to continue |
 
 A change is checked about a third of a second after it is made, so a burst
 of changes (a held key, several undos) is checked once.

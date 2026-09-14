@@ -238,7 +238,13 @@ interface StatusLook {
   readonly icon: IconName;
 }
 
-function statusLook(status: CheckStatus, problems: number): StatusLook {
+/**
+ * How the toolbar reads a check status. A refusal of the token is worded by
+ * whether one is stored: "refused" names a credential the browser does not
+ * hold when the operator has cleared it, which sends them looking for a
+ * wrong token rather than a missing one.
+ */
+function statusLook(status: CheckStatus, problems: number, tokenStored: boolean): StatusLook {
   switch (status) {
     case "checking":
       return { label: "Checking", tone: "neutral", icon: "refresh" };
@@ -253,7 +259,11 @@ function statusLook(status: CheckStatus, problems: number): StatusLook {
     case "conflict":
       return { label: "The configuration changed", tone: "caution", icon: "alert" };
     case "guarded":
-      return { label: "The engine refused the token", tone: "critical", icon: "key" };
+      return {
+        label: tokenStored ? "The engine refused the token" : "Needs an operator token",
+        tone: "critical",
+        icon: "key",
+      };
   }
 }
 
@@ -602,16 +612,19 @@ function Lens({
   });
   const save = useSave({ stateRef, transport, keys, events: saveEvents });
 
+  // Read at render: a token change always dispatches, so this is current.
+  const tokenStored = apiToken() !== "";
   const readOnlyReason = useMemo((): string | null => {
     if (save.unsettled) return "the outcome of the last save is not known yet";
     if (keeping.offer) return "a kept draft is waiting for Keep or Discard";
-    if (posture.kind === "guarded") return "the engine refused this browser's token";
-    if (status === "guarded") return "the engine refused this browser's token";
+    if (posture.kind === "guarded" || status === "guarded") {
+      return tokenStored ? "the engine refused this browser's token" : "no operator token is set";
+    }
     if (status === "readonly") return "this process cannot write the configuration";
     if (status === "conflict") return "the configuration changed since this draft was started";
     if (loaded && !isBaseKeyed(state)) return "the engine has not described this company yet";
     return null;
-  }, [save.unsettled, keeping.offer, posture.kind, status, loaded, state]);
+  }, [save.unsettled, keeping.offer, posture.kind, status, loaded, state, tokenStored]);
   const readOnly = !loaded || readOnlyReason !== null;
 
   const dispatch = useCallback(
@@ -942,7 +955,7 @@ function Lens({
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
-  const look = statusLook(status, problemCount);
+  const look = statusLook(status, problemCount, tokenStored);
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
@@ -1217,7 +1230,7 @@ function Lens({
               </Button>
             }
           >
-            {apiToken()
+            {tokenStored
               ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
               : "Editing the organization needs an operator token. Your draft is kept on this page."}
           </Banner>
