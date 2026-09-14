@@ -86,11 +86,24 @@ func (e *Engine) RecheckGitHub() {
 // belongs to the rows in the file rather than to the current config, and
 // [Engine.buildEmbedder] has already refused any revision that would change
 // it.
+//
+// It also tells the OPERATOR one thing: that an epoch with no model is now
+// current. See nomodels.go.
 func (e *Engine) installEpoch(c *Company) {
 	if c != nil && !e.indexes(c) {
 		e.refreshParties(c)
 	}
 	e.epoch.current.Store(c)
+	if c != nil && c.Models == nil {
+		// Said here, once per epoch, because it is the only line that
+		// reaches the operator of a company nobody has messaged yet: with
+		// no traffic there is no held delivery to log about.
+		log.Warn("company_has_no_models", "company", c.Config.Name,
+			"seats", len(c.Seats()),
+			"detail", "the company configures no model provider: its seats are "+
+				"placed and keep what arrives on their inboxes, but none takes a "+
+				"turn until a revision adds one under providers.llm")
+	}
 	// Backends are always present on a running engine; a `crewlet validate`
 	// engine applies to nothing and has no store to tell.
 	if e.backends != nil && e.backends.Store != nil {
@@ -266,6 +279,13 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	// — `crewlet validate` applies to nothing.
 	if e.node != nil {
 		e.node.EnsureMailboxes(ctx)
+		// AND THE MAIL A COMPANY WITH NO MODEL HELD BACK is let through
+		// once this epoch has one. Here, after the seat tools are refiled,
+		// because the first thing a released inbox does is run a turn, and
+		// that turn must find everything it reads already current.
+		if next.Models != nil {
+			e.releaseModelHolds(ctx)
+		}
 		applied = append(applied, "mailboxes")
 	}
 	// AFTER the epoch is published too, and for a sharper version of the

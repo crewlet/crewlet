@@ -177,8 +177,8 @@ func TestAStoredRevisionDecodesAndIsValidatedSeparately(t *testing.T) {
 		t.Fatalf("the decode lost the document: %+v", cfg)
 	}
 	// Lenient about the READ is not lenient about running it: a seat naming
-	// a provider the document does not configure fails at the first turn,
-	// which is the worst place to learn it.
+	// a provider the document does not configure is refused by every node
+	// that builds it, which is the worst place to learn it.
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("a seat naming an unconfigured provider validated")
 	}

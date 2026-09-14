@@ -63,9 +63,19 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// rather than each call site is what makes a worker added later charge
 	// without anyone remembering to — see learningbudget.go.
 	models := e.meteredModelsFor(c)
+	if models == nil {
+		// A COMPANY WITH NO MODELS is a valid one (see nomodels.go), and the
+		// workers that call a model are waiting for a provider rather than
+		// broken. Reported once, as the fact it is, instead of four warnings
+		// about a missing registry beside the line that says what to change.
+		log.Info("learning_models_absent",
+			"detail", "the company configures no providers.llm, so the persist "+
+				"decider, the skill synthesizer and refiner and the counterparty "+
+				"profiler are built by the apply that adds one")
+	}
 
 	var workers []learning.Worker
-	if cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
+	if models != nil && cfg.Reflect.Enabled.Or(true) && cfg.Reflect.PersistDecider.Or(true) {
 		decider, err := learning.NewPersistDecider(models, learning.NewDiary(db),
 			learning.PersistOptions{MaxTokens: cfg.Reflect.BudgetTokens})
 		if err != nil {
@@ -106,7 +116,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// rows in it. Everything that reads a skill — use_skill, the executor's
 	// catalogue, refine_skill, the curator — shipped before anything wrote
 	// one, so all of it ran correctly over an empty table.
-	if cfg.SkillSynthesis.Enabled.Or(true) {
+	if models != nil && cfg.SkillSynthesis.Enabled.Or(true) {
 		synth, err := learning.NewSynthesizer(models, learning.NewSkills(db),
 			synthesizerOptions(cfg.SkillSynthesis))
 		if err != nil {
@@ -123,7 +133,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 	// `auto_refine_on_success` and `auto_refine_on_failure` validated,
 	// shipped in the example company and had no reader — a company whose
 	// skills only ever improved when a model happened to notice.
-	if cfg.SkillRefinement.Refines() {
+	if models != nil && cfg.SkillRefinement.Refines() {
 		switch {
 		case !cfg.SkillRefinement.OnSuccess() && !cfg.SkillRefinement.OnFailure():
 			// Both halves off is refinement off, spelled the long way.
@@ -145,7 +155,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 		}
 	}
 
-	if cfg.Counterparty.Enabled.Or(true) {
+	if models != nil && cfg.Counterparty.Enabled.Or(true) {
 		profiler, err := learning.NewProfiler(models, learning.NewCounterparties(db),
 			learning.ProfilerOptions{MaxTokens: cfg.Counterparty.BudgetTokens})
 		if err != nil {

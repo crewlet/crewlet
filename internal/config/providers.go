@@ -60,9 +60,10 @@ type Providers struct {
 }
 
 // DefaultProviders is the empty provider surface: no models, no
-// embeddings, no sandbox. A company with no LLM provider parses — that is
-// what lets an org chart be authored before the credentials exist — and
-// fails at the first turn, which is where the failure is actionable.
+// embeddings, no sandbox. A company with no LLM provider parses, validates
+// and runs, which is what lets an org chart be authored before the
+// credentials exist: its seats are placed and hold their work until a
+// revision adds a provider.
 func DefaultProviders() Providers { return Providers{} }
 
 // llmKeyOrder reads the declaration order of providers.llm off the document

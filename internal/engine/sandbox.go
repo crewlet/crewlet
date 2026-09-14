@@ -1183,9 +1183,9 @@ func (e *Engine) AwaitingSandbox(handle string) bool {
 //     larger trust step than the token — which is why the map is offered and
 //     each backend decides, rather than being exported like the rest.
 //
-// A seat with no resolvable sandbox model is not an error here: the phase
-// registry already refuses a company with no models at build, and a run whose
-// agent reads its credential from the environment needs none of this.
+// A seat with no resolvable sandbox model is not an error here: a company with
+// no models takes no turn, so launches no run (see nomodels.go), and a run
+// whose agent reads its credential from the environment needs none of this.
 func sandboxLLM(c *Company, seat *org.Role) (*sandbox.AgentLLM, map[string]string, map[string]string) {
 	return runLLM(c, seat, phase.Sandbox)
 }
@@ -1284,11 +1284,11 @@ func sandboxCredentials(c *Company, seat *org.Role, ph phase.Phase, placement sa
 	member, err := c.Models.Head(seat, ph)
 	if err != nil {
 		//nolint:nilerr // Deliberate: a seat with no resolvable model for
-		// this phase is the phase registry's problem — it refuses a
-		// company with no models at build — and [runLLM], which resolved
-		// the same seat and phase to pick the run's model moments ago,
-		// has already logged it. Returning the error here would refuse a
-		// run over a question this guard does not ask.
+		// this phase is not this guard's question. A company with no
+		// models takes no turn and so launches no run, and [runLLM],
+		// which resolved the same seat and phase to pick the run's model
+		// moments ago, has already logged it. Returning the error here
+		// would refuse a run over a question this guard does not ask.
 		return nil
 	}
 	agent, isCLI := member.Provider.(*cliagent.Provider)

@@ -166,8 +166,11 @@ func TestEveryDeferRecordsThatTheConsumerStopped(t *testing.T) {
 			t.Errorf("%s: a defer carried no reason", name)
 		}
 	}
-	// A park is not a defer and must NOT quiesce: the topic pause and the
-	// coordinator's resume already own that consumer's lifecycle.
+	// A park is not a defer and must NOT quiesce: it acks once its requeue
+	// has landed, and a quiesce would stop the consumer on a seat that is
+	// merely busy. The sandbox park takes no pause at all, and the no-model
+	// park's pause belongs to the engine, which lifts it when a model
+	// arrives; neither is the seat host's to resume.
 	c := healthy()
 	c.AwaitingSandbox = true
 	if got := inbox.Screen(c, []*events.Event{ev(t, "notification")}); got.NoteDeferred {

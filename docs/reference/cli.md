@@ -392,6 +392,10 @@ unit names, bad cron expressions, invalid timezones, human seats missing a
 contact identity, and a knowledge scope with no backend behind it all fail here
 rather than at run time. It reads **no environment**: Tier B keeps `${VAR}`
 references verbatim, so a config validates fully before any secret exists.
+For the same reason a company with no `providers.llm` at all validates, and
+its summary reports `0 LLM providers`: every node applies it, and its seats
+hold their work until a provider is added (see
+[A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
 
 | Flag | Description |
 |------|-------------|

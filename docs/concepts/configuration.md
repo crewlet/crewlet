@@ -222,6 +222,40 @@ Transition out of unconfigured: the first activation moves the pointer → the r
 
 ---
 
+## A Company With No Model Provider
+
+An empty `providers.llm` is a valid company: an org chart written before its
+credentials exist, and what a company created in the dashboard's
+[org builder](../guides/org-builder.md#creating-the-company) is until somebody
+adds a provider. `crewlet validate` accepts it (reporting `0 LLM providers`),
+`PUT /config` and its dry run accept it, and every node applies it like any
+other revision: the fleet view reports `ok`, the agent seats are placed, and
+their mailboxes attach and keep what arrives.
+
+What no seat can do is take a turn, and each node handles that the same way:
+
+- It logs `company_has_no_models` when the revision becomes current, naming
+  `providers.llm`. This is the line to look for on a company nobody has
+  messaged yet.
+- It holds every delivery to a seat on that seat's inbox. The inbox is paused
+  and the delivery requeued, never consumed, and the node logs
+  `seat_inbox_paused` for the seat, naming `providers.llm` again.
+- The apply that adds a provider releases every inbox the node paused
+  (`seat_inbox_resumed`), and the held work runs on the new provider. Nothing
+  sent to a seat in the meantime is lost.
+
+The learning workers that call a model (the persist decider, the skill
+synthesizer and refiner, and the counterparty profiler) are not built for such
+a company; the apply that adds a provider builds them.
+
+A delivery is held rather than failed on purpose. A turn that cannot build its
+runner proves nothing reached outside the engine, so the dispatcher would hand
+it back to the broker, which would redeliver it until its delivery budget ran
+out and then drop it: every message sent before the provider arrived would be
+retried pointlessly and then lost.
+
+---
+
 ## Live Propagation
 
 When a new revision is activated (via `PUT /config`, `PATCH /config`, a per-entity write, a revert, or `crewlet config import`), the revision is stored and the fleet's **activation pointer** is then moved to it; the pointer's own KV sequence *is* the epoch, so the append and the flip cannot come apart. Every node polls that pointer and converges onto it; a broadcast `crewlet.config.revision_activated` event wakes the poll early but carries no work.
@@ -241,6 +275,7 @@ in a fixed order, and names each stage it got through:
 
 1. **`secrets`** — re-read the secret store and install a fresh resolver snapshot. **First**, because re-activating an unchanged revision is the documented [rotation gesture](secret-store.md): the payload has not moved, so the only thing that can have is what its `${VAR}` references resolve to.
 2. **`company`** — validate and build the new epoch, resolving `${VAR}` where each provider is *constructed*. A refusal here changes nothing: this node keeps serving the previous epoch.
+   A company with no `providers.llm` is not refused: it builds with no model registry (see [A Company With No Model Provider](#a-company-with-no-model-provider)).
 3. **`tools`** — equip the new epoch with this node's builtins. An epoch is published, never mutated, so each one gets its own registry; a node that equipped only its first would serve a company whose agents silently lost every builtin at the first config change.
 4. **`learning`** — rebuild the reflection workers against the new org. Deliberately cannot fail the apply: reflecting against a stale org is a far smaller wrong than not reflecting.
 5. **`sandbox`** — swap the sandbox *manager* only. The coordinator and waiter hold this process's busy set and poll loop; rebuilding them would forget which seats are mid-run and start a second loop over the same rows. **Conditional:** only where this node booted with a sandbox coordinator (see below).
@@ -248,7 +283,7 @@ in a fixed order, and names each stage it got through:
 7. **`integrations`**: rebuild the inbound surfaces against the new epoch (Confluence, Datadog, Jira, GitLab, GitHub, and the two chat transports, Slack on every apply and Mattermost when a value it is built from moved), so work items route by the new chart rather than the boot-time one. A third-party app the revision **retires** (its block removed, or `enabled: false` for GitHub and GitLab) has its parser unregistered, so its deliveries route to no seat; GitHub's and GitLab's webhook routes then answer `503` rather than verifying and ingesting a delivery the routing half would drop. Confluence additionally loses its searcher, or every seat would go on searching a wiki the company has removed, with the credential it revoked. Confluence and Jira re-derive a **lead map** from the org (space and project key to unit lead), which is what an unrouted page or issue falls through to. GitLab and GitHub have no lead map; theirs re-resolves the engine credential and the participants lookup that fans a thread out to the seats on it.
 8. **`epoch`** — publish the new epoch. This is the swap; everything before it built, everything after it reads the now-current company.
 9. **`seat_tools`**: rebuild the registry each seat this node *holds* runs against. **After** the swap, because that registry is a clone of the current epoch's surface: a seat's per-role children are filed into a copy of the builtins plus the shared servers, so a new epoch leaves the copy stale. The children themselves are deliberately untouched (they belong to the seat's lease, not to the epoch; see below), so what is rebuilt is the catalogue a turn is built against, never a process. Reported on every apply, including one where this node holds no seat with per-role children and there is nothing to rebuild.
-10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
+10. **`mailboxes`**: ensure a mailbox exists for every seat. **After** the swap, because it reads the seat list off the current company, and until something creates a new role's mailbox every event published to it is dropped rather than retained. When the new epoch has a model provider, this stage also releases every seat inbox the node paused while the company had none, after the seat tools are rebuilt, because the first thing a released inbox does is run a turn. **Conditional:** only where the engine has a node, because `crewlet validate` applies to nothing.
 11. **`scheduler`** — re-arm the cron loop. After the swap too, and for a sharper version of the same reason: the tick reads schedules off the current company, so arming early would open a window in which the loop fires the outgoing company's crons.
 
 Then a `config_revision_applied` event is published on

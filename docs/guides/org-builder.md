@@ -78,10 +78,11 @@ beside it.
 
 After a successful create, two steps remain that the dashboard cannot take:
 connecting chat and trackers on the Integrations screen, and adding a model
-provider, which no dashboard screen writes. Until the provider is added every
-node refuses to apply the new company (the strip after the save says so), and
-the panel gives the exact `crewlet config import` and `PATCH /config` commands
-for it.
+provider, which no dashboard screen writes. The engine applies the new company
+without one, but until the provider is added no agent seat takes a turn:
+whatever is sent to a seat waits on its inbox and runs once the provider
+exists. The panel gives the exact `crewlet config import` and `PATCH /config`
+commands for it.
 
 ## Reading the organization
 
@@ -217,11 +218,12 @@ A change is checked about a third of a second after it is made, so a burst of
 changes (a held key, several undos) is checked once.
 
 When the company has no model provider configured, a caution says so. The
-engine builds the models for every apply and refuses a company with none, so
-until a provider exists every node keeps the revision it had and nothing in
-this company runs; the dashboard does not write providers. Add one with
-`crewlet config import` or `PATCH /config`
-([Configure via the API](configure-via-api.md)).
+engine applies such a company and places its seats, but no agent seat takes a
+turn until a provider exists: work sent to a seat waits on its inbox and runs
+once one is added
+([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
+The dashboard does not write providers. Add one with `crewlet config import`
+or `PATCH /config` ([Configure via the API](configure-via-api.md)).
 
 ## Adding a unit or a seat
 

@@ -33,6 +33,16 @@ import (
 type Company struct {
 	Config *config.Company
 	Org    *org.Organization
+
+	// Models is the company's providers.llm, built. NIL WHEN IT HAS NONE,
+	// which is a valid company rather than a broken one: an org chart
+	// written before its credentials exist validates, applies and places
+	// its seats. What it cannot do is think, so the dispatcher holds every
+	// delivery on the seat's inbox while this is nil (see
+	// [Engine.conditionsFor]) and the apply that brings a provider releases
+	// them. The nil registry answers every method as a company with no
+	// models ([phase.ErrNoProviders]), so a consumer that forgets to ask
+	// is refused rather than crashed.
 	Models *phase.Registry
 
 	// Tools is the catalogue every seat's surface is cut from: the
@@ -168,6 +178,14 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil {
 		return nil, fmt.Errorf("engine: %q is not an agent seat in this company", handle)
+	}
+	if c.Models == nil {
+		// Refused HERE, naming the seat and the fix, rather than by the
+		// runner's own nil check, which reads as a wiring fault. The
+		// dispatcher never gets this far for a company with no models, so
+		// what reaches it is a path that bypasses the inbox: a coding run
+		// resuming after a revision removed every provider.
+		return nil, fmt.Errorf("engine: seat %q cannot take a turn: %w", handle, phase.ErrNoProviders)
 	}
 	if reg == nil {
 		reg = c.Tools

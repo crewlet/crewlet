@@ -102,6 +102,30 @@ func TestValidateCatchesWhatASchemaCannot(t *testing.T) {
 	}
 }
 
+// A COMPANY WITH NO MODELS VALIDATES, as it does over the API and in every
+// node's apply. Validate builds the epoch, and the build used to refuse an
+// empty providers.llm, so the one command meant to predict a write's fate
+// called invalid the company `PUT /config` had just stored and activated. Both
+// forms are checked, because each prints a provider count read off the epoch's
+// registry, and a company with no models has none.
+func TestValidateAcceptsACompanyWithNoModels(t *testing.T) {
+	t.Parallel()
+	const noModels = "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\n"
+	for name, args := range map[string][]string{
+		"one file":  {"validate", writeYAML(t, "company.yaml", noModels)},
+		"two tiers": append([]string{"validate"}, configPair(t, "", noModels)...),
+	} {
+		var out, errOut bytes.Buffer
+		if err := run(args, &out, &errOut); err != nil {
+			t.Errorf("%s: a company with no models was refused: %v", name, err)
+			continue
+		}
+		if !strings.Contains(out.String(), "0 LLM providers") {
+			t.Errorf("%s: summary %q does not say the company has no provider", name, out.String())
+		}
+	}
+}
+
 func TestBothTiersAreReportedTogether(t *testing.T) {
 	t.Parallel()
 	// An operator fixing a broker URL only to be told about their org

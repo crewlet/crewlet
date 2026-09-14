@@ -97,6 +97,11 @@ type Engine struct {
 	// substitute its own without standing up a broker.
 	dispatch *Dispatcher
 
+	// modelHolds is every seat inbox this node paused because its company
+	// had no model, which the apply that brings one releases. See
+	// nomodels.go.
+	modelHolds modelHolds
+
 	// watchdog ends this process when the seat host's heartbeat stops
 	// turning past the lease TTL.
 	//
@@ -359,16 +364,6 @@ type Options struct {
 	// rather than waiting out a real tick.
 	SandboxPollInterval time.Duration
 }
-
-// pauseReasonNoTurnEngine is the hold name the no-turn-engine park takes on a
-// seat's inbox.
-//
-// A STABLE KEY, not the screening's prose. Pause holds are keyed by reason so
-// two subsystems gating one inbox cannot release each other's hold, which
-// means the pause and the eventual resume must spell it identically. Deriving
-// it from the human-readable reason would make an edit to a log message
-// silently strand every seat that was parked under the old wording.
-const pauseReasonNoTurnEngine = "no_turn_engine"
 
 // New assembles an engine.
 //
@@ -858,19 +853,18 @@ func (e *Engine) Dispatch(ctx context.Context, handle string, evs []*events.Even
 func (e *Engine) conditionsFor(awaiting func(string) bool) func(string) inbox.Conditions {
 	return func(handle string) inbox.Conditions {
 		_, owned := e.node.Host().MayStart(handle)
+		company := e.Company()
 		return inbox.Conditions{
 			// FRESHNESS, not membership: a renew at t proves exclusivity
 			// through t+ttl, and a membership snapshot can be a full TTL
 			// stale — which is exactly the window this check exists to
 			// close.
 			Owned: owned,
-			// Read off the EPOCH rather than asserted true. NewCompany
-			// refuses a company with no models today, so this cannot be
-			// false yet; stating the actual rule means it stops being
-			// true on its own when the config-apply path can hand a node
-			// an epoch that has none, instead of a constant quietly
-			// outliving the reason for it.
-			TurnEngineReady: e.Company().Models != nil,
+			// Read off the EPOCH rather than asserted true: a company
+			// with no providers.llm is applied with no model registry,
+			// and every delivery to its seats is held on the inbox until
+			// an apply brings one. See nomodels.go.
+			TurnEngineReady: company != nil && company.Models != nil,
 			AwaitingSandbox: awaiting != nil && awaiting(handle),
 			// The SAME gate the inbound edge and the scheduler read, so
 			// a shedding node refuses at every trigger admission rather
@@ -900,17 +894,6 @@ func (e *Engine) park(ctx context.Context, handle string, evs []*events.Event) e
 		}
 	}
 	return nil
-}
-
-// pause stops delivery on a seat's inbox before a park, so the requeued copies
-// buffer on the queue rather than looping straight back.
-func (e *Engine) pause(ctx context.Context, handle, reason string) error {
-	subject, group := topics.AgentInbox(handle), topics.AgentInboxGroup(handle)
-	if subject == "" || group == "" {
-		return fmt.Errorf("engine: seat %q has no inbox subject", handle)
-	}
-	log.InfoContext(ctx, "seat_inbox_paused", "handle", handle, "reason", reason)
-	return e.backends.Queue.PauseTopic(ctx, subject, group, pauseReasonNoTurnEngine)
 }
 
 // runTurn is the default turn: build the seat's runner and drive the loop.

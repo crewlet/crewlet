@@ -31,8 +31,8 @@ var pinnedNow = time.Date(2026, 8, 23, 14, 0, 0, 0, time.UTC)
 
 // brokenRevision is well-formed JSON that cannot be built: a seat naming a
 // provider the document does not configure. The provider block is non-empty
-// deliberately — a company with no models at all is a supported authoring
-// state, so an empty one would exercise a different refusal.
+// deliberately: a company with no models at all is a supported authoring
+// state, and an empty one would not be refused at all (see nomodels_test.go).
 var brokenRevision = json.RawMessage(`{"name":"Acme",
   "providers":{"llm":{"zulu":{"type":"anthropic","model":"m","api_keys":["k"]}}},
   "roles":[{"name":"CEO","handle":"ceo","llm":"nonexistent"}]}`)
@@ -75,7 +75,13 @@ type applied struct {
 
 func newPlane(t *testing.T, opts ...func(*engine.ReconcilerOptions)) *plane {
 	t.Helper()
-	e := newEngine(t, engine.Options{})
+	return planeFor(t, newEngine(t, engine.Options{}), opts...)
+}
+
+// planeFor puts the reconciler in front of an engine the caller built, for a
+// case whose subject needs a company or a dispatcher of its own.
+func planeFor(t *testing.T, e *engine.Engine, opts ...func(*engine.ReconcilerOptions)) *plane {
+	t.Helper()
 	p := &plane{engine: e, store: e.Backends().Store, fleet: e.Backends().Fleet}
 
 	options := engine.ReconcilerOptions{
@@ -412,9 +418,9 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	before := p.engine.Company()
 	// A seat naming a provider the document does not configure:
 	// well-formed JSON, and refused at build. The provider block is
-	// non-empty on purpose — a company with NO models is a documented
-	// authoring state, so an empty one would be a different fault from
-	// the one under test.
+	// non-empty on purpose: a company with NO models is a documented
+	// authoring state, which applies cleanly and so could not stand for
+	// a revision that cannot be built.
 	p.activatePayload(t, "broken", brokenRevision)
 	err := p.recon.Tick(t.Context())
 	if err == nil {

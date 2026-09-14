@@ -165,8 +165,8 @@ func TestAPatchThatBreaksTheCompanyIsRefused(t *testing.T) {
 	// A signing secret whose SHAPE the validator checks. Chosen over
 	// "delete the provider every seat names", which is deliberately
 	// ACCEPTED: a company with no models at all is a documented authoring
-	// state — an org chart written before the credentials exist — and it
-	// fails at the first turn, where the failure is actionable.
+	// state (an org chart written before the credentials exist), and every
+	// node applies it, holding each seat's work until a provider returns.
 	res := s.do(t, http.MethodPatch, "/config",
 		`{"integrations": {"gitlab": {"signing_secret": "not-a-signing-secret"}}}`,
 		summaryHeader)

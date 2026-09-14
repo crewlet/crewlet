@@ -144,8 +144,8 @@ func TestTheExecutorEntryResolvesLikeThePhaseRegistry(t *testing.T) {
 	}
 
 	// A company with no providers at all answers false rather than
-	// crashing: the registry refuses that company at construction, and
-	// validation has to survive long enough to say so.
+	// crashing: it is a valid company (the engine builds it with no model
+	// registry), and validation walks every seat of it.
 	empty := &Company{}
 	if _, _, ok := empty.ExecutorProvider(&Role{}); ok {
 		t.Error("a company with no providers resolved an executor entry")

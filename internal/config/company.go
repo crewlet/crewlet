@@ -548,10 +548,12 @@ type Knowledge struct {
 // a loop here, so the next whole-document rule about seats inherits it.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a
-// documented authoring state — an org chart written before the credentials
-// exist — and it fails at the first turn, where the failure is actionable.
-// Rejecting every role's key against an empty map would turn that supported
-// flow into a wall of errors about models the author has not added yet.
+// documented authoring state (an org chart written before the credentials
+// exist, and what a company created from the dashboard is until one is added),
+// and it runs: every node applies it and places its seats, and each seat holds
+// its work until a revision adds a provider. Rejecting every role's key
+// against an empty map would turn that supported flow into a wall of errors
+// about models the author has not added yet.
 func (c *Company) validateProviderKeys() error {
 	var p problems
 	if len(c.Providers.LLM) == 0 {
@@ -822,8 +824,8 @@ func agentModeEntryPath(name string) Path {
 // growing a rule the registry does not have.
 //
 // The second return is false when there is no executor to resolve: a company
-// that configures no provider at all (which the registry refuses at
-// construction and this must not crash on), or a HUMAN SEAT. A human seat is
+// that configures no provider at all (a valid company, which the engine runs
+// with no model registry and this must not crash on), or a HUMAN SEAT. A human seat is
 // addressable and never spawned — it runs no phase, and `llm` is one of the
 // fields [org.Role.Validate] refuses on one — so resolving it would answer
 // with whatever entry happens to be declared first and call that entry
