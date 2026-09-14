@@ -337,24 +337,12 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	}
 
 	svc, err := notify.New(notify.Options{
-		Queue:    e.backends.Queue,
-		Registry: e.Registry,
-		Prompts:  notify.NewPrompts(prompts...),
-		Parsers:  parsers,
-		Valve:    e.notifyValve(),
-		// Read live off the epoch rather than captured: an apply that
-		// changes the cap must take effect on the next notification,
-		// not on the next restart. The company this edge was started for
-		// answers until an epoch is current, because a node's first
-		// company starts the edge BEFORE publishing the epoch that
-		// carries it (see [Engine.startInbound]), and a delivery can
-		// arrive in between.
-		RateLimit: func() int {
-			if live := e.Company(); live != nil {
-				return live.Config.NotificationRateLimit
-			}
-			return c.Config.NotificationRateLimit
-		},
+		Queue:     e.backends.Queue,
+		Registry:  e.Registry,
+		Prompts:   notify.NewPrompts(prompts...),
+		Parsers:   parsers,
+		Valve:     e.notifyValve(),
+		RateLimit: e.notificationRateLimit(c),
 		// The config posture, supplied by whoever holds the control
 		// plane. A shedding node PARKS inbound deliveries rather than
 		// routing them against a company it is not sure of — and nil
@@ -373,6 +361,25 @@ func (e *Engine) startNotifications(ctx context.Context, c *Company) error {
 	e.notify.service = svc
 	e.notify.mu.Unlock()
 	return nil
+}
+
+// notificationRateLimit is the per-seat notification cap the inbound edge
+// started for c enforces.
+//
+// Read live off the epoch rather than captured: an apply that changes the cap
+// must take effect on the next notification, not on the next restart. And c,
+// the company the edge was started for, answers until an epoch is current,
+// because a node's first company starts the edge BEFORE publishing the epoch
+// that carries it (see [Engine.startInbound]), and a delivery a peer accepted
+// can reach this node's consumer in between. Read off the epoch alone, that
+// delivery dereferenced a company that did not exist yet.
+func (e *Engine) notificationRateLimit(c *Company) func() int {
+	return func() int {
+		if live := e.Company(); live != nil {
+			return live.Config.NotificationRateLimit
+		}
+		return c.Config.NotificationRateLimit
+	}
 }
 
 // inboundStarted reports whether this node's inbound edge is running.

@@ -64,3 +64,34 @@ integrations:
 		t.Error("the retry on a healthy broker started no inbound edge")
 	}
 }
+
+// THE CAP ANSWERS BEFORE THE EPOCH EXISTS. A node's first company starts the
+// inbound edge before the epoch that carries it is published, and a delivery
+// that reaches the edge in between still asks for the per-seat cap. Read off
+// the epoch alone, that question dereferenced a company that did not exist
+// yet; once the epoch is current it is the one that answers, so an apply that
+// moves the cap moves it on the next notification.
+func TestTheNotificationCapAnswersBeforeTheFirstEpoch(t *testing.T) {
+	t.Parallel()
+	e := &Engine{}
+	limit := e.notificationRateLimit(companyFor(t, `
+name: Acme
+notification_rate_limit: 7
+roles:
+  - name: CEO
+    handle: ceo
+`))
+	if got := limit(); got != 7 {
+		t.Errorf("cap before the first epoch = %d, want the starting company's 7", got)
+	}
+	setEpoch(e, companyFor(t, `
+name: Acme
+notification_rate_limit: 9
+roles:
+  - name: CEO
+    handle: ceo
+`))
+	if got := limit(); got != 9 {
+		t.Errorf("cap once an epoch is current = %d, want the epoch's 9", got)
+	}
+}
