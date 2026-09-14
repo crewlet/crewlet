@@ -16,6 +16,34 @@ import (
 // this package.
 const repoRoot = "../.."
 
+// readRepoFile reads a file shipped in this repository, and FAILS when it
+// cannot.
+//
+// Every caller here used to t.Skipf "the example tree is not in this
+// checkout". CI does a full checkout and the module zip carries examples/ and
+// docs/, so none of those skips has ever fired — which means the only event
+// they could ever respond to is the one they must not hide: somebody renaming
+// examples/nimbus.company.yaml, moving a docs page, or dropping an entry from
+// the list. Every one of these cases certifies a SHIPPED artefact, so a file
+// that is not there is a broken checkout or a rename nobody swept, and both
+// are findings.
+//
+// This is not hypothetical. internal/api/queries/company_test.go carried the
+// identical shape over a dashboard path, the React rewrite moved the path, and
+// that gate certified nothing on every machine and in CI until somebody went
+// looking.
+func readRepoFile(t *testing.T, parts ...string) []byte {
+	t.Helper()
+	path := filepath.Join(append([]string{repoRoot}, parts...)...)
+	data, err := os.ReadFile(path) //nolint:gosec // a path this repository ships
+	if err != nil {
+		t.Fatalf("read %s: %v — this case certifies a file this repository "+
+			"ships, so a missing one is a rename that was not swept, not a "+
+			"reason to certify nothing", path, err)
+	}
+	return data
+}
+
 // The shipped examples and the docs are a promise: someone copies them and
 // runs them. Nothing else stops them drifting away from what the loader
 // accepts, so this suite is what holds them to the models.
@@ -36,10 +64,7 @@ func TestShippedCompanyExamplesLoad(t *testing.T) {
 	for _, name := range shippedCompanies {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			data, err := os.ReadFile(filepath.Join(repoRoot, "examples", name))
-			if err != nil {
-				t.Skipf("the example tree is not in this checkout: %v", err)
-			}
+			data := readRepoFile(t, "examples", name)
 			cfg, err := ParseCompany(data)
 			if err != nil {
 				t.Fatalf("examples/%s no longer loads:\n%v", name, err)
@@ -87,10 +112,7 @@ func TestBothShippedExamplesModelTheSameCompany(t *testing.T) {
 	t.Parallel()
 	seats := func(name string) []string {
 		t.Helper()
-		data, err := os.ReadFile(filepath.Join(repoRoot, "examples", name))
-		if err != nil {
-			t.Skipf("the example tree is not in this checkout: %v", err)
-		}
+		data := readRepoFile(t, "examples", name)
 		cfg, err := ParseCompany(data)
 		if err != nil {
 			t.Fatalf("examples/%s no longer loads:\n%v", name, err)
@@ -209,10 +231,7 @@ func TestBootstrapExampleLoads(t *testing.T) {
 
 func bootstrapExampleLoads(t *testing.T, name string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "examples", name))
-	if err != nil {
-		t.Skipf("the example tree is not in this checkout: %v", err)
-	}
+	data := readRepoFile(t, "examples", name)
 	// EVERY REFERENCE ANSWERED, so what is under test is the SHAPE rather
 	// than whose shell happens to have the variables exported. A file that
 	// only loads on a machine with the right environment is not a shipped
@@ -303,10 +322,7 @@ secrets:
 
 func quickstartText(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "docs", "getting-started", "quickstart.md"))
-	if err != nil {
-		t.Skipf("the docs tree is not in this checkout: %v", err)
-	}
+	data := readRepoFile(t, "docs", "getting-started", "quickstart.md")
 	return string(data)
 }
 
@@ -440,10 +456,7 @@ func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 // yaml block that writes a credential helper.
 func gitAuthRecipeBlock(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(repoRoot, "docs", "concepts", "code-sandbox.md"))
-	if err != nil {
-		t.Skipf("the docs tree is not in this checkout: %v", err)
-	}
+	data := readRepoFile(t, "docs", "concepts", "code-sandbox.md")
 	// The page carries a second, abbreviated helper snippet for `direct`
 	// mode, so matching on the helper name alone would find that one. The
 	// recipe proper is the block that declares the whole provider.
