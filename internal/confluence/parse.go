@@ -143,10 +143,11 @@ type ParserOptions struct {
 	// concerns it.
 	OnPage func(ctx context.Context, change PageChange) error
 
-	// Watchers is the engine's own page-subscription list. Nil routes by
-	// mentions and space leads alone, which is the single-node case with
-	// no coordination store and the honest degradation: a seat that
-	// touched a page simply is not woken by later activity on it.
+	// Watchers is the engine's own page-subscription list, on the fleet
+	// store every node opens. Nil routes by mentions and space leads alone,
+	// which is how this parser routed before the list existed and an honest
+	// degradation rather than a fault: a seat that touched a page simply is
+	// not woken by later activity on it.
 	Watchers Watchers
 
 	// Now is the clock a subscription is stamped with. Nil takes the wall
