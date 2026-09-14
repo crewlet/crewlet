@@ -90,6 +90,12 @@ describe("a seat", () => {
     expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
   });
 
+  test("at the top level no unit lead manages the seat, and the preview says so", () => {
+    open(withManager(), "seat:dev");
+    choose("The company (top level)");
+    expect(screen.getByText("At the top level, no unit lead manages it.")).toBeDefined();
+  });
+
   test("moving into a unit with a lead names the lead that manages its members", () => {
     open(withManager(), "seat:sre");
     choose("Engineering");

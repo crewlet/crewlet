@@ -74,6 +74,13 @@ describe("a unit", () => {
   });
 });
 
+test("an empty unit is said to hold nothing", () => {
+  const doc = fixtureCompany();
+  doc.units!.push({ name: "Legal" });
+  open(keyedState(doc), "unit:Legal");
+  expect(screen.getByText(/Deletes the unit Legal, which holds nothing./)).toBeDefined();
+});
+
 describe("outside the chart", () => {
   test("the Datadog fallback must be replaced before the seat that is it can go", () => {
     const view = open(keyedState(fixtureCompany()), "seat:sre");

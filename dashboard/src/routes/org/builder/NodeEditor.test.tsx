@@ -321,6 +321,11 @@ describe("seat fields", () => {
       screen.getByText("Empty uses the handle the engine derives from the name: qa."),
     ).toBeDefined();
     expect((field("Access level") as HTMLSelectElement).disabled).toBe(false);
+    expect(
+      screen.getByText(
+        "Kept by handle: choosing a handle for this seat carries its level with it.",
+      ),
+    ).toBeDefined();
     type("Name", "Quality");
     expect(
       screen.getByText(
@@ -344,6 +349,67 @@ describe("seat fields", () => {
         "Access levels are kept by handle, so this is available once the check reports this seat's handle.",
       ),
     ).toBeDefined();
+  });
+
+  test("a model chain says the order it is tried in, and how to change it", () => {
+    const doc = connected();
+    doc.units![0]!.roles![1]!.llm = ["smart", "fast"];
+    edit(keyedState(doc), "seat:dev");
+    expect(
+      screen.getByText(
+        "Tried in this order: smart, then fast. To change the order, remove a provider and choose it again.",
+      ),
+    ).toBeDefined();
+  });
+
+  test("a GitLab block without provisioning has no access level to set, and says so", () => {
+    const doc = fixtureCompany();
+    doc.integrations = { ...doc.integrations, gitlab: { enabled: true } };
+    edit(keyedState(doc), "seat:dev");
+    expect(screen.queryByLabelText(labelled("Access level"))).toBeNull();
+    expect(
+      screen.getByText(/GitLab provisioning is not set up, so there is no access level to set./),
+    ).toBeDefined();
+  });
+
+  test("a seat, a unit and the charter each need a name before Apply", () => {
+    const cases: [NodeKey, string, string][] = [
+      ["seat:dev", "Name", "A seat needs a name."],
+      ["unit:Engineering", "Name", "A unit needs a name."],
+      [COMPANY_KEY, "Company name", "The company needs a name."],
+    ];
+    for (const [key, label, reason] of cases) {
+      edit(keyedState(fixtureCompany()), key);
+      type(label, "  ");
+      expect(screen.getByText(reason)).toBeDefined();
+      expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      cleanup();
+    }
+  });
+
+  test("a node that has left the draft opens as an editor that says so", () => {
+    edit(keyedState(fixtureCompany()), "seat:gone");
+    expect(screen.getByText("This node is no longer in the draft")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
+  // A manages entry that names both a seat and a unit names the seat, so a
+  // unit sharing a seat's name, or the edited seat's own, is not offered as a
+  // second meaning of it.
+  test("a unit that shares a seat's name is not offered as a second meaning of it", () => {
+    const doc = fixtureCompany();
+    doc.roles!.push({ name: "Sales" });
+    edit(keyedState(doc), "seat:dev");
+    fireEvent.click(screen.getByRole("combobox", { name: /^Manages/ }));
+    expect(screen.getAllByRole("option", { name: /^Sales/ })).toHaveLength(1);
+    expect(screen.getByRole("option", { name: /^Engineering/ })).toBeDefined();
+    cleanup();
+
+    edit(keyedState(doc), "seat:sales");
+    fireEvent.click(screen.getByRole("combobox", { name: /^Manages/ }));
+    expect(screen.queryByRole("option", { name: /^Sales/ })).toBeNull();
   });
 
   test("automatic reports are their own read-only group beside the manages list", () => {
@@ -537,6 +603,11 @@ describe("integrations", () => {
     edit(keyedState(connected()), "seat:sre");
     expect(screen.queryByLabelText(labelled("Slack channel ID"))).toBeNull();
     expect(screen.getByText(/has no Slack app of its own/)).toBeDefined();
+    // The same for a Mattermost channel, which a bot of the seat's own carries.
+    expect(screen.queryByLabelText(labelled("Mattermost channel"))).toBeNull();
+    expect(
+      screen.getByText(/This seat has no Mattermost bot of its own, so it has no channel to set./),
+    ).toBeDefined();
     expect(screen.getByText("This seat is the Datadog fallback.")).toBeDefined();
     // Where it is chosen, which is also where the builder asks for a new one.
     expect(
@@ -685,6 +756,15 @@ describe("a unit", () => {
       lead: "SRE",
       purpose: "Keep it running",
     });
+  });
+
+  test("a custom unit type is typed in its own box and applied", () => {
+    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
+    fireEvent.change(field("Type"), { target: { value: "__custom__" } });
+    type("Custom type", "tribe");
+    apply();
+    const found = locate(view.state().draft, "unit:Platform");
+    expect(found?.kind === "unit" && found.node.data.type).toBe("tribe");
   });
 
   test("renaming a unit names its masked literal credentials and links to Secrets", () => {
