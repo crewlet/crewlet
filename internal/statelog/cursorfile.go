@@ -10,27 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// CursorsInFile reads every domain's committed checkpoint out of a COPY of the
-// replicated estate.
-//
-// # Why a position is read from the file and never from the live database
-//
-// The checkpoint commits in the SAME transaction as the rows it describes, so
-// the position inside a file is the only position that describes that file. A
-// caller that stamped its manifest from the live cursor would be writing down
-// where the node was when the copy started, not where the copy actually
-// finished — and a copy is taken while the applier is running, so those two
-// differ by however long it took.
-//
-// It is the same read for both artefacts a node produces, and that is why it
-// is here rather than beside either: a snapshot names its positions so a
-// recipient can refuse a stale donor, and a backup names them so a restore
-// knows which records the log still has to replay. Two implementations of one
-// query is how one of them starts reading a column the other dropped.
-//
-// The file is opened as ONE ESTATE. [store.Open] would treat it as a node —
-// applying the node estate's whole migration sequence into this copy of the
-// replicated file and opening a second file beside it.
 // FileCursor is one stream's committed checkpoint AS A COPY KEEPS IT: where
 // the applier had got to, and which stream it was applying.
 //
@@ -53,6 +32,27 @@ type FileCursor struct {
 	StreamCreatedAt time.Time
 }
 
+// CursorsInFile reads every domain's committed checkpoint out of a COPY of the
+// replicated estate.
+//
+// # Why a position is read from the file and never from the live database
+//
+// The checkpoint commits in the SAME transaction as the rows it describes, so
+// the position inside a file is the only position that describes that file. A
+// caller that stamped its manifest from the live cursor would be writing down
+// where the node was when the copy started, not where the copy actually
+// finished — and a copy is taken while the applier is running, so those two
+// differ by however long it took.
+//
+// It is the same read for both artefacts a node produces, and that is why it
+// is here rather than beside either: a snapshot names its positions so a
+// recipient can refuse a stale donor, and a backup names them so a restore
+// knows which records the log still has to replay. Two implementations of one
+// query is how one of them starts reading a column the other dropped.
+//
+// The file is opened as ONE ESTATE. [store.Open] would treat it as a node —
+// applying the node estate's whole migration sequence into this copy of the
+// replicated file and opening a second file beside it.
 func CursorsInFile(ctx context.Context, path string) (map[string]FileCursor, error) {
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, path, store.Options{})
 	if err != nil {

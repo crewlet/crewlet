@@ -212,15 +212,3 @@ func waitUntil(t *testing.T, within time.Duration, what string, cond func() bool
 	}
 	t.Fatalf("waited %s for %s", within, what)
 }
-
-func itoaU(n uint64) string {
-	if n == 0 {
-		return "0"
-	}
-	var out []byte
-	for n > 0 {
-		out = append([]byte{byte('0' + n%10)}, out...)
-		n /= 10
-	}
-	return string(out)
-}
