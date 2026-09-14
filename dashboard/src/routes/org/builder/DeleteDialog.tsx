@@ -174,7 +174,6 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
             names={bare.op.placed.map((p) =>
               isRecord(p.json) && typeof p.json.name === "string" ? p.json.name : p.key,
             )}
-            none=""
           />
           <Segmented<PlacedChoice>
             ariaLabel="Seats placed here by unit reference"
@@ -251,7 +250,7 @@ function ClearedReferences({
   };
   return (
     <EditorSection title="References that are cleared">
-      <NameList names={cleared.map(sentence)} none="" />
+      <NameList names={cleared.map(sentence)} />
     </EditorSection>
   );
 }
@@ -319,7 +318,6 @@ function OutsideTheChart({
           (level) =>
             `The GitLab access level for ${level.handle}${level.before ? ` (${level.before})` : ""} is removed, so it cannot pass to a seat added later under that handle.`,
         )}
-        none=""
       />,
     );
   }

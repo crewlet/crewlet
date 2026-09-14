@@ -231,9 +231,9 @@ export function Refusal({ message }: { message: string | null }) {
   return <Banner tone="critical">{message}</Banner>;
 }
 
-/** A read-only list of names, or a sentence saying there are none. */
-export function NameList({ names, none }: { names: readonly string[]; none: string }) {
-  if (names.length === 0) return <p className="t-body muted">{none}</p>;
+/** A read-only list of names or sentences, and nothing at all when there are none. */
+export function NameList({ names }: { names: readonly string[] }) {
+  if (names.length === 0) return null;
   return (
     <ul className="builder-list">
       {names.map((name, i) => (
