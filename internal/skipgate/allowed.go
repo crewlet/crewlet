@@ -210,4 +210,20 @@ var allowed = []Allowance{
 			"in-box paths are exercised against a real container; the direct mode covers " +
 			"the run protocol itself.",
 	},
+
+	// -----------------------------------------------------------------
+	// Environment: a Bourne shell. Listed for the same reason as the
+	// container entry — it does not fire on any machine the gates run on,
+	// and an entry is what makes the day it starts firing visible rather
+	// than a quiet loss of the only case that proves the quoting.
+	// -----------------------------------------------------------------
+	{
+		Package: "internal/envfile",
+		Test:    "TestEveryWrittenAssignmentSurvivesARealShell",
+		When:    Environment,
+		Why: "Needs `sh` on PATH. It is the only case that proves FormatAssignment's " +
+			"quoting against a real parser rather than against this package's own reading " +
+			"of it; the table cases check the bytes written, which is what a wrong quoting " +
+			"rule would agree with.",
+	},
 }
