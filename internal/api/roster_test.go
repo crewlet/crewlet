@@ -75,7 +75,7 @@ func rows(t *testing.T, v any) []map[string]any {
 // THE ROSTER IS THE COMPANY'S AGENT SEATS, present before anything happens.
 func TestTheSnapshotCarriesTheCompanysSeats(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, nil)
+	a := rosterApp(t, &fakeRuntime{})
 
 	got := rows(t, a.Stream().Snapshot()["agents"])
 	if len(got) != 2 {
@@ -145,7 +145,7 @@ func TestOnlyHeldSeatsCarryAState(t *testing.T) {
 // one the client parses would be the one nobody edited.
 func TestTheSnapshotCarriesTheOrgTreeVerbatim(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, nil)
+	a := rosterApp(t, &fakeRuntime{})
 
 	org, _ := a.Stream().Snapshot()["org"].(map[string]any)
 	if org == nil {
@@ -189,21 +189,21 @@ func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 	}
 }
 
-// A STANDALONE API SAYS NOTHING ABOUT TOOLS rather than claiming none.
+// AN ENGINE SERVING NO TOOLS YET STILL SERVES THE ROSTER.
 //
-// It has no engine to ask. An empty catalogue is a real answer for a node that
-// serves none, and this process cannot make it.
-func TestAnAPIWithNoEngineClaimsNoTools(t *testing.T) {
+// The catalogue comes from the engine and the roster from the company
+// document, so an engine whose catalogue is empty (its MCP servers not up, or
+// no revision equipped yet) renders an empty tool screen and the whole roster,
+// rather than letting one absence blank the other.
+func TestAnEngineWithNoToolsStillServesTheRoster(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, nil)
+	a := rosterApp(t, &fakeRuntime{})
 
 	if got := rows(t, a.Stream().Snapshot()["tools"]); len(got) != 0 {
-		t.Errorf("tools = %v on a node with no engine", got)
+		t.Errorf("tools = %v from an engine serving none", got)
 	}
-	// The roster and the org still come through: both are read from the
-	// company document, which a standalone API has.
 	if got := rows(t, a.Stream().Snapshot()["agents"]); len(got) != 2 {
-		t.Errorf("a standalone API lost the roster: %v", got)
+		t.Errorf("an engine with no tools lost the roster: %v", got)
 	}
 }
 
@@ -236,7 +236,7 @@ func TestANodeWithNoCompanyAnswersEmptySurfaces(t *testing.T) {
 // built without one.
 func TestTheSnapshotCarriesTheConfiguredSchedules(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, nil)
+	a := rosterApp(t, &fakeRuntime{})
 
 	snap := a.Stream().Snapshot()
 	if _, present := snap["schedules"]; !present {
@@ -257,7 +257,7 @@ func TestTheSnapshotCarriesTheConfiguredSchedules(t *testing.T) {
 // at every time an unrelated config field changed.
 func TestTheSchedulesPushCarriesOnlyTheConfiguredHalf(t *testing.T) {
 	t.Parallel()
-	a := rosterApp(t, nil)
+	a := rosterApp(t, &fakeRuntime{})
 
 	push := a.Stream().Schedules()
 	if _, present := push["schedules"]; !present {

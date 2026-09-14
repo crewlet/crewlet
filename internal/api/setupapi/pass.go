@@ -288,7 +288,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 // reader that finds a report on it is reading one some other writer put
 // there.
 func (s *Service) recordEndpoint(ctx context.Context, kind integration.Kind, base string) {
-	if s.status == nil || base == "" {
+	if base == "" {
 		return
 	}
 	_, release, held, err := s.passes.Hold(ctx, kind)
@@ -367,7 +367,7 @@ func (s *Service) currentState(
 
 // record folds a pass's outcome into the fleet's integration status.
 func (s *Service) record(ctx context.Context, kind integration.Kind, run *setup.Run, passErr error) {
-	if s.status == nil || run == nil {
+	if run == nil {
 		return
 	}
 	now := s.now()

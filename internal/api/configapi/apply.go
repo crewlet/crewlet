@@ -45,10 +45,6 @@ type Applied struct {
 	Parent string
 }
 
-// ErrNoControlPlane reports a process that can store a revision but cannot
-// point the fleet at one, so a write here would take effect nowhere.
-var ErrNoControlPlane = errors.New("configapi: no control plane on this process")
-
 // RacedError reports that the active revision moved under the caller.
 //
 // Carries both sides, because the recovery needs them: the caller re-reads
@@ -269,14 +265,6 @@ func (s *Service) activate(
 func (s *Service) activateDocument(
 	ctx context.Context, document []byte, parent, summary, operator string,
 ) (Applied, error) {
-	if s.plane == nil {
-		// REFUSED BEFORE ANYTHING IS STORED, and here rather than in each
-		// caller: this is the one tail every write on this surface passes
-		// through, so a new caller cannot forget it. Storing a revision
-		// this process cannot point the fleet at would report success for
-		// a change that takes effect nowhere.
-		return Applied{}, ErrNoControlPlane
-	}
 	payload, err := secrets.Seal(s.cipher, document)
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)

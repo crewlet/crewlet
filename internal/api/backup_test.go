@@ -61,22 +61,6 @@ func TestABackupWithoutADestinationIsRefused(t *testing.T) {
 	}
 }
 
-// A node with neither estate says so rather than 404ing: the route exists on
-// this build, and a 404 sends an operator looking for a version mismatch that
-// is not there.
-func TestABackupOnANodeWithNothingToCopyReportsWhyRatherThan404(t *testing.T) {
-	t.Parallel()
-	a := newApp(t, api.Options{Bootstrap: guarded()})
-
-	status, body := post(t, a, "/backup?dir=/tmp/x", "t0ken")
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503", status)
-	}
-	if body["error"] != "nothing_to_back_up" {
-		t.Errorf("error = %v", body["error"])
-	}
-}
-
 // A destination the caller named badly is THEIR mistake, and answering 500
 // would send an operator to the engine's logs to debug their own command.
 func TestABadDestinationIsTheCallersMistakeNotTheNodes(t *testing.T) {

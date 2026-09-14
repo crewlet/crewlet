@@ -1,11 +1,25 @@
 // Package api serves the REST surface and the dashboard.
 //
-// ONE WIRING for the embedded and standalone deployments. What differs between
-// them is not how the app is assembled but what it can SEE: a node running the
-// engine in the same process can answer how many turns are in flight and which
-// seats it holds, and a standalone API cannot. That difference is one seam —
-// [NodeRuntime] — and everything else is identical, so a route cannot behave
-// differently depending on which process it happens to be in.
+// # There is one shape: the API is served beside the engine
+//
+// `crewlet run` is the only thing that builds an [App], and it builds one inside
+// the engine's own process, over the engine's own store, broker and
+// coordination plane. What `node.roles` changes is what that engine does (an
+// ingress-only node claims no seats and runs no worker duties), never whether
+// it exists, and a node with `api.port: 0` builds no App at all. There is no
+// API process without an engine.
+//
+// This package was once written for a "standalone API" as well, and every
+// dependency the engine supplies was optional to serve it: a nil [NodeRuntime]
+// reported `engine: false` and omitted the engine's fields, a nil budget counter
+// answered `no_coordination_store`, a nil config service left /config
+// unregistered. No process ever took those branches, and they described a
+// deployment the binary cannot run. [New] now refuses a missing dependency by
+// name instead.
+//
+// [NodeRuntime] stays a seam for what it always was underneath: the facts this
+// package asks the engine for, declared by the consumer, so a route can be
+// tested against fixed answers without standing a node up.
 package api
 
 import (
@@ -17,7 +31,7 @@ import (
 
 var log = logging.Get("api")
 
-// RuntimeState is what only a co-located engine can answer.
+// RuntimeState is what only the engine can answer.
 //
 // A SNAPSHOT, taken in one call, rather than a field read per question. Six
 // independent reads describe six different instants, and a health body that
@@ -47,10 +61,8 @@ type RuntimeState struct {
 	// the same answer a health surface wants for both.
 	StallLag time.Duration
 
-	// StartedAt is when the ENGINE started, which on the standalone
-	// deployment is a different process on a different clock from the
-	// API's own start. Kept separate for that reason: one merged uptime
-	// would be the two-different-windows error in a new place.
+	// StartedAt is when the engine started, which is this node's start:
+	// the API is served inside the engine's process.
 	StartedAt string
 
 	// Seats are the handles this node is serving. The first question about
@@ -62,10 +74,9 @@ type RuntimeState struct {
 	// wake a seat — the ones with a parser, not the ones with a config
 	// block.
 	//
-	// Nil means "cannot say", never "none route": a standalone API has no
-	// engine to ask, and a co-located one mid-boot has not started
-	// notifications yet. The two are the same answer for a reader, and
-	// both are the opposite of an empty slice, which is a real claim that
+	// Nil means "cannot say", never "none route": an engine mid-boot, or
+	// one with no active revision, has not started notifications yet.
+	// That is the opposite of an empty slice, which is a real claim that
 	// nothing routes.
 	RoutedSources []string
 
@@ -84,12 +95,11 @@ type RuntimeState struct {
 	VerifiableSources []string
 }
 
-// NodeRuntime is the seam for facts only a co-located engine can answer.
+// NodeRuntime is the seam for facts only the engine can answer.
 //
-// Nil on a standalone API, and that is a real answer rather than a missing
-// one: the health surface reports engine=false and OMITS the fields it cannot
-// know, so a client can tell "nothing is running" from "this process cannot
-// know". Without the distinction a dashboard renders a confident zero for both.
+// Required: every process that serves the API runs the engine beside it, so
+// there is no process for which these facts are unknowable, and [New] refuses
+// an App without one.
 type NodeRuntime interface {
 	// Snapshot is this node's live state.
 	//
@@ -108,12 +118,10 @@ type NodeRuntime interface {
 	// Snapshot is called on every health tick and this is the one answer
 	// that is expensive to build — a company's catalogue is hundreds of
 	// entries once its MCP servers are up, and rebuilding it every few
-	// seconds to throw it away is work nobody asked for. Two methods on
-	// one seam still keeps the standalone/embedded difference in one place.
+	// seconds to throw it away is work nobody asked for.
 	//
-	// Nil slice is "this node serves none", which for a co-located engine
-	// is a real claim; a standalone API has no NodeRuntime at all and the
-	// surface is simply absent.
+	// A nil slice is "this node serves none", which is a real claim: a
+	// node with no active revision has no catalogue.
 	Tools() []ToolInfo
 }
 

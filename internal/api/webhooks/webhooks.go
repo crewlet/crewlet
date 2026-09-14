@@ -26,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -92,27 +93,31 @@ type Emitter interface {
 }
 
 // Options wire the receiver.
+//
+// Secrets, Publisher, Events, Claims, Stream, Configured and AppFlow are
+// REQUIRED, and [New] refuses a missing one by name. Each used to be optional,
+// for a receiver built with nothing beside it: no secrets refused everything, no
+// event log recorded nothing, no claim registry deduplicated nothing, no
+// configured flag read as serving. No process builds one that way. The API
+// mounts this beside an engine that supplies every one, so a nil is a wiring
+// mistake, and a receiver that quietly did less around it would hide the mistake
+// until a duplicate turn or an empty feed gave it away.
 type Options struct {
 	// Secrets reads the current epoch's verification material. Called per
-	// request — see [Secrets]. Nil means no secret for anything, so every
-	// route answers 503.
+	// request; see [Secrets]. A route whose secret is unset answers 503.
 	Secrets func() Secrets
 
-	// Publisher republishes an accepted delivery for the transports. THE
-	// one required dependency: everything else here is observability, and
-	// this is the wake.
+	// Publisher republishes an accepted delivery for the transports. This
+	// is the wake; everything else here is observability.
 	Publisher queue.Publisher
 
-	// Events records the delivery for the dashboard's feed. Nil records
-	// nothing, which is a standalone posture rather than a failure.
+	// Events records the delivery for the dashboard's feed. A write that
+	// fails is logged and does not fail the delivery.
 	Events *store.EventLog
 
 	// AppFlow finishes a GitHub App creation begun on the setup surface.
-	//
-	// Nil serves the landing page with an honest refusal rather than 404:
-	// the redirect URL is baked into every app this engine creates, so a
-	// process that cannot finish one still has to say so to the browser
-	// that arrives.
+	// The redirect URL is baked into every app this engine creates, so the
+	// callback has to be served wherever the setup surface is.
 	AppFlow AppCompleter
 
 	// Recheck asks the reconcile loop to look at GitHub immediately, for
@@ -124,22 +129,21 @@ type Options struct {
 	// thing the card is asking for is the instant the wait is longest.
 	Recheck GitHubRechecker
 
-	// Claims is the FLEET-WIDE dedupe. Nil handles every delivery, which
-	// is what a single node without coordination already does.
+	// Claims is the FLEET-WIDE dedupe.
 	//
-	// It is coordination state rather than store state because a third-party app
-	// retrying a delivery reaches whichever ingress node the load balancer
-	// picks: a claim only one node could see suppressed nothing, and the
-	// same push woke the same seat twice.
+	// It is coordination state rather than store state because a
+	// third-party app retrying a delivery reaches whichever ingress node
+	// the load balancer picks: a claim only one node could see suppressed
+	// nothing, and the same push woke the same seat twice. A registry that
+	// cannot answer fails open; see [Receiver.claim].
 	Claims coord.Claims
 
-	// Stream surfaces the delivery live. Nil pushes nothing.
+	// Stream surfaces the delivery live.
 	Stream Emitter
 
-	// Configured reports whether a company revision is active here. Nil
-	// reads as configured: an embedder that never wires it is running one
-	// company from a file, and a receiver that answered 503 to everything
-	// would make the omission look like an outage.
+	// Configured reports whether a company revision is active here. An
+	// unconfigured node cannot have the secrets a delivery is verified
+	// with, so it answers 503 and the provider retries.
 	Configured func() bool
 
 	// Now is injectable so a test can pin the replay windows.
@@ -171,8 +175,31 @@ type Receiver struct {
 	recheckedAt time.Time
 }
 
-// New assembles the receiver.
-func New(opts Options) *Receiver {
+// New assembles the receiver, or refuses a missing required dependency by
+// name. See [Options].
+func New(opts Options) (*Receiver, error) {
+	var missing []string
+	for _, field := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Secrets", opts.Secrets == nil},
+		{"Publisher", opts.Publisher == nil},
+		{"Events", opts.Events == nil},
+		{"Claims", opts.Claims == nil},
+		{"Stream", opts.Stream == nil},
+		{"Configured", opts.Configured == nil},
+		{"AppFlow", opts.AppFlow == nil},
+	} {
+		if field.absent {
+			missing = append(missing, "Options."+field.name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("webhooks: %s required: the receiver is mounted "+
+			"beside the engine, which supplies every one of them",
+			strings.Join(missing, ", "))
+	}
 	r := &Receiver{
 		secrets:    opts.Secrets,
 		publisher:  opts.Publisher,
@@ -184,17 +211,11 @@ func New(opts Options) *Receiver {
 		configured: opts.Configured,
 		now:        opts.Now,
 	}
-	if r.secrets == nil {
-		r.secrets = func() Secrets { return Secrets{} }
-	}
-	if r.configured == nil {
-		r.configured = func() bool { return true }
-	}
 	if r.now == nil {
 		r.now = func() time.Time { return time.Now().UTC() }
 	}
 	r.forge = newForgeVerifier(opts.Keys, r.now)
-	return r
+	return r, nil
 }
 
 // Routes registers every inbound endpoint on the API's mux.
@@ -435,12 +456,12 @@ func (r *Receiver) accept(w http.ResponseWriter, req *http.Request, v verified, 
 
 // claim reports whether this caller may handle the delivery.
 //
-// FAILS OPEN in every direction: no registry, no key, or a store that cannot
-// be reached all yield true. A duplicate is recoverable noise — the completion
-// ledger collapses the turn — while a delivery dropped because the store
-// blinked is a message nobody ever answers.
+// FAILS OPEN in both directions: a delivery with no key, or a store that
+// cannot be reached, yields true. A duplicate is recoverable noise (the
+// completion ledger collapses the turn), while a delivery dropped because the
+// store blinked is a message nobody ever answers.
 func (r *Receiver) claim(ctx context.Context, d delivery) bool {
-	if r.claims == nil || d.key == "" {
+	if d.key == "" {
 		return true
 	}
 	won, err := r.claims.Claim(ctx, claimKey(d), coord.ClaimTTL, r.now())
@@ -453,7 +474,7 @@ func (r *Receiver) claim(ctx context.Context, d delivery) bool {
 }
 
 func (r *Receiver) release(ctx context.Context, d delivery) {
-	if r.claims == nil || d.key == "" {
+	if d.key == "" {
 		return
 	}
 	// context.WithoutCancel: the request context is already being torn
@@ -483,22 +504,16 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 	ctx = context.WithoutCancel(ctx)
 	at := r.now()
 	id := uuid.NewString()
-	if r.events != nil {
-		// The RAW bytes as the stored payload, not a re-serialization of
-		// the parsed body: this row is what the dashboard shows when
-		// somebody opens the delivery, and it should show what the
-		// provider actually sent.
-		if err := r.events.Append(ctx, store.EventRecord{
-			ID: id, Type: d.label, Source: d.source, Time: at,
-			Category: "webhook", Summary: d.summary, Actor: d.source,
-			TraceID: trace.TraceID, SpanID: trace.SpanID,
-			Payload: json.RawMessage(d.raw),
-		}); err != nil {
-			log.WarnContext(ctx, "event_store_write_failed", "source", d.source, "error", err)
-		}
-	}
-	if r.stream == nil {
-		return
+	// The RAW bytes as the stored payload, not a re-serialization of the
+	// parsed body: this row is what the dashboard shows when somebody opens
+	// the delivery, and it should show what the provider actually sent.
+	if err := r.events.Append(ctx, store.EventRecord{
+		ID: id, Type: d.label, Source: d.source, Time: at,
+		Category: "webhook", Summary: d.summary, Actor: d.source,
+		TraceID: trace.TraceID, SpanID: trace.SpanID,
+		Payload: json.RawMessage(d.raw),
+	}); err != nil {
+		log.WarnContext(ctx, "event_store_write_failed", "source", d.source, "error", err)
 	}
 	// The engine never publishes these on crewlet.events.*, so the stream
 	// service would otherwise never see them and the activity feed would

@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -264,7 +265,8 @@ func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	port := taken.Addr().(*net.TCPAddr).Port
 
 	e := testEngine(t)
-	surface, err := serveAPI(t.Context(), bootstrapFor(t, port), e, nil, nil, nil, logging.Get("test"))
+	boot := bootstrapFor(t, port)
+	surface, err := serveNode(t, boot, e)
 	if err == nil {
 		surface.stop(context.Background(), logging.Get("test"))
 		t.Fatal("binding a port already in use reported success")
@@ -274,17 +276,17 @@ func TestAnUnbindablePortIsReportedRatherThanIgnored(t *testing.T) {
 	}
 }
 
-func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
+func TestANodeServesItsOwnHealth(t *testing.T) {
 	t.Parallel()
 	// One process is both engine and API, sharing one broker and one
-	// store. The API half is what makes the node reachable at all — every
-	// inbound webhook arrives through it — so an engine that ran without
-	// it would hold seats and hear nothing.
+	// store. The API half is what makes the node reachable at all (every
+	// inbound webhook arrives through it), so an engine that ran without it
+	// would hold seats and hear nothing.
 	e := testEngine(t)
 	boot := bootstrapFor(t, 0)
 	boot.API.Port = freePort(t)
 
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
+	surface, err := serveNode(t, boot, e)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -296,9 +298,12 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	}
 	body := getJSON(t, base+"/health")
 
-	// The engine's own answers, which only a co-located process has.
-	if body["engine"] != true {
-		t.Errorf("engine = %v, want true on a merged node", body["engine"])
+	// The engine's own answers, which only the process running it has.
+	if _, present := body["in_flight"]; !present {
+		t.Errorf("the body carries no in-flight count: %v", body)
+	}
+	if body["started_at"] == "" || body["started_at"] == nil {
+		t.Errorf("started_at = %v, want the engine's own start", body["started_at"])
 	}
 	if body["configured"] != true {
 		t.Errorf("configured = %v: the node built an epoch and did not say so, "+
@@ -307,6 +312,37 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	if body["queue"] == "" || body["queue"] == nil {
 		t.Errorf("queue = %v, want the broker named", body["queue"])
 	}
+}
+
+// serveNode builds the API half of a node the way runEngine does: the config
+// surface first (a node with api.port 0 still needs a config WRITER), the
+// reconciler that owns the posture, then the listener.
+func serveNode(t *testing.T, boot *config.Bootstrap, e *engine.Engine) (*httpSurface, error) {
+	t.Helper()
+	cipher, err := boot.Secrets.Cipher()
+	if err != nil {
+		t.Fatalf("keyring: %v", err)
+	}
+	configSurface, err := configapi.New(configapi.Options{
+		Store: e.Backends().Store, Cipher: cipher,
+		Plane: e.Backends().Fleet, Queue: e.Backends().Queue,
+	})
+	if err != nil {
+		t.Fatalf("config surface: %v", err)
+	}
+	nodeID, err := config.ResolveNodeID(boot, nil)
+	if err != nil {
+		t.Fatalf("node identity: %v", err)
+	}
+	reconciler, err := e.NewReconciler(engine.ReconcilerOptions{
+		Store: e.Backends().Store, Fleet: e.Backends().Fleet,
+		Queue: e.Backends().Queue, NodeID: nodeID, Cipher: cipher,
+	})
+	if err != nil {
+		t.Fatalf("reconciler: %v", err)
+	}
+	return serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
+		logging.Get("test"))
 }
 
 // testEngine builds a real engine on an embedded stream in a temp directory.

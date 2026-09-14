@@ -396,10 +396,10 @@ func (b *Bridge) resolve(token string) (s *Session, runID, reason string) {
 			"which is a box that outlived the run it was started for"
 	}
 	return nil, runID, "this fleet signed the token, but this node holds no session " +
-		"for that run — the run has ended, or " + BaseURLVar + " resolves to a " +
+		"for that run: the run has ended, or " + BaseURLVar + " resolves to a " +
 		"node other than the one that owns the seat (a load balancer in front of " +
-		"several, or a standalone API process). It must address the node that " +
-		"opened the session: a session is a live tool surface, not fleet state"
+		"several). It must address the node that opened the session, because a " +
+		"session is a live tool surface rather than fleet state"
 }
 
 // Miss says WHY a token did not resolve, for the log only. Exported for the

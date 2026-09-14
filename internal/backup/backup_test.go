@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/store"
 )
 
@@ -102,12 +103,20 @@ func openStore(t *testing.T) *store.DB {
 
 func service(t *testing.T, db *store.DB, nc *nats.Conn) *backup.Service {
 	t.Helper()
-	s := backup.New(backup.Options{
-		Store: db, Conn: nc, NodeID: "node-0",
+	fleet := memory.NewFleet()
+	return build(t, backup.Options{
+		Store: db, Conn: nc, NodeID: "node-0", Holds: fleet, Backups: fleet,
 		Now: func() time.Time { return clock },
 	})
-	if s == nil {
-		t.Fatal("New returned nil with a store and a connection")
+}
+
+// build is New for a case that supplies every required field, failing the
+// test on a wiring mistake.
+func build(t *testing.T, opts backup.Options) *backup.Service {
+	t.Helper()
+	s, err := backup.New(opts)
+	if err != nil {
+		t.Fatalf("backup.New: %v", err)
 	}
 	return s
 }
@@ -270,13 +279,19 @@ func TestARelativeDestinationIsRefused(t *testing.T) {
 	}
 }
 
-// A node running without one estate still backs the other up, and the
-// manifest says which it got — rather than the service refusing to exist or,
-// worse, writing a manifest that claims more than it holds.
-func TestANodeWithOnlyOneEstateBacksUpWhatItHas(t *testing.T) {
+// A NODE THAT DIALLED AN EXTERNAL BROKER BACKS UP ITS STORE, AND NO STREAMS.
+//
+// It holds no connection to snapshot over: the queue owns that connection and
+// the streams belong to a cluster backed up with its own tooling. The manifest
+// then describes both store estates and nothing else, which the CLI reads as
+// the cue to say where the rest of the state lives.
+func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 	t.Parallel()
-
-	storeOnly := backup.New(backup.Options{Store: openStore(t), NodeID: "n", Now: func() time.Time { return clock }})
+	fleet := memory.NewFleet()
+	storeOnly := build(t, backup.Options{
+		Store: openStore(t), NodeID: "n", Holds: fleet, Backups: fleet,
+		Now: func() time.Time { return clock },
+	})
 	dir := filepath.Join(t.TempDir(), "store-only")
 	manifest, err := storeOnly.Take(t.Context(), dir)
 	if err != nil {
@@ -287,28 +302,33 @@ func TestANodeWithOnlyOneEstateBacksUpWhatItHas(t *testing.T) {
 			len(manifest.Stores))
 	}
 	if len(manifest.Streams) != 0 {
-		t.Errorf("a node with no broker reported %d streams", len(manifest.Streams))
+		t.Errorf("a node with no broker connection reported %d streams", len(manifest.Streams))
 	}
+}
 
-	nc := embeddedNATS(t)
-	seedStream(t, nc, "CREWLET_DLQ", "dlq.>", 1)
-	streamOnly := backup.New(backup.Options{Conn: nc, NodeID: "n", Now: func() time.Time { return clock }})
-	dir = filepath.Join(t.TempDir(), "stream-only")
-	manifest, err = streamOnly.Take(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("stream-only take: %v", err)
-	}
-	if len(manifest.Stores) != 0 {
-		t.Errorf("a node with no store described %d copies", len(manifest.Stores))
-	}
-	if len(manifest.Streams) == 0 {
-		t.Error("the stream-only backup captured nothing")
-	}
-
-	// Neither: there is nothing to back up, and saying so beats writing a
-	// manifest describing an empty directory.
-	if backup.New(backup.Options{}) != nil {
-		t.Error("a node with neither estate produced a backup service")
+// A STORE AND BOTH FLEET REGISTERS ARE REQUIRED, and a missing one is refused
+// by name.
+//
+// Each used to be optional, for an API process with no store or no
+// coordination. No process runs that way, and a backup that did less around a
+// nil was either missing the node's own estate or invisible to the trim.
+func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	fleet := memory.NewFleet()
+	for field, opts := range map[string]backup.Options{
+		"Store":   {Holds: fleet, Backups: fleet},
+		"Holds":   {Store: db, Backups: fleet},
+		"Backups": {Store: db, Holds: fleet},
+	} {
+		svc, err := backup.New(opts)
+		if err == nil {
+			t.Errorf("no %s built a backup service: %v", field, svc)
+			continue
+		}
+		if !strings.Contains(err.Error(), "Options."+field) {
+			t.Errorf("the refusal does not name Options.%s: %v", field, err)
+		}
 	}
 }
 

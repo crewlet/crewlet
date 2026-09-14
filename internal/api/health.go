@@ -11,8 +11,12 @@ import (
 
 // The statuses a health body reports.
 //
-// Precedence is shutting_down > unconfigured > the posture > ok: a draining
-// engine is draining first, whatever else is true of it.
+// Precedence is shutting_down > a diverged posture > unconfigured > ok. A
+// draining engine is draining first, whatever else is true of it. A diverged
+// posture outranks unconfigured because it names the CAUSE: a node that is
+// stuck applying its first revision is unconfigured because it is stuck, and
+// `configured: false` still says the rest beside it. This comment used to put
+// unconfigured first, which the code never did.
 const (
 	StatusOK           = "ok"
 	StatusUnconfigured = "unconfigured"
@@ -26,9 +30,10 @@ const (
 // snapshot and the periodic push together — and a reconnect restores it with no
 // second round trip.
 //
-// The engine-only fields are pointers. ABSENT and ZERO are different answers: a
-// standalone API has no engine to ask, and a client that could not tell those
-// apart renders a confident zero for both.
+// Every field the engine answers is ALWAYS PRESENT. They were pointers, omitted
+// beside an `engine: false` flag, for an API process with no engine to ask; no
+// such process exists, because every process that serves the API runs the
+// engine beside it. A zero here is therefore a real zero.
 type Health struct {
 	Status string `json:"status"`
 
@@ -45,24 +50,24 @@ type Health struct {
 	// screens.
 	Configured bool `json:"configured"`
 
-	// Engine says whether the fields below can be known at all.
-	Engine  bool   `json:"engine"`
 	Version string `json:"version"`
 
-	// StartedAt is the API process's own start, deliberately separate from
-	// the engine's: on the standalone deployment they are two processes on
-	// two clocks.
+	// StartedAt is when this node's engine started. ONE start, where there
+	// used to be two: the API's own `started_at` beside the engine's
+	// `engine_started_at`, kept apart because an API process on its own
+	// would have had its own clock. Every API runs inside the engine's
+	// process, so the engine's start is the node's, and it is the same
+	// instant the fleet view reports for this node.
 	StartedAt string `json:"started_at"`
 
 	Queue   string `json:"queue"`
 	Clients int    `json:"clients"`
 
-	InFlight        *int     `json:"in_flight,omitempty"`
-	ShuttingDown    *bool    `json:"shutting_down,omitempty"`
-	Posture         string   `json:"posture,omitempty"`
-	AppliedEpoch    *int64   `json:"applied_epoch,omitempty"`
-	EngineStartedAt string   `json:"engine_started_at,omitempty"`
-	Seats           []string `json:"seats,omitempty"`
+	InFlight     int      `json:"in_flight"`
+	ShuttingDown bool     `json:"shutting_down"`
+	Posture      string   `json:"posture"`
+	AppliedEpoch int64    `json:"applied_epoch"`
+	Seats        []string `json:"seats"`
 
 	// StallLagSeconds is how far behind this node's watched duty is,
 	// present only when it is behind at all. It is the number that climbs
@@ -93,29 +98,27 @@ var divergedPostures = map[string]struct{}{"shed": {}, "stuck": {}}
 // health builds the body every health surface shares.
 func (a *App) health(ctx context.Context) Health {
 	configured := a.Configured()
-	body := Health{
-		Status:     StatusOK,
-		Node:       a.nodeID,
-		Configured: configured,
-		Engine:     a.runtime != nil,
-		Version:    version.String(),
-		StartedAt:  a.startedAt,
-		Queue:      a.queueBackend,
-		Clients:    a.stream.Hub().Clients(),
-	}
-	if !configured {
-		body.Status = StatusUnconfigured
-	}
-	if a.runtime == nil {
-		return body
-	}
-
 	state := a.runtime.Snapshot(ctx)
-	body.InFlight = &state.InFlight
-	body.ShuttingDown = &state.ShuttingDown
-	body.Posture = state.Posture
-	body.AppliedEpoch = &state.AppliedEpoch
-	body.EngineStartedAt = state.StartedAt
+	seats := state.Seats
+	if seats == nil {
+		// A node holding no seats holds an empty list, and says so as one:
+		// a null here would read as "cannot say", which this node can.
+		seats = []string{}
+	}
+	body := Health{
+		Status:       StatusOK,
+		Node:         a.nodeID,
+		Configured:   configured,
+		Version:      version.String(),
+		StartedAt:    state.StartedAt,
+		Queue:        a.queueBackend,
+		Clients:      a.stream.Hub().Clients(),
+		InFlight:     state.InFlight,
+		ShuttingDown: state.ShuttingDown,
+		Posture:      state.Posture,
+		AppliedEpoch: state.AppliedEpoch,
+		Seats:        seats,
+	}
 	if state.StallLag > 0 {
 		// Only when there is something to say. A field that is always
 		// present and always 0 trains a reader to skip it, which is the
@@ -123,13 +126,14 @@ func (a *App) health(ctx context.Context) Health {
 		lag := state.StallLag.Seconds()
 		body.StallLagSeconds = &lag
 	}
-	body.Seats = state.Seats
 
 	switch {
 	case state.ShuttingDown:
 		body.Status = StatusShuttingDown
 	case state.Posture != "" && state.Posture != "serve" && state.Posture != "wait":
 		body.Status = state.Posture
+	case !configured:
+		body.Status = StatusUnconfigured
 	}
 	return body
 }
@@ -155,13 +159,10 @@ const tickReadBudget = 5 * time.Second
 // fleet avoids answering with a node that would only reject the delivery.
 func (a *App) readiness(ctx context.Context) (Readiness, int) {
 	configured := a.Configured()
-	body := Readiness{Node: a.nodeID, Configured: configured, Posture: "serve"}
-	if a.runtime != nil {
-		state := a.runtime.Snapshot(ctx)
-		body.Draining = state.ShuttingDown
-		if state.Posture != "" {
-			body.Posture = state.Posture
-		}
+	state := a.runtime.Snapshot(ctx)
+	body := Readiness{
+		Node: a.nodeID, Configured: configured,
+		Draining: state.ShuttingDown, Posture: state.Posture,
 	}
 	_, diverged := divergedPostures[body.Posture]
 	body.Ready = configured && !body.Draining && !diverged
@@ -188,7 +189,3 @@ func (a *App) streamHealth() stream.Health {
 		ShuttingDown: full.ShuttingDown,
 	}
 }
-
-// nowISO stamps a time the way every other timestamp on this surface is
-// spelled.
-func nowISO(now time.Time) string { return now.UTC().Format(time.RFC3339Nano) }

@@ -3,18 +3,61 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/config"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/store"
 )
 
 var clock = time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)
 
-// fakeRuntime is a co-located engine's answers, fixed.
+// sharedEvents is the ONE event log every case that does not seed its own
+// history shares.
+//
+// Shared rather than opened per case, because opening a store runs its whole
+// migration set over two estates, and this package builds an app in most of its
+// cases: a store apiece is minutes of the suite under -race for a log the cases
+// that use it never read. The ones whose subject IS the history
+// ([seededApp]) open their own and write to it, so nothing writes to this one.
+var sharedEvents *store.EventLog
+
+func TestMain(m *testing.M) {
+	os.Exit(runSuite(m))
+}
+
+// runSuite is TestMain's body as a function, so the store's cleanup runs:
+// os.Exit skips deferred calls.
+func runSuite(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "api-test")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "api test: temp dir:", err)
+		return 2
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	db, err := store.Open(context.Background(), filepath.Join(dir, "api.db"), store.Options{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "api test: store.Open:", err)
+		return 2
+	}
+	defer func() { _ = db.Close() }()
+	sharedEvents = db.Events()
+	return m.Run()
+}
+
+// fakeRuntime is the engine's answers, fixed.
 type fakeRuntime struct {
 	state api.RuntimeState
 	tools []api.ToolInfo
@@ -23,7 +66,40 @@ type fakeRuntime struct {
 func (f *fakeRuntime) Snapshot(context.Context) api.RuntimeState { return f.state }
 func (f *fakeRuntime) Tools() []api.ToolInfo                     { return f.tools }
 
+// noRoutes is a surface that mounts nothing, for the cases that are not about
+// /config, /secrets or /setup.
+type noRoutes struct{}
+
+func (noRoutes) Routes(*http.ServeMux) {}
+
+// noAppFlow is a GitHub App completer that completes nothing.
+type noAppFlow struct{}
+
+func (noAppFlow) Complete(context.Context, string, string) (string, error) { return "", nil }
+func (noAppFlow) InstallURL(string) string                                 { return "" }
+
+// active is a company revision that is active, for the cases about a
+// configured node.
+func active() func() *config.Company {
+	company := &config.Company{Name: "Acme"}
+	return func() *config.Company { return company }
+}
+
+// newApp builds the app over whatever a case names, filling each required
+// dependency it leaves unset with an inert one: no active revision, an engine
+// holding nothing, and surfaces that mount nothing. A case names only what it
+// is about.
 func newApp(t *testing.T, opts api.Options) *api.App {
+	t.Helper()
+	a, err := api.New(withRequired(t, opts))
+	if err != nil {
+		t.Fatalf("api.New: %v", err)
+	}
+	t.Cleanup(a.Stop)
+	return a
+}
+
+func withRequired(t *testing.T, opts api.Options) api.Options {
 	t.Helper()
 	if opts.Bootstrap == nil {
 		b := config.DefaultBootstrap()
@@ -32,9 +108,82 @@ func newApp(t *testing.T, opts api.Options) *api.App {
 	if opts.Now == nil {
 		opts.Now = func() time.Time { return clock }
 	}
-	a := api.New(opts)
-	t.Cleanup(a.Stop)
-	return a
+	if opts.Runtime == nil {
+		opts.Runtime = &fakeRuntime{state: api.RuntimeState{Posture: "serve"}}
+	}
+	if opts.Sources.Company == nil {
+		opts.Sources.Company = func() *config.Company { return nil }
+	}
+	if opts.Sources.Events == nil {
+		opts.Sources.Events = sharedEvents
+	}
+	fleet := coordmemory.NewFleet()
+	if opts.Inbound.Publisher == nil {
+		opts.Inbound.Publisher = queuememory.New()
+	}
+	if opts.Inbound.Claims == nil {
+		opts.Inbound.Claims = fleet
+	}
+	if opts.Inbound.Secrets == nil {
+		opts.Inbound.Secrets = func() webhooks.Secrets { return webhooks.Secrets{} }
+	}
+	if opts.Inbound.AppFlow == nil {
+		opts.Inbound.AppFlow = noAppFlow{}
+	}
+	if opts.Config == nil {
+		opts.Config = noRoutes{}
+	}
+	if opts.Secrets == nil {
+		opts.Secrets = noRoutes{}
+	}
+	if opts.Setup == nil {
+		opts.Setup = noRoutes{}
+	}
+	if opts.Budgets == nil {
+		opts.Budgets = fleet
+	}
+	if opts.Retention == nil {
+		opts.Retention = fleet
+	}
+	if opts.Capacity == nil {
+		opts.Capacity = &fakeStateLog{}
+	}
+	if opts.Backup == nil {
+		opts.Backup = &fakeBackup{}
+	}
+	return opts
+}
+
+// EVERY DEPENDENCY THE ENGINE SUPPLIES IS REQUIRED, and a missing one is
+// refused by name.
+//
+// Each used to be optional, for a "standalone API" with no engine beside it,
+// and each nil had an answer built around it that looked deliberate: a health
+// body saying engine=false, a 503 naming no_coordination_store, an absent
+// /config. No process ever took any of them. A nil is a wiring mistake, and the
+// constructor is the one place it can surface before an operator is misled.
+func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
+	t.Parallel()
+	_, err := api.New(api.Options{})
+	if err == nil {
+		t.Fatal("an app wired to nothing was built")
+	}
+	for _, field := range []string{
+		"Runtime", "Sources.Company", "Sources.Events",
+		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
+		"Config", "Secrets", "Setup", "Budgets", "Retention", "Capacity", "Backup",
+	} {
+		if !strings.Contains(err.Error(), "Options."+field) {
+			t.Errorf("the refusal does not name Options.%s: %v", field, err)
+		}
+	}
+	// And the counterfactual: a complete set builds. Without it a refusal
+	// that named every field for any input would pass the case above.
+	a, err := api.New(withRequired(t, api.Options{}))
+	if err != nil {
+		t.Fatalf("a complete set was refused: %v", err)
+	}
+	a.Stop()
 }
 
 // get runs one request and returns the status and decoded body.
@@ -76,44 +225,70 @@ func TestHealthAnswersWhileTheProcessIsAlive(t *testing.T) {
 
 func TestAConfiguredNodeSaysSo(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{})
-	a.SetConfigured(true)
+	a := newApp(t, api.Options{Sources: queries.Sources{Company: active()}})
 	_, body := get(t, a, "/health")
 	if body["status"] != api.StatusOK || body["configured"] != true {
 		t.Errorf("body = %v, want ok and configured", body)
 	}
 }
 
-func TestAStandaloneAPIOmitsWhatItCannotKnow(t *testing.T) {
+// CONFIGURED IS READ OFF THE LIVE EPOCH, not remembered. An apply that brings a
+// node its first revision flips it with nothing to call, and a revision that
+// stops being active flips it back.
+func TestConfiguredFollowsTheLiveEpoch(t *testing.T) {
 	t.Parallel()
-	// ABSENT and ZERO are different answers. Without the distinction a
-	// dashboard renders a confident zero for both, and reports an idle
-	// company during an outage.
-	a := newApp(t, api.Options{})
-	_, body := get(t, a, "/health")
-
-	if body["engine"] != false {
-		t.Errorf("engine = %v, want false", body["engine"])
+	var current *config.Company
+	a := newApp(t, api.Options{Sources: queries.Sources{
+		Company: func() *config.Company { return current },
+	}})
+	if a.Configured() {
+		t.Fatal("a node with no active revision reported configured")
 	}
-	for _, absent := range []string{"in_flight", "shutting_down", "applied_epoch", "seats"} {
-		if _, present := body[absent]; present {
-			t.Errorf("a standalone API answered %q = %v", absent, body[absent])
-		}
+	current = &config.Company{Name: "Acme"}
+	if !a.Configured() {
+		t.Error("the first revision applied and the node still reads unconfigured")
 	}
 }
 
-func TestAMergedNodeReportsWhatOnlyItCanKnow(t *testing.T) {
+// THE ENGINE'S FIELDS ARE ALWAYS ON THE BODY, and a zero is a real zero.
+//
+// They were omitted, beside `engine: false`, for an API process with no engine
+// to ask. No such process exists, so an idle node says 0 in flight and an
+// empty seat list rather than leaving a client to guess what an absence means.
+func TestAnIdleNodeReportsItsZerosRatherThanOmittingThem(t *testing.T) {
 	t.Parallel()
-	a := newApp(t, api.Options{Runtime: &fakeRuntime{state: api.RuntimeState{
-		InFlight: 3, Posture: "serve", AppliedEpoch: 41,
-		StartedAt: "2026-06-14T11:00:00Z", Seats: []string{"ceo", "cto"},
-	}}})
-	a.SetConfigured(true)
+	a := newApp(t, api.Options{})
 	_, body := get(t, a, "/health")
 
-	if body["engine"] != true {
-		t.Errorf("engine = %v", body["engine"])
+	if _, present := body["engine"]; present {
+		t.Errorf("the body still carries the engine flag: %v", body["engine"])
 	}
+	if _, present := body["engine_started_at"]; present {
+		t.Errorf("the body still carries a second start time: %v", body["engine_started_at"])
+	}
+	for field, want := range map[string]any{
+		"in_flight": float64(0), "shutting_down": false, "applied_epoch": float64(0),
+	} {
+		if got, present := body[field]; !present || got != want {
+			t.Errorf("%s = %v (present %v), want %v", field, got, present, want)
+		}
+	}
+	if seats, ok := body["seats"].([]any); !ok || len(seats) != 0 {
+		t.Errorf("seats = %#v, want an empty list", body["seats"])
+	}
+}
+
+func TestANodeReportsWhatOnlyTheEngineCanKnow(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: active()},
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			InFlight: 3, Posture: "serve", AppliedEpoch: 41,
+			StartedAt: "2026-06-14T11:00:00Z", Seats: []string{"ceo", "cto"},
+		}},
+	})
+	_, body := get(t, a, "/health")
+
 	if body["in_flight"] != float64(3) || body["applied_epoch"] != float64(41) {
 		t.Errorf("body = %v", body)
 	}
@@ -121,11 +296,23 @@ func TestAMergedNodeReportsWhatOnlyItCanKnow(t *testing.T) {
 	if len(seats) != 2 {
 		t.Errorf("seats = %v", body["seats"])
 	}
-	// Separate from the API's own start: on the standalone deployment they
-	// are two processes on two clocks, and one merged uptime would be the
-	// two-different-windows error in a new place.
-	if body["engine_started_at"] == body["started_at"] {
-		t.Error("the engine's start was merged with the API's")
+	// The ENGINE's start is the node's, and the only start the body names.
+	if body["started_at"] != "2026-06-14T11:00:00Z" {
+		t.Errorf("started_at = %v, want the engine's own start", body["started_at"])
+	}
+}
+
+// A DIVERGED POSTURE OUTRANKS UNCONFIGURED, because it names the cause: a node
+// stuck applying its first revision is unconfigured because it is stuck, and
+// `configured: false` says the rest beside it.
+func TestADivergedPostureOutranksUnconfigured(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{Runtime: &fakeRuntime{
+		state: api.RuntimeState{Posture: "stuck"},
+	}})
+	_, body := get(t, a, "/health")
+	if body["status"] != "stuck" || body["configured"] != false {
+		t.Errorf("body = %v, want status stuck beside configured false", body)
 	}
 }
 
@@ -133,10 +320,12 @@ func TestHealthStaysOKThroughADrain(t *testing.T) {
 	t.Parallel()
 	// An orchestrator watching liveness must not SIGKILL a node that is
 	// finishing its in-flight turns.
-	a := newApp(t, api.Options{Runtime: &fakeRuntime{state: api.RuntimeState{
-		InFlight: 2, ShuttingDown: true, Posture: "serve",
-	}}})
-	a.SetConfigured(true)
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: active()},
+		Runtime: &fakeRuntime{state: api.RuntimeState{
+			InFlight: 2, ShuttingDown: true, Posture: "serve",
+		}},
+	})
 	status, body := get(t, a, "/health")
 
 	if status != http.StatusOK {
@@ -165,20 +354,20 @@ func TestADivergedPostureBecomesTheStatus(t *testing.T) {
 	// reports a bare 503 either way, and "draining" and "cannot apply
 	// epoch 41" call for opposite responses.
 	for _, posture := range []string{"shed", "stuck", "isolated"} {
-		a := newApp(t, api.Options{Runtime: &fakeRuntime{
-			state: api.RuntimeState{Posture: posture},
-		}})
-		a.SetConfigured(true)
+		a := newApp(t, api.Options{
+			Sources: queries.Sources{Company: active()},
+			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
+		})
 		if _, body := get(t, a, "/health"); body["status"] != posture {
 			t.Errorf("posture %q: status = %v", posture, body["status"])
 		}
 	}
 	// And the two that are ordinary do NOT become a status.
 	for _, posture := range []string{"serve", "wait"} {
-		a := newApp(t, api.Options{Runtime: &fakeRuntime{
-			state: api.RuntimeState{Posture: posture},
-		}})
-		a.SetConfigured(true)
+		a := newApp(t, api.Options{
+			Sources: queries.Sources{Company: active()},
+			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
+		})
 		if _, body := get(t, a, "/health"); body["status"] != api.StatusOK {
 			t.Errorf("posture %q: status = %v, want ok", posture, body["status"])
 		}
@@ -192,11 +381,14 @@ func TestReadinessNeedsAConfiguredNode(t *testing.T) {
 	// An unconfigured node cannot verify a webhook signature, and taking
 	// it out of rotation is how a fleet avoids answering with a node that
 	// would only reject the delivery.
-	a := newApp(t, api.Options{})
+	var current *config.Company
+	a := newApp(t, api.Options{Sources: queries.Sources{
+		Company: func() *config.Company { return current },
+	}})
 	if status, body := get(t, a, "/ready"); status != http.StatusServiceUnavailable || body["ready"] != false {
 		t.Errorf("status = %d body = %v, want 503", status, body)
 	}
-	a.SetConfigured(true)
+	current = &config.Company{Name: "Acme"}
 	if status, body := get(t, a, "/ready"); status != http.StatusOK || body["ready"] != true {
 		t.Errorf("status = %d body = %v, want 200", status, body)
 	}
@@ -207,10 +399,10 @@ func TestADrainLeavesRotationImmediately(t *testing.T) {
 	// The split from /health is what lets a node leave rotation the moment
 	// a drain starts while still reporting itself alive for the minutes
 	// its turns need to finish.
-	a := newApp(t, api.Options{Runtime: &fakeRuntime{state: api.RuntimeState{
-		ShuttingDown: true, Posture: "serve",
-	}}})
-	a.SetConfigured(true)
+	a := newApp(t, api.Options{
+		Sources: queries.Sources{Company: active()},
+		Runtime: &fakeRuntime{state: api.RuntimeState{ShuttingDown: true, Posture: "serve"}},
+	})
 	status, body := get(t, a, "/ready")
 	if status != http.StatusServiceUnavailable {
 		t.Errorf("status = %d during a drain, want 503", status)
@@ -231,10 +423,10 @@ func TestOnlyShedAndStuckTakeANodeOutOfRotation(t *testing.T) {
 		"serve": true, "wait": true, "isolated": true,
 		"shed": false, "stuck": false,
 	} {
-		a := newApp(t, api.Options{Runtime: &fakeRuntime{
-			state: api.RuntimeState{Posture: posture},
-		}})
-		a.SetConfigured(true)
+		a := newApp(t, api.Options{
+			Sources: queries.Sources{Company: active()},
+			Runtime: &fakeRuntime{state: api.RuntimeState{Posture: posture}},
+		})
 		status, body := get(t, a, "/ready")
 		if body["ready"] != wantReady {
 			t.Errorf("posture %q: ready = %v, want %v", posture, body["ready"], wantReady)
@@ -249,18 +441,6 @@ func TestOnlyShedAndStuckTakeANodeOutOfRotation(t *testing.T) {
 	}
 }
 
-func TestAStandaloneAPIIsReadyOnceConfigured(t *testing.T) {
-	t.Parallel()
-	// With no engine to ask there is nothing to be draining or diverged
-	// about, and refusing traffic on that basis would take every
-	// standalone API permanently out of rotation.
-	a := newApp(t, api.Options{})
-	a.SetConfigured(true)
-	if status, body := get(t, a, "/ready"); status != http.StatusOK {
-		t.Errorf("status = %d body = %v", status, body)
-	}
-}
-
 // --- the guard ----------------------------------------------------------- //
 
 func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
@@ -270,8 +450,7 @@ func TestTheProbesAreReachableWithoutAToken(t *testing.T) {
 	b := config.DefaultBootstrap()
 	b.API.Auth.AllowAnonymousRead = false
 	b.API.Auth.Tokens = []config.APIToken{{ID: "founder", Token: "secret"}}
-	a := newApp(t, api.Options{Bootstrap: &b})
-	a.SetConfigured(true)
+	a := newApp(t, api.Options{Bootstrap: &b, Sources: queries.Sources{Company: active()}})
 
 	for _, path := range []string{"/health", "/ready"} {
 		rec := httptest.NewRecorder()
@@ -306,24 +485,6 @@ func TestAnUnknownRouteIsNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rec.Code)
 	}
-}
-
-func TestTheConfiguredFlagIsSafeUnderConcurrentUse(t *testing.T) {
-	t.Parallel()
-	// The config refresher sets it from its own goroutine while every
-	// health probe reads it.
-	a := newApp(t, api.Options{})
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for i := range 200 {
-			a.SetConfigured(i%2 == 0)
-		}
-	}()
-	for range 200 {
-		get(t, a, "/health")
-	}
-	<-done
 }
 
 func TestTheNodeIDNamesTheProcessThatAnswered(t *testing.T) {

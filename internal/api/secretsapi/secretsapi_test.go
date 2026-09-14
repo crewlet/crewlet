@@ -38,7 +38,7 @@ func cipherFor(t *testing.T, ids ...string) secrets.Cipher {
 func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, coord.Fleet) {
 	t.Helper()
 	fleet := coordmem.NewFleet()
-	svc := secretsapi.New(secretsapi.Options{
+	svc := newService(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipher, ActiveKeyID: keyID,
 		Now: func() time.Time { return clock },
 	})
@@ -47,6 +47,16 @@ func surface(t *testing.T, cipher secrets.Cipher, keyID string) (http.Handler, c
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mux.ServeHTTP(w, r.WithContext(auth.WithOperator(r.Context(), "ops")))
 	}), fleet
+}
+
+// newService builds the surface, failing the test on a wiring mistake.
+func newService(t *testing.T, opts secretsapi.Options) *secretsapi.Service {
+	t.Helper()
+	svc, err := secretsapi.New(opts)
+	if err != nil {
+		t.Fatalf("secretsapi.New: %v", err)
+	}
+	return svc
 }
 
 func call(t *testing.T, h http.Handler, method, path, body string) (int, string) {
@@ -224,7 +234,7 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	t.Parallel()
 	fleet := coordmem.NewFleet()
 	mux := http.NewServeMux()
-	secretsapi.New(secretsapi.Options{
+	newService(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k1", "k2"), ActiveKeyID: "k1",
 		Now: func() time.Time { return clock },
 	}).Routes(mux)
@@ -234,7 +244,7 @@ func TestRekeyMovesTheStaleRowsAndNamesThem(t *testing.T) {
 	call(t, old, http.MethodPut, "/secrets/A", "one")
 
 	rotated := http.NewServeMux()
-	secretsapi.New(secretsapi.Options{
+	newService(t, secretsapi.Options{
 		Fleet: fleet, Cipher: cipherFor(t, "k2", "k1"), ActiveKeyID: "k2",
 		Now: func() time.Time { return clock },
 	}).Routes(rotated)
@@ -285,18 +295,19 @@ func TestASecretNamedRekeyIsStillReachable(t *testing.T) {
 	}
 }
 
-// A PROCESS THAT CANNOT REACH THE FLEET SERVES NO ROUTES AT ALL.
+// A FLEET IS REQUIRED, and a missing one is refused by name.
 //
-// 404 is the honest answer for a surface this process does not implement; an
-// endpoint that exists and answers 503 to everything reads as broken.
-func TestWithoutAFleetTheRoutesAreAbsentRatherThanBroken(t *testing.T) {
+// It used to leave /secrets unregistered, for an API process that could not
+// reach the fleet's store. No process runs that way, so a nil is a wiring
+// mistake, and a 404 built around it would look like a deliberate answer.
+func TestWithoutAFleetTheSurfaceIsRefused(t *testing.T) {
 	t.Parallel()
-	mux := http.NewServeMux()
-	secretsapi.New(secretsapi.Options{Cipher: cipherFor(t, "k1")}).Routes(mux)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/secrets", nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("GET /secrets = %d, want 404 on a process with no fleet store", rec.Code)
+	svc, err := secretsapi.New(secretsapi.Options{Cipher: cipherFor(t, "k1")})
+	if err == nil {
+		t.Fatalf("no fleet built a secrets surface: %v", svc)
+	}
+	if !strings.Contains(err.Error(), "Options.Fleet") {
+		t.Errorf("the refusal does not name Options.Fleet: %v", err)
 	}
 }
 

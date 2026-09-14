@@ -77,8 +77,8 @@ func newSurface(t *testing.T, cipher secrets.Cipher) *surface {
 	return newSurfaceWith(t, func(o *configapi.Options) { o.Cipher = cipher })
 }
 
-// newSurfaceWith is newSurface with the options a case needs to vary — a
-// missing plane, a queue to record the nudge on.
+// newSurfaceWith is newSurface with the options a case needs to vary, such as
+// a queue to record the nudge on.
 func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	t.Helper()
 	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
@@ -98,10 +98,12 @@ func newSurfaceWith(t *testing.T, mutate func(*configapi.Options)) *surface {
 	if mutate != nil {
 		mutate(&opts)
 	}
-	// Assigned back onto the surface so a case that dropped the plane sees
-	// the same nil the service does.
 	s.plane, s.cipher = opts.Plane, opts.Cipher
-	s.svc = configapi.New(opts)
+	svc, err := configapi.New(opts)
+	if err != nil {
+		t.Fatalf("configapi.New: %v", err)
+	}
+	s.svc = svc
 	s.svc.Routes(s.mux)
 	return s
 }
@@ -694,21 +696,6 @@ func TestABodyOverTheCapIsRefused(t *testing.T) {
 	}
 }
 
-func TestANodeWithNoStoreServesNoConfigSurface(t *testing.T) {
-	t.Parallel()
-	// A standalone API with no store genuinely has no config surface, so
-	// the routes 404 rather than 500 — the honest answer for a process that
-	// does not implement them.
-	mux := http.NewServeMux()
-	configapi.New(configapi.Options{}).Routes(mux)
-	req := httptest.NewRequest(http.MethodGet, "/config", nil)
-	res := httptest.NewRecorder()
-	mux.ServeHTTP(res, req)
-	if res.Code != http.StatusNotFound {
-		t.Errorf("got %d, want 404", res.Code)
-	}
-}
-
 func key(t *testing.T) []byte {
 	t.Helper()
 	material, err := secrets.GenerateKey()
@@ -998,26 +985,32 @@ func TestADocumentWithNoSummaryKeyKeepsItsLineNumbers(t *testing.T) {
 	}
 }
 
-// A process with no coordination store cannot activate anything, and the
-// binary shipped without one wired in at all — so every /config write reached
-// a nil plane. Refused with a 503 that says where to post instead, never a
-// 201 for a change that takes effect nowhere and never a panic.
-func TestAWriteWithoutAControlPlaneIsRefused(t *testing.T) {
+// A STORE AND A PLANE ARE REQUIRED, and a missing one is refused by name.
+//
+// Both used to be optional, for an API process with no store or coordination:
+// the surface went unregistered, or every write answered 503. No process runs
+// that way, so a nil is a wiring mistake, and building a narrower surface around
+// it would hide the mistake behind an answer that looks deliberate.
+func TestNewRefusesAMissingStoreOrPlane(t *testing.T) {
 	t.Parallel()
-	s := newSurfaceWith(t, func(o *configapi.Options) { o.Plane = nil })
+	db, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "c.db"), store.Options{})
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
 
-	res := s.do(t, http.MethodPut, "/config", companyDoc,
-		map[string]string{"X-Summary": "first import"})
-	if res.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 (body %s)", res.Code, res.Body)
-	}
-	if got := decode(t, res)["error"]; got != "no_control_plane" {
-		t.Errorf("error = %v, want no_control_plane", got)
-	}
-	// And nothing was stored: a revision this process cannot point the
-	// fleet at is a change that takes effect nowhere.
-	if _, found, err := s.configs.Active(t.Context()); err != nil || found {
-		t.Errorf("a refused write stored a revision (found=%v err=%v)", found, err)
+	for field, opts := range map[string]configapi.Options{
+		"Store": {Plane: coordmemory.NewFleet()},
+		"Plane": {Store: db},
+	} {
+		svc, err := configapi.New(opts)
+		if err == nil {
+			t.Errorf("no %s built a config surface: %v", field, svc)
+			continue
+		}
+		if !strings.Contains(err.Error(), "Options."+field) {
+			t.Errorf("the refusal does not name Options.%s: %v", field, err)
+		}
 	}
 }
 

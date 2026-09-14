@@ -240,10 +240,10 @@ func TestASlackSeatNamesTheAppItAuthenticatesAs(t *testing.T) {
 
 // AND WHERE NOTHING KNOWS, what this CAN prove.
 //
-// A seat whose token was refused has no app to name, and a standalone API has
-// no transport to ask. Inventing one from the config would name an app that
-// may not exist, so the row says where the credential lives, which is what
-// every other app's roster says.
+// A seat whose token was refused has no app to name, and a node whose Slack
+// transport is not running has nothing to ask. Inventing one from the config
+// would name an app that may not exist, so the row says where the credential
+// lives, which is what every other app's roster says.
 func TestASlackSeatWithNoKnownAppNamesItsCredential(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

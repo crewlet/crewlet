@@ -46,18 +46,6 @@ type backupTaker interface {
 // gives up, or a drain that ends the process mid-copy, leaves an unfinished
 // directory rather than a false one.
 func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
-	if a.backup == nil {
-		// This node has neither a store nor a broker to copy. 503 rather
-		// than 404, on the same reasoning as the budget reset: the route
-		// exists on this build, and a 404 sends an operator looking for a
-		// version mismatch that is not there.
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error":  "nothing_to_back_up",
-			"detail": "this process runs neither a store nor a broker, so it holds no durable state",
-			"hint":   "take the backup against a node running seats or workers",
-		})
-		return
-	}
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{

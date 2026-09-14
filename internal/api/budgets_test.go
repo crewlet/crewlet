@@ -114,18 +114,3 @@ func TestAResetIsRefusedWithoutAToken(t *testing.T) {
 		t.Errorf("a refused reset still cleared the counter (now %d)", got)
 	}
 }
-
-// A NODE WITH NO COORDINATION STORE says so, and says it as 503 rather than
-// 404: the route exists on this build, and a 404 sends an operator looking
-// for a version mismatch that is not there.
-func TestAResetWithoutACounterReportsWhyRatherThan404(t *testing.T) {
-	t.Parallel()
-	a := newApp(t, api.Options{Bootstrap: guarded()})
-	status, body := post(t, a, "/budgets/reset", "t0ken")
-	if status != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body = %v", status, body)
-	}
-	if body["error"] != "no_coordination_store" {
-		t.Errorf("error = %v, want the reason", body["error"])
-	}
-}

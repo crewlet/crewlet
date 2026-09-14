@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,11 +17,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/crewlet/crewlet/internal/api"
-	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
@@ -159,9 +155,7 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *
 // queue the engine owns, and the server serves the app.
 func stopAll(stops [][]func()) {
 	for _, member := range stops {
-		for i := len(member) - 1; i >= 0; i-- {
-			member[i]()
-		}
+		stopInReverse(member)
 	}
 }
 
@@ -224,27 +218,18 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 		return fail(fmt.Errorf("engine.Start: %w", err))
 	}
 
-	app := api.New(api.Options{
-		Bootstrap:    &boot,
-		QueueBackend: e.Backends().Queue.Backend(),
-		Sources: queries.Sources{
-			Events:  e.Backends().Store.Events(),
-			Company: func() *config.Company { return cfg },
-		},
-		HealthInterval: tickInterval,
-	})
-	app.SetConfigured(true)
-	app.Start(t.Context())
-	stops = append(stops, app.Stop)
-
-	projector := observe.NewProjector(e.Backends().Queue, app.Stream())
-	if err := projector.Start(t.Context()); err != nil {
-		return fail(fmt.Errorf("projector: %w", err))
+	// THROUGH wireAPI, NOT serveAPI: this runs off the test's goroutine,
+	// where t.Fatalf would end only this goroutine, and the API's teardown
+	// belongs in this member's list, after the engine's, so a failed
+	// attempt stops the listener, the projector and the app before the
+	// engine they read from, and before the next attempt starts.
+	app, srv, apiStops, err := wireAPI(t.Context(), e, &boot,
+		func() *config.Company { return cfg }, nil)
+	stops = append(stops, apiStops...)
+	if err != nil {
+		return fail(fmt.Errorf("api: %w", err))
 	}
-	stops = append(stops, func() { projector.Stop(context.Background()) })
 
-	srv := httptest.NewServer(app)
-	stops = append(stops, srv.Close)
 	return &node{
 		engine: e, app: app, server: srv, model: model,
 		id:          boot.Node.ID,

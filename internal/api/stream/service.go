@@ -2,8 +2,10 @@ package stream
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,14 +31,14 @@ const HealthInterval = 5 * time.Second
 
 // Health is what the shared tick carries.
 //
-// InFlight and ShuttingDown are pointers because ABSENT and ZERO are different
-// answers: a merged node knows how many turns are running, and a standalone API
-// does not — and a dashboard that drew "0 in flight" for "cannot see the
-// engine" would report an idle company during an outage.
+// InFlight and ShuttingDown are always present. They were pointers, absent on
+// an API process with no engine to ask, and no such process exists: the API is
+// served beside the engine in every node that serves it, so both are always
+// known and a zero is a real zero.
 type Health struct {
 	Status       string `json:"status"`
-	InFlight     *int   `json:"in_flight,omitempty"`
-	ShuttingDown *bool  `json:"shutting_down,omitempty"`
+	InFlight     int    `json:"in_flight"`
+	ShuttingDown bool   `json:"shutting_down"`
 }
 
 // HealthFunc reports the current health, for the shared tick.
@@ -52,14 +54,12 @@ type Service struct {
 	hub   *Hub
 	state *livestate.LiveState
 
-	// health is consulted by the shared tick. Nil answers a bare "ok",
-	// which is the standalone API's honest answer: it has no engine to ask
-	// and must not invent one.
+	// health is consulted by the shared tick.
 	health HealthFunc
 
 	// handles maps a role to its agent handle, for the per-agent rollup's
-	// cross-links. Nil leaves them blank, which is what a standalone API
-	// with no org honestly has.
+	// cross-links. It answers an empty map while no company is active,
+	// which leaves them blank.
 	handles HandleFunc
 
 	// roster, org and tools are the config-derived surfaces. See Options.
@@ -85,12 +85,19 @@ type Service struct {
 type HandleFunc func() map[string]string
 
 // Options configure a service.
+//
+// Health, Handles, Roster, Org, Tools and Schedules are REQUIRED, and
+// [NewService] refuses a missing one by name. Each used to be optional, for an
+// API process with no engine to ask: no health answered a bare "ok", no tools
+// function drew an empty catalogue. No process runs that way, and with the
+// health fields no longer optional a missing function would push a confident
+// zero rather than an honest absence.
 type Options struct {
 	Health HealthFunc
 
-	// Handles supplies the role-to-handle map. Nil leaves each row's
-	// handle blank rather than guessing one — a wrong link is worse than
-	// no link.
+	// Handles supplies the role-to-handle map. An empty map leaves each
+	// row's handle blank rather than guessing one: a wrong link is worse
+	// than no link.
 	Handles HandleFunc
 
 	// Roster, Org and Tools are the three surfaces the dashboard renders
@@ -106,8 +113,6 @@ type Options struct {
 	// replaces the company, and a roster captured at boot would keep
 	// showing a role a revision deleted.
 	//
-	// Nil is an empty surface rather than a fault: a standalone API has no
-	// engine to ask for tools, and that screen says so.
 	Roster    func() []map[string]any
 	Org       func() map[string]any
 	Tools     func() []map[string]any
@@ -126,8 +131,30 @@ type Options struct {
 	HealthInterval time.Duration
 }
 
-// NewService builds the fan-out over a projection.
-func NewService(state *livestate.LiveState, opts Options) *Service {
+// NewService builds the fan-out over a projection, or refuses a missing
+// required function by name. See [Options].
+func NewService(state *livestate.LiveState, opts Options) (*Service, error) {
+	var missing []string
+	for _, field := range []struct {
+		name   string
+		absent bool
+	}{
+		{"Health", opts.Health == nil},
+		{"Handles", opts.Handles == nil},
+		{"Roster", opts.Roster == nil},
+		{"Org", opts.Org == nil},
+		{"Tools", opts.Tools == nil},
+		{"Schedules", opts.Schedules == nil},
+	} {
+		if field.absent {
+			missing = append(missing, "Options."+field.name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("stream: %s required: the live channel is served "+
+			"beside the engine, which answers every one of them",
+			strings.Join(missing, ", "))
+	}
 	s := &Service{
 		hub:       NewHub(),
 		state:     state,
@@ -146,7 +173,7 @@ func NewService(state *livestate.LiveState, opts Options) *Service {
 	if s.interval <= 0 {
 		s.interval = HealthInterval
 	}
-	return s
+	return s, nil
 }
 
 // Hub exposes the client registry, for a transport to join and leave.
@@ -192,8 +219,8 @@ func (s *Service) Ingest(env livestate.Envelope) {
 	}
 	if change.Tokens {
 		// MARKED, NOT SENT. Aggregating here would run inside the
-		// caller's publish — which on a merged node is the engine's own
-		// goroutine, mid-turn, between a model's answer and its tools.
+		// caller's publish, which is the engine's own goroutine, mid-turn,
+		// between a model's answer and its tools.
 		// The shared tick owns the fold, so a busy company's rollup costs
 		// one aggregation every five seconds rather than one per phase.
 		s.tokensDirty.Store(true)
@@ -257,33 +284,13 @@ func (s *Service) Schedules() map[string]any {
 	return map[string]any{"schedules": s.currentSchedules()}
 }
 
-func (s *Service) currentRoster() []map[string]any {
-	if s.roster == nil {
-		return nil
-	}
-	return s.roster()
-}
+func (s *Service) currentRoster() []map[string]any { return s.roster() }
 
-func (s *Service) currentOrg() map[string]any {
-	if s.org == nil {
-		return map[string]any{}
-	}
-	return s.org()
-}
+func (s *Service) currentOrg() map[string]any { return s.org() }
 
-func (s *Service) currentSchedules() any {
-	if s.schedules == nil {
-		return []any{}
-	}
-	return s.schedules()
-}
+func (s *Service) currentSchedules() any { return s.schedules() }
 
-func (s *Service) currentTools() []map[string]any {
-	if s.tools == nil {
-		return nil
-	}
-	return s.tools()
-}
+func (s *Service) currentTools() []map[string]any { return s.tools() }
 
 // Broadcast pushes an envelope to every client, for the surfaces that own their
 // own data — the roster, the org tree, the tool catalogue, the schedules.
@@ -291,15 +298,7 @@ func (s *Service) Broadcast(kind string, data any) {
 	s.hub.Broadcast(Push(kind, data, s.now()))
 }
 
-func (s *Service) currentHealth() Health {
-	if s.health == nil {
-		// No engine to ask. "ok" and nothing else is the honest answer: a
-		// standalone API is serving, and it cannot see whether anything
-		// is in flight.
-		return Health{Status: "ok"}
-	}
-	return s.health()
-}
+func (s *Service) currentHealth() Health { return s.health() }
 
 // StartHealthTicks runs the shared tick until the context is cancelled or
 // [Service.Stop] is called.
@@ -355,12 +354,8 @@ func (s *Service) flushTokens() {
 // mid-window and one that has been receiving pushes must hold the same rollup,
 // and two constructions of it is how they come to differ.
 func (s *Service) TokenRollup() tokens.Rollup {
-	handles := map[string]string{}
-	if s.handles != nil {
-		handles = s.handles()
-	}
 	return tokens.Aggregate(s.state.SpendRecords(), tokens.Options{
-		Handles: handles,
+		Handles: s.handles(),
 		// The window this rollup actually covers, reported rather than
 		// assumed: the client prints it beside the numbers, and a figure
 		// labelled with the wrong window is worse than an unlabelled one.

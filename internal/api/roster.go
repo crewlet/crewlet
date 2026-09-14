@@ -61,10 +61,8 @@ func roster(ctx context.Context, company func() *config.Company, runtime NodeRun
 	// bounded. The claim that it made no coordination read was already
 	// untrue when it was written.
 	held := map[string]bool{}
-	if runtime != nil {
-		for _, handle := range runtime.Snapshot(ctx).Seats {
-			held[handle] = true
-		}
+	for _, handle := range runtime.Snapshot(ctx).Seats {
+		held[handle] = true
 	}
 
 	var out []map[string]any
@@ -163,12 +161,8 @@ func orgTree(company func() *config.Company) map[string]any {
 	return out
 }
 
-// toolRows renders the catalogue for the wire, or nil where this process has
-// no engine to ask.
+// toolRows renders the engine's catalogue for the wire.
 func toolRows(runtime NodeRuntime) []map[string]any {
-	if runtime == nil {
-		return nil
-	}
 	infos := runtime.Tools()
 	out := make([]map[string]any, 0, len(infos))
 	for _, info := range infos {
