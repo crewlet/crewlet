@@ -449,6 +449,23 @@ func clearableInstant(at *time.Time) *time.Time {
 	return at
 }
 
+// Patched is [applyPatch] under an exported name, for the ONE caller outside
+// this package that has to answer the same question: a tool composing the
+// WAKE that announces a write it is about to make.
+//
+// EXPORTED RATHER THAN REIMPLEMENTED, because the second implementation is
+// what this exists to end. The tool kept its own field-by-field copy of this
+// merge, and every field added to [TaskPatch] since had to be remembered in
+// two places — so when the schedule fields arrived, the durable row took them
+// and the wake's snapshot did not. The delta was then computed between a task
+// and itself, and every due date, estimate, size and sprint a seat moved
+// reached its notification as a change that changed nothing.
+//
+// The caller still layers what is genuinely ITS own on top: a wake's
+// recipient list reflects the watch gesture in flight, which the durable sets
+// settle later inside the writer's transaction.
+func Patched(task Task, patch TaskPatch) Task { return applyPatch(task, patch) }
+
 // applyPatch is the pointer-semantics merge.
 //
 // A NIL FIELD IS UNCHANGED and a non-nil one carries its COMPLETE new value —
