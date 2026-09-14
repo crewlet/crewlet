@@ -193,8 +193,8 @@ func TestThePageWritesCountAsDeliveries(t *testing.T) {
 		// answers a turn asked to document something; it does not answer
 		// somebody waiting in a chat thread, and the surface is what keeps
 		// those two apart.
-		if deliveries[name] != tools.SurfacePages {
-			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], tools.SurfacePages)
+		if deliveries[name] != pages.Source {
+			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], pages.Source)
 		}
 	}
 	for _, name := range []string{builtin.ListPagesTool, builtin.GetPageTool} {

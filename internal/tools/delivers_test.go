@@ -38,7 +38,7 @@ func TestDeliveriesIsDeclaredNotDerived(t *testing.T) {
 	// First-party, declared: the native tracker's write.
 	if err := r.RegisterWith(deliverStub{"comment_on_work_item"}, tools.OriginBuiltin,
 		tools.Annotations{ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.Yes},
-		tools.DeliversTo(tools.SurfaceTracker)); err != nil {
+		tools.DeliversTo("work")); err != nil {
 		t.Fatal(err)
 	}
 	// First-party, NOT declared, and annotated exactly like a write. This is
@@ -64,7 +64,7 @@ func TestDeliveriesIsDeclaredNotDerived(t *testing.T) {
 	// told", and a gate holding only the first closed a founder's chat
 	// thread with a row in the tracker.
 	want := map[string]string{
-		"comment_on_work_item": tools.SurfaceTracker,
+		"comment_on_work_item": "work",
 		// AN MCP TOOL'S SURFACE IS ITS SERVER, which is the same name an
 		// inbound notification from that vendor reports itself under.
 		"vendor_post": "vendor",

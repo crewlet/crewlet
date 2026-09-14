@@ -467,11 +467,11 @@ func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 		// AND ON THE TRACKER. The name alone says the turn reached
 		// somebody; the surface says whom, and without it a tracker write
 		// discharged an obligation owed to a founder waiting in chat.
-		if deliveries[name] != tools.SurfaceTracker {
+		if deliveries[name] != tracker.Source {
 			t.Errorf("%s delivers to %q, want %q — a turn that answered with it "+
 				"would otherwise be corrected for having done nothing, or credited "+
 				"for answering somebody it never reached",
-				name, deliveries[name], tools.SurfaceTracker)
+				name, deliveries[name], tracker.Source)
 		}
 	}
 	// READING IS NOT DELIVERING. A turn that only read is exactly the turn

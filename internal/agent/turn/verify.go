@@ -347,7 +347,16 @@ type Verdict struct {
 // that is the reviewer's, and everything this returns without a correction
 // goes there.
 func Check(w Work, reply Reply, s Surface) Verdict {
-	acted := DeliveredTo(w.Calls, s, reply)
+	// TWO PREDICATES, TWO QUESTIONS, and they are deliberately not one
+	// variable. `acted` asks whether anything at all reached outside the
+	// engine, which is what makes ending a turn as "nobody was asking"
+	// wrong; `delivered` asks whether the party WAITING was reached, which
+	// is what makes a claim of delivery wrong. A turn can satisfy the first
+	// and fail the second — it files a ticket while a founder waits in chat
+	// — and collapsing them lets that turn pass one check under the other's
+	// name.
+	acted := Delivered(w.Calls, s)
+	delivered := DeliveredTo(w.Calls, s, reply)
 
 	// A rescue never takes any fast path. The engine wrote the outcome,
 	// so there is nothing here anybody committed to.
@@ -388,7 +397,19 @@ func Check(w Work, reply Reply, s Surface) Verdict {
 	// and demanding a call there loops every research turn to exhaustion.
 	// An A2A ask is answered by the engine itself, so there is no call to
 	// look for.
-	if w.Outcome == OutcomeDelivered && reply.Kind == ReplyTool && !acted {
+	if w.Outcome == OutcomeDelivered && reply.Kind == ReplyTool && !delivered {
+		// NAMED WHERE IT IS KNOWN, exactly as [OverrideDone] and the
+		// submission check do. A turn that DID write somewhere is told "no
+		// tool was called", reads that as false against its own record, and
+		// argues with the correction instead of acting on it.
+		if on := reply.Surface; on != "" && s.Reaches(on) && acted {
+			return Verdict{Correction: "You reported the work as delivered, and you " +
+				"did act — but nothing was delivered on " + on + ", which is where " +
+				"this was asked. Filing the work somewhere else does not tell the " +
+				"person waiting. Call the tool that delivers on " + on + " — " +
+				"discovering it with `list_mcp_server_tools` and `activate_tool` if " +
+				"you do not have it yet — or report honestly what is blocking you."}
+		}
 		return Verdict{Correction: "You reported the work as delivered, but no tool " +
 			"that acts outside the engine was called in this turn: writing about an " +
 			"action does not perform it. Call the tool that actually delivers — " +

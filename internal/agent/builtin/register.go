@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
@@ -213,11 +214,17 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		// round. The SURFACE is what stops the opposite error: these reach
 		// the engine's own tracker and knowledge base, and a founder
 		// waiting in a chat thread is on neither of them.
+		// THE FEED'S OWN SOURCE NAME, never a second spelling. The gate
+		// compares a delivery's surface against the NotificationSource an
+		// inbound wake carried, and these two feeds publish under
+		// [tracker.Source] and [pages.Source] — so inventing `tracker`
+		// and `pages` here made every native obligation unreachable and
+		// the check silently fell back to "any delivery counts".
 		switch {
 		case slices.Contains(WorkWrites(), c.tool.Name()):
-			opts = append(opts, tools.DeliversTo(tools.SurfaceTracker))
+			opts = append(opts, tools.DeliversTo(tracker.Source))
 		case slices.Contains(PageWrites(), c.tool.Name()):
-			opts = append(opts, tools.DeliversTo(tools.SurfacePages))
+			opts = append(opts, tools.DeliversTo(pages.Source))
 		}
 		if err := reg.RegisterWith(c.tool, tools.OriginBuiltin,
 			annotationsFor(c.tool.Name()), opts...); err != nil {

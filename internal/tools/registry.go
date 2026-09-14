@@ -598,20 +598,3 @@ func (s Snapshot) With(e Entry) (Snapshot, error) {
 	out.byName[e.Name()] = e
 	return out, nil
 }
-
-// The engine's OWN delivery surfaces, in the vocabulary [DeliversTo] and the
-// delivery gate share with an inbound notification's reported source.
-//
-// A vendor's surface is its MCP server's name and needs no constant — the
-// operator chose it and the notification reports it. These two are the
-// surfaces the engine ships itself, so it is the engine that has to name them,
-// and they are here rather than beside the builtins because the gate in
-// internal/agent/turn compares against the same strings.
-const (
-	// SurfaceTracker is the engine's own work tracker: the item, its
-	// comments, its assignment.
-	SurfaceTracker = "tracker"
-
-	// SurfacePages is the engine's own knowledge base.
-	SurfacePages = "pages"
-)

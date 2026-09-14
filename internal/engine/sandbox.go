@@ -348,11 +348,19 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 
 	company := e.Company()
 	tel := e.describeResume(ctx, company, in)
+	resumedReply := turn.ParseReply(in.Run.Reply)
 	turnIdentity := tel.runnerTurn(company, in.Run.TurnID, in.Run.DelegationDepth,
-		in.Run.DelegationChain, resumeTask(in), turn.ParseReply(in.Run.Reply))
+		in.Run.DelegationChain, resumeTask(in), resumedReply)
 	r, err := company.RunnerFor(in.Turn.Handle(),
 		e.seatRegistry(company, in.Turn.Handle()), RunnerInput{
-			Task:      resumeTask(in),
+			Task: resumeTask(in),
+			// THE RUNNER NEEDS IT TOO, not just the loop below. This
+			// field reaches runner.Config.Reply, which is what
+			// submit_work's own citation check reads — so a resumed turn
+			// with this unset accepted `no_action` on a turn somebody was
+			// waiting on, and accepted a citation naming any surface at
+			// all, before the loop's later checks ever ran.
+			Reply:     resumedReply,
 			Publisher: e.backends.Queue,
 			Turn:      turnIdentity,
 			// THE SAME RUNTIME THE TURN SUSPENDED UNDER — supplied here for
@@ -412,7 +420,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		// resumed turn never sees its trigger, so without this a turn
 		// somebody asked for would come back from a coding run free to
 		// end in silence.
-		Reply: turn.ParseReply(in.Run.Reply),
+		Reply: resumedReply,
 	})
 	e.publishTurnCompleted(ctx, tel, in.Run.TurnID, r.Spend(), res, err)
 	if err != nil {
