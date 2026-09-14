@@ -193,12 +193,40 @@ func TestACreateOnlyWriteLosingAtTheActivationIsAlreadyConfigured(t *testing.T) 
 	}
 }
 
+// AND ONE WHOSE WINNER CANNOT BE READ NAMES NONE, rather than an empty id a
+// client would build a revision URL out of.
+func TestACreateOnlyWriteLosingToAnUnreadableWinnerNamesNone(t *testing.T) {
+	t.Parallel()
+	racing := &racingPlane{winner: "the-company-that-appeared", unreadableAfter: true}
+	s := newSurfaceWith(t, func(o *configapi.Options) {
+		racing.Plane = o.Plane
+		o.Plane = racing
+	})
+
+	res := s.do(t, http.MethodPut, "/config", companyJSONDoc,
+		map[string]string{"X-Summary": "create", "If-None-Match": "*"})
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("PUT = %d, want 412: %s", res.Code, res.Body)
+	}
+	body := decode(t, res)
+	if body["error"] != "already_configured" {
+		t.Errorf("refusal = %v, want already_configured", body)
+	}
+	if current, present := body["current_revision_id"]; present {
+		t.Errorf("current_revision_id = %q, want it left out when the winner could not be read", current)
+	}
+	s.assertKeptInert(t, body)
+}
+
 // racingPlane is a plane with no activation until it refuses one: the window
 // between a precondition and the compare-and-set that closes it.
 type racingPlane struct {
 	coord.Plane
 	winner string
-	lost   atomic.Bool
+	// unreadableAfter makes the pointer unreadable once the activation has
+	// been refused, so the refusal cannot say what won.
+	unreadableAfter bool
+	lost            atomic.Bool
 }
 
 func (p *racingPlane) Activate(context.Context, coord.ActivationRequest) (coord.Activation, error) {
@@ -208,8 +236,11 @@ func (p *racingPlane) Activate(context.Context, coord.ActivationRequest) (coord.
 }
 
 func (p *racingPlane) Target(context.Context) (coord.Activation, bool, error) {
-	if !p.lost.Load() {
+	switch {
+	case !p.lost.Load():
 		return coord.Activation{}, false, nil
+	case p.unreadableAfter:
+		return coord.Activation{}, false, errors.New("the coordination store stopped answering")
 	}
 	return coord.Activation{RevisionID: p.winner}, true, nil
 }

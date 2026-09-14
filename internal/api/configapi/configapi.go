@@ -668,9 +668,17 @@ func (s *Service) refuseWrite(w http.ResponseWriter, err error, createOnly bool)
 	var raced *RacedError
 	if createOnly && errors.As(err, &raced) {
 		body := map[string]any{
-			"error": "already_configured", "current_revision_id": raced.Current,
+			"error": "already_configured",
 			"hint": "If-None-Match asked for this write to land only on a " +
 				"config that is not there; one was activated first",
+		}
+		// NAMED ONLY WHEN KNOWN, as on every other refusal here: the
+		// pointer is re-read after a lost activation, and a read that
+		// failed has no revision to name. An empty id is not "none", and a
+		// client fetching /config/revisions/ to see what won would be
+		// sent to a route that is not there.
+		if raced.Current != "" {
+			body["current_revision_id"] = raced.Current
 		}
 		if raced.Stored != "" {
 			body["stored_revision_id"] = raced.Stored
