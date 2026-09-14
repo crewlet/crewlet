@@ -9,7 +9,7 @@
  * only undone, so these drive the real history the way a browser does.
  */
 
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   Router,
@@ -56,8 +56,21 @@ function mount(guard: LeaveGuard | null, unload = false) {
   return { rerender: (g: LeaveGuard | null, u = false) => view.rerender(ui(g, u)) };
 }
 
-/** Lets the history traversals the page queued run, and their events arrive. */
-const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+/**
+ * Waits until the page shows `hash` and the history agrees, however many
+ * traversals the browser queued to get there (a held move is two: the move
+ * and its undo), then a little longer, so an undo that was still to come
+ * would have arrived and failed the assertion that follows.
+ */
+async function settleOn(hash: string) {
+  await waitFor(() => {
+    expect(location.hash).toBe(hash);
+    expect(shown).toBe(hash);
+  });
+  await act(() => new Promise<void>((resolve) => setTimeout(resolve, 30)));
+  expect(location.hash).toBe(hash);
+  expect(shown).toBe(hash);
+}
 
 beforeEach(() => {
   history.replaceState(null, "", "#/org");
@@ -101,24 +114,18 @@ test("Back and Forward are undone while held, and leave makes each", async () =>
   view.rerender(probe.guard);
 
   act(() => history.back());
-  await settle();
-  expect(probe.asked).toEqual(["#/people"]);
+  await waitFor(() => expect(probe.asked).toEqual(["#/people"]));
   // Undone: the page never showed the entry it was asked about.
-  expect(location.hash).toBe("#/runs");
-  expect(shown).toBe("#/runs");
+  await settleOn("#/runs");
 
   act(() => probe.leave());
-  await settle();
-  expect(location.hash).toBe("#/people");
-  expect(shown).toBe("#/people");
+  await settleOn("#/people");
 
   act(() => history.forward());
-  await settle();
-  expect(probe.asked).toEqual(["#/people", "#/runs"]);
-  expect(location.hash).toBe("#/people");
+  await waitFor(() => expect(probe.asked).toEqual(["#/people", "#/runs"]));
+  await settleOn("#/people");
   act(() => probe.leave());
-  await settle();
-  expect(shown).toBe("#/runs");
+  await settleOn("#/runs");
 });
 
 // A link is an entry the browser makes itself, with no place stamped on it:
@@ -131,14 +138,10 @@ test("a link is held and undone, and leave follows it", async () => {
   document.body.appendChild(link);
   try {
     fireEvent.click(link);
-    await settle();
-    expect(probe.asked).toEqual(["#/integrations"]);
-    expect(location.hash).toBe("#/org");
-    expect(shown).toBe("#/org");
+    await waitFor(() => expect(probe.asked).toEqual(["#/integrations"]));
+    await settleOn("#/org");
     act(() => probe.leave());
-    await settle();
-    expect(location.hash).toBe("#/integrations");
-    expect(shown).toBe("#/integrations");
+    await settleOn("#/integrations");
   } finally {
     link.remove();
   }
@@ -155,9 +158,8 @@ test("a guard that lets a move go is not in its way, and no guard holds nothing"
   expect(shown).toBe("#/people");
   view.rerender(null);
   act(() => history.back());
-  await settle();
+  await settleOn("#/org");
   expect(asked).toEqual(["#/people"]);
-  expect(shown).toBe("#/org");
 });
 
 // An editor's question is asked over the lens's: the guard that began to
