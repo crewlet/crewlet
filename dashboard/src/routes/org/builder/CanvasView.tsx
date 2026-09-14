@@ -75,7 +75,7 @@ import {
 } from "~/ui/treeModel.ts";
 import { useLayoutAnchor, useMeasuredSizes } from "~/ui/useMeasuredSizes.ts";
 import type { Point, Rect } from "~/ui/viewport.ts";
-import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
+import { useBuilder, useBuilderView, type BuilderApi, type ChartKind } from "./BuilderContext.tsx";
 import {
   CYCLE_GROUP,
   type NodeView,
@@ -106,9 +106,6 @@ import {
   seatKindLabel,
 } from "./nodeMarks.tsx";
 import { treeStep, useOpenScreen, useReporting, useStructure, useTreeState } from "./useCharts.ts";
-
-/** Which arrangement of the draft the canvas draws. */
-export type ChartKind = "structure" | "reporting";
 
 /**
  * The canvas of the Builder lens.

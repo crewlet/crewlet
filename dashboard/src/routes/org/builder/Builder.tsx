@@ -78,6 +78,7 @@ import {
   type AddKind,
   type BuilderApi,
   type BuilderViewHandle,
+  type ChartKind,
 } from "./BuilderContext.tsx";
 import { handlesByKey } from "./model/document.ts";
 import { allUnits, locate, type Draft } from "./model/draft.ts";
@@ -137,13 +138,6 @@ export interface AddDialogProps {
 }
 
 /**
- * Which chart the canvas draws. The Builder owns the `chart` section param
- * (its toolbar is where it is chosen), so the canvas is HANDED the answer
- * rather than reading the URL a second time, where the two could disagree.
- */
-export type BuilderChart = "structure" | "reporting";
-
-/**
  * The views and dialogs the Builder hosts. They read and act through
  * `BuilderContext`; the Builder decides which is mounted.
  *
@@ -151,7 +145,7 @@ export type BuilderChart = "structure" | "reporting";
  * it would have drawn it rather than drawing nothing.
  */
 export interface BuilderSurfaces {
-  canvas: ComponentType<{ chart: BuilderChart }> | null;
+  canvas: ComponentType<{ chart: ChartKind }> | null;
   outline: ComponentType | null;
   editor: ComponentType<NodeDialogProps> | null;
   add: ComponentType<AddDialogProps> | null;
@@ -466,7 +460,7 @@ function Lens({
   const [viewParam, setView] = useParam("view", narrowDefault ? "outline" : "canvas", "section");
   const view = viewParam === "outline" ? "outline" : "canvas";
   const [chartParam, setChart] = useParam("chart", "structure", "section");
-  const chart = chartParam === "reporting" ? "reporting" : "structure";
+  const chart: ChartKind = chartParam === "reporting" ? "reporting" : "structure";
   const [unitParam] = useParam("unit", "", "filter");
   const [seatParam] = useParam("seat", "", "filter");
   const viewPanel = useId();

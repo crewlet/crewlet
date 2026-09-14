@@ -40,6 +40,13 @@ import type { BuilderAction, BuilderState } from "./model/reducer.ts";
 /** What the Add dialog is asked to add. */
 export type AddKind = "unit" | "agent" | "human";
 
+/**
+ * Which chart the canvas draws. The Builder owns the `chart` section param
+ * (its toolbar is where it is chosen), so the canvas is HANDED the answer
+ * rather than reading the URL a second time, where the two could disagree.
+ */
+export type ChartKind = "structure" | "reporting";
+
 /** The engine's derivation of the current draft, with its lists always present. */
 export interface BuilderDerived {
   readonly seats: DerivedSeat[];

@@ -24,8 +24,8 @@ import {
   type ConfigProblem,
   type OrgProjection,
 } from "~/protocol/index.ts";
-import { Builder, type BuilderChart, type BuilderSurfaces } from "./Builder.tsx";
-import { useBuilder } from "./BuilderContext.tsx";
+import { Builder, type BuilderSurfaces } from "./Builder.tsx";
+import { useBuilder, type ChartKind } from "./BuilderContext.tsx";
 import { allSeats, allUnits } from "./model/draft.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
 import type { DraftStorage } from "./model/persistence.ts";
@@ -317,7 +317,7 @@ export function FakeView() {
 }
 
 /** The canvas stand-in, which draws whichever chart the Builder hands it. */
-export function FakeCanvas({ chart }: { chart: BuilderChart }) {
+export function FakeCanvas({ chart }: { chart: ChartKind }) {
   return (
     <div>
       <p>{`Drawing the ${chart} chart`}</p>
