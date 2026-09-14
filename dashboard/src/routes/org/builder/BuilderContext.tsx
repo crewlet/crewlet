@@ -90,7 +90,8 @@ export interface BuilderApi {
   sandboxes: SandboxEntry[];
   /**
    * Registers the mounted view's handle; the result unregisters it. Views use
-   * [useBuilderView] rather than calling this directly.
+   * [useBuilderView] rather than calling this directly. Its identity is stable
+   * for the Builder's lifetime, so a view registers once per mount.
    */
   registerView(handle: BuilderViewHandle): () => void;
 }

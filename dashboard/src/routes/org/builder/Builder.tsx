@@ -646,6 +646,15 @@ function Lens({
   // Say what the last operation did, and put focus where it leads.
   const viewHandle = useRef<BuilderViewHandle | null>(null);
   const focusNode = useCallback((key: NodeKey) => viewHandle.current?.focusNode(key), []);
+  // ONE IDENTITY FOR THE LENS'S LIFETIME. A view registers in an effect that
+  // depends on this function, so a new one per state change unregistered and
+  // registered the mounted view again after every edit and every answer.
+  const registerView = useCallback((handle: BuilderViewHandle) => {
+    viewHandle.current = handle;
+    return () => {
+      if (viewHandle.current === handle) viewHandle.current = null;
+    };
+  }, []);
   useEffect(() => {
     if (!state.last) return;
     announce(announcementOf(state.last));
@@ -927,12 +936,7 @@ function Lens({
       readOnly,
       agents,
       sandboxes,
-      registerView: (handle) => {
-        viewHandle.current = handle;
-        return () => {
-          if (viewHandle.current === handle) viewHandle.current = null;
-        };
-      },
+      registerView,
     };
   }, [
     state,
@@ -946,6 +950,7 @@ function Lens({
     readOnly,
     agents,
     sandboxes,
+    registerView,
   ]);
 
   // ---- Rendering --------------------------------------------------------------

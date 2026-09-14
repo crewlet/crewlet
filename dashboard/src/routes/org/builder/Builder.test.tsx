@@ -5,9 +5,19 @@
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { clearToken, storeToken, type OrgProjection } from "~/protocol/index.ts";
-import { company, Engine, json, mountBuilder, refusal } from "./testkit.tsx";
+import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
+import {
+  company,
+  Engine,
+  fakeSurfaces,
+  FakeView,
+  json,
+  mountBuilder,
+  refusal,
+} from "./testkit.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -154,6 +164,43 @@ describe("the posture table", () => {
 });
 
 describe("the views the lens hosts", () => {
+  /** A view that registers `handle` exactly as `useBuilderView` does, counting each registration. */
+  function registering(handle: BuilderViewHandle, count: { n: number }) {
+    return function RegisteringView() {
+      const { registerView } = useBuilder();
+      useEffect(() => {
+        count.n++;
+        return registerView(handle);
+      }, [registerView]);
+      return <FakeView />;
+    };
+  }
+
+  // THE TOOLBAR AND THE BUILDER ACT THROUGH THE VIEW ON SCREEN: Expand all,
+  // Collapse all and the focus that follows an operation all reach the
+  // handle the mounted view registered, and it is registered once.
+  test("the toolbar and every operation reach the mounted view's handle", async () => {
+    const handle = { focusNode: vi.fn(), expandAll: vi.fn(), collapseAll: vi.fn() };
+    const count = { n: 0 };
+    const engine = new Engine(company());
+    mountBuilder({ engine, surfaces: { ...fakeSurfaces, canvas: registering(handle, count) } });
+    await screen.findByText("No problems");
+    const registered = count.n;
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    expect(handle.expandAll).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+    expect(handle.collapseAll).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() => expect(handle.focusNode).toHaveBeenCalledWith("seat:ceo"));
+    await waitFor(() => expect(engine.checks()).toHaveLength(2));
+    await screen.findByText("No problems");
+    // An edit and its answer changed the state twice, and the view was not
+    // registered again for either.
+    expect(count.n).toBe(registered);
+  });
+
   test("the canvas is handed the chart the toolbar chooses", async () => {
     const engine = new Engine(company());
     mountBuilder({ engine });
