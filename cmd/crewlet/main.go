@@ -1114,17 +1114,14 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	if err = e.Start(ctx); err != nil {
 		// Everything the engine opened comes down with it. Returning
 		// without this leaves a broker, a store and a set of held seat
-		// leases behind — and the leases are the expensive half, because
+		// leases behind, and the leases are the expensive half, because
 		// a peer cannot take those seats until they lapse at the TTL.
 		//
-		// The listener goes first, for the same reason it does in the
-		// ordinary shutdown below: it is already accepting, and a node
-		// whose engine failed to start must stop answering before it
-		// gives up whatever it holds.
-		if surface != nil {
-			surface.stop(context.WithoutCancel(ctx), log)
-		}
-		e.Stop(context.WithoutCancel(ctx))
+		// In the ONE order every stop takes rather than a second one for
+		// a boot that failed: the listener is already accepting, and it
+		// is the drain, not a closed port, that refuses new work on it.
+		// See [shutdown].
+		shutdown(context.WithoutCancel(ctx), e, surface, log)
 		return err
 	}
 
@@ -1147,23 +1144,53 @@ func runEngine(args []string, stderr io.Writer) (err error) {
 	// an operator at a terminal the second press IS their bound.
 	stop()
 
-	if surface != nil {
-		surface.stop(context.WithoutCancel(ctx), log)
-	}
+	// Said BEFORE the drain, which can take minutes: this line is what an
+	// operator at a terminal reads to learn what the node is waiting for and
+	// how to stop waiting.
+	log.InfoContext(ctx, "engine_draining",
+		"in_flight", e.Backends().Queue.InFlightCount(),
+		"detail", "the turns already running finish before this node stops; "+
+			"until they have, /health stays 200, /ready answers 503 and every "+
+			"route that would start new work answers 503",
+		"hint", "a second interrupt exits at once, leaving those turns to be "+
+			"redelivered once their ack window elapses")
 
-	// Detached from the signal context, which is already cancelled — that
-	// is what woke us. The drain waits for in-flight turns, bounded only
-	// by the context it is given, so handing it this one would abandon
-	// every turn already running and make the shutdown the opposite of
-	// graceful.
+	// Detached from the signal context, which is already cancelled: that is
+	// what woke us. The drain waits for in-flight turns, bounded only by the
+	// context it is given, so handing it this one would abandon every turn
+	// already running and make the shutdown the opposite of graceful.
 	//
 	// The bound belongs to whatever supervises the process: a container
 	// runtime's kill grace, or the operator's second interrupt that the
-	// stop() above just re-armed. Both already have one and can see
-	// things this process cannot.
-	log.InfoContext(ctx, "engine_draining")
-	e.Stop(context.WithoutCancel(ctx))
+	// stop() above just re-armed. Both already have one and can see things
+	// this process cannot.
+	shutdown(context.WithoutCancel(ctx), e, surface, log)
 	return nil
+}
+
+// shutdown is the one order a node comes down in, whatever stopped it.
+//
+//  1. DRAIN WITH THE LISTENER UP. /health and /ready are what an orchestrator
+//     reads while the turns finish, and they keep answering: 200 for liveness
+//     and 503 for readiness. The drain is also what shuts the door, because
+//     from its first moment the HTTP surface refuses every route that would
+//     start new work (see internal/api's drain gate), so a listener still
+//     accepting is no longer a listener still minting turns.
+//  2. CLOSE THE LISTENER, once the drain has completed or its context has
+//     ended, and not before: a node that closed it first answered neither
+//     probe for the whole drain, so its liveness probe failed while it was
+//     doing exactly what it should.
+//  3. TEAR THE ENGINE DOWN, after the listener, because both probes read the
+//     broker and the coordination store the teardown closes.
+//
+// A nil surface is a node with api.port 0, which drains and stops the same way
+// with nothing to close between the two.
+func shutdown(ctx context.Context, e *engine.Engine, surface *httpSurface, log *slog.Logger) {
+	e.Drain(ctx)
+	if surface != nil {
+		surface.stop(ctx, log)
+	}
+	e.Stop(ctx)
 }
 
 // httpSurface is the API half of a merged node.
@@ -1173,24 +1200,28 @@ type httpSurface struct {
 	projector *observe.Projector
 }
 
-// stop shuts the HTTP surface down before the engine drains.
-//
-// BEFORE, deliberately: the drain waits for in-flight turns, and a listener
-// still accepting webhooks during it would keep minting new ones. Closing the
-// door first is what makes the drain converge.
+// stop closes the HTTP surface, once the engine has drained. See [shutdown]
+// for why it is then and not earlier.
 func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
-	shutdown, cancel := context.WithTimeout(ctx, apiShutdownGrace)
+	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
-	if err := s.server.Shutdown(shutdown); err != nil {
-		// A listener that would not close is not a reason to skip the
-		// drain: the seats are the expensive thing to strand.
-		log.WarnContext(ctx, "api_shutdown_failed", "error", err)
+	if err := s.server.Shutdown(grace); err != nil {
+		// The grace is over and a request is still running. It is CUT,
+		// which cancels its context, rather than left to run on into
+		// the teardown that is about to close the store and the broker
+		// it is reading.
+		log.WarnContext(ctx, "api_shutdown_failed", "error", err,
+			"detail", "requests still running after the shutdown grace were cut")
+		if closeErr := s.server.Close(); closeErr != nil {
+			log.WarnContext(ctx, "api_close_failed", "error", closeErr)
+		}
 	}
 	// After the listener, so no socket can be reading the projection while
-	// its feed is torn down, and before the engine drains, so the drain's
-	// own turns are not projected onto a page nobody can reach.
-	s.projector.Stop(shutdown)
+	// its feed is torn down, and after the drain, so a dashboard watching
+	// the drain saw its turns finish.
+	s.projector.Stop(grace)
 	s.app.Stop()
+	log.InfoContext(ctx, "api_stopped")
 }
 
 // apiShutdownGrace bounds how long the listener waits for in-flight REQUESTS.
@@ -1202,13 +1233,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // supervisor rather than by a constant here.
 const apiShutdownGrace = 5 * time.Second
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
-// companySecrets reads the verification material out of the engine's CURRENT
-// epoch, on every request.
-//
-// Not captured once: a config reload replaces the epoch, and a receiver holding
-// the old one would keep rejecting deliveries signed with a rotated secret —
-// a failure that looks exactly like an attack and resolves only on restart.
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1217,8 +1241,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret, a
+// failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, log *slog.Logger,
@@ -1668,11 +1699,17 @@ func (r engineRuntime) Tools() []api.ToolInfo {
 	return out
 }
 
+// ShuttingDown is the engine's own flag, which is set at the first moment of
+// its drain rather than when the drain reaches the seat host.
+func (r engineRuntime) ShuttingDown() bool { return r.engine.ShuttingDown() }
+
 func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 	host := r.engine.Node().Host()
 	state := api.RuntimeState{
-		InFlight:     r.engine.Backends().Queue.InFlightCount(),
-		ShuttingDown: host.Draining(),
+		InFlight: r.engine.Backends().Queue.InFlightCount(),
+		// THE SAME FLAG the drain gate refuses work on, so a probe can
+		// never report a node in rotation while its routes refuse.
+		ShuttingDown: r.ShuttingDown(),
 		Seats:        host.Held(),
 		StartedAt:    r.engine.StartedAt().Format(time.RFC3339),
 		// Which integrations have a PARSER, which is the only thing that
@@ -1693,9 +1730,8 @@ func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {
 	if r.reconciler != nil {
 		// Read live, on every probe, rather than cached: a cached
 		// posture is a node that reports healthy through the whole
-		// window in which it stopped being so — and this is the ONLY
-		// place an operator can see why a node left rotation, since
-		// /ready answers a bare 503 either way and "draining" and
+		// window in which it stopped being so, and it is what names
+		// why a node that is not draining left rotation. "draining" and
 		// "cannot apply epoch 41" call for opposite responses.
 		state.Posture = string(r.reconciler.Posture(ctx))
 		state.AppliedEpoch = r.reconciler.Applied()

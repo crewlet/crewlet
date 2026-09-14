@@ -289,8 +289,16 @@ finish, releases each seat as it goes idle, and exits. Peers pick the
 seats up. Point load-balancer readiness at `/ready` (`503` while
 draining) and liveness at `/health` (stays `200` through a drain), and
 give the orchestrator a termination grace period longer than your longest
-turn — the engine does not impose its own cutoff, because that would be a
+turn. The engine does not impose its own cutoff, because that would be a
 guess at yours.
+
+The node keeps its listener for the whole drain, so both probes answer
+until the last turn has finished, and closes it only then. A request that
+still reaches it in the meantime (a webhook or a config write the load
+balancer sent before its readiness probe caught up) is refused with `503`
+and a `Retry-After` rather than accepted, which sends it to a peer; reads
+and the dashboard keep answering. See
+[During a drain](../reference/api-endpoints.md#during-a-drain).
 
 **Upgrade one node at a time, and let each one finish.** Seat leases
 carry a protocol version, and a node refuses to claim seats while any

@@ -133,6 +133,15 @@ type Engine struct {
 	// orchestrator watching for liveness.
 	watchdog *seat.Watchdog
 
+	// shuttingDown is set at the first moment of [Engine.Drain] and never
+	// cleared. See [Engine.ShuttingDown].
+	shuttingDown atomic.Bool
+
+	// drainOnce makes the drain one operation however many callers ask for
+	// it: [Engine.Stop] drains for a caller that did not, and a second run
+	// would announce a second stop for one shutdown.
+	drainOnce sync.Once
+
 	// batch is the inbox coalescing window and cap, shared with every seat
 	// attachment on this node.
 	//
@@ -1023,29 +1032,69 @@ func (e *Engine) publishLifecycle(ctx context.Context, ev *events.Event) {
 	}
 }
 
-// Stop drains and shuts down.
+// Drain is the first half of a graceful stop: this node stops taking work,
+// lets the turns already running finish, and hands its seats back. Every
+// backend stays open; [Engine.Stop] is the half that closes them.
+//
+// SPLIT FROM STOP FOR THE HTTP SURFACE, which has to come down between the two
+// halves and nowhere else. Not before the drain: /health and /ready are what an
+// orchestrator reads while the turns finish, and a node that closed its
+// listener first answered neither, so its liveness probe failed while it was
+// doing exactly what it should. Not after the teardown: both probes read the
+// broker and the coordination store the teardown closes.
+//
+// ONCE. A second call, and the drain [Engine.Stop] runs for a caller that did
+// not drain first, both wait for the first to finish and then do nothing more,
+// so one shutdown is announced once and no seat is handed back twice.
+//
+// Bounded only by ctx, for the reason [node.Node.Drain] gives.
+func (e *Engine) Drain(ctx context.Context) {
+	e.drainOnce.Do(func() {
+		// BEFORE ANYTHING THAT CAN BLOCK, so every surface that asks
+		// refuses new work from the moment the drain was decided rather
+		// than from whenever the seat host reaches it: the announcement
+		// below is a broker round trip, and the seat host's own flag is
+		// not set until the drain gets there.
+		e.shuttingDown.Store(true)
+		// FIRST of what does block. The drain below and the teardown
+		// after it reap MCP process trees, join goroutines and wait on
+		// in-flight turns indefinitely: all legitimate, all slow, and all
+		// of it would look to an armed watchdog exactly like the wedge it
+		// exists to end. Exiting through the middle of a drain abandons
+		// the seat release that makes it graceful, and costs every peer a
+		// full TTL of dark seats.
+		if e.watchdog != nil {
+			e.watchdog.Stop()
+		}
+		// WHERE THE STOP IS DECIDED, rather than where it completes. The
+		// broker stays open until the teardown, so the drain's far end
+		// would carry this line just as well; what that end does not
+		// survive is a second interrupt or a supervisor's kill grace
+		// running out mid-drain, and the one thing the audit log must not
+		// lose is that this node was told to stop.
+		if company := e.Company(); company != nil {
+			e.publishLifecycle(ctx, events.New(
+				types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
+		}
+		e.node.Drain(ctx)
+	})
+}
+
+// ShuttingDown reports whether a drain has begun.
+//
+// True from the first moment of [Engine.Drain] and never false again. It is
+// what the HTTP surface refuses new work on and what /health and /ready
+// report, and it is deliberately not the seat host's own draining flag, which
+// is set later, once the drain has reached the seat host.
+func (e *Engine) ShuttingDown() bool { return e.shuttingDown.Load() }
+
+// Stop drains, unless [Engine.Drain] already has, and shuts down.
 //
 // The DRAIN comes first and is the difference between a restart that resumes
 // cleanly and one that redelivers half-finished turns: it stops claiming, hands
 // back every seat, and waits for in-flight handlers before anything closes.
 func (e *Engine) Stop(ctx context.Context) {
-	// FIRST, before anything blocks. The drain below reaps MCP process
-	// trees, joins goroutines and waits on in-flight turns indefinitely —
-	// all legitimate, all slow, and all of it would look to an armed
-	// watchdog exactly like the wedge it exists to end. Exiting through
-	// the middle of a drain abandons the seat release that makes it
-	// graceful, and costs every peer a full TTL of dark seats.
-	if e.watchdog != nil {
-		e.watchdog.Stop()
-	}
-	// BEFORE THE DRAIN, because the drain is what closes the broker
-	// connection this publishes over: announced afterwards, the line
-	// would be written on a queue that is already gone, every time.
-	if company := e.Company(); company != nil {
-		e.publishLifecycle(ctx, events.New(
-			types.OrgStopped{OrgName: company.Config.Name}, tracing.TraceOf(ctx)))
-	}
-	e.node.Drain(ctx)
+	e.Drain(ctx)
 	e.teardown(ctx)
 	log.InfoContext(ctx, "engine_stopped")
 }

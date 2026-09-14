@@ -26,6 +26,33 @@ A body that does not arrive inside its deadline fails the read like any other tr
 
 ---
 
+## During a drain
+
+A node that has been told to stop (SIGTERM, or `Ctrl+C` once) keeps serving HTTP for the whole of its [drain](../concepts/agent-runtime.md#graceful-shutdown), and closes its listener only once the drain has completed. What changes from the drain's first moment is which requests it will still take:
+
+| Request | During a drain | Why |
+|---|---|---|
+| `GET /health` | `200`, `status: "shutting_down"` | Liveness. An orchestrator that could not reach the node would kill it in the middle of the turns the drain exists to finish. |
+| `GET /ready` | `503`, `reason: "draining"` | Readiness: takes the node out of rotation so traffic moves to a peer. |
+| Every other read (`GET`, `HEAD`, `OPTIONS`): the dashboard, the REST reads, `/query/*`, `/ws/stream` | Served | A read starts nothing, and it is how the drain is watched. |
+| `/mcp/{token}` and `/otlp/{token}/v1/{signal}` | Served | They carry the tool calls and spans of coding runs that started before the drain. A [detached run](../concepts/code-sandbox.md) outlives the turn that started it, so the drain never waits on one, and refusing these would shorten no drain and only break a run mid-flight. |
+| Every `/webhooks/*` route, whatever its method | `503` | A delivery is new work, and one of the two `GET` landings acts: the GitHub App return seals a credential and writes a config revision, and an install arrival asks the reconcile loop for a pass. The Slack OAuth landing only renders a page and is refused with the rest, because a per-route carve-out is what refusing by default avoids. |
+| Every other write: `/config`, `/secrets`, `/setup`, `/budgets/reset`, `/backup`, the `/work/*` writes, `/operator/mcp` | `503` | Each one starts work or changes the company the drain is leaving. Refusing by default is what keeps a write route added later from slipping through a drain. |
+
+A refusal is `503` with a `Retry-After` of 30 seconds, long enough for a load balancer following `/ready` to have moved traffic to a peer, and a body the CLI and the dashboard both render:
+
+```json
+{
+  "error": "draining",
+  "detail": "this node is draining for a shutdown: the turns already running finish, and nothing new is started here",
+  "hint": "retry against another node, or once this one has restarted; /ready answers 503 for as long as the drain lasts"
+}
+```
+
+A write still needs its token first: an unauthenticated write answers `401` whether or not the node is draining. And a request that was already running when the drain began is not interrupted by it; it is cut only if it is still running five seconds after the listener starts to close.
+
+---
+
 ## Routes
 
 | Method | Path | Description |
@@ -68,8 +95,8 @@ A body that does not arrive inside its deadline fails the read like any other tr
 > the delivery flows once the secret is set; nothing is discarded, and nothing
 > unsigned is ever recorded, published, or shown on the dashboard.
 
-| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain — use `/ready` to steer traffic |
-| `GET` | `/ready` | Readiness for a load balancer: `503` while draining or before the first config revision applies, `200` otherwise |
+| `GET` | `/health` | Liveness + the engine-health envelope (see [below](#the-health-envelope)). Stays `200` through a drain (see [During a drain](#during-a-drain)); use `/ready` to steer traffic |
+| `GET` | `/ready` | Readiness for a load balancer: `503` while draining, before the first config revision applies, or on a `shed` or `stuck` posture, and `200` otherwise. A `503` names why in `reason`: `draining`, `unconfigured`, `shed` or `stuck`, in that order of precedence |
 | `GET` | `/agents` | List agent roles, each merged with live state from the in-memory projection (including the in-flight `live_call`). [Human seats](../concepts/humans-in-the-org.md) are excluded — they appear only in `/org` with `"kind": "human"` |
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
@@ -1162,51 +1189,59 @@ without the tag every historical failure would read back as a success.
 
 ### The health envelope
 
-One builder (`api.streaming.build_health_envelope`) answers `GET /health`,
-the snapshot's `health` section, and the 5-second push, so those three
-surfaces cannot disagree about whether the engine is healthy — and a
-reconnect restores every field without a second round trip.
+One builder answers `GET /health` and the `stream` query in full, and the
+same builder feeds the snapshot's `health` section and the 5-second push, so
+no two of them can disagree about whether the engine is healthy. The push and
+the snapshot carry the three fields a badge needs (`status`, `in_flight` and
+`shutting_down`); a screen that shows more asks the `stream` query.
 
 ```json
 {
   "status": "ok",
+  "node": "node-1",
   "configured": true,
   "engine": true,
-  "version": "0.4.0",
-  "started_at": "2026-04-01T12:00:00+00:00",
+  "version": "v0.4.0",
+  "started_at": "2026-04-01T12:00:00Z",
   "queue": "jetstream-embedded",
-  "event_store": "durable",
-  "feed_hydrated": true,
   "clients": 3,
   "in_flight": 2,
-  "engine_started_at": "2026-04-01T11:58:03+00:00",
-  "shutting_down": false
+  "shutting_down": false,
+  "posture": "serve",
+  "applied_epoch": 41,
+  "engine_started_at": "2026-04-01T11:58:03Z",
+  "seats": ["ceo", "cto"]
 }
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `status` | `ok`, `unconfigured`, or `shutting_down`. Precedence is `shutting_down > unconfigured > ok` — a draining engine is draining first, whatever else is true of it. |
-| `configured` | Whether a company revision is active. When `false` the engine accepts and **discards** every inbound webhook, so an operator watching empty screens needs to be told this rather than left to infer it. |
-| `engine` | Whether this process has an engine to ask. `false` on the [standalone API](../guides/deployment.md), where `in_flight` / `engine_started_at` / `shutting_down` are absent — the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
+| `status` | `shutting_down`, `unconfigured`, a diverged posture (`shed`, `stuck` or `isolated`), or `ok`, in that order of precedence. A draining engine is draining first, whatever else is true of it, and a node with no active revision is that before it is anything else. The two ordinary postures, `serve` and `wait`, read as `ok`. |
+| `node` | The node that answered: the field that turns "the config apply failed" into "the config apply failed on node-2" once a load balancer sits in front of more than one process. |
+| `configured` | Whether a company revision is active. When `false` the node refuses every inbound webhook with `503`, so an operator watching empty screens needs to be told this rather than left to infer it. |
+| `engine` | Whether this process has an engine to ask. `false` on a process with none, where every field below `clients` is absent: the flag is what lets a client tell "nothing is running" from "this process cannot know", instead of rendering a confident zero for both. |
 | `version` | The `crewlet` version this process is running. |
-| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`: on the standalone deployment those are two processes on two clocks, and one merged "uptime" would be wrong for at least one of them. |
-| `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
-| `event_store` | `durable`, `memory`, or `none`. Three-valued because "a store is wired" is not "history survives a restart": with no database the CLI still wraps in-memory legs in a `CompositeEventStore`, so a presence check answers yes while every event is one process death from gone. |
-| `feed_hydrated` | Whether the live-state projection was seeded from stored history at startup. Hydration is best-effort and swallows its own store errors, so this is the only signal that the activity feed starts at this process's boot rather than at the retained history. |
+| `started_at` | When the **API process** started. Deliberately separate from `engine_started_at`, so a process whose two halves started at different moments never reports one merged uptime that is wrong for one of them. |
+| `queue` | The event queue's backend: `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this API process. |
-| `in_flight` | Handler invocations mid-flight (embedded API only). |
-| `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens — the API server keeps serving until the engine has fully stopped. |
+| `in_flight` | Handler invocations mid-flight on this node. |
+| `shutting_down` | `true` from the first moment of a drain, so a dashboard shows the drain while it happens: the listener keeps serving until the drain has completed. See [During a drain](#during-a-drain). |
+| `posture` | What this node concluded about its own config lag: `serve`, `wait`, `shed`, `isolated` or `stuck`. See [the control plane](../concepts/control-plane.md). |
+| `applied_epoch` | The config revision this node is running. |
+| `engine_started_at` | When this node's engine started. |
+| `seats` | The seats this node holds. |
+| `stall_lag_seconds` | How far behind this node's watched duty is, present only when it is behind at all. It is the number that climbs towards the seat lease TTL, at which the watchdog ends the process, so a node degrading shows it here before the restart. |
 
-Per-socket facts — how many envelopes *this* connection dropped, how deep
-its queue is — are deliberately **not** here. The tick encodes one JSON
+Per-socket facts, such as how many envelopes *this* connection dropped and how
+deep its queue is, are deliberately **not** here. The tick encodes one JSON
 string and hands the same string to every client, so a per-client field
 would force one encode per client per tick; they are answered on demand
 by the `stream` query instead.
 
 `GET /health` always returns **200**, including when `status` is
-`unconfigured`: the status code is liveness, and an engine waiting for a
-configuration is alive. A readiness probe should read `configured`.
+`unconfigured` or a diverged posture: the status code is liveness, and an
+engine waiting for a configuration is alive. Steer traffic with
+[`GET /ready`](#routes) instead, which answers `503` and names the reason.
 
 ### Paging the event history
 
