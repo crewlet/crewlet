@@ -550,12 +550,18 @@ function Lens({
     const hasWork = current.log.ops.length > 0 || current.log.undone.length > 0;
     const force = forceLoad.current;
     forceLoad.current = false;
+    // A DRAFT WITH WORK ON IT STAYS ON ITS BASE, whatever the read found. A
+    // newer revision is the check's to report as a conflict, and the operator
+    // decides what happens to the work; without work there is nothing to lose
+    // by standing on it. A forced read is no exception: it reads back what a
+    // save stored, whose own answer already keyed the base and left the lens
+    // editable, so an edit made while that read was out stands on the saved
+    // revision already, and reading the same revision over it would throw the
+    // edit away unasked for a document that differs from the one sent only by
+    // the engine's own normalization.
     if (posture.kind === "edit") {
-      // A draft with work on it stays on its base: the check reports the newer
-      // revision as a conflict, and the operator decides what happens to the
-      // work. Without work there is nothing to lose by standing on the new one.
       const stale = current.mode !== "edit" || current.base.revision !== posture.revision;
-      if (!loaded || force || (stale && !hasWork)) {
+      if (!loaded || ((force || stale) && !hasWork)) {
         dispatchRaw({
           type: "load",
           mode: "edit",
@@ -565,7 +571,7 @@ function Lens({
         setLoaded(true);
       }
     } else if (posture.kind === "create") {
-      if (!loaded || force || (current.mode !== "create" && !hasWork)) {
+      if (!loaded || ((force || current.mode !== "create") && !hasWork)) {
         dispatchRaw({ type: "load", mode: "create", document: null, revision: null });
         setLoaded(true);
       }
@@ -969,7 +975,15 @@ function Lens({
       });
       clearDraft(storage);
       keeping.markWrite(null);
-      dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
+      // A SAVE A PREVIOUS VISIT SENT IS NOT THE DRAFT ON SCREEN: this visit
+      // stands on that save's base with nothing restored, so making the draft
+      // the base would label the old document with the new revision. The
+      // revision it stored is read like any newer one instead (unforced, so
+      // it is never read over work), and a save of this visit's own draft
+      // makes that draft the base until the stored document is read back.
+      if (!landed.resumed) {
+        dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
+      }
       setReviewing(false);
       if (landed.mode === "create") setCreated(true);
       // THE TOAST IS THE ANNOUNCEMENT: its host is a polite live region of
@@ -980,7 +994,7 @@ function Lens({
           ? "The last save from this tab was stored. The engine is applying it."
           : "Saved. The engine is applying it.",
       );
-      load(true);
+      load(!landed.resumed);
     },
     onConflict: ({ reason, currentRevisionId }) => {
       setReviewing(false);

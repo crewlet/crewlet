@@ -1104,6 +1104,11 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   have landed, so an answer lost after the lens was left, or across a reload,
   is settled on the next visit (`useSave.resume`) before the kept log is
   offered: replayed onto its own revision it would apply every change twice.
+  Such a save is not the draft on screen, so the revision it stored is read
+  like any newer revision rather than made the base. A save of the draft on
+  screen makes that draft the base, keyed by the save's answer, and the
+  stored document is then read back, never over an edit made while that read
+  is out: such an edit already stands on the saved revision.
   `ReviewSaveDialog.tsx` states every change and consequence and gates the
   irreversible ones on an acknowledgement, whose sentences (`dialogParts`'s
   `ACKNOWLEDGEMENT_TEXT`) the editor's company rename shares.

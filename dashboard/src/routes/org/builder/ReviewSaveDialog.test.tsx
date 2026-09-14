@@ -5,7 +5,7 @@
  * cannot lose or duplicate the work.
  */
 
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
@@ -66,6 +66,39 @@ describe("the save", () => {
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"'));
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // THE SAVED REVISION IS READ BACK, NEVER OVER WORK. The save's own answer
+  // keys the base, so the lens is editable while that read is out, and an
+  // edit made then already stands on the saved revision.
+  test("an edit made while the saved revision is read back is kept", async () => {
+    const engine = new Engine(company());
+    const dialog = await reviewEdit(engine);
+    let readBack: () => void = () => {};
+    engine.script = (r, e) =>
+      r.method === "GET" && r.path === "/config" && engine.requests.some(isWrite)
+        ? new Promise<Response>((resolve) => {
+            readBack = () => resolve(e.answer(r));
+          })
+        : null;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved. The engine is applying it.");
+    await screen.findByText("editable");
+    fireEvent.click(screen.getByRole("button", { name: "Edit Designer" }));
+    await waitFor(() =>
+      expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Design and more"),
+    );
+
+    engine.script = () => null;
+    act(() => readBack());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Still in the draft, kept, and checked against the saved revision.
+    expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain("Design and more");
+    await waitFor(() => {
+      const last = engine.checks().at(-1)!;
+      expect(last.headers["If-Match"]).toBe('"r-saved"');
+      expect(JSON.stringify(last.body)).toContain("Design and more");
+    });
   });
 
   test("a revision saved first by somebody else leads into update my draft, then back to the review", async () => {
@@ -229,12 +262,46 @@ describe("a save whose answer never arrives", () => {
           "The last save from this tab was stored. The engine is applying it.",
         ),
       ).toBeDefined();
+      const checked = engine.checks().length;
       await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull());
       expect(engine.sent("GET", "/config/revisions/r-saved").length).toBeGreaterThan(0);
+      // The lens read the saved revision when it opened, so it stands on it
+      // already and nothing is read or checked over again.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(engine.checks()).toHaveLength(checked);
       // Neither offered back nor replayed: nothing more was written.
       expect(screen.queryByRole("button", { name: "Keep the draft" })).toBeNull();
       expect(screen.queryByRole("dialog", { name: "Update my draft and review" })).toBeNull();
       expect(engine.requests.filter(isWrite)).toHaveLength(1);
+    });
+
+    // THIS VISIT NEVER HELD THE SAVED DOCUMENT. It stands on whatever it read,
+    // here a colleague's revision built on the save, and settling the save
+    // must not relabel that document with the save's revision: every check
+    // then named a revision the document was not, and met a conflict.
+    test("a save that landed under a later revision leaves the lens on the later one", async () => {
+      const engine = new Engine(company());
+      await loseTheAnswer(engine, { lands: true });
+      engine.commit({
+        method: "PATCH",
+        path: "/config",
+        query: new URLSearchParams(),
+        headers: {},
+        body: { mission: "Somebody else's", _summary: "A colleague's save" },
+      });
+      expect(engine.revision).toBe("r-saved-2");
+
+      mountBuilder({ engine });
+      expect(
+        await screen.findByText(
+          "The last save from this tab was stored. The engine is applying it.",
+        ),
+      ).toBeDefined();
+      await screen.findByText("No problems");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(engine.checks().map((c) => c.headers["If-Match"])).not.toContain('"r-saved"');
+      expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved-2"');
+      expect(screen.queryByText("The configuration changed")).toBeNull();
     });
 
     // Given back as any kept draft is: here restored at once, because this
