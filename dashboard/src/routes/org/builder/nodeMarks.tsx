@@ -9,18 +9,21 @@
  * critical tone; a reference that names no unit is a caution; a seat's live
  * state is the `StateBadge` every other screen uses.
  *
- * A LIVE PUSH NEVER MOVES A CARD. The live state badge sits in a slot of its
- * own that does not wrap and does not grow the row (`.bnode-state` in
- * `screens.css`), and nothing else here reads live data, so a push twice per
- * tool-loop round changes a badge's text and never a card's measured size,
- * which is what the canvas lays out by.
+ * A LIVE PUSH NEVER MOVES A CARD, AND NEITHER DOES A CHECK. The live state
+ * badge and the problem count each sit in a slot of their own on the card's
+ * first line that does not wrap and does not grow it (`.bnode-state` and
+ * `.bnode-count` in `screens.css`), and the marks of a reference that names
+ * nothing come from the chart, which holds them while the node still writes
+ * what the check warned about. So a push twice per tool-loop round, and a
+ * check after every edit, change a badge's text and never a card's measured
+ * size, which is what the canvas lays out by.
  */
 
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import { Badge } from "~/ui/primitives.tsx";
 import type { BuilderApi } from "./BuilderContext.tsx";
-import type { SeatView } from "./chartModel.ts";
+import type { SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
 
 /** "Agent seat" or "Human seat". */
@@ -39,14 +42,27 @@ export function managerLabel(manager: string | null | undefined): string {
   return manager ?? "No manager";
 }
 
-/** The problem count badge: nothing when the last check placed none on the node. */
+/**
+ * The problem count badge, in a slot of its own: empty when the last check
+ * of the current draft placed nothing on the node.
+ *
+ * A CHECK NEVER MOVES A CARD. The count is the last check of the CURRENT
+ * draft's, so it is absent while a check is out, which is after every edit.
+ * Drawn in a line of its own, that line collapsed and came back, changing the
+ * card's measured height twice per edit and moving every card beside it. The
+ * slot (`.bnode-count`) sits on the card's first line beside the name, which
+ * truncates instead, and that line is as tall with the badge as without it.
+ */
 export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeKey }) {
   const count = api.problemsFor(nodeKey).length;
-  if (count === 0) return null;
   return (
-    <Badge tone="critical" icon="alert">
-      {plural(count, "problem")}
-    </Badge>
+    <span className="bnode-count">
+      {count > 0 && (
+        <Badge tone="critical" icon="alert">
+          {plural(count, "problem")}
+        </Badge>
+      )}
+    </span>
   );
 }
 
@@ -71,24 +87,22 @@ export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
 /**
  * A unit's lead that names no seat, as the engine warned. The lead chip shows
  * the name as written, and a name that reads like a seat must not look like
- * one that resolves.
+ * one that resolves. Read from the chart (`UnitView.danglingLead`), which
+ * holds it while the unit still writes what the check warned about, so a
+ * check going out does not take it off the card and change its height.
  */
-export function UnitMarks({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeKey }) {
-  const warning = api.warningsFor(nodeKey).find((w) => w.ref === "lead");
-  if (!warning) return null;
+export function UnitMarks({ view }: { view: UnitView }) {
+  if (view.danglingLead === null) return null;
   return (
-    <Badge tone="caution" icon="alert" title={warning.message}>
+    <Badge tone="caution" icon="alert" title={view.danglingNote}>
       Lead names no seat
     </Badge>
   );
 }
 
 /** The wiring marks of a seat: placement by reference, a dangling reference, the Datadog fallback. */
-export function SeatMarks({ api, view }: { api: BuilderApi; view: SeatView }) {
+export function SeatMarks({ view }: { view: SeatView }) {
   const dangling = view.danglingUnitRef;
-  const warning = dangling
-    ? api.warningsFor(view.key).find((w) => w.ref === "unit")?.message
-    : undefined;
   if (!view.placedByRef && !dangling && !view.datadogFallback) return null;
   return (
     <>
@@ -98,7 +112,7 @@ export function SeatMarks({ api, view }: { api: BuilderApi; view: SeatView }) {
         </Badge>
       )}
       {dangling && (
-        <Badge tone="caution" icon="alert" title={warning}>
+        <Badge tone="caution" icon="alert" title={view.danglingNote}>
           {`No unit named ${dangling}`}
         </Badge>
       )}

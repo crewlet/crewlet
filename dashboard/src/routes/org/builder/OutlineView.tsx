@@ -653,8 +653,8 @@ function NameCell({
         <Icon name={view.type === "company" ? "flag" : "folder"} size="sm" />
       )}
       <span className="truncate">{name}</span>
-      {view.type === "seat" && <SeatMarks api={api} view={view as SeatView} />}
-      {view.type === "unit" && <UnitMarks api={api} nodeKey={view.key} />}
+      {view.type === "seat" && <SeatMarks view={view as SeatView} />}
+      {view.type === "unit" && <UnitMarks view={view as UnitView} />}
     </div>
   );
 }

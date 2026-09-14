@@ -775,10 +775,15 @@
   border-style: dashed;
   border-color: var(--border);
 }
-/* A LIVE STATE NEVER RESIZES ITS CARD. Its slot does not shrink, wrap or push
-   the name onto a second line: the name truncates instead, so a push that
-   turns "idle" into "working" changes a word and never a measured height. */
-.bnode-state {
+/* A LIVE STATE OR A CHECK NEVER RESIZES A CARD. The live state and the
+   problem count each have a slot on the card's first line that does not
+   shrink, wrap or push the name onto a second line: the name truncates
+   instead, and the line is as tall with a badge as without one. So a push
+   that turns "idle" into "working", and a count that leaves while a check
+   is out and comes back with its answer, change a word and never a
+   measured height. */
+.bnode-state,
+.bnode-count {
   display: inline-flex;
   flex: none;
   white-space: nowrap;

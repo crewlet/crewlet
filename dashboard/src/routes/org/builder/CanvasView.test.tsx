@@ -245,11 +245,27 @@ describe("the tree", () => {
       code: "validation_error",
       hint: "",
     });
-    mount(state);
+    const { probe } = mount(state);
     const badge = within(item("Account Executive")).getByText("1 problem");
     expect(badge.closest(".badge")!.classList.contains("critical")).toBe(true);
     expect(within(item("Sales")).getByText("1 problem")).toBeDefined();
     expect(within(item("Engineering")).queryByText(/problem/)).toBeNull();
+    // IN THE FIRST LINE'S SLOT, which stays when a check is out and the count
+    // with it: the line is as tall either way, so the card keeps its height.
+    const slot = badge.closest(".bnode-count")!;
+    expect(slot.parentElement!.classList.contains("bchart-line")).toBe(true);
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: {
+          type: "updateSeat",
+          target: seatKey("dev"),
+          set: [{ path: ["goal"], value: "x" }],
+        },
+      }),
+    );
+    expect(within(item("Account Executive")).queryByText(/problem/)).toBeNull();
+    expect(item("Account Executive").querySelector(".bchart-line > .bnode-count")).not.toBeNull();
   });
 
   test("a unit whose lead names no seat is marked with the engine's warning", () => {
@@ -272,12 +288,24 @@ describe("the tree", () => {
       ],
       derived: fixtureDerived(doc, PLACED),
     });
-    mount(state);
+    const { probe } = mount(state);
     const mark = within(item("Sales")).getByText("Lead names no seat");
     expect(mark.closest(".badge")!.getAttribute("title")).toBe(
       "Unit Sales names lead Ghost, which is no seat.",
     );
     expect(within(item("Engineering")).queryByText("Lead names no seat")).toBeNull();
+    // Still there while the check of a later edit is out.
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: {
+          type: "updateSeat",
+          target: seatKey("dev"),
+          set: [{ path: ["goal"], value: "x" }],
+        },
+      }),
+    );
+    expect(within(item("Sales")).getByText("Lead names no seat")).toBeDefined();
   });
 
   test("a unit's other warnings are not read as a lead that names no seat", () => {

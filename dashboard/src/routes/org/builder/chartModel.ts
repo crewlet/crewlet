@@ -34,13 +34,26 @@
  * is shown only from a check of the draft as it stands. When the draft has
  * moved past what the check saw, the fact is left out until the next check
  * answers, rather than shown stale.
+ *
+ * A CHECK THAT IS OUT MOVES NO CARD. The canvas lays cards out by their
+ * measured size, and every edit sends a check. So a mark on a card that
+ * comes from the engine (a reference that names nothing) is held to the same
+ * rule as a placement: it stands while the node still writes what the last
+ * check warned about, whatever generation that check was, rather than
+ * vanishing with every edit and coming back a moment later.
  */
 
-import type { CompanyDocument, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
+import type { CompanyDocument, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
 import type { TreeInput } from "~/ui/treeModel.ts";
 import { checkedDocument, type BuilderState } from "./model/reducer.ts";
 import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
-import { allUnits, locate, type Draft, type DraftSeat } from "./model/draft.ts";
+import {
+  allUnits,
+  locate,
+  seatNames as draftSeatNames,
+  type Draft,
+  type DraftSeat,
+} from "./model/draft.ts";
 import {
   DATADOG_ROUTE_TO,
   knownHandles,
@@ -63,6 +76,8 @@ export interface ChartInputs {
   readonly checked: CheckedDocument | null;
   /** Whether that derivation describes the draft as it stands: no change since that check. */
   readonly current: boolean;
+  /** The warnings the last check placed on each node, whatever generation it answered. */
+  readonly warnings: ReadonlyMap<NodeKey, readonly ConfigWarning[]>;
 }
 
 /**
@@ -74,11 +89,21 @@ export function chartInputs(
   state: Pick<BuilderState, "draft" | "baseDraft" | "check" | "generation">,
 ): ChartInputs {
   const checked = checkedDocument(state.check);
+  const warnings = new Map<NodeKey, ConfigWarning[]>();
+  for (const [key, placed] of state.check.problems.byNode) {
+    const found = placed.filter((p) => p.severity === "warning");
+    if (found.length > 0)
+      warnings.set(
+        key,
+        found.map((p) => p.source as ConfigWarning),
+      );
+  }
   return {
     draft: state.draft,
     baseDraft: state.baseDraft,
     checked,
     current: checked !== null && state.check.generation === state.generation,
+    warnings,
   };
 }
 
@@ -116,6 +141,13 @@ export interface UnitView {
    * not. `null` when that is nothing, or not known.
    */
   readonly inheritable: LeadView | null;
+  /**
+   * The lead the unit declares that the last check found no seat for, while
+   * the unit still declares it and no seat of that name has been added since.
+   */
+  readonly danglingLead: string | null;
+  /** The engine's sentence about `danglingLead`, when that check gave one. */
+  readonly danglingNote: string | undefined;
   /** Seats drawn inside the unit: its own, then the root seats placed in it. */
   readonly seats: readonly NodeKey[];
   readonly units: readonly NodeKey[];
@@ -145,6 +177,8 @@ export interface SeatView {
   readonly placedByRef: boolean;
   /** The `unit:` a root seat writes that the engine resolved to no unit. */
   readonly danglingUnitRef: string | null;
+  /** The engine's sentence about `danglingUnitRef`, when the last check gave one. */
+  readonly danglingNote: string | undefined;
   /** The seat an alert that names nobody wakes (`integrations.datadog.route_to`, while enabled). */
   readonly datadogFallback: boolean;
   /**
@@ -249,6 +283,10 @@ export function structure(inputs: ChartInputs): Structure {
   const unitName = new Map<NodeKey, string>();
   for (const { unit } of allUnits(draft)) unitName.set(unit.key, unit.data.name);
   const unitNames = new Set(unitName.values());
+  const seatNames = new Set(draftSeatNames(draft));
+  /** The last check's warning about one of a node's references, by the reference it names. */
+  const warningOn = (key: NodeKey, ref: ConfigWarning["ref"]) =>
+    inputs.warnings.get(key)?.find((w) => w.kind === "dangling_reference" && w.ref === ref);
 
   // WHERE A ROOT SEAT IS DRAWN. The engine says whether its reference placed
   // it, and in which unit; the draft says whether that is still true. A
@@ -318,6 +356,7 @@ export function structure(inputs: ChartInputs): Structure {
       running,
       placedByRef: (placed?.unit ?? null) !== null,
       danglingUnitRef: placed?.dangling ?? null,
+      danglingNote: placed?.dangling ? warningOn(seat.key, "unit")?.message : undefined,
       datadogFallback: routeTo !== undefined && handle === routeTo,
       manager: managerName(seat.key),
       parent,
@@ -362,6 +401,18 @@ export function structure(inputs: ChartInputs): Structure {
         text(checked.lead) === declared;
       const lead: LeadView | null | undefined =
         declared !== "" ? { name: declared, inherited: false } : inheritedLead(unit.key, asChecked);
+      // A LEAD THAT NAMES NO SEAT is marked while the unit still declares the
+      // lead the check warned about and no seat of that name has come since,
+      // which the next check would resolve.
+      const leadWarning = warningOn(unit.key, "lead");
+      const danglingLead =
+        leadWarning &&
+        declared !== "" &&
+        checked !== undefined &&
+        text(checked.lead) === declared &&
+        !seatNames.has(declared)
+          ? declared
+          : null;
       // With a lead of its own, the unit would inherit its parent's; without
       // one, it already does.
       const source = declared !== "" ? parentLead : lead;
@@ -388,6 +439,8 @@ export function structure(inputs: ChartInputs): Structure {
             : ""),
         lead,
         inheritable,
+        danglingLead,
+        danglingNote: danglingLead !== null ? leadWarning?.message : undefined,
         seats,
         units: unit.children.map((c) => c.key),
         parent,

@@ -212,6 +212,7 @@ describe("structure", () => {
       baseDraft: checkedDraft,
       checked: { sent, derived },
       current: false,
+      warnings: new Map(),
     });
     const rewrite = (data: Partial<Record<string, string>>) => ({
       ...checkedDraft,
@@ -455,5 +456,94 @@ describe("what every surface reads about a node", () => {
     const removed = record(state, { type: "remove", target: seatKey("dev") });
     expect(keyOfHandle(removed, "dev")).toBeUndefined();
     expect(keyOfHandle(run(INITIAL_BUILDER), "sre")).toBeUndefined();
+  });
+});
+
+describe("the engine's marks", () => {
+  const leadWarning = {
+    kind: "dangling_reference" as const,
+    ref: "lead" as const,
+    path: "units[1].lead",
+    segments: ["units", 1, "lead"],
+    seat: "",
+    unit: "Sales",
+    from: "Sales",
+    to: "Ghost",
+    message: "Unit Sales names lead Ghost, which is no seat.",
+  };
+  const warned = () => {
+    const doc = fixtureCompany();
+    doc.units![1]!.lead = "Ghost";
+    return answered(checkedEdit(doc), {
+      status: "clean",
+      warnings: [leadWarning],
+      derived: fixtureDerived(doc, PLACED),
+    });
+  };
+
+  // A CHECK THAT IS OUT MOVES NO CARD: every edit sends one, and a mark that
+  // left with it and came back with its answer changed the card's height
+  // twice per edit.
+  test("a lead that names no seat is marked while the unit still writes it, through later checks", () => {
+    const state = warned();
+    expect(unitOf(state, unitKey("Sales"))).toMatchObject({
+      danglingLead: "Ghost",
+      danglingNote: "Unit Sales names lead Ghost, which is no seat.",
+    });
+    // Another node edited: a check of this draft is out, and the mark holds.
+    const later = record(state, {
+      type: "updateSeat",
+      target: seatKey("dev"),
+      set: [{ path: ["goal"], value: "Ship" }],
+    });
+    expect(unitOf(later, unitKey("Sales")).danglingLead).toBe("Ghost");
+    // The lead changed, or a seat of that name added: the next check's to say.
+    const relead = record(state, { type: "setLead", target: unitKey("Sales"), lead: "CEO" });
+    expect(unitOf(relead, unitKey("Sales"))).toMatchObject({
+      danglingLead: null,
+      danglingNote: undefined,
+    });
+    // Another name that is no seat either: the warning was about Ghost, so
+    // what the new name resolves to is the next check's to say.
+    const other = record(state, { type: "setLead", target: unitKey("Sales"), lead: "Phantom" });
+    expect(unitOf(other, unitKey("Sales")).danglingLead).toBeNull();
+    const added = record(state, {
+      type: "addSeat",
+      key: "new:ghost",
+      placement: { parent: unitKey("Sales"), after: null },
+      data: { name: "Ghost" },
+    });
+    expect(unitOf(added, unitKey("Sales")).danglingLead).toBeNull();
+  });
+
+  test("a seat's dangling reference keeps the engine's sentence through a later check", () => {
+    const doc = fixtureCompany();
+    doc.roles!.push({ name: "Scout", unit: "Nowhere" });
+    const state = answered(checkedEdit(doc), {
+      status: "clean",
+      warnings: [
+        {
+          kind: "dangling_reference",
+          ref: "unit",
+          path: "roles[2].unit",
+          segments: ["roles", 2, "unit"],
+          seat: "scout",
+          unit: "",
+          from: "Scout",
+          to: "Nowhere",
+          message: "Seat Scout names unit Nowhere, which is no unit.",
+        },
+      ],
+      derived: fixtureDerived(doc, PLACED),
+    });
+    const later = record(state, {
+      type: "updateSeat",
+      target: seatKey("dev"),
+      set: [{ path: ["goal"], value: "Ship" }],
+    });
+    expect(seatOf(later, seatKey("scout"))).toMatchObject({
+      danglingUnitRef: "Nowhere",
+      danglingNote: "Seat Scout names unit Nowhere, which is no unit.",
+    });
   });
 });

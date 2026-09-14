@@ -1178,10 +1178,16 @@ to.
   takes the critical tone, a reference that names nothing takes the caution
   tone, and the Datadog fallback seat carries a neutral badge while Datadog is
   enabled, the only time the engine routes an alert to it.
-- **A live push never moves a card.** A saved agent seat shows the same
-  `StateBadge` as every other screen, in a slot that neither shrinks nor wraps
-  while the seat's name truncates beside it, and live state is no input to
-  the layout, so a push changes a word and never a measured height.
+- **A live push never moves a card, and neither does a check.** A saved agent
+  seat shows the same `StateBadge` as every other screen, in a slot that
+  neither shrinks nor wraps while the seat's name truncates beside it, and
+  live state is no input to the layout, so a push changes a word and never a
+  measured height. The problem count, which is the current draft's and so is
+  absent while the check of every edit is out, has a slot of its own on the
+  same first line, which is as tall with it as without it. A mark the engine
+  gave (a lead or a unit reference that names nothing) is held by the chart
+  like a placement, while the node still writes what the check warned about,
+  rather than leaving with each check and coming back with its answer.
 - **The outline is a treegrid of rows.** The same structure as rows with
   navigable cells: Name, Kind or type, Handle, Lead or reports to, Problems
   and the row's actions. A row's keys are a card's keys; Right opens a row or

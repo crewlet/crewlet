@@ -32,9 +32,11 @@ const rule = (selector: string) =>
     .map(([, body]) => body)
     .join(";");
 
-test("the live state slot neither shrinks nor wraps, and the name beside it truncates instead", () => {
-  expect(rule(".bnode-state")).toMatch(/flex:\s*none/);
-  expect(rule(".bnode-state")).toMatch(/white-space:\s*nowrap/);
+test("the live state and problem count slots neither shrink nor wrap, and the name truncates", () => {
+  for (const slot of [".bnode-state", ".bnode-count"]) {
+    expect(rule(slot), slot).toMatch(/flex:\s*none/);
+    expect(rule(slot), slot).toMatch(/white-space:\s*nowrap/);
+  }
   // A flex child keeps its content's minimum width unless told otherwise, and
   // a long name would then push the badge rather than truncate.
   expect(rule(".bchart-text")).toMatch(/min-width:\s*0/);

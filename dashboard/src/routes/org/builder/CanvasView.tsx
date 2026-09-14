@@ -322,8 +322,6 @@ function StructureCard({
                 {plural(view.units.length, "unit")}
               </span>
             </span>
-          </span>
-          <span className="bchart-marks">
             <ProblemCount api={api} nodeKey={id} />
           </span>
         </div>
@@ -351,11 +349,11 @@ function StructureCard({
               {view.unitType || "Unit"}, {plural(view.seats.length, "seat")}
             </span>
           </span>
+          <ProblemCount api={api} nodeKey={id} />
         </span>
         <span className="sr-only">{leadSentence(view)}</span>
         <span className="bchart-marks">
-          <UnitMarks api={api} nodeKey={id} />
-          <ProblemCount api={api} nodeKey={id} />
+          <UnitMarks view={view} />
         </span>
       </div>
       <CardActions ctx={ctx} id={id}>
@@ -408,10 +406,10 @@ function SeatBody({ api, view }: { api: BuilderApi; view: SeatView }) {
           </span>
         </span>
         <LiveState api={api} view={view} />
+        <ProblemCount api={api} nodeKey={view.key} />
       </span>
       <span className="bchart-marks">
-        <SeatMarks api={api} view={view} />
-        <ProblemCount api={api} nodeKey={view.key} />
+        <SeatMarks view={view} />
       </span>
     </>
   );
@@ -442,6 +440,7 @@ function ReportingCard({
             </span>
           </span>
           {seat && <LiveState api={api} view={seat} />}
+          {seat && <ProblemCount api={api} nodeKey={seat.key} />}
         </span>
         <span className="bchart-marks">
           {item.root && <Badge outline>No manager</Badge>}
@@ -450,7 +449,6 @@ function ReportingCard({
               {`In a reporting cycle of ${plural(item.cycleSize, "seat")}`}
             </Badge>
           )}
-          {seat && <ProblemCount api={api} nodeKey={seat.key} />}
         </span>
       </div>
       <CardActions ctx={ctx} id={item.id}>
