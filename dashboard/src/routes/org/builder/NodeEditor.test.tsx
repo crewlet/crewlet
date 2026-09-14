@@ -435,6 +435,9 @@ describe("integrations", () => {
 
   test("with the tools connected, each field is there and says what it changes", () => {
     edit(keyedState(connected()), "seat:dev");
+    // A tool's section is a part of Integrations, and is heard as one.
+    expect(screen.getByRole("heading", { name: "Integrations", level: 2 })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "GitHub", level: 3 })).toBeDefined();
     expect((field("Slack channel ID") as HTMLInputElement).value).toBe("C1");
     expect((field("Mattermost channel") as HTMLInputElement).value).toBe("eng");
     expect(screen.queryByLabelText(labelled("Bot username"))).toBeNull();

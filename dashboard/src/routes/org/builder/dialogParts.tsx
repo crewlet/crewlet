@@ -19,7 +19,20 @@ import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
 
-/** A titled group of fields or facts inside a drawer or dialog. */
+/** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
+const SectionDepth = createContext(0);
+
+type SectionHeading = "h2" | "h3" | "h4" | "h5" | "h6";
+
+/**
+ * A titled group of fields or facts inside a drawer or dialog.
+ *
+ * ITS HEADING LEVEL IS ITS DEPTH. A drawer or dialog is named by its own
+ * title, so a section directly inside one is a second-level heading, and a
+ * section inside a section (one tool inside Integrations) is a level below
+ * it: a reader moving by heading hears the parts of the form as they nest,
+ * rather than every section at one level.
+ */
 export function EditorSection({
   title,
   hint,
@@ -30,15 +43,17 @@ export function EditorSection({
   children: ReactNode;
 }) {
   const id = useId();
+  const depth = useContext(SectionDepth);
+  const Heading = `h${Math.min(depth + 2, 6)}` as SectionHeading;
   return (
     <section className="builder-section col gap-3" aria-labelledby={id}>
       <div className="col gap-1">
-        <h3 className="builder-section-title" id={id}>
+        <Heading className="builder-section-title" id={id}>
           {title}
-        </h3>
+        </Heading>
         {hint && <p className="t-caption">{hint}</p>}
       </div>
-      {children}
+      <SectionDepth.Provider value={depth + 1}>{children}</SectionDepth.Provider>
     </section>
   );
 }
