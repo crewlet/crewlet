@@ -102,6 +102,12 @@ type Engine struct {
 	// nomodels.go.
 	modelHolds modelHolds
 
+	// applying serialises [Engine.Apply] against [Engine.Stop], and stopped,
+	// which it guards, is what refuses an apply once Stop has begun. See
+	// [Engine.Apply].
+	applying sync.Mutex
+	stopped  bool
+
 	// watchdog ends this process when the seat host's heartbeat stops
 	// turning past the lease TTL.
 	//
@@ -774,6 +780,18 @@ func (e *Engine) Stop(ctx context.Context) {
 	if e.watchdog != nil {
 		e.watchdog.Stop()
 	}
+	// NO APPLY RUNS ON A NODE THAT IS STOPPING. The reconcile loop can be
+	// mid-tick when the process is told to stop, and an apply that went on
+	// past this point would start again what the teardown below ends: the
+	// scheduler re-armed after its loop was stopped and its duty given
+	// back, the background passes handed to loops that are gone, and on a
+	// node's first company the inbound edge started on a node that is
+	// leaving. So Stop waits out an apply already running, which returns
+	// quickly on the cancelled context that asked for the stop, and every
+	// later one is refused.
+	e.applying.Lock()
+	e.stopped = true
+	e.applying.Unlock()
 	e.node.Drain(ctx)
 	// After the drain: the waiter's keepalive is what stops a running box
 	// being reaped, so stopping it first would start the orphan clock on

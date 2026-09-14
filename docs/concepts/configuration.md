@@ -318,6 +318,12 @@ conditional, so a successful apply on a node that booted without a sandbox
 reports eleven names and the swap is the seventh of them. The numbering above is the order the code runs, not an index
 into what a node reports.
 
+**A stopping node applies nothing.** Stopping waits for an apply already
+running, which returns quickly on the cancelled context that asked for the
+stop, and refuses every later one with `error`. An apply that ran on past the
+teardown would start again what it had just ended: the scheduler, the
+background learning passes, and on a node's first company the inbound edge.
+
 > **"No rollback" is not "no mutation".** What the build-first ordering buys is
 > that a revision which cannot be *built* changes nothing: `NewCompany`
 > validates, resolves the org and constructs the providers without reaching the

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -159,11 +160,15 @@ func embeddingWidth(c *Company) int {
 // the previous epoch, so the window in which degraded is reachable is as small
 // as the ordering can make it.
 // ONE CALLER: the reconciler's tick, which is synchronous. The API's write
-// path does NOT reach here — it activates a revision and lets the tick apply
+// path does NOT reach here: it activates a revision and lets the tick apply
 // it, because activation also has to move the pointer, record the outcome and
-// reset the attempt budget, none of which this function does. A lock here
-// would guard a path that has never had a second writer, and would imply a
-// concurrency story that does not exist.
+// reset the attempt budget, none of which this function does. So there is no
+// second apply to exclude, and the lock taken below is not for one. It is for
+// [Engine.Stop], the one other writer of what an apply builds: an apply that
+// overlapped the teardown restarted the scheduler, the background passes and
+// a first company's inbound edge after Stop had ended them. Stop waits for an
+// apply in flight, and an apply that starts after it is refused with
+// [errStopped].
 //
 // The second return is the subsystems this apply GOT THROUGH, in the order it
 // went through them. On a failure it is what was already mutated when the
@@ -171,6 +176,11 @@ func embeddingWidth(c *Company) int {
 // diagnosable after the fact — it travels on ConfigRevisionApplied into the
 // audit event log, where it outlives the fleet view's one-minute bucket.
 func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.ApplyStatus, []string, error) {
+	e.applying.Lock()
+	defer e.applying.Unlock()
+	if e.stopped {
+		return configplane.StatusError, nil, errStopped
+	}
 	var applied []string
 	// THE SNAPSHOT FIRST, because re-activating an unchanged revision is
 	// the documented rotation gesture: the payload has not moved, so the
@@ -332,6 +342,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company) (configplane.Ap
 	e.notifyApplied(ctx)
 	return configplane.StatusOK, applied, nil
 }
+
+// errStopped refuses an apply that reaches a node after [Engine.Stop] began.
+// The node is leaving, and nothing it would build for the revision could run.
+var errStopped = errors.New("engine: apply: this node is stopping and applies no revision")
 
 // seatCount reports a possibly-absent epoch's seat count, for the log line
 // that says what changed. The first apply on a node has no previous epoch.
