@@ -5,7 +5,9 @@
  *
  *  - the **spend rollup** is a WINDOW (24 hours by default, up to 30 days) over
  *    what the company's model calls consumed;
- *  - a **meter** is PROCESS-LIFETIME — it resets when the engine restarts.
+ *  - a **meter** is the fleet's shared counter as the budget gate enforces it:
+ *    every node's spend since the last deliberate reset, against the cap in the
+ *    company revision. It is the one figure a cap can be divided into.
  *
  * They are never comparable, and every number here says which it is.
  *
@@ -421,8 +423,18 @@ export function Spend() {
         <Card>
           <Card.Header
             icon={<TargetGlyph size="sm" />}
-            subtitle="process-lifetime — not the window above"
-            actions={org.used >= org.max ? <Tag variant="danger">spent</Tag> : undefined}
+            subtitle="spend since the last reset, not the window above"
+            // THE GATE'S OWN WORD FIRST. `refused_at` is stamped when a charge
+            // is actually turned away; `used >= max` is sufficient but never
+            // necessary, because a refused charge increments nothing and a
+            // company charged in rounds stops short of its cap for ever.
+            actions={
+              org.refused_at ? (
+                <Tag variant="danger">refusing charges</Tag>
+              ) : org.used >= org.max ? (
+                <Tag variant="danger">spent</Tag>
+              ) : undefined
+            }
           >
             <Card.Title>Company budget meter</Card.Title>
           </Card.Header>
@@ -439,7 +451,7 @@ export function Spend() {
             label="Company token budget"
             valueText={`${fmtExact(org.used)} of ${fmtExact(org.max)} tokens`}
             hint={`${fmtPct(org.used, org.max, 1)} used · ${fmtExact(org.used)} / ${fmtExact(org.max)}`}
-            tone={org.used >= org.max ? "danger" : undefined}
+            tone={org.refused_at || org.used >= org.max ? "danger" : undefined}
           />
           {org.used >= org.max && (
             // AT THE CAP IS WHAT THE SHARED COUNTER CAN SAY. It is

@@ -197,22 +197,27 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // --- budgets -------------------------------------------------------------
   //
-  // THE METER, NOT A REFUSAL INSTANT. Both entries used to key on a
-  // `refused_at` the engine never wrote: the reporter that builds the budget
-  // payload set neither the org's nor any seat's, so the critical entry was
-  // unreachable and the badge beside it could never render. It could not have
-  // been written from there either — the report is built per NODE and a
-  // refusal happens inside one node's tool loop, so a node that refused
-  // nothing would report no refusal while the company next door was turning
-  // charges away.
-  //
-  // What the meter DOES say is honest and fleet-wide, because the counter is
-  // shared: at or past the cap, no further charge can be accepted. It is
-  // sufficient rather than necessary — a refused charge increments nothing, so
-  // a company that is refusing can sit just short of its cap — which is what
-  // the 90% entry below is for.
+  // THE REFUSAL FIRST, THE METER AS A BACKSTOP. `refused_at` is the gate's own
+  // record of turning a charge away, kept in the shared counter beside the
+  // spend, so it is fleet-wide and every node reports the same one. It is what
+  // "exhausted" actually means: a refused charge increments NOTHING, so a
+  // company charged in rounds sits just short of its cap for ever and
+  // `used >= max` never comes true. That test is kept beside it because it is
+  // sufficient where it does fire — at or past the cap no further charge can
+  // be accepted — and it covers the moment before the first refusal is stamped.
   const org = budget?.org;
-  if (org && org.max > 0 && org.used >= org.max) {
+  if (org?.refused_at) {
+    out.push({
+      id: "org-budget",
+      severity: "critical",
+      subject: "budget",
+      icon: "token",
+      title: "The company token budget is refusing charges",
+      detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}. Raise token_budget or reset the counter.`,
+      path: ["cost"],
+      at: org.refused_at,
+    });
+  } else if (org && org.max > 0 && org.used >= org.max) {
     out.push({
       id: "org-budget",
       severity: "critical",
@@ -229,7 +234,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       subject: "budget",
       icon: "token",
       title: "The company token budget is nearly spent",
-      detail: `${Math.round((org.used / org.max) * 100)}% of the process-lifetime meter is used.`,
+      detail: `${Math.round((org.used / org.max) * 100)}% of the company's token budget is spent. Raise token_budget or reset the counter.`,
       path: ["cost"],
     });
   }
@@ -319,8 +324,22 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         });
       }
     }
+    // THE SAME PAIR AS THE COMPANY ROW ABOVE: the gate's own refusal stamp
+    // first, the meter as the backstop it is sufficient for.
     const meter = agent.budget;
-    if (meter && meter.max > 0 && meter.used >= meter.max) {
+    if (meter?.refused_at) {
+      out.push({
+        id: `seat-budget-${agent.role}`,
+        severity: "caution",
+        subject: "budget",
+        icon: "token",
+        title: `${agent.role}'s token budget is refusing charges`,
+        detail: `This seat's turns are being declined at the budget gate. Last refusal ${meter.refused_at}.`,
+        path: ["company", "people", String(agent.handle ?? agent.id)],
+        query: { tab: "cost" },
+        at: meter.refused_at,
+      });
+    } else if (meter && meter.max > 0 && meter.used >= meter.max) {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",

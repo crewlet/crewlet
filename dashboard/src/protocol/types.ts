@@ -195,18 +195,20 @@ export interface LiveCall {
   started_at?: string;
 }
 
-/** A live token meter. Process-lifetime — never comparable to a spend rollup.
- *
- *  THERE IS NO `refused_at`. The field was on the wire, read here to draw a
- *  "refusing charges" badge, and never written by the engine — so the badge
- *  was unreachable on every company. It could not have been written either:
- *  the report is built per NODE and a refusal happens inside one node's tool
- *  loop, so a node that refused nothing would report no refusal while the
- *  company next door was turning charges away. At or past the cap is what the
- *  shared counter can honestly say. */
+/** A live token meter: the fleet's SHARED counter, as the budget gate enforces
+ *  it — every node's spend since the last deliberate reset, against the cap in
+ *  the active revision. Never comparable to a spend rollup, which is a window
+ *  over time rather than the life of a counter. */
 export interface Meter {
   used: number;
   max: number;
+  /** When this scope last turned a charge away, in UTC; empty while it is not
+   *  refusing. The gate's own record, kept in the shared counter beside the
+   *  spend, so every node reports the same one and it clears on the scope's
+   *  next admitted charge. It is what "exhausted" means: a refused charge
+   *  increments nothing, so `used >= max` is sufficient but never necessary —
+   *  a scope charged in rounds stops short of its cap for ever. */
+  refused_at?: string;
 }
 
 /** The live half of a seat row, merged onto its static config row. */

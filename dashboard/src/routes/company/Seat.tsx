@@ -1981,7 +1981,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Card>
                 <Card.Header
                   icon={<TargetGlyph size="sm" />}
-                  subtitle="process-lifetime, not the 7-day window"
+                  subtitle="spend since the last reset, not the 7-day window"
                 >
                   <Card.Title>Live budget meter</Card.Title>
                 </Card.Header>
@@ -1997,13 +1997,27 @@ export function SeatScreen({ handle }: { handle: string }) {
                   label={`${agent.role}'s token budget`}
                   valueText={`${fmtCount(agent.budget.used)} of ${fmtCount(agent.budget.max)} tokens`}
                   hint={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
-                  tone={agent.budget.used >= agent.budget.max ? "danger" : undefined}
+                  // THE REFUSAL STAMP OR THE CAP. See the company meter on the
+                  // Cost screen: the stamp is the gate's own record and the
+                  // ratio is only ever sufficient.
+                  tone={
+                    agent.budget.refused_at || agent.budget.used >= agent.budget.max
+                      ? "danger"
+                      : undefined
+                  }
                 />
-                {agent.budget.used >= agent.budget.max && (
+                {agent.budget.refused_at ? (
                   <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-                    This seat&rsquo;s meter is at its cap, so its turns are being declined at the
-                    gate.
+                    This seat&rsquo;s turns are being declined at the budget gate. Last refusal{" "}
+                    {agent.budget.refused_at}.
                   </p>
+                ) : (
+                  agent.budget.used >= agent.budget.max && (
+                    <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
+                      This seat&rsquo;s meter is at its cap, so its turns are being declined at the
+                      gate.
+                    </p>
+                  )
                 )}
               </Card>
             ) : (
