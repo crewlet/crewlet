@@ -426,9 +426,15 @@ func newHarness(t *testing.T, newBackend func(t *testing.T) coord.Backend) *harn
 	ctx, cancel := context.WithTimeout(context.Background(), stallBudget)
 	t.Cleanup(cancel)
 	h := &harness{t: t, ctx: ctx, b: b}
-	if live := h.listLive(""); len(live) != 0 {
-		t.Fatalf("newBackend must return an empty store, got %d live lease(s): %v",
-			len(live), resources(live))
+	// Per class, because there is no all-classes listing: a class is the
+	// leading segment of a resource name and the empty one addresses
+	// nothing, so "every lease" is a question this surface deliberately
+	// does not answer. These three are what the suite itself claims.
+	for _, class := range []coord.Class{coord.ClassSeat, coord.ClassWorker, coord.ClassNode} {
+		if live := h.listLive(class); len(live) != 0 {
+			t.Fatalf("newBackend must return an empty store, got %d live %s lease(s): %v",
+				len(live), class, resources(live))
+		}
 	}
 	return h
 }
@@ -508,20 +514,20 @@ func (h *harness) listOwned(owner string) []coord.Lease {
 	return leases
 }
 
-func (h *harness) listLive(prefix string) []coord.Lease {
+func (h *harness) listLive(class coord.Class) []coord.Lease {
 	h.t.Helper()
-	leases, err := h.b.ListLive(h.ctx, prefix)
+	leases, err := h.b.ListLive(h.ctx, class)
 	if err != nil {
-		h.t.Fatalf("ListLive(%q): unexpected error: %v", prefix, err)
+		h.t.Fatalf("ListLive(%q): unexpected error: %v", class, err)
 	}
 	return leases
 }
 
-func (h *harness) preferred(prefix, nodeID string) map[string]struct{} {
+func (h *harness) preferred(class coord.Class, nodeID string) map[string]struct{} {
 	h.t.Helper()
-	got, err := h.b.PreferredResources(h.ctx, prefix, nodeID)
+	got, err := h.b.PreferredResources(h.ctx, class, nodeID)
 	if err != nil {
-		h.t.Fatalf("PreferredResources(%q, %q): unexpected error: %v", prefix, nodeID, err)
+		h.t.Fatalf("PreferredResources(%q, %q): unexpected error: %v", class, nodeID, err)
 	}
 	return got
 }

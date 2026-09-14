@@ -100,19 +100,19 @@ func (f *Faulty) ListOwned(ctx context.Context, owner string) ([]coord.Lease, er
 }
 
 // ListLive delegates, or fails with the configured error.
-func (f *Faulty) ListLive(ctx context.Context, prefix string) ([]coord.Lease, error) {
+func (f *Faulty) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
 	}
-	return f.inner.ListLive(ctx, prefix)
+	return f.inner.ListLive(ctx, class)
 }
 
 // PreferredResources delegates, or fails with the configured error.
-func (f *Faulty) PreferredResources(ctx context.Context, prefix, nodeID string) (map[string]struct{}, error) {
+func (f *Faulty) PreferredResources(ctx context.Context, class coord.Class, nodeID string) (map[string]struct{}, error) {
 	if err := f.fault(); err != nil {
 		return nil, err
 	}
-	return f.inner.PreferredResources(ctx, prefix, nodeID)
+	return f.inner.PreferredResources(ctx, class, nodeID)
 }
 
 // FleetProtocolFloor delegates, or fails with the configured error.

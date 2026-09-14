@@ -448,6 +448,30 @@ stream:
                                     #   failure domain). Declining it on a real
                                     #   three-host fleet is a legitimate trade
                                     #   and costs 1–3 ms per write on NVMe
+  # debug: true                     # the EMBEDDED broker's OWN debug logging,
+                                    #   which is a SEPARATE question from
+                                    #   `logging.level` — that one is how loud
+                                    #   the ENGINE is. Off by default because
+                                    #   nats-server's debug output is per
+                                    #   internal-client rather than per event,
+                                    #   and the engine's coordination reads
+                                    #   manufacture those: every KV key listing
+                                    #   is an ordered consumer created and
+                                    #   deleted, and each deletion writes two
+                                    #   `JetStream connection closed: Client
+                                    #   Closed` lines. Two 15-second duty loops
+                                    #   list keys every tick, so this is a
+                                    #   constant background stream on an idle
+                                    #   node — turn it on when the BROKER is
+                                    #   what you are diagnosing. Its warnings and
+                                    #   errors are never gated by it and always
+                                    #   reach the log. What it unlocks are debug
+                                    #   lines, so `logging.level: debug` (or
+                                    #   `-debug`, or a `debug` log file) still has
+                                    #   to be recording them — `crewlet validate`
+                                    #   warns when nothing is. REFUSED for `type:
+                                    #   nats`: an external cluster logs wherever
+                                    #   its own operator configured it to
   # tracker_log_max_bytes: 17179869184
                                     #   the byte ceiling on the mutation log —
                                     #   the ordered stream the engine's own

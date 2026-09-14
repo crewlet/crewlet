@@ -153,6 +153,28 @@ type Config struct {
 	// redeliveries minutes apart.
 	NakCeiling time.Duration
 
+	// Debug hands nats-server its own debug flag, which is what unlocks
+	// the broker's internal `Debugf` population.
+	//
+	// SEPARATE FROM THE ENGINE'S LOG LEVEL, and that separation is the
+	// whole field. It used to be derived from the level this package's
+	// logger was at, so `-debug` — which an operator asks for to watch
+	// turns, prompts and tool calls — also subscribed them to a per
+	// internal-client lifecycle trace of a broker they deliberately never
+	// deployed. The engine's own coordination reads manufacture those: a
+	// KV `ListKeys` is an ordered ephemeral consumer created and deleted,
+	// and deleting a consumer closes the two internal JetStream clients it
+	// was built on, so every key listing writes two "JetStream connection
+	// closed: Client Closed" lines. Two of the node's 15-second duty loops
+	// list keys on every tick.
+	//
+	// It says nothing about WARNINGS AND ERRORS, which nats-server emits
+	// through a path this flag does not gate (server/log.go) and which the
+	// bridge keeps at their own severity — the half that was actually
+	// missing before it existed. Embedded only: an external cluster logs
+	// wherever its operator configured it to.
+	Debug bool
+
 	// Credentials authenticates against an external server.
 	Credentials string
 	Token       string

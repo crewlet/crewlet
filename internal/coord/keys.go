@@ -52,6 +52,32 @@ func DocumentKey(segments ...string) string {
 	return strings.Join(escaped, KeySeparator)
 }
 
+// DocumentFilter builds the subject filter matching every key whose leading
+// segments are these — the class prefix of a shared bucket, as a wildcard the
+// BROKER can match.
+//
+// It lives beside [DocumentKey] because the two have to agree byte for byte
+// and there is nothing else that would make them: a filter written at the
+// caller escapes its segments by hand, or forgets to, and then selects
+// nothing for every class whose name grows a character this grammar escapes.
+// Written here, a change to the escaping changes both in one edit.
+//
+// The wildcard is `>` rather than `*`, so it matches a key of ANY remaining
+// depth. A class whose keys are two segments today and three tomorrow keeps
+// being selected by the same filter, where `*` would silently stop matching
+// the day a segment was added — a listing that returns nothing and an empty
+// class are the same answer at the caller.
+//
+// AN EMPTY SEGMENT IS NOT A FILTER either, and it fails differently from the
+// key side: [DocumentSegments] refuses a key with one at the first listing
+// that reads it back, but nothing reads a filter back. A caller that lost its
+// class value composes a filter matching nothing and is answered with an empty
+// listing — which is why every filter here is built from a constant, never
+// from a value that arrived from somewhere else.
+func DocumentFilter(segments ...string) string {
+	return DocumentKey(segments...) + KeySeparator + ">"
+}
+
 // DocumentSegments recovers the segments of a key, reporting false for one
 // this grammar did not write.
 //

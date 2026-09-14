@@ -30,6 +30,17 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		{"unknown stream type", "stream:\n  type: kafka\n", "stream.type", ErrUnknownValue},
 		{"external stream with no url", "stream:\n  type: nats\ncoordination:\n  type: embedded-kv\n", "stream.url", ErrMissing},
 		{"embedded stream with a url", "stream:\n  url: nats://localhost:4222\n", "stream.url", ErrConflict},
+		// `debug` starts the EMBEDDED server verbose. Against an external
+		// cluster it reaches nothing, so it is refused for the reason
+		// `url` and `store_dir` are refused the other way round: a flag
+		// nobody reads is the classic "I configured it and nothing
+		// happened".
+		{
+			"external stream with the embedded broker's debug flag",
+			"stream:\n  type: nats\n  url: nats://x:4222\n  debug: true\n" +
+				"coordination:\n  type: embedded-kv\n",
+			"stream.debug", ErrConflict,
+		},
 
 		{"unknown coordination type", "coordination:\n  type: zookeeper\n", "coordination.type", ErrUnknownValue},
 

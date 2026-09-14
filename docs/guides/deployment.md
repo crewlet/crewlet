@@ -295,6 +295,20 @@ in the fleet store holding the shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
+**A coordination read costs one ordered pass, and an account needs the
+consumer API.** A node reads a whole coordination bucket constantly — several
+fifteen-second duty loops on every tick, and the state-log write fence on every
+first write to a subject — and each of those is one pass over a temporary
+consumer, which on a replicated bucket is two metadata-raft proposals. The
+engine deliberately does **not** use the batched direct get that would avoid
+the consumer: it is served by any replica, and this estate has reads whose
+answer is acted on with nothing to arbitrate them. So a credential scoped only
+to publishing and consuming is not enough; the account needs the consumer API
+alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
+consumer churn is what produces a steady stream of `JetStream connection
+closed: Client Closed` lines — see `stream.debug`, which is off by default for
+exactly this reason.
+
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
 applies to an external cluster exactly as it does to an embedded one — set it
@@ -1001,6 +1015,49 @@ untouched. `crewlet run` ignores all three — its level, shape and file come
 from Tier A and its own flags. See
 [Environment Variables](../reference/environment-variables.md#logging).
 Nothing silences a warning.
+
+#### The embedded broker's own logs
+
+The NATS server the engine embeds logs through the engine's logger, under the
+component `queue.nats.server`, so what the **broker** said is always
+distinguishable from what the engine said about it. Anything it reports as
+wrong — a JetStream write error, a slow consumer, stream recovery after an
+unclean shutdown, cluster election trouble — keeps its own severity and
+reaches the log whatever else is configured. Its boot narration ("Starting
+nats-server", the JetStream storage line, "Server is ready") is `debug`: a
+dozen lines describing infrastructure you deliberately did not deploy.
+
+Its **own debug output is a separate switch**, `stream.debug`, and it is off
+by default:
+
+```yaml
+stream:
+  debug: true     # only when the BROKER is what you are diagnosing
+```
+
+`logging.level: debug` and `-debug` say how loud the *engine* is. They are
+what you want to watch a turn — the prompt, the tool calls, the review — and
+they deliberately do not turn this on, because nats-server's debug output is
+per *internal client* rather than per event, and the engine's own coordination
+reads manufacture those continuously. Every coordination key listing is an
+ordered consumer created and then deleted, and deleting one writes two lines
+like:
+
+```
+DEBUG queue.nats.server  nats_server detail="JETSTREAM - JetStream connection closed: Client Closed"
+```
+
+Two of a node's fifteen-second duty loops list keys on every tick, so that is
+a constant background stream on a node doing nothing at all. `Client Closed`
+is the *graceful* close reason and nothing is leaking; it is simply the
+broker narrating its own housekeeping.
+
+Both switches have to agree for these to appear: `stream.debug` decides
+whether nats-server produces them, and a destination at `debug` decides
+whether anything records them. `crewlet validate` warns when the first is set
+and the second is not. `stream.debug` is **refused** for `stream.type: nats` —
+an external cluster logs wherever its own operator configured it to, so a flag
+here would reach nothing.
 
 ### Per-Agent Token Tracking
 

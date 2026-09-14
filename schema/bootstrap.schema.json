@@ -289,6 +289,10 @@
           "description": "Path to a NATS credentials file for an external server.",
           "type": "string"
         },
+        "debug": {
+          "description": "Turn on the EMBEDDED broker's own debug logging. Separate from logging.level, which is the engine's; refused for type: nats. Its warnings and errors are never gated by this.",
+          "type": "boolean"
+        },
         "event_retention_hours": {
           "description": "Event stream retention; 0 takes the queue default.",
           "minimum": 0,

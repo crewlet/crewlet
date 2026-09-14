@@ -1521,7 +1521,7 @@ func (e *Engine) searchRoster(ctx context.Context) ([]string, error) {
 	if e.backends == nil || e.backends.Coord == nil {
 		return nil, nil
 	}
-	leases, err := e.backends.Coord.ListLive(ctx, coord.NodePrefix)
+	leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 	if err != nil {
 		return nil, err
 	}

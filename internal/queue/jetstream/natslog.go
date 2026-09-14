@@ -38,6 +38,25 @@ import (
 // nobody asked for one. Everything that reports something WRONG keeps its
 // severity, which is the half that was actually missing.
 //
+// # The broker's OWN debug is a separate question, and [Config.Debug] asks it
+//
+// `Debugf` is a different population from the narration above, and a far
+// larger one: nats-server calls it per internal-client lifecycle event, and
+// the engine's own coordination reads manufacture those by the dozen. One
+// `ListKeys` on a KV bucket is an ordered ephemeral consumer created and
+// deleted, and deleting a consumer closes the two internal JetStream clients
+// it was built on — so every key listing emits exactly two "JetStream
+// connection closed: Client Closed" lines. Two of the node's 15-second duty
+// loops list keys on every tick, so an idle solo node produces a steady
+// stream of them before anything happens at all.
+//
+// That flag used to be read off this logger's own level, which made
+// `-debug` — asked for to watch turns, prompts and tool calls — also
+// subscribe the operator to a broker they never deployed. They are two
+// questions and they now have two knobs: the level decides whether the
+// ENGINE is verbose, `stream.debug` decides whether the BROKER is. Warnings
+// and errors are unaffected by both and always reach the sink.
+//
 // `Fatalf` maps to Error and DOES NOT EXIT, for the same reason
 // `Options.NoSigs` is set beside it: the engine owns this process, and a
 // library killing it mid-drain loses the running turn and the lease release
@@ -46,15 +65,14 @@ import (
 // which is what makes a non-exiting Fatalf safe rather than merely polite.
 type natsLogger struct{ log *slog.Logger }
 
-// newNATSLogger builds the bridge, and reports whether nats-server should
-// bother calling Debugf at all.
+// newNATSLogger builds the bridge.
 //
-// The debug flag is read ONCE, here, because that is when the server is
-// built. `crewlet run` configures logging from its flags before it brings
-// the stream up, so the value is the operator's, not the package default.
-func newNATSLogger(ctx context.Context) (natsLogger, bool) {
-	log := logging.Get("queue.nats.server")
-	return natsLogger{log: log}, log.Enabled(ctx, slog.LevelDebug)
+// It takes no verbosity of its own: whether nats-server calls Debugf at all
+// is [Config.Debug]'s answer, and whether a line that reaches here is
+// RECORDED is the sink's — [natsLogger.emit] asks it per line, so a level
+// raised after the server was built still takes effect.
+func newNATSLogger() natsLogger {
+	return natsLogger{log: logging.Get("queue.nats.server")}
 }
 
 // The event name is the same for every line and the severity rides on the

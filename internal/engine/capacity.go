@@ -620,7 +620,7 @@ func (e *Engine) capacityParticipants(ctx context.Context) ([]string, error) {
 		seen[row.NodeID] = true
 	}
 	if e.backends.Coord != nil {
-		leases, err := e.backends.Coord.ListLive(ctx, coord.NodePrefix)
+		leases, err := e.backends.Coord.ListLive(ctx, coord.ClassNode)
 		if err != nil {
 			return nil, fmt.Errorf("engine: list the live nodes: %w", err)
 		}

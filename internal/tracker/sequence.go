@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -100,11 +101,25 @@ type Claims interface {
 // The claim names. One function each rather than a format string at the call
 // site, because a claim spelled two ways is two claims and admits exactly the
 // concurrency it was taken to exclude.
-func bulkClaim(domain string) string { return "bulk/" + domain }
-func moveClaim(task string) string   { return "move/" + task }
-func mergeClaim(task string) string  { return "merge/" + task }
+//
+// Built through [coord.Class] like every other lease, because these land in
+// the SAME bucket as the fleet's own and a bucket with two naming conventions
+// in it has two grammars to keep right. The class is the key's leading
+// SUBJECT TOKEN, so each of these is filterable on its own — and a rollover's
+// project is a segment of its own for the same reason, rather than a slash
+// inside one.
+const (
+	classBulk     coord.Class = "bulk"
+	classMove     coord.Class = "move"
+	classMerge    coord.Class = "merge"
+	classRollover coord.Class = "rollover"
+)
+
+func bulkClaim(domain string) string { return classBulk.Resource(domain) }
+func moveClaim(task string) string   { return classMove.Resource(task) }
+func mergeClaim(task string) string  { return classMerge.Resource(task) }
 func rolloverClaim(p string, n int) string {
-	return fmt.Sprintf("rollover/%s/%d", p, n)
+	return classRollover.Resource(p, strconv.Itoa(n))
 }
 
 // stepID derives one append's operation id from the gesture's own.
