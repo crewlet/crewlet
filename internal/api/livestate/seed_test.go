@@ -118,6 +118,37 @@ func TestSeedingDoesNotCountWhatTheStreamAlreadyApplied(t *testing.T) {
 	}
 }
 
+// AND IN THE OTHER ORDER, which the store makes the likelier one. The node that
+// publishes an event writes its row inline, before the broker has delivered
+// anything to anybody, so the seed can list an event the stream has not handed
+// over yet. When the envelope lands it is the same event: listed once, counted
+// once, and still pushed, because the envelope is the only frame that carries
+// the payload a client keeps for a completed phase.
+func TestAnEventTheSeedAlreadyListedIsListedOnceWhenItStreams(t *testing.T) {
+	t.Parallel()
+	s := seededState(t)
+	stored := storedRow("p1", "2026-06-14T11:45:00Z")
+	stored.Type = "agent_phase_completed"
+	s.Seed(livestate.History{
+		Events: []livestate.FeedRow{stored, storedRow("e0", "2026-06-14T11:00:00Z")},
+		Spend:  []tokens.Record{storedSpend("p1", "2026-06-14T11:45:00Z", 40)},
+	})
+
+	change := s.Apply(phaseSpend("p1", "2026-06-14T11:45:00Z", 40))
+
+	if got, want := feedIDs(s.RecentEvents(0)), []string{"p1", "e0"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("feed = %v, want %v: the streamed event was listed a second time", got, want)
+	}
+	if !change.Events {
+		t.Error("the streamed event was not pushed, and its envelope is the only frame carrying its payload")
+	}
+	rollup := tokens.Aggregate(s.SpendRecords(), tokens.Options{})
+	if rollup.Totals.TotalTokens != 40 || rollup.Totals.Calls != 1 {
+		t.Errorf("rollup = %d tokens over %d calls, want 40 over 1: the seeded phase was counted again",
+			rollup.Totals.TotalTokens, rollup.Totals.Calls)
+	}
+}
+
 // HISTORY LANDS BEHIND THE LIVE ROWS IT PREDATES. The feed is read
 // newest-first, and a seed that appended would put an hour-old row above the
 // one a reader just watched arrive.

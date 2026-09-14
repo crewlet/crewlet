@@ -31,9 +31,9 @@ type History struct {
 //
 // SAFE AGAINST THE LIVE STREAM IN EITHER ORDER, which is what lets the caller
 // subscribe FIRST and read the store second, so no event published between
-// the two is lost. An event that is both in the store and already applied off
-// the stream is recognised by its id and counted once, and history lands
-// behind the live rows it predates rather than after them.
+// the two is lost. An event that arrives both ways is recognised by its id and
+// listed and counted once, whichever way reached the projection first, and
+// history lands behind the live rows it predates rather than after them.
 func (s *LiveState) Seed(h History) Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -44,21 +44,16 @@ func (s *LiveState) Seed(h History) Change {
 }
 
 // seedFeed merges stored rows into the feed ring, reporting whether any landed.
+//
+// Through the same id index the live path lists by, which is what makes the
+// overlap safe in BOTH orders: a row the stream delivered first is skipped
+// here, and an envelope that arrives after its row was seeded is skipped by
+// [LiveState.recordEvent].
 func (s *LiveState) seedFeed(rows []FeedRow) bool {
-	held := make(map[string]struct{}, len(s.feed)+len(rows))
-	for _, row := range s.feed {
-		held[row.ID] = struct{}{}
-	}
 	added := false
 	for _, row := range rows {
-		// Every stored row has an id, because the store refuses one
-		// without; an empty one here is a caller's bug and is still kept
-		// rather than collapsed with an unrelated row.
-		if row.ID != "" {
-			if _, dup := held[row.ID]; dup {
-				continue
-			}
-			held[row.ID] = struct{}{}
+		if !s.admitFeedID(row.ID) {
+			continue
 		}
 		s.feed = append(s.feed, row)
 		added = true
@@ -72,9 +67,7 @@ func (s *LiveState) seedFeed(rows []FeedRow) bool {
 	slices.SortStableFunc(s.feed, func(a, b FeedRow) int {
 		return newStamp(a.Timestamp).chronological(newStamp(b.Timestamp))
 	})
-	if len(s.feed) > s.feedLimit {
-		s.feed = s.feed[len(s.feed)-s.feedLimit:]
-	}
+	s.trimFeed()
 	return true
 }
 
