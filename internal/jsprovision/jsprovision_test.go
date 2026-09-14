@@ -195,7 +195,7 @@ func TestAReadBackReAsksWhileTheObjectIsNotVisibleYet(t *testing.T) {
 	// would be waiting for something nobody is going to do.
 	calls = 0
 	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
-	if err := Settle(t.Context(), func() error { calls++; return placement }); err != placement {
+	if err := Settle(t.Context(), func() error { calls++; return placement }); !errors.Is(err, placement) {
 		t.Errorf("a placement failure came back as %v", err)
 	}
 	if calls != 1 {

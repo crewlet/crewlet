@@ -391,9 +391,9 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// common case, named, in microseconds. The accept-timeout message below
 	// covers the rest.
 	if clustered && opts.Cluster.Port != 0 {
-		free, err := PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port)
+		free, probeErr := PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port)
 		switch {
-		case err != nil:
+		case probeErr != nil:
 			// THE PROBE ITSELF COULD NOT ANSWER — the address is not one
 			// this host has, the port is privileged, or the caller is
 			// shutting down. Reported as what it was: calling any of
@@ -402,7 +402,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 			removeScratch(scratch)
 			return nil, fmt.Errorf("stream.cluster.port %d on %s cannot be "+
 				"bound by this node: %w", opts.Cluster.Port,
-				routeHostLabel(opts.Cluster.Host), err)
+				routeHostLabel(opts.Cluster.Host), probeErr)
 		case !free:
 			removeScratch(scratch)
 			return nil, fmt.Errorf("stream.cluster.port %d is already in use on %s, "+

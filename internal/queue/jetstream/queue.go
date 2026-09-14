@@ -394,7 +394,7 @@ func (q *Queue) provisionBudget() time.Duration {
 	return q.Clustered().Budget()
 }
 
-// clustered is whether this queue's broker has peers, which is the fact every
+// Clustered is whether this queue's broker has peers, which is the fact every
 // provisioning budget branches on.
 //
 // THE NAME IS WHAT DECIDES IT, because the name is what [embeddedOptions]
