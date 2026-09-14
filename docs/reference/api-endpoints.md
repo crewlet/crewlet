@@ -284,7 +284,7 @@ A refused document (`400 validation_error`, `400 invalid_patch`, `400 invalid_bo
 
 | Field | Meaning |
 |-------|---------|
-| `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into. `""` only for a failure that belongs to no place in it, such as a body that is not YAML at all |
+| `path` | The authored path in the whole document that was validated. For a per-entity write that is the document the entity was spliced into, and an entity body it cannot read is placed where that entity sits (`roles[1].gaol` for a typo in the second seat). `""` only for a failure that belongs to no place in it, such as a whole document that is not YAML at all |
 | `segments` | The same path taken apart: strings for keys, numbers for list indexes. A map key can hold a dot, so read these rather than splitting `path`. `null` when `path` is `""` |
 | `kind` | `missing`, `unknown_value`, `out_of_range`, `conflict`, `unknown_field`, `shape`, or `invalid` for anything this build does not classify |
 | `message` | The failure's whole line, exactly as it appears in `detail`. A duplicate name is one line naming every entity and one problem beside each, so there can be more problems than lines |
@@ -346,16 +346,18 @@ invites, because the caller never sees the rest of the document.
 
 Four rules follow from that:
 
-- **An unknown field is refused, not dropped.** The entity body is decoded
-  strictly, the same way the whole-document parser is: `gaol` where `goal` was
-  meant is `400 invalid_body` naming the field. A decoder that ignored what it
-  did not recognise would answer `201` and store the seat with its goal
-  silently gone.
+- **An unknown field is refused, not dropped.** The entity body is read by the
+  whole-document parser, JSON or YAML: `gaol` where `goal` was meant is
+  `400 invalid_body` with an `unknown_field` [problem](#refusals-carry-located-problems)
+  placed where the seat sits in the document (`roles[1].gaol`), with its line in
+  the body. A decoder that ignored what it did not recognise would answer `201`
+  and store the seat with its goal silently gone.
 - **A `PUT` never creates.** An id nothing carries is `404 no_such_entity`, not
   a new entity: naming one that is not there is far more often a typo than an
   intent to add one, and creating through this route would grow the company
   without the caller ever seeing the document they changed. Add through
-  `PUT /config`, which shows the whole thing.
+  `PUT /config`, which shows the whole thing. The id is looked up before the
+  body is read, so a mistyped one is a `404` whatever the body holds.
 - **The id in the path is the identity, and a `PUT` never renames.** A body
   whose own identity disagrees with the path is `400 identity_mismatch`, not a
   move: nothing that points at the old identity travels with the splice. A

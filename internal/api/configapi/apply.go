@@ -538,22 +538,25 @@ func readPatched(patch, merged []byte) (*config.Company, error) {
 // text the caller did not write. Each fault's rendered message loses its
 // trailing line with it, so a refusal's detail and its problems still agree.
 func withoutLines(err error) error {
-	var walk func(error)
-	walk = func(e error) {
-		switch e := e.(type) { //nolint:errorlint // Every fault in the tree, not the first one errors.As finds.
-		case nil:
-		case *config.Fault:
-			e.Line = 0
-		case interface{ Unwrap() []error }:
-			for _, part := range e.Unwrap() {
-				walk(part)
-			}
-		case interface{ Unwrap() error }:
-			walk(e.Unwrap())
-		}
-	}
-	walk(err)
+	eachFault(err, func(f *config.Fault) { f.Line = 0 })
 	return err
+}
+
+// eachFault changes every fault in err's tree in place, before anything has
+// rendered it: a fault's message is built from its fields when it is read, so
+// the detail and the problems of one refusal both carry the change.
+func eachFault(err error, change func(*config.Fault)) {
+	switch e := err.(type) { //nolint:errorlint // Every fault in the tree, not the first one errors.As finds.
+	case nil:
+	case *config.Fault:
+		change(e)
+	case interface{ Unwrap() []error }:
+		for _, part := range e.Unwrap() {
+			eachFault(part, change)
+		}
+	case interface{ Unwrap() error }:
+		eachFault(e.Unwrap(), change)
+	}
 }
 
 // onlyUnknownField keeps an unknown-key refusal and discards every other

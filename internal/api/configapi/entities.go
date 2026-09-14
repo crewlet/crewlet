@@ -1,7 +1,6 @@
 package configapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -124,23 +123,25 @@ var entityKinds = map[string]entityAccess{
 			return found, true
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
-			incoming, err := decodeEntity[config.Role](raw)
-			if err != nil {
-				return fmt.Errorf("decode role: %w", err)
-			}
 			// FOUND FIRST, judged second. Both orders refuse the same
 			// requests, but they answer a PUT to an id nothing carries
 			// differently: identity-first calls that a rename and blames
 			// the body, when the entity the caller addressed is simply not
-			// there and the URL is what they got wrong.
+			// there and the URL is what they got wrong. And the place it
+			// was found is where a body that cannot be read is refused.
 			var target *config.Role
-			eachRole(c, func(r *config.Role) {
+			var at config.Path
+			eachRoleAt(c, func(p config.Path, r *config.Role) {
 				if target == nil && roleID(r) == id {
-					target = r
+					target, at = r, p
 				}
 			})
 			if target == nil {
 				return ErrNoSuchEntity
+			}
+			incoming, err := decodeEntity[config.Role](raw, at)
+			if err != nil {
+				return err
 			}
 			// THE IDENTITY IS THE ADDRESS, so a body that renames the
 			// seat is refused rather than silently moved: the caller asked
@@ -181,18 +182,19 @@ var entityKinds = map[string]entityAccess{
 			return found, true
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
-			incoming, err := decodeEntity[config.Unit](raw)
-			if err != nil {
-				return fmt.Errorf("decode unit: %w", err)
-			}
 			var target *config.Unit
-			eachUnit(c, func(u *config.Unit) {
+			var at config.Path
+			eachUnitAt(c, func(p config.Path, u *config.Unit) {
 				if target == nil && u.Name == id {
-					target = u
+					target, at = u, p
 				}
 			})
 			if target == nil {
 				return ErrNoSuchEntity
+			}
+			incoming, err := decodeEntity[config.Unit](raw, at)
+			if err != nil {
+				return err
 			}
 			// The same rule as a seat, and a unit's name is referenced from
 			// further away: every `manages:` entry that expands to it and
@@ -223,9 +225,9 @@ var entityKinds = map[string]entityAccess{
 			if _, ok := c.Providers.LLM[id]; !ok {
 				return ErrNoSuchEntity
 			}
-			incoming, err := decodeEntity[config.LLMProvider](raw)
+			incoming, err := decodeEntity[config.LLMProvider](raw, config.Path{"providers", "llm", id})
 			if err != nil {
-				return fmt.Errorf("decode llm provider: %w", err)
+				return err
 			}
 			c.Providers.LLM[id] = incoming
 			return nil
@@ -254,13 +256,13 @@ var entityKinds = map[string]entityAccess{
 			return nil, false
 		},
 		replace: func(c *config.Company, id string, raw []byte) error {
-			incoming, err := decodeEntity[config.MCPServer](raw)
-			if err != nil {
-				return fmt.Errorf("decode mcp server: %w", err)
-			}
 			for i := range c.MCPServers {
 				if c.MCPServers[i].Name != id {
 					continue
+				}
+				incoming, err := decodeEntity[config.MCPServer](raw, config.Path{"mcp_servers", i})
+				if err != nil {
+					return err
 				}
 				// The name is the key a seat declares this server's
 				// credentials under and the prefix its tools carry, so a
@@ -548,34 +550,39 @@ func objects(value any) []map[string]any {
 // alike, because an operator editing "the CEO" does not think about which
 // list it happens to live in.
 func eachRole(c *config.Company, visit func(*config.Role)) {
-	for i := range c.Roles {
-		visit(&c.Roles[i])
-	}
-	for i := range c.Units {
-		eachUnitRole(&c.Units[i], visit)
-	}
+	eachRoleAt(c, func(_ config.Path, r *config.Role) { visit(r) })
 }
 
-func eachUnitRole(u *config.Unit, visit func(*config.Role)) {
-	for i := range u.Roles {
-		visit(&u.Roles[i])
+// eachRoleAt is [eachRole] with the place each seat is written at, in the
+// same order, so a seat found through either is the same seat.
+func eachRoleAt(c *config.Company, visit func(config.Path, *config.Role)) {
+	for i := range c.Roles {
+		visit(config.Path{"roles", i}, &c.Roles[i])
 	}
-	for i := range u.Children {
-		eachUnitRole(&u.Children[i], visit)
-	}
+	eachUnitAt(c, func(at config.Path, u *config.Unit) {
+		for i := range u.Roles {
+			visit(append(slices.Clone(at), "roles", i), &u.Roles[i])
+		}
+	})
 }
 
 // eachUnit visits every unit, nesting to any depth.
 func eachUnit(c *config.Company, visit func(*config.Unit)) {
+	eachUnitAt(c, func(_ config.Path, u *config.Unit) { visit(u) })
+}
+
+// eachUnitAt is [eachUnit] with the place each unit is written at: parents
+// before their children, depth first.
+func eachUnitAt(c *config.Company, visit func(config.Path, *config.Unit)) {
 	for i := range c.Units {
-		visitUnit(&c.Units[i], visit)
+		visitUnitAt(config.Path{"units", i}, &c.Units[i], visit)
 	}
 }
 
-func visitUnit(u *config.Unit, visit func(*config.Unit)) {
-	visit(u)
+func visitUnitAt(at config.Path, u *config.Unit, visit func(config.Path, *config.Unit)) {
+	visit(at, u)
 	for i := range u.Children {
-		visitUnit(&u.Children[i], visit)
+		visitUnitAt(append(slices.Clone(at), "children", i), &u.Children[i], visit)
 	}
 }
 
@@ -589,25 +596,33 @@ func sorted(in []string) []string {
 	return in
 }
 
-// decodeEntity decodes one entity body STRICTLY.
+// decodeEntity decodes one entity body STRICTLY, and places every failure
+// where the entity sits in the document, at.
 //
 // Unknown fields are refused, which is the same rule Tier B's document parser
 // has and for the same reason: a mistyped setting that silently did nothing is
-// the failure this build refuses to have. `json.Unmarshal` does the opposite —
-// it drops what it does not recognise — so a `PUT /config/roles/ceo` carrying
+// the failure this build refuses to have. `json.Unmarshal` does the opposite:
+// it drops what it does not recognise, so a `PUT /config/roles/ceo` carrying
 // `"gaol"` answered 201 and stored a company with no goal on that seat. This
 // is the surface most likely to be hand-edited in a hurry, so it is the worst
 // place to accept a typo quietly.
 //
+// READ BY THE DOCUMENT'S OWN READER ([config.ParseMember]) and placed in the
+// document, because a refusal's problems are located in the document the
+// entity is spliced into, like the validation that follows. A strict JSON
+// decoder refused the same typo naming the key and no place, as a problem of
+// no kind, so it could not be put beside the field it was about.
+//
 // It also closes the one hole a whole-document write does not have: the body
 // key that carries a revision summary is lifted out before this runs, and a
 // route that forgot to lift it would be caught here rather than storing it.
-func decodeEntity[T any](raw []byte) (T, error) {
+func decodeEntity[T any](raw []byte, at config.Path) (T, error) {
 	var out T
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&out); err != nil {
+	if err := config.ParseMember(raw, &out); err != nil {
 		var zero T
+		eachFault(err, func(f *config.Fault) {
+			f.Path = append(slices.Clone(at), f.Path...)
+		})
 		return zero, err
 	}
 	return out, nil

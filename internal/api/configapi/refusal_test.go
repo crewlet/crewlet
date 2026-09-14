@@ -153,8 +153,12 @@ func TestARefusedDocumentCarriesLocatedProblems(t *testing.T) {
 		s.seed(t, companyDoc, nil)
 		res := s.do(t, http.MethodPut, "/config/roles/cto", `{"name": "CTO", "gaol": "x"}`, summaryHeader)
 		body := refusalOf(t, res, http.StatusBadRequest, "invalid_body")
-		if !strings.Contains(body.Problems[0].Message, "gaol") {
-			t.Errorf("problems = %+v, want the unknown field named", body.Problems)
+		// Placed where the seat sits in the document, as a whole
+		// document's typo is, with the line in the body that was sent.
+		p := problemAt(t, body, "roles[1].gaol")
+		if p.Kind != "unknown_field" || p.Line != 1 ||
+			!reflect.DeepEqual(p.Segments, config.Path{"roles", 1, "gaol"}) {
+			t.Errorf("problem = %+v, want an unknown_field with its segments on line 1", p)
 		}
 	})
 
