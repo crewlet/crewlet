@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -507,6 +508,54 @@ func TestTraceAnswersEverythingSharingOne(t *testing.T) {
 		if row.TraceID != "tr-1" {
 			t.Errorf("a row from %q came back", row.TraceID)
 		}
+	}
+	// A SHORT TRACE IS NOT A CUT ONE, and the flag has to say so explicitly:
+	// a client cannot tell an absent field from a false one.
+	if got["truncated"] != false {
+		t.Errorf("truncated = %#v on a two-event trace", got["truncated"])
+	}
+}
+
+// A TRACE OF EXACTLY THE CAP IS NOT A TRUNCATED ONE.
+//
+// `len(rows) == cap` is the inference this replaces, and this is the boundary
+// it gets wrong: every row of the trace is on the page, under a caution badge
+// saying only the oldest of them are.
+func TestATraceOfExactlyTheCapIsNotReportedCut(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	for i := range store.MaxTraceEvents {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: fmt.Sprintf("t-%04d", i), Type: "task_assigned",
+			Time:     base.Add(time.Duration(i) * time.Second),
+			Category: "task", Actor: "PM", TraceID: "tr-exact",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := registryOver(t, queries.Sources{Events: log})
+
+	got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"})
+	if rows, _ := got["events"].([]store.EventRecord); len(rows) != store.MaxTraceEvents {
+		t.Fatalf("rows = %d, want the cap %d", len(rows), store.MaxTraceEvents)
+	}
+	if got["truncated"] != false {
+		t.Errorf("truncated = %#v for a trace of exactly the cap; every row "+
+			"of it is on the page", got["truncated"])
+	}
+
+	// THE CONTROL: one more event and it genuinely is cut.
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "t-9999", Type: "task_assigned",
+		Time:     base.Add(time.Duration(store.MaxTraceEvents) * time.Second),
+		Category: "task", Actor: "PM", TraceID: "tr-exact",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := ask(t, r, "trace", map[string]any{"trace_id": "tr-exact"}); got["truncated"] != true {
+		t.Errorf("truncated = %#v for a trace one past the cap", got["truncated"])
 	}
 }
 

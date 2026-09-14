@@ -668,15 +668,28 @@ func (s Sources) trace(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// SAYS WHEN IT CUT. EventLog.Trace stops at store.MaxTraceEvents and its
-	// own doc asks the caller to report that — a trace shown short with no
-	// note reads as a complete causal chain that simply ends, which is the
-	// one thing a reader must not conclude from it. Additive, so a client
-	// that predates the field is unaffected.
+	// SAYS WHEN IT CUT. EventLog.Trace stops at store.MaxTraceEvents — a
+	// trace shown short with no note reads as a complete causal chain that
+	// simply ends, which is the one thing a reader must not conclude from it.
+	// Additive, so a client that predates the field is unaffected.
+	//
+	// ASKED, NOT INFERRED, for the reason the turn answer gives at length: a
+	// trace of exactly the cap holds every row it has, and `len(rows) == cap`
+	// reports it cut. That is a caution badge on a complete trace, which is
+	// the same class of lie as the note's absence and costs one indexed count
+	// on the reads that filled.
+	truncated := false
+	if len(rows) >= store.MaxTraceEvents {
+		total, err := s.Events.TraceEventCount(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		truncated = total > len(rows)
+	}
 	return map[string]any{
 		"trace_id":  id,
 		"events":    rows,
-		"truncated": len(rows) >= store.MaxTraceEvents,
+		"truncated": truncated,
 	}, nil
 }
 

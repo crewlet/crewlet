@@ -59,13 +59,30 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 	// which is the part nothing can stand in for. Two cheap seeks on the same
 	// (turn_id, event_time, event_id) index rather than one, and only on the
 	// turns that need it.
-	truncated := len(records) >= store.MaxTurnEvents
-	if truncated {
-		closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
+	//
+	// ASKED, NOT INFERRED. `len(records) == cap` is not "the read stopped
+	// early": a turn of exactly the cap holds every row it has, and the
+	// recovery below widens that misreading rather than narrowing it — a turn
+	// a little past the cap ends up whole on the page, under a banner saying
+	// part of it is missing. The count runs only on a read that filled, which
+	// is the only case where a cut is possible at all.
+	truncated := false
+	if len(records) >= store.MaxTurnEvents {
+		total, err := s.Events.TurnEventCount(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		records = mergeByID(records, closing)
+		if total > len(records) {
+			closing, err := s.Events.TurnClosing(ctx, id, TurnClosingEvents)
+			if err != nil {
+				return nil, err
+			}
+			records = mergeByID(records, closing)
+		}
+		// AFTER the merge, because the merge is what decides it: the
+		// recovered ending closes the gap outright on a turn only a little
+		// past the cap, and leaves one on a turn that is genuinely long.
+		truncated = total > len(records)
 	}
 	if records == nil {
 		// A named empty slice, not nil: nil marshals as `null` and the

@@ -549,6 +549,49 @@ func (l *EventLog) Turn(ctx context.Context, turnID string) ([]EventRecord, erro
 // MaxTurnEvents bounds one turn's read.
 const MaxTurnEvents = MaxTraceEvents
 
+// TurnEventCount is how many rows one turn has in the window, whatever a
+// capped read of it returned.
+//
+// Because "did the read reach the end" is NOT `len(rows) == cap`, and that
+// inference is wrong on the one boundary it is asked about most: a turn of
+// exactly MaxTurnEvents rows holds every row it has and would be reported
+// cut. A view that recovers the turn's ending beside its opening widens the
+// wrong answer rather than narrowing it — a turn a little past the cap ends
+// up whole on the page under a banner saying part of it is missing — so the
+// question is asked rather than guessed at, and only on the reads that
+// filled. It is a range scan of the same (turn_id, event_time, event_id)
+// index the read walked.
+func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, error) {
+	return l.countEvents(ctx, "turn_id", turnID)
+}
+
+// TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].
+func (l *EventLog) TraceEventCount(ctx context.Context, traceID string) (int, error) {
+	return l.countEvents(ctx, "trace_id", traceID)
+}
+
+// countEvents counts one id's rows inside the history window.
+//
+// The COLUMN is chosen from this file's own two callers and never from a
+// parameter a request can reach: it is interpolated into the statement, which
+// is the one place in this package where that would be an injection rather
+// than a convenience.
+func (l *EventLog) countEvents(ctx context.Context, column, id string) (int, error) {
+	switch column {
+	case "turn_id", "trace_id":
+	default:
+		return 0, fmt.Errorf("store: count events: %q is not a countable column", column)
+	}
+	var n int
+	err := l.db.sql.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM crewlet_events WHERE "+column+" = ? AND event_time >= ?",
+		id, EncodeTime(now().Add(-EventHistory))).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count events: %w", err)
+	}
+	return n, nil
+}
+
 // TurnClosing returns the NEWEST rows of one turn, oldest first among
 // themselves, with their payloads.
 //

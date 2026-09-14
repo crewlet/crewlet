@@ -206,6 +206,54 @@ func TestATurnAtTheCapIsNotDoubled(t *testing.T) {
 		t.Errorf("%d events for a turn of exactly %d; the closing read was "+
 			"concatenated rather than merged", n, store.MaxTurnEvents)
 	}
+	// AND IT IS NOT REPORTED CUT. `len(rows) == cap` is the inference this
+	// replaces, and this is the boundary it gets wrong: every row of the turn
+	// is on the page, under a banner saying part of it is missing.
+	if got["truncated"] != false {
+		t.Errorf("truncated = %#v for a turn of exactly the cap; the page "+
+			"holds all of it", got["truncated"])
+	}
+}
+
+// A TURN THE RECOVERY MAKES WHOLE IS NOT REPORTED CUT EITHER.
+//
+// The closing read is twenty rows, so a turn between the cap and the cap plus
+// twenty ends up complete on the page: its opening is the head and its ending
+// closes the gap outright. Inferring the flag from the row count would put a
+// "middle not shown" banner over a turn with nothing missing — which is the
+// band a long turn most often lands in, so it is the common case rather than
+// an edge.
+func TestATurnTheRecoveryMakesWholeIsNotReportedCut(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	payload, err := json.Marshal(map[string]any{"turn_id": "whole", "phase": "execute"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Past the cap, but inside the reach of the closing read.
+	total := store.MaxTurnEvents + queries.TurnClosingEvents/2
+	for i := range total {
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID:   fmt.Sprintf("w-%04d", i),
+			Type: "agent_phase_completed", Time: base.Add(time.Duration(i) * time.Second),
+			Category: "lifecycle", Actor: "PM", Payload: payload,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turn",
+		map[string]any{"turn_id": "whole"}))
+	if n := len(rows(t, got["events"])); n != total {
+		t.Errorf("%d of the turn's %d events reached the answer", n, total)
+	}
+	if got["truncated"] != false {
+		t.Errorf("truncated = %#v for a turn the recovery made whole",
+			got["truncated"])
+	}
 }
 
 // A TURN NOBODY RECORDED IS AN EMPTY LIST, not a null.
