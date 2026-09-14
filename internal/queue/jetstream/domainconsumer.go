@@ -42,8 +42,19 @@ type DomainConsumer struct {
 	// cons is the broker-side consumer, under a mutex because [Reset]
 	// replaces it while the applier that holds this handle is between
 	// runs — the handle stays, the consumer under it moves.
+	//
+	// NIL IS A REAL STATE: a reset deletes before it creates, so a create
+	// that fails leaves the broker with no consumer at all, and a handle
+	// that went on naming the deleted one would fail every fetch for the
+	// life of the process with nothing able to repair it. Cleared instead,
+	// and rebuilt from `want` by the next caller — see [DomainConsumer.consumerFor].
 	mu   sync.Mutex
 	cons jetstream.Consumer
+
+	// want is the configuration this consumer should have, kept so that a
+	// handle cleared by a failed reset can be rebuilt without the caller
+	// knowing how one is configured.
+	want jetstream.ConsumerConfig
 }
 
 // domainConsumerMaxAckPending is how many records the broker may hand this
@@ -141,7 +152,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
 			name, stream, err)
 	}
-	return &DomainConsumer{q: q, cons: cons, stream: stream, name: name}, nil
+	return &DomainConsumer{q: q, cons: cons, stream: stream, name: name, want: config}, nil
 }
 
 // Reset moves this node's reader to resume from `after`, by deleting the
@@ -160,6 +171,17 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 // The applier resumes from the checkpoint whatever the consumer says, so a
 // reset that fails leaves correctness alone and costs only those
 // redeliveries; it is reported so the operator knows which.
+//
+// # What a HALF-done reset leaves, and why the handle is cleared
+//
+// The delete and the create are two calls and the broker can take the first
+// and refuse the second — a connection lost in between, a server that went
+// away. That leaves no consumer on the stream at all, and a handle still
+// naming the deleted one: every later fetch fails against something that does
+// not exist, for the life of the process, and no later reset is ever attempted
+// because the caller only logs this error. The handle is therefore CLEARED on
+// that path, which makes the next fetch rebuild it — the repair happens where
+// the damage is noticed rather than needing a second failure to trigger it.
 func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	config := jetstream.ConsumerConfig{
 		Durable:       c.name,
@@ -181,20 +203,47 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 		return fmt.Errorf("jetstream: reset the domain consumer %s on %s: %w",
 			c.name, c.stream, err)
 	}
+	// THE DELETE HAS LANDED, so from here the broker has no consumer and
+	// the handle must not go on naming one.
+	// THE DELETE HAS LANDED, so from here the broker has no consumer and
+	// the handle must not go on naming one.
+	c.cons = nil
 	cons, err := c.q.js.CreateConsumer(ctx, c.stream, config)
 	if err != nil {
+		// `want` IS LEFT AS IT WAS, deliberately: the rebuild then
+		// restores the consumer at its PREVIOUS position rather than at
+		// one this broker has just refused. The applier resumes from its
+		// own checkpoint whatever the consumer says, so that costs
+		// redeliveries and not correctness — which is the same trade the
+		// caller makes when it logs this error and carries on.
 		return fmt.Errorf("jetstream: recreate the domain consumer %s on %s at "+
 			"%d: %w", c.name, c.stream, after, err)
 	}
-	c.cons = cons
+	c.cons, c.want = cons, config
 	return nil
 }
 
-// consumer is the current broker-side consumer.
-func (c *DomainConsumer) consumer() jetstream.Consumer {
+// consumerFor is the current broker-side consumer, created if a failed reset
+// left none.
+//
+// THE REBUILD IS HERE rather than at the call site because this is where the
+// absence is discovered, and because every caller wants the same thing: a
+// consumer at the position the last reset asked for. It is idempotent — a
+// consumer the broker still has comes back from CreateConsumer unchanged.
+func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.cons
+	if c.cons != nil {
+		return c.cons, nil
+	}
+	cons, err := c.q.js.CreateConsumer(ctx, c.stream, c.want)
+	if err != nil {
+		return nil, fmt.Errorf("jetstream: rebuild the domain consumer %s on "+
+			"%s after a reset that deleted it and could not create it again: %w",
+			c.name, c.stream, err)
+	}
+	c.cons = cons
+	return cons, nil
 }
 
 // alignDomainConsumer updates an existing consumer's updatable bounds to this
@@ -268,7 +317,10 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 	opts := []jetstream.FetchOpt{jetstream.FetchMaxWait(wait)}
 	var batch jetstream.MessageBatch
 	var err error
-	cons := c.consumer()
+	cons, err := c.consumerFor(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if maxBytes > 0 {
 		batch, err = cons.FetchBytes(maxBytes, opts...)
 	} else {
@@ -333,7 +385,11 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 // not delivered, which is what tells a partially filled batch whether waiting
 // would buy anything.
 func (c *DomainConsumer) Pending(ctx context.Context) (uint64, error) {
-	info, err := c.consumer().Info(ctx)
+	cons, err := c.consumerFor(ctx)
+	if err != nil {
+		return 0, err
+	}
+	info, err := cons.Info(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("jetstream: read %s: %w", c.name, err)
 	}

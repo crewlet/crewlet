@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -76,7 +77,7 @@ func TestAByteBoundedReplayLeavesNothingDeliveredUnconsumed(t *testing.T) {
 	// AND THE FIRST PULL WAS BOUNDED BY THE CEILING rather than by the
 	// client's own million: the broker handed over at most one
 	// transaction's worth of records before an acknowledgement.
-	info, err := cons.consumer().Info(t.Context())
+	info, err := consumerInfo(t, cons)
 	if err != nil {
 		t.Fatalf("consumer info: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestAnExistingDomainConsumerHasItsCeilingRealigned(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	info, err := cons.consumer().Info(t.Context())
+	info, err := consumerInfo(t, cons)
 	if err != nil {
 		t.Fatalf("info: %v", err)
 	}
@@ -189,4 +190,69 @@ func seqsOf(msgs []statelog.Message) []uint64 {
 		out = append(out, m.Seq)
 	}
 	return out
+}
+
+// consumerInfo reads the broker's own view of a domain consumer, rebuilding
+// the handle if a reset left none — which is what every production caller
+// does too.
+func consumerInfo(t *testing.T, c *DomainConsumer) (*jetstream.ConsumerInfo, error) {
+	t.Helper()
+	cons, err := c.consumerFor(t.Context())
+	if err != nil {
+		return nil, err
+	}
+	return cons.Info(t.Context())
+}
+
+// A RESET THAT DELETES AND THEN CANNOT CREATE LEAVES A HANDLE THAT REPAIRS
+// ITSELF.
+//
+// The two calls are separate and the broker can take the first and refuse the
+// second — a connection lost in between, a server that went away. What that
+// used to leave was a handle still naming the deleted consumer: every later
+// fetch failed against something that did not exist, for the life of the
+// process, and nothing retried the reset because its one caller only logs the
+// error and starts the appliers anyway.
+//
+// The interleaving is staged by taking the STREAM away between the two calls:
+// the delete is then a tolerated not-found and the create has nowhere to go,
+// which is the same half-done state a dropped connection leaves.
+func TestAResetThatCannotRecreateLeavesARepairableHandle(t *testing.T) {
+	t.Parallel()
+	q, log := openDomain(t, "CREWLET_HALFRESET_LOG", "crewlet.halfreset.log")
+	for i := range 6 {
+		if _, _, err := log.Append(t.Context(), "crewlet.halfreset.log.task.x", "", nil, []byte{byte(i)}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_HALFRESET_LOG", "node-half", 0)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// A START SEQUENCE THE BROKER REFUSES: the delete lands, the create
+	// does not. Any refusal reaches the same half-done state — a dropped
+	// connection between the two calls is the one an operator will see.
+	if err := cons.Reset(t.Context(), math.MaxUint64); err == nil {
+		t.Fatal("a reset whose create could not run reported success")
+	}
+	cons.mu.Lock()
+	cleared := cons.cons == nil
+	cons.mu.Unlock()
+	if !cleared {
+		t.Fatal("the handle still names the consumer the reset deleted — every " +
+			"later fetch goes to something that does not exist, for the life " +
+			"of the process, and its one caller only logs this error")
+	}
+
+	// AND THE NEXT FETCH REBUILDS IT, at the position the consumer held
+	// before the reset — the applier resumes from its own checkpoint
+	// whatever the consumer says, so restoring the previous position
+	// costs redeliveries and not correctness.
+	got := fetchAll(t, cons, 2)
+	if len(got) != 2 || got[0].Seq != 1 {
+		t.Fatalf("after a half-done reset the handle delivered %v, want the log "+
+			"from 1 — a handle naming a deleted consumer fails every fetch for "+
+			"the life of the process", seqsOf(got))
+	}
 }

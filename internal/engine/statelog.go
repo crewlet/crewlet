@@ -1320,8 +1320,20 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 			// CORRECTNESS IS THE CHECKPOINT'S and the applier resumes
 			// from it regardless; what a consumer left behind costs
 			// is the redeliveries between, which is worth a line.
+			//
+			// THAT HOLDS BECAUSE THE HANDLE REPAIRS ITSELF. A reset
+			// deletes before it creates, so a create that fails leaves
+			// the broker with no consumer at all — and the appliers
+			// are relaunched below either way. [jetstream.DomainConsumer]
+			// clears the handle on that path and rebuilds it on the
+			// next fetch, at the position it held before; without that
+			// this line would be logging the start of a domain that
+			// never applies another record.
 			log.WarnContext(ctx, "statelog_consumer_not_reset",
-				"domain", name, "checkpoint", at.String(), "error", err.Error())
+				"domain", name, "checkpoint", at.String(), "error", err.Error(),
+				"detail", "the consumer is rebuilt at its previous position by "+
+					"the next fetch, so this costs redeliveries rather than "+
+					"correctness")
 		}
 	}
 	log.InfoContext(ctx, "statelog_rejoined", "node", s.nodeID)
