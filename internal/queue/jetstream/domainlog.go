@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // DomainLog is one state-log domain's append surface: a conditional publish
@@ -70,19 +72,79 @@ type DomainLog struct {
 // rejection would put an extra round trip on the path that is already the
 // slowest one the write authority has.
 func (q *Queue) DomainLog(ctx context.Context, stream string) (*DomainLog, error) {
-	s, err := q.js.Stream(ctx, stream)
+	s, err := q.openProvisioned(ctx, stream)
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q: %w", stream, err)
 	}
 	// THE SECOND HANDLE, opened here rather than lazily: a lazy one would
 	// need its own lock to build, and the whole point of the split is that
 	// the shared handle never takes one.
-	state, err := q.js.Stream(ctx, stream)
+	state, err := q.openProvisioned(ctx, stream)
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the log %q's state reader: %w",
 			stream, err)
 	}
 	return &DomainLog{js: q.js, stream: s, state: state, name: stream, q: q}, nil
+}
+
+// openProvisioned resolves a stream THIS NODE HAS JUST PROVISIONED, waiting
+// out the window in which its own create has committed but is not yet visible
+// to it.
+//
+// # Why a bare lookup was wrong here
+//
+// Every caller of [Queue.DomainLog] reaches it immediately after
+// [Queue.EnsureDomainStream] returned nil for the same name — that is the
+// contract, and the two are consecutive statements in the state log's
+// provision step. On one node the lookup after a successful create cannot
+// fail. On a CLUSTER it can: the create is committed by the metadata leader
+// and the asking member learns of it on the next metadata update, so there is
+// a window in which the member that made the stream is told it does not
+// exist.
+//
+// That is not a hypothetical. It failed a clustered boot outright —
+// `open the log "CREWLET_TRACKER_VECTORS": nats: API error: code=404
+// err_code=10059 description=stream not found`, reported by the node whose own
+// create of that stream had just succeeded. Everything else on this path
+// already tolerates the window: [Queue.createOrObserveStream] re-asks after a
+// lost race and so does [openBucket] in [internal/coord/kv]. This was the one
+// lookup with no tolerance at all, which is why it was the one that broke.
+//
+// # Why it is bounded by ReadBack rather than the provisioning budget
+//
+// The create has already returned successfully, so what is being waited out is
+// metadata propagation and not placement — a round trip, not a raft election.
+// A not-found that outlives [jsprovision.ReadBack] is a stream that really is
+// gone, and reporting that promptly is what the caller needs. A placement
+// failure is deliberately NOT waited out here: nothing is being placed, so
+// waiting for peers would be waiting for something nobody is going to do.
+func (q *Queue) openProvisioned(ctx context.Context, stream string) (jetstream.Stream, error) {
+	// THE RETRY WINDOW IS BOUNDED, NOT THE LOOKUP. Shortening the caller's
+	// context to this would cap each individual read at it too, which is a
+	// different and worse thing: a metadata read on a busy group is exactly
+	// what is slow here, so truncating it would trade a not-found for a
+	// deadline on the same boot. Each attempt keeps whatever the caller
+	// gave it — for a context with no deadline that is nats.go's own API
+	// timeout — and only the re-asking stops here.
+	deadline := time.Now().Add(jsprovision.ReadBack)
+
+	for {
+		s, err := q.js.Stream(ctx, stream)
+		if err == nil || !jsprovision.NotYetVisible(err) {
+			return s, err
+		}
+		if !time.Now().Before(deadline) {
+			// THE ORIGINAL ERROR, not a deadline of our own:
+			// "stream not found" says what is wrong and names the
+			// stream, which is what the caller has to act on.
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(jsprovision.PlacementRetry):
+		}
+	}
 }
 
 // Append publishes one record.
