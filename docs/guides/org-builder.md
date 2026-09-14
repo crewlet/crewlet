@@ -12,6 +12,8 @@ engine a dry run of exactly the write a save would send, and draws the
 problems, warnings and derived hierarchy the engine answers with. It does not
 implement any configuration rule of its own.
 
+Every change is made to a draft in the browser. Nothing reaches the engine until you review the draft and save it, and the builder keeps every field of the document it does not show. What it shows and what it can change is listed under [Editing a node](#editing-a-node), field by field.
+
 ## Opening the builder
 
 The configuration is guarded, reads included, so the builder needs what any
@@ -120,6 +122,104 @@ until a provider exists every node keeps the revision it had and nothing in
 this company runs; the dashboard does not write providers. Add one with
 `crewlet config import` or `PATCH /config`
 ([Configure via the API](configure-via-api.md)).
+
+## Editing a node
+
+Choose **Edit** on the company, a unit or a seat to open its editor at the side
+of the chart. The editor holds your changes in its own form until you press
+**Apply**, which adds them to the draft as **one step**: one Undo takes the
+whole edit back. Closing an editor that holds changes (Cancel, Close, Escape or
+a click outside it) asks before discarding them.
+
+If the engine refused something about the node at the last check, the problem
+is shown beside the field it names. Problems that name no field in the editor
+are listed at its top.
+
+### The charter
+
+| You can change | Notes |
+|---|---|
+| Name | Renaming the company asks you to confirm what it does. An agent seat's id is derived from the company name and its handle, so every agent seat gets a new id: each seat's diary and onboarding progress stay under the old id and are no longer read, and every agent seat onboards again. Handles, mailboxes and episodes are unchanged. |
+| Mission, vision, policies | Policies are an ordered list. |
+
+Everything else in the company document (providers, integrations, workers,
+MCP servers, sandbox and scheduling settings) is edited in the configuration
+document, not in the builder.
+
+### A unit
+
+| You can change | Notes |
+|---|---|
+| Name | Unit names are unique. Renaming an existing unit re-keys what is attached to its name: agent seats in it and in its units onboard again, onboarding pages are looked up under the new name, and its schedules get a new identity, so a run due that minute may fire again. |
+| Type | One of the well-known types or a custom one. It is informational; an empty type is `team`. |
+| Purpose, goals | |
+| Lead | Any seat. The empty choice shows the lead the unit inherits from the unit above it, as the last check reported it. |
+| Channel | An empty channel inherits the one above it. |
+| Knowledge | Free-text references, not a read scope. |
+| Owns: Jira project, Confluence space | Where unrouted work for the unit goes. Not a permission. Shown only when the company has connected Jira or Confluence. |
+| Schedules: enabled | Each schedule can be switched on or off. |
+
+Shown and not changed: each schedule's cron, timezone, runner and task, and the
+unit's tool credentials as server and variable names. Schedules and tool
+credentials are written in the configuration document.
+
+**Renaming a unit that holds literal credentials.** The engine never sends a
+credential to the dashboard: a literal value arrives masked, and a save that
+carries the mask back is restored from the stored unit of the same name. A
+renamed unit has no stored unit of its new name, so the engine refuses the
+save. Before you rename such a unit, the editor lists the paths of its masked
+credentials. Move each one to the secret store (**Secrets**) and reference it
+as `${NAME}` first; a reference is a name, so it survives the rename.
+
+### A seat
+
+| You can change | Notes |
+|---|---|
+| Name | Seat names are unique. An existing seat keeps its handle through a rename. |
+| Handle | Only on a seat added in this draft. Leave it empty and the engine derives one from the name; the editor shows the derived handle after the next check. An existing seat's handle is its identity (its memory and mailbox attach to it), so it is not editable. |
+| Email, goal, backstory, responsibilities | |
+| Behavioral guidelines | Agent seats. |
+| Manages | Seats and units. Seats this seat manages automatically as a unit's lead are listed apart, because the engine adds them whatever the list says. |
+| Contact identities, availability | Human seats. A human seat needs at least one contact identity. |
+| Model | Agent seats. An ordered chain of the company's `providers.llm` keys, tried in the order chosen; to change the order, remove a provider and choose it again. A seat with no model runs on the provider keyed `default`, else the first provider in the company's order. A per-phase mapping is shown and edited in the configuration document. |
+| Token budget | Agent seats. Empty or 0 is unlimited. |
+| Schedules: enabled | Agent seats. |
+| Integrations | Agent seats; see below. |
+| Owns: Jira project, Confluence space | Agent seats. Where unrouted work for the seat goes. Not a permission. |
+
+Shown with the reason they are not changed here: per-phase models
+(`llm_review` and the other `llm_*` fields), sandbox (enabled, where it runs),
+workers, placement, learning, tool credentials (names only) and whether the
+seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
+each depend on a company-level block the builder does not edit.
+
+A seat's kind is changed with **Change to a human seat** or **Change to an
+agent seat**, which is its own step because it removes fields.
+
+### Seat integrations
+
+Each field is shown only when the company has connected the tool. Otherwise the
+editor says the tool is not connected and links to **Integrations**. No
+credential is ever shown.
+
+- **GitHub:** access tier and repositories (an empty list means every
+  repository the installation covers). Setting a tier on a seat with no GitHub
+  block enrols the seat in GitHub; create its app from Integrations. A seat's
+  app permissions are fixed when the app is created, so after changing the tier
+  of a seat whose app exists, raise the app's permissions at GitHub as well.
+- **Slack:** the default channel ID, for a seat that has its own Slack app.
+- **Mattermost:** the default channel name, for a seat that has its own bot.
+  The bot username is read-only once the bot is provisioned, because changing
+  it would make the provisioner find or create a second bot.
+- **GitLab:** the access level (developer or maintainer) the seat's account
+  joins with, when GitLab provisioning is set up. Access levels are kept by
+  handle, so a seat added in this draft can have one once the check reports
+  its handle.
+
+Not in the builder: per-seat allow or block lists for GitLab, Atlassian,
+Datadog or Mattermost (the engine provisions every agent seat), a per-seat
+Datadog role, GitLab tiers beyond developer and maintainer, and flags that
+grant access to everything (an empty repository list already does).
 
 ## Reviewing and saving
 

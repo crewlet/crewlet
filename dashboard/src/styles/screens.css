@@ -1857,3 +1857,54 @@ details > summary.int-summary::-webkit-details-marker {
   color: var(--text);
   border-color: var(--text-faint);
 }
+
+/* ---- Org builder: the node editor and its dialogs ------------------------
+   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
+   kind dialogs. A drawer's body is a column of fields; a section separates a
+   group of them (reports, a tool, what the document configures) with a rule
+   and a heading, so a long seat form reads as parts rather than one list. */
+
+.builder-section + .builder-section,
+.sheet-body > .builder-section,
+.dialog-body > .builder-section {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+/* A section inside a section (one tool inside Integrations) is a sub-part,
+   not a new part: no rule of its own. */
+.builder-section .builder-section {
+  padding-top: 0;
+  border-top: none;
+}
+.builder-section-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+}
+.builder-section .builder-section .builder-section-title {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.builder-section p,
+.builder-fact p,
+.builder-note {
+  margin: 0;
+}
+.builder-list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+/* Two fields that make one answer (a contact's surface and its identity) sit
+   side by side and share the width, so neither reads as a separate question. */
+.builder-pair {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.builder-pair > .field {
+  flex: 1 1 0;
+  min-width: 0;
+}
