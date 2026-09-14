@@ -1207,13 +1207,6 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 // supervisor rather than by a constant here.
 const apiShutdownGrace = 5 * time.Second
 
-// serveAPI binds the HTTP surface, or reports that this node serves none.
-// companySecrets reads the verification material out of the engine's CURRENT
-// epoch, on every request.
-//
-// Not captured once: a config reload replaces the epoch, and a receiver holding
-// the old one would keep rejecting deliveries signed with a rotated secret —
-// a failure that looks exactly like an attack and resolves only on restart.
 // companyConfig is the engine's CURRENT company document, or nil.
 func companyConfig(e *engine.Engine) *config.Company {
 	if company := e.Company(); company != nil {
@@ -1222,8 +1215,15 @@ func companyConfig(e *engine.Engine) *config.Company {
 	return nil
 }
 
+// companySecrets reads the verification material out of the engine's CURRENT
+// epoch, on every request.
+//
+// Not captured once: a config reload replaces the epoch, and a receiver holding
+// the old one would keep rejecting deliveries signed with a rotated secret, a
+// failure that looks exactly like an attack and resolves only on restart.
 func companySecrets(e *engine.Engine) webhooks.Secrets { return e.WebhookSecrets() }
 
+// serveAPI binds the HTTP surface, or reports that this node serves none.
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, log *slog.Logger,
@@ -1244,12 +1244,13 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, fmt.Errorf("api: node identity: %w", err)
 	}
 	// The config surface is the caller's, built before this function so a
-	// node with no HTTP listener still has a config WRITER — see runEngine.
+	// node with no HTTP listener still has a config WRITER (see runEngine).
 	// One instance, shared by the REST routes, the socket queries and the
 	// engine's own disconnect path: sealing and opening with the SAME
 	// keyring the reconciler applies through, because two ciphers over one
 	// store would mean a revision written here is one no node can read.
-	// The fleet's secret store, sealed with the SAME keyring — a value
+	//
+	// The fleet's secret store, sealed with the SAME keyring: a value
 	// written here is one this node and every peer opens with the key
 	// their Tier A names, and a second cipher would make a rotation
 	// readable only on the node that served the request.
@@ -1260,17 +1261,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
-	// Connecting an integration from the dashboard. It writes through the
-	// TWO surfaces above rather than reaching for the store and the plane
-	// itself: a credential is sealed by the same store /secrets serves,
-	// and the pointer to it lands through the same merge, validation and
-	// activation PATCH /config performs.
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
 	integrationStatus, err := e.IntegrationStore()
 	if err != nil {
 		return nil, fmt.Errorf("api: integration status: %w", err)
 	}
+	// Connecting an integration from the dashboard. It writes through the
+	// TWO surfaces above rather than reaching for the store and the plane
+	// itself: a credential is sealed by the same store /secrets serves,
+	// and the pointer to it lands through the same merge, validation and
+	// activation PATCH /config performs.
 	setupSurface, err := setupapi.New(setupapi.Options{
 		Company: func() *config.Company { return companyConfig(e) },
 		Config:  configSurface,
@@ -1318,14 +1319,9 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 				"begun on one node cannot be finished on another")
 	}
 
-	// The contextcheck exemption is for the two PUSH TICKS this constructor
-	// registers — the roster re-send and the health frame. Both manufacture
-	// a bounded context of their own instead of inheriting one, which is
-	// what [api.tickReadBudget] and [api.App.streamHealth] both state is
-	// correct: a tick is a timer, not a request, so there is nothing to
-	// inherit, and a read that outlived the interval firing the next tick
-	// would cost a goroutine per tick for the life of the process. Nothing
-	// else reached from here creates a context.
+	// What only the engine can answer (in flight, seats, the posture and
+	// the applied epoch, the tool catalogue), read live on every probe
+	// through the reconciler that owns this node's config posture.
 	runtime, err := api.NewEngineRuntime(e, reconciler)
 	if err != nil {
 		return nil, err
@@ -1354,6 +1350,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	if err != nil {
 		return nil, err
 	}
+	// The contextcheck exemption is for the two PUSH TICKS this constructor
+	// registers — the roster re-send and the health frame. Both manufacture
+	// a bounded context of their own instead of inheriting one, which is
+	// what [api.tickReadBudget] and [api.App.streamHealth] both state is
+	// correct: a tick is a timer, not a request, so there is nothing to
+	// inherit, and a read that outlived the interval firing the next tick
+	// would cost a goroutine per tick for the life of the process. Nothing
+	// else reached from here creates a context.
 	app, err := api.New(api.Options{ //nolint:contextcheck // see the paragraph above
 		Bootstrap: boot,
 		Runtime:   runtime,
@@ -1481,12 +1485,6 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Retention: nativeRetention(ctx, e),
 			NodeID:    nodeID,
 		},
-		// The inbound edge. It republishes onto THIS node's queue and
-		// dedupes through the FLEET'S coordination store, which is what
-		// makes a delivery that lands on any node wake the seat's owner
-		// exactly once. A third-party app retrying reaches whichever node
-		// the load balancer picks, so a claim only this node could see
-		// would suppress nothing.
 		// The WRITE half of the counter, for POST /budgets/reset. On the
 		// default topology the coordination store is this engine's own
 		// embedded broker, so a node that is running is the only thing
@@ -1518,6 +1516,12 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
+		// The inbound edge. It republishes onto THIS node's queue and
+		// dedupes through the FLEET'S coordination store, which is what
+		// makes a delivery that lands on any node wake the seat's owner
+		// exactly once. A third-party app retrying reaches whichever node
+		// the load balancer picks, so a claim only this node could see
+		// would suppress nothing.
 		Inbound: api.Inbound{
 			Secrets:   func() webhooks.Secrets { return companySecrets(e) },
 			Publisher: e.Backends().Queue,
