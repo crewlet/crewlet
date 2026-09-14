@@ -480,9 +480,9 @@ func TestOnePoolsBenchDoesNotReachAnotherEntryOnTheSameKey(t *testing.T) {
 	}
 }
 
-// SHARE(nil) DETACHES WITHOUT FORGETTING. An epoch rebuilt on a node that has
-// lost its coordination store must stop publishing through a stale handle —
-// and must not hand out a key the vendor is still refusing.
+// SHARE(nil) DETACHES WITHOUT FORGETTING. A detached pool must stop publishing
+// through the handle it held, and must not hand out a key the vendor is still
+// refusing.
 func TestDetachingKeepsTheBenchAndStopsPublishing(t *testing.T) {
 	t.Parallel()
 	p, _, _, ledger := sharedPool(t, "zulu", []string{"k0", "k1"}, Policy{RateLimit: time.Hour})
