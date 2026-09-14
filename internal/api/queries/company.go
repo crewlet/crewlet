@@ -785,24 +785,39 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		// agent's: archived hidden, stale shown — a stale skill still
 		// works and still revives on use, so hiding it would misreport
 		// what the seat can actually load.
-		skills, err := s.Skills.List(ctx, id, learning.ListOptions{})
+		//
+		// ONE options value feeds both reads below, deliberately: the count
+		// and the listing have to describe the same set, and two literals
+		// here is how a later edit to one of them starts reporting a total
+		// over rows the page could never contain.
+		opts := learning.ListOptions{}
+		// THE TOTAL, ALWAYS, and that is the difference between a page and
+		// a lie — but it comes from a COUNT rather than from the length of
+		// what was read. Taking the whole library apart to show fifty of it
+		// cost the seat's entire catalogue in I/O and allocations on every
+		// open of the panel, and a skill row carries its content and its
+		// frontmatter, so that is a real read of every body the seat has
+		// ever drafted. The store bounds all three collections now: the
+		// diary and the episodes ask for a recency feed, and the skills ask
+		// for a page with the count beside it.
+		//
+		// The count is what keeps the page honest. The panel that renders
+		// the listing counts the rows it was given, so a seat past the cap
+		// would otherwise report exactly [MemoryPageLimit] skills — a
+		// number an operator has no reason to doubt and no way to check.
+		// Every other cut in this tree says so: a config diff answers
+		// `changes_total` beside the listing it bounded, a trace answers
+		// `truncated`, a ledger line appends "+N more".
+		total, err := s.Skills.Count(ctx, id, opts)
 		if err != nil {
 			return nil, err
 		}
-		// THE TOTAL, ALWAYS, and that is the difference between a page and
-		// a lie. This is the one collection here the store does not bound
-		// for us — the diary and the episodes ask for their limit and get
-		// a recency feed — so it is cut after the read, and the panel that
-		// renders it counts the rows it was given. A seat past the cap
-		// therefore reported exactly [MemoryPageLimit] skills, which is a
-		// number an operator has no reason to doubt and no way to check.
-		// Every other cut in this tree says so: a diff appends "N further
-		// changes not listed", a trace answers `truncated`, a ledger line
-		// appends "+N more".
-		out["skills_total"] = len(skills)
-		if len(skills) > MemoryPageLimit {
-			skills = skills[:MemoryPageLimit]
+		opts.Limit = MemoryPageLimit
+		skills, err := s.Skills.List(ctx, id, opts)
+		if err != nil {
+			return nil, err
 		}
+		out["skills_total"] = total
 		rows := make([]map[string]any, 0, len(skills))
 		for _, sk := range skills {
 			rows = append(rows, skillRow(sk))
@@ -814,11 +829,13 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 
 // MemoryPageLimit bounds each collection of a seat's memory page.
 //
-// FIFTY, and it reaches the three collections differently: the diary and the
-// episodes ask their store for that many and get a recency feed, where "the
-// most recent fifty" IS the question. The skills are a SET the seat loads
-// from and the store has no limit to pass, so they are cut here — which is
-// why `skills_total` travels beside them.
+// FIFTY, and every collection asks its own store for that many rather than
+// reading everything and cutting: the diary and the episodes get a recency
+// feed, where "the most recent fifty" IS the question, and the skills get an
+// ordered listing bounded by [learning.ListOptions.Limit]. The skills are a
+// SET the seat loads from rather than a feed, so a page of one says how large
+// the set was — which is why `skills_total` travels beside them, and why it
+// is counted rather than measured off the page.
 const MemoryPageLimit = 50
 
 // countOrNil renders an outcome count, or null when nothing was counted.

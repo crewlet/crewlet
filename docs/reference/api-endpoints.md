@@ -1839,9 +1839,9 @@ Sources:
   still revives on use. Capped at 50 like the two above, and
   **`skills_total`** is how many the seat actually has — the diary and the
   episodes ask their store for a recency feed, where "the most recent 50"
-  is the question, but skills are a set a seat loads from, so the listing
-  is cut after the read and the count beside it is what says so. Render
-  the total, not the length of the list.
+  is the question, but skills are a set a seat loads from, so the store
+  returns a bounded page and counts the set beside it. Render the total,
+  not the length of the list.
 * **`counterparties`** — profiles built up from observed interactions.
 
 The table is strictly per-agent; cross-agent procedural artefacts are

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -1773,11 +1774,11 @@ func TestAnEnabledFalseRowIsAlwaysADeliberatePause(t *testing.T) {
 //
 // The diary and the episodes ask their store for [queries.MemoryPageLimit] and
 // get a recency feed, where "the most recent fifty" IS the question. Skills
-// are a SET the seat loads from and the store takes no limit, so the listing
-// is cut after the read — and it was cut SILENTLY, which is the one shape this
-// tree does not allow a cut to have. The panel counts what it is given, so a
-// seat with more skills than the page holds reported exactly the page limit:
-// a number an operator has no reason to doubt and no way to check.
+// are a SET the seat loads from, so the page carries the size of the set it
+// came from — and it once carried nothing, which is the one shape this tree
+// does not allow a cut to have. The panel counts what it is given, so a seat
+// with more skills than the page holds reported exactly the page limit: a
+// number an operator has no reason to doubt and no way to check.
 func TestASkillListingPastThePageLimitReportsWhatItCut(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -1810,6 +1811,71 @@ func TestASkillListingPastThePageLimitReportsWhatItCut(t *testing.T) {
 	if got, want := jsonInt(t, total), held; got != want {
 		t.Errorf("skills_total = %d, want %d — the count a screen renders is "+
 			"the seat's whole set, not the length of the page", got, want)
+	}
+}
+
+// AND THE PAGE IS TAKEN IN THE STORE rather than out of a fully materialized
+// library.
+//
+// The total and the page used to come from ONE unbounded listing that decoded
+// every row the seat owns — content, frontmatter and all — to show fifty of
+// them, so the answer stayed O(the whole catalogue) in I/O and allocations
+// however small the page was. The bound is [learning.ListOptions.Limit] now,
+// which the SQL honours, and the total is a COUNT beside it. Both halves are
+// asserted here because either one alone is satisfiable by the bug: a listing
+// that is bounded but counted off the page under-reports the set, and an
+// honest total over an unbounded read is exactly what this replaced.
+//
+// The zero Limit is asserted too. It is the unbounded setting every other
+// caller in the tree relies on — the prefetch's offer, the refiner's view of
+// what is live — so a bound that leaked into the default would silently
+// truncate all of them.
+func TestTheSkillPageIsBoundedInTheStore(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	skills := learning.NewSkills(db)
+	const held = queries.MemoryPageLimit + 7
+	for i := range held {
+		name := "skill-" + strconv.Itoa(i)
+		if err := skills.Insert(t.Context(), learning.Skill{
+			ID: name, AgentHandle: "ceo", Name: name,
+			Description: "drafted from repeated work",
+			Content:     strings.Repeat("a body a page never renders. ", 64),
+			CreatedAt:   pinned, UpdatedAt: pinned,
+		}); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+
+	page, err := skills.List(t.Context(), "ceo",
+		learning.ListOptions{Limit: queries.MemoryPageLimit})
+	if err != nil {
+		t.Fatalf("bounded listing: %v", err)
+	}
+	if len(page) != queries.MemoryPageLimit {
+		t.Errorf("a listing bounded to %d read %d row(s), so the answer pays "+
+			"for every skill the seat holds to render a page of them",
+			queries.MemoryPageLimit, len(page))
+	}
+	whole, err := skills.List(t.Context(), "ceo", learning.ListOptions{})
+	if err != nil {
+		t.Fatalf("unbounded listing: %v", err)
+	}
+	if len(whole) != held {
+		t.Errorf("the zero Limit read %d of %d skill(s): it is the unbounded "+
+			"setting every non-paging caller depends on", len(whole), held)
+	}
+
+	body := asMap(t, answer(t, queries.Sources{Skills: skills},
+		"agent_memory", map[string]any{"id": "ceo"}))
+	rows, _ := body["skills"].([]any)
+	if len(rows) != queries.MemoryPageLimit {
+		t.Errorf("the answer carries %d skill(s), want the page limit %d",
+			len(rows), queries.MemoryPageLimit)
+	}
+	if got := jsonInt(t, body["skills_total"]); got != held {
+		t.Errorf("skills_total = %d, want %d — the total is counted over the "+
+			"seat's set, never measured off the page", got, held)
 	}
 }
 

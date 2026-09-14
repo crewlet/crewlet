@@ -242,9 +242,10 @@ type Refinement struct {
 	At           time.Time
 }
 
-// ListOptions narrows a skill listing by lifecycle state.
+// ListOptions narrows a skill listing by lifecycle state, and bounds how much
+// of it a listing reads.
 //
-// Both fields are inverted relative to the natural spelling
+// Both state fields are inverted relative to the natural spelling
 // (include_archived / include_stale), so the zero value is the answer the
 // engine wants everywhere: archived hidden, stale shown. A prefetch that
 // forgets to pass options offers exactly the skills the loader will accept.
@@ -255,6 +256,26 @@ type ListOptions struct {
 	// ExcludeStale drops ageing rows. Off by default: stale is a marker on a
 	// skill that still works and still revives on use, not a hidden state.
 	ExcludeStale bool
+	// Limit bounds the ORDERED listings — [Skills.List] and [Skills.ListFor]
+	// — so a caller rendering a page of N pays for N rows rather than for
+	// the seat's whole library. A skill row carries its content and its
+	// frontmatter, so the difference is real I/O and real allocations, not
+	// a slice header.
+	//
+	// ZERO MEANS UNBOUNDED, and that is a setting rather than a missing
+	// value: every read here that is not a page — the prefetch's offer, the
+	// refiner's view of what is live, the promotion pass's candidate set —
+	// wants the whole set, and a default of "some" would silently truncate
+	// each of them. Any non-positive value reads the same way, which is
+	// SQLite's own reading of LIMIT -1.
+	//
+	// [Skills.Count] and [Skills.ToolSequences] deliberately ignore it. The
+	// count's whole job is the true total a bounded listing cannot report —
+	// capping it would answer the page's own length, which is the bug a
+	// total exists to remove — and the near-duplicate check must see every
+	// sequence the seat already holds, or it re-synthesizes a skill sitting
+	// just past the bound.
+	Limit int
 }
 
 // filter renders the exclusions as SQL.
@@ -274,6 +295,18 @@ func (o ListOptions) filter() string {
 	default:
 		return " AND state <> 'archived'"
 	}
+}
+
+// limit renders the row bound as SQL, with the value to bind for it.
+//
+// Bound rather than spelled inline, unlike the state names in filter: those
+// are compile-time constants of this package, and this is a number off a
+// caller.
+func (o ListOptions) limit() (string, []any) {
+	if o.Limit <= 0 {
+		return "", nil
+	}
+	return " LIMIT ?", []any{o.Limit}
 }
 
 // Skills is a seat's synthesized-skill library, and the curator's write side.
@@ -372,12 +405,15 @@ func (s *Skills) ByID(ctx context.Context, id string) (Skill, bool, error) {
 	return s.one(ctx, s.db.SQL(), `WHERE id = ?`, id)
 }
 
-// List returns a seat's skills, newest first.
+// List returns a seat's skills, newest first, bounded by
+// [ListOptions.Limit].
 func (s *Skills) List(ctx context.Context, handle string, opts ListOptions) ([]Skill, error) {
+	bound, args := opts.limit()
 	rows, err := s.db.SQL().QueryContext(ctx,
 		`SELECT `+skillColumns+` FROM synthesized_skills
 		 WHERE agent_handle = ?`+opts.filter()+`
-		 ORDER BY created_at DESC, id DESC`, handle)
+		 ORDER BY created_at DESC, id DESC`+bound,
+		append([]any{handle}, args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list skills for %s: %w", handle, err)
 	}
@@ -401,10 +437,12 @@ func (s *Skills) ListFor(ctx context.Context, handles []string, opts ListOptions
 	// Only the placeholder COUNT is built from the input; every handle is
 	// still bound.
 	list := strings.TrimSuffix(strings.Repeat("?, ", len(handles)), ", ")
+	bound, bindings := opts.limit()
 	rows, err := s.db.SQL().QueryContext(ctx,
 		`SELECT `+skillColumns+` FROM synthesized_skills
 		 WHERE agent_handle IN (`+list+`)`+opts.filter()+`
-		 ORDER BY created_at DESC, id DESC`, args...)
+		 ORDER BY created_at DESC, id DESC`+bound,
+		append(args, bindings...)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list skills for %d seat(s): %w", len(handles), err)
 	}
