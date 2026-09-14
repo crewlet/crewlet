@@ -803,7 +803,15 @@
 .boutline-frame {
   position: relative;
 }
+/* THE SCROLLER IS THE CONTAINING BLOCK OF WHAT IT HOLDS. A box that scrolls
+   clips only the descendants whose containing block is inside it, so an
+   absolutely positioned one (the Actions header's screen-reader text, far
+   right in a phone-width grid) was placed against the frame instead, escaped
+   the scroller, and gave `.screen` a sideways overflow of the grid's width:
+   hidden, but scrolled by a focus or a find in page, which pushed the whole
+   page sideways. Positioned, the scroller keeps all of it. */
 .boutline-wrap {
+  position: relative;
   overflow-x: auto;
   overscroll-behavior-x: contain;
 }

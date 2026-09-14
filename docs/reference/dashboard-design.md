@@ -1199,7 +1199,10 @@ to.
   hidden from assistive technology, takes no focus at all and hands the press
   to the row. Navigation keys are the grid's before they are the control's, so
   ArrowDown on a menu button moves to the next row rather than opening the
-  menu. The grid scrolls sideways in its own box at narrow widths, and a box
+  menu. The grid scrolls sideways in its own box at narrow widths, and that
+  box is the containing block of everything in it: a scroller clips only the
+  descendants placed inside it, and a screen-reader label placed against the
+  frame instead gave the page a sideways overflow as wide as the grid. A box
   that scrolls on one axis clips on both, so a row's menus open in a
   `.popup-layer` over the grid, placed from their trigger, and follow a
   sideways scroll (or close once their trigger has left the frame) rather than

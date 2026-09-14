@@ -43,6 +43,15 @@ test("the live state and problem count slots neither shrink nor wrap, and the na
   expect(rule(".bchart-line")).toMatch(/min-width:\s*0/);
 });
 
+// A scroll box clips only descendants whose containing block is inside it:
+// the outline's screen-reader column header, absolutely positioned against the
+// frame, escaped the grid's sideways scroller and gave the page a sideways
+// overflow as wide as the grid, which a focus or a find in page then scrolled.
+test("the outline scrolls sideways in its own box, which contains everything it holds", () => {
+  expect(rule(".boutline-wrap")).toMatch(/overflow-x:\s*auto/);
+  expect(rule(".boutline-wrap")).toMatch(/position:\s*relative/);
+});
+
 test("a builder card or row takes no status or data hue, only the accent for the selection", () => {
   const builder = rules(css).filter(([selector]) => /\.(bchart|boutline|bnode)/.test(selector));
   expect(builder.length).toBeGreaterThan(10);
