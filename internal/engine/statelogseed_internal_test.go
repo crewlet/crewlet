@@ -52,6 +52,15 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	s := e.native.log
 	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
 
+	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the
+	// floor this case forges. `PutFloor` replaces a domain's floor
+	// wholesale, and this node's own retention loop publishes one per
+	// domain per tick at the generation its rows are on — zero — so a tick
+	// landing after the write below erases the fleet's generation 3 and the
+	// case asserts against a floor it did not publish. `stopRetention`
+	// waits for an in-flight tick, so after it returns nothing else writes.
+	e.stopRetention()
+
 	name := tracker.Domain{}.Name()
 	stream := tracker.Domain{}.Stream().Name
 

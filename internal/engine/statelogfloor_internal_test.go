@@ -81,6 +81,12 @@ func TestANodeBelowThePublishedFloorRefusesToServe(t *testing.T) {
 		t.Fatal("the tracker domain is not running")
 	}
 	waitUntil(t, 20*time.Second, "the node to admit seats", e.NativeHydrated)
+	// THIS NODE'S OWN TRIM DUTY PUBLISHES THE SAME FIELD, and it ticks
+	// immediately at boot: its first conclusion is `blocked_by
+	// backup_floor` at zero, which lands on top of the floor published
+	// below and reads back as ok. Stop it first — it waits out an
+	// in-flight tick — so the floor under test is the only one there is.
+	e.stopRetention()
 
 	// THE TRIM CONCLUDES the fleet may remove everything below a point this
 	// node has not reached — which is what happens to a node that was away
