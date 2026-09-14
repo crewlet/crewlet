@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -46,9 +45,6 @@ func TestSafeJoinRefusesAnEscape(t *testing.T) {
 // The lexical form of a symlinked path stays under the root, so a Clean-only
 // check passes it. This is the case that makes resolution non-negotiable.
 func TestSafeJoinRefusesAnEscapeThroughASymlinkedAncestor(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need a privilege on Windows")
-	}
 	root := t.TempDir()
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
@@ -64,9 +60,6 @@ func TestSafeJoinRefusesAnEscapeThroughASymlinkedAncestor(t *testing.T) {
 // A symlink that stays inside the box is fine: containment is the property,
 // not the absence of links.
 func TestSafeJoinAllowsASymlinkThatStaysInside(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need a privilege on Windows")
-	}
 	root := t.TempDir()
 	inner := filepath.Join(root, "real")
 	if err := os.MkdirAll(inner, DirMode); err != nil {
@@ -88,9 +81,6 @@ func TestSafeJoinAllowsASymlinkThatStaysInside(t *testing.T) {
 // (t.TempDir does exactly this on macOS, via /var -> /private/var) is not
 // refused for it.
 func TestSafeJoinResolvesTheRootAsWell(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need a privilege on Windows")
-	}
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "boxes")
 	if err := os.Symlink(real, link); err != nil {
@@ -182,7 +172,14 @@ func TestCopyFileAtomicWritesTheContentAtFileMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != FileMode {
+	// UNCONDITIONAL, and it has to stay that way. This was guarded by
+	// `runtime.GOOS != "windows"`, which never held: internal/store refuses to
+	// compile off the four supported platforms (see its platform.go), so there
+	// is no Windows build of this module for the branch to be false in, and no
+	// Windows host `go test ./...` can run on. A carve-out that cannot fire is
+	// not portability — it is an assertion about a credential's mode that
+	// reads as conditional and is not.
+	if info.Mode().Perm() != FileMode {
 		t.Fatalf("dst mode = %v, want %v — a credential must never be readable", info.Mode().Perm(), FileMode)
 	}
 }
