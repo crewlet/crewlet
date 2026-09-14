@@ -1021,8 +1021,9 @@ in `routes/org/builder/surfaces.ts`) and reach all of it through
 - **The selection is in the URL, and the toolbar mirrors it.** `unit=` and
   `seat=` are filters that name the selected node; a link naming one selects
   it, a rename rewrites it, and a removed node clears it. The toolbar carries
-  the selected node's own actions, because a canvas tree item may contain no
-  tab stops of its own.
+  the selected node's own actions, the same entries in the same order as its
+  card's menu, because a canvas tree item may contain no tab stops of its
+  own. Open seat is offered only for a seat the saved company has.
 - **One polite live region** says what each operation, undo and redo did (an
   undo or a redo names itself, since the operation's own sentence is in the
   past tense and would announce the change as just made), and focus moves to

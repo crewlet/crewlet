@@ -298,10 +298,48 @@ describe("the selection in the URL", () => {
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
     fireEvent.click(actions);
     const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
-    expect(within(menu).getByRole("menuitem", { name: "Edit" })).toBeDefined();
-    expect(within(menu).getByRole("menuitem", { name: "Open seat" })).toBeDefined();
-    expect(within(menu).getByRole("menuitem", { name: "Move to" })).toBeDefined();
-    expect(within(menu).getByRole("menuitem", { name: "Delete" })).toBeDefined();
+    // The same actions, in the same order, as the seat's own card offers.
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent),
+    ).toEqual(["Edit", "Open seat", "Edit reports", "Change to human seat", "Move to", "Delete"]);
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Open seat" }));
+    // The path only: this harness keeps the Builder mounted under any route,
+    // where the app replaces the whole screen.
+    await waitFor(() => expect(location.hash.split("?")[0]).toBe("#/seats/ceo"));
+  });
+
+  // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
+  // at once, and a link built from that handle opened a seat the engine does
+  // not have; its kind, like any seat's, can still be changed.
+  test("a seat added in the draft is offered no screen, and can change kind", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    // First with no answer about the new seat, so no handle is known for it.
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? json({ error: "bad" }, 502) : null);
+    fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await screen.findByText("Could not reach the engine to check");
+    fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
+    const actionsFor = async () => {
+      fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
+      return screen.findByRole("menu", { name: "Actions for Analyst" });
+    };
+    let menu = await actionsFor();
+    expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
+    const kind = within(menu).getByRole("menuitem", { name: "Change to human seat" });
+    expect(kind.getAttribute("aria-disabled")).not.toBe("true");
+    fireEvent.keyDown(menu, { key: "Escape" });
+
+    // Then once a check has derived its handle: the URL names it, and there
+    // is still no screen to open.
+    engine.script = () => null;
+    expect(await screen.findByText("No problems", {}, { timeout: 4000 })).toBeDefined();
+    await waitFor(() => expect(location.hash).toContain("seat=analyst"));
+    menu = await actionsFor();
+    expect(within(menu).queryByRole("menuitem", { name: "Open seat" })).toBeNull();
+    expect(within(menu).getByRole("menuitem", { name: "Change to human seat" })).toBeDefined();
   });
 });
 

@@ -238,6 +238,23 @@ export function FakeView() {
       >
         Rename the company
       </button>
+      <button
+        type="button"
+        onClick={() =>
+          api.dispatch({
+            type: "record",
+            intent: {
+              type: "addSeat",
+              // Minted in the handler, as every view mints a new node's key.
+              key: "new:analyst",
+              placement: { parent: COMPANY_KEY, after: null },
+              data: { name: "Analyst", goal: "Analyse" },
+            },
+          })
+        }
+      >
+        Add an analyst
+      </button>
       <ul aria-label="Units">
         {[...allUnits(api.state.draft)].map(({ unit }) => (
           <li key={unit.key}>
@@ -266,6 +283,9 @@ export function FakeView() {
             <span data-testid={`problems ${seat.data.name}`}>
               {api.problemsFor(seat.key).length}
             </span>
+            <button type="button" onClick={() => api.selection.select(seat.key)}>
+              {`Select ${seat.data.name}`}
+            </button>
             <button
               type="button"
               onClick={() =>

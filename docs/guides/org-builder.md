@@ -81,8 +81,10 @@ opens on the outline. The view, the chart and the selected unit or seat are
 in the URL, so a link opens the builder where it was.
 
 Selecting a unit or a seat names it in the URL (`unit=` and `seat=`), and the
-toolbar carries that node's own actions, so every one of them is reachable
-from the keyboard. A rename rewrites the name in the URL rather than leaving a
+toolbar carries that node's own actions, the same ones in the same order as
+its card, so every one of them is reachable from the keyboard. **Open seat**
+is offered only for a seat the saved company has: a seat added in the draft
+has no screen until it is saved. A rename rewrites the name in the URL rather than leaving a
 link pointing at something that no longer exists. Selecting the company itself
 carries the charter's **Edit** and the same **Add** menu; it names no filter,
 because the lens is already about that company. Where the builder cannot

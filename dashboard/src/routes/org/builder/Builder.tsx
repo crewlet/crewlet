@@ -50,6 +50,7 @@ import {
 } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
+import { seatPath } from "~/lib/seats.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
@@ -951,81 +952,107 @@ function Lens({
   // READ-ONLY DISABLES, IT DOES NOT HIDE. A menu that loses half its entries
   // teaches an operator nothing about what the builder does, and an entry
   // that is offered and then only answers into the live region tells a
-  // sighted operator nothing at all. Edit and Open seat change no draft and
-  // stay available.
+  // sighted operator nothing at all. Edit, Edit reports and Open seat change
+  // no draft and stay available.
+  //
+  // THE SAME ACTIONS, IN THE SAME ORDER, UNDER THE SAME NAMES as a card's or
+  // a row's own menu, so an operator who learned them on the canvas finds
+  // them here.
   const addItems = (parent: NodeKey | null): MenuEntry[] => [
     {
       key: "add-unit",
       label: "Add unit",
-      icon: "folder",
+      icon: "folderPlus",
       disabled: readOnly,
       onSelect: () => api.openAdd(parent, "unit"),
     },
     {
       key: "add-agent",
       label: "Add agent seat",
-      icon: "cpu",
+      icon: "userPlus",
       disabled: readOnly,
       onSelect: () => api.openAdd(parent, "agent"),
     },
     {
       key: "add-human",
       label: "Add human seat",
-      icon: "user",
+      icon: "userPlus",
       disabled: readOnly,
       onSelect: () => api.openAdd(parent, "human"),
     },
   ];
   const nodeItems = (): MenuEntry[] => {
     if (!selected || (!selectedNode && !companySelected)) return addItems(null);
-    const items: MenuEntry[] = [
-      { key: "edit", label: "Edit", icon: "pencil", onSelect: () => api.openEditor(selected) },
-    ];
+    const edit: MenuEntry = {
+      key: "edit",
+      label: "Edit",
+      icon: "pencil",
+      onSelect: () => api.openEditor(selected),
+    };
     // The company holds seats and units as a unit does, and its Edit is the
     // charter's. Nothing moves or deletes the document the company IS, so
     // its menu ends there.
-    if (companySelected) {
-      items.push({ kind: "separator", key: "s" }, ...addItems(null));
-      return items;
+    if (companySelected) return [...addItems(null), { kind: "separator", key: "s" }, edit];
+    const move: MenuEntry = {
+      key: "move",
+      label: "Move to",
+      icon: "move",
+      disabled: readOnly,
+      onSelect: () => api.openMove(selected),
+    };
+    const remove: MenuEntry = {
+      key: "delete",
+      label: "Delete",
+      icon: "trash",
+      danger: true,
+      disabled: readOnly,
+      onSelect: () => api.openDelete(selected),
+    };
+    if (selectedNode!.kind === "unit") {
+      return [
+        ...addItems(selected),
+        { kind: "separator", key: "s" },
+        edit,
+        move,
+        { kind: "separator", key: "s-delete" },
+        remove,
+      ];
     }
-    const seatHandle = handleOfKey(selected) ?? currentHandles(state).get(selected);
-    if (selectedNode!.kind === "unit")
-      items.push({ kind: "separator", key: "s" }, ...addItems(selected));
-    else if (seatHandle) {
+    const items: MenuEntry[] = [edit];
+    // OPEN SEAT ONLY FOR A SEAT THE SAVED COMPANY HAS. A seat added in this
+    // draft has a handle as soon as a check derives one, and no screen until
+    // it is saved: the link would open a seat that does not exist yet.
+    const saved = locate(state.baseDraft, selected);
+    if (saved?.kind === "seat") {
+      const path = seatPath({
+        handle: text(saved.node.data.handle) || (handleOfKey(selected) ?? ""),
+        name: saved.node.data.name,
+      });
       items.push({
         key: "open",
         label: "Open seat",
-        icon: "external",
-        onSelect: () => nav.to(["seats", seatHandle]),
-      });
-      items.push({
-        key: "kind",
-        label:
-          selectedNode!.node.data.kind === "human"
-            ? "Change to agent seat"
-            : "Change to human seat",
-        icon: "users",
-        disabled: readOnly,
-        onSelect: () => api.openChangeKind(selected),
+        icon: "arrowUpRight",
+        onSelect: () => nav.to(path),
       });
     }
+    const human = selectedNode!.node.data.kind === "human";
     items.push(
-      { kind: "separator", key: "s2" },
       {
-        key: "move",
-        label: "Move to",
-        icon: "move",
-        disabled: readOnly,
-        onSelect: () => api.openMove(selected),
+        key: "reports",
+        label: "Edit reports",
+        icon: "sitemap",
+        onSelect: () => api.openEditor(selected),
       },
       {
-        key: "delete",
-        label: "Delete",
-        icon: "trash",
-        danger: true,
+        key: "kind",
+        label: human ? "Change to agent seat" : "Change to human seat",
+        icon: human ? "cpu" : "user",
         disabled: readOnly,
-        onSelect: () => api.openDelete(selected),
+        onSelect: () => api.openChangeKind(selected),
       },
+      move,
+      { kind: "separator", key: "s-delete" },
+      remove,
     );
     return items;
   };
