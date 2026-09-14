@@ -47,8 +47,10 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	// one step whose entire purpose is deciding whether the binary on PATH is
 	// even the right program was handing an unidentified executable every key
 	// and token the environment carried, before any identity check had run.
+	probeDir := t.TempDir()
 	probe := exec.CommandContext(t.Context(), binary, "--version")
-	probe.Env = vendorCLIEnv(t.TempDir(), nil)
+	probe.Dir = probeDir
+	probe.Env = vendorCLIEnv(probeDir, nil)
 	out, err := probe.Output()
 	version := strings.TrimSpace(string(out))
 	// THE BUILD ID IS THE PROVENANCE, not the major number and not a bare
@@ -75,8 +77,16 @@ func TestTheGrokProfileArgvParsesAgainstTheRealCLI(t *testing.T) {
 	args = append(args, p.PromptArgs...)
 	args = append(args, "say hello")
 
+	// ONE directory for both the home and the working directory, and the
+	// working directory matters as much as the environment: a vendor CLI
+	// reads AGENTS.md / CLAUDE.md from its cwd, and this repository has both.
+	// Left in the checkout, the probe answers with whatever the tree happens
+	// to contain rather than about the shipped profile — the kimi, pi and
+	// hermes cases were already right about this where this one was not.
+	dir := t.TempDir()
 	cmd := exec.Command(binary, args...) //nolint:gosec // args come from the shipped profile
-	cmd.Env = vendorCLIEnv(t.TempDir(), nil)
+	cmd.Dir = dir
+	cmd.Env = vendorCLIEnv(dir, nil)
 	combined, _ := cmd.CombinedOutput()
 	assertArgvReachedAuth(t, args, string(combined))
 }

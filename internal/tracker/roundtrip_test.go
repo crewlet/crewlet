@@ -411,6 +411,13 @@ func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) err
 			// DeadlineExceeded rather than a sentinel of its own, so the
 			// publisher takes the identical path it took before: this is the
 			// same outcome, reached without the wait.
+			// THE CALLER'S OWN ERROR FIRST. A context already cancelled is
+			// a cancellation, not a timeout, and reporting DeadlineExceeded
+			// for one would hand the publisher the wrong reason — the
+			// pending/timeout path after an explicit cancel.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			return context.DeadlineExceeded
 		}
 		advance()

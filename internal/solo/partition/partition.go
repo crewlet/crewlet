@@ -29,6 +29,22 @@ import (
 	"slices"
 )
 
+// goCommand is the toolchain to discover packages with.
+//
+// THE ONE THE CALLER SELECTED, not whatever `go` PATH resolves to. The
+// Makefile lets a caller pick with `make GO=/path/to/go` and uses $(GO) for
+// every other command, so a hardcoded `go` here would discover packages with
+// one toolchain and run the tests with another — or fail outright where the
+// selected toolchain is not on PATH at all. The Makefile exports this
+// alongside $(GO); a bare `go` is the fallback for anyone running the command
+// by hand.
+func goCommand() string {
+	if selected := os.Getenv("CREWLET_GO"); selected != "" {
+		return selected
+	}
+	return "go"
+}
+
 // marker is the package whose import declares "this one runs alone".
 const marker = "github.com/crewlet/crewlet/internal/solo"
 
@@ -80,7 +96,8 @@ func list(ctx context.Context) ([]pkg, error) {
 	// would be a worse bug than the hang it guards against — `go list` on a
 	// cold module cache downloads the module graph, and a budget sized for a
 	// warm CI checkout would fail a fresh clone for no reason.
-	cmd := exec.CommandContext(ctx, "go", "list", "-json=ImportPath,TestImports,XTestImports", "./...")
+	cmd := exec.CommandContext(ctx, goCommand(), "list",
+		"-json=ImportPath,TestImports,XTestImports", "./...")
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {

@@ -892,12 +892,20 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := runHost(ctx, hostCommand{
-			argv: []string{"/bin/sh", "-c", "sh -c 'echo $$ > " + pidFile + "; sleep 300' & sleep 300"},
+			// THE PATH TRAVELS IN THE ENVIRONMENT, quoted where it is used,
+			// rather than being pasted into the shell source. t.TempDir() is
+			// derived from TMPDIR and from the test's own name, so it can
+			// carry a space or a shell metacharacter — and interpolated, that
+			// writes the pid somewhere else or fails to start, which this
+			// case would then report as a process tree that survived its
+			// teardown. A quoting bug must not be able to look like the
+			// defect under test.
+			argv: []string{"/bin/sh", "-c", `sh -c 'echo $$ > "$PIDFILE"; sleep 300' & sleep 300`},
 			// Long enough that it is never what ends this command: the
 			// cancel below is, and a timeout racing it would reintroduce
 			// exactly the flake this case was rewritten to remove.
 			timeout: time.Minute,
-			env:     map[string]string{"PATH": os.Getenv("PATH")},
+			env:     map[string]string{"PATH": os.Getenv("PATH"), "PIDFILE": pidFile},
 		})
 		done <- err
 	}()

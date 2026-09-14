@@ -45,7 +45,14 @@ type pkg struct {
 func list(t *testing.T) []pkg {
 	t.Helper()
 
-	cmd := exec.Command("go", "list", "-json=ImportPath,Imports,TestImports,XTestImports", "./...")
+	// The caller's toolchain, for the reason internal/solo/partition states
+	// at goCommand: `make GO=/path/to/go` must not discover packages with a
+	// different go than it runs the suite with.
+	goCmd := os.Getenv("CREWLET_GO")
+	if goCmd == "" {
+		goCmd = "go"
+	}
+	cmd := exec.Command(goCmd, "list", "-json=ImportPath,Imports,TestImports,XTestImports", "./...")
 	// THE MODULE ROOT, two levels up from internal/solo — not one.
 	//
 	// It was "..", which is internal/, so `go list ./...` enumerated

@@ -43,6 +43,12 @@ export GOTOOLCHAIN ?= auto
 
 GO ?= go
 
+# Exported so the partition command and internal/solo's roster guard discover
+# packages with the SAME toolchain this file runs the tests with. Both shell
+# out to `go list`, and a hardcoded `go` there would resolve through PATH —
+# a different toolchain than `make GO=/path/to/go` selected, or none at all.
+export CREWLET_GO = $(GO)
+
 # ./crewlet is where `go build ./cmd/crewlet` drops the binary, and — with
 # goreleaser's dist/ — the only build output .gitignore already knows about.
 # Nothing here writes anywhere else, so `make clean` has nothing to guess at.
