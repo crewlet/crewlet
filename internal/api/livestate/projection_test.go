@@ -429,7 +429,7 @@ func TestAnAlternateFieldNameIsUsedOnlyWhenTheFirstIsEmpty(t *testing.T) {
 	}
 }
 
-// THE LIVE ROW AND THE HYDRATED ROW AGREE ABOUT THE SAME EVENT.
+// THE PUSHED FRAME AND THE FEED ROW AGREE ABOUT THE SAME EVENT.
 //
 // `failed` is derived once, in Apply, and stamped onto the envelope the client
 // is handed as well as onto the feed row the snapshot carries. It used to be

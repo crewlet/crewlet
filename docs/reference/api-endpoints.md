@@ -1408,16 +1408,10 @@ its own `failed` field (a phase or turn that died) and for an event type that
 failures without re-deriving them from a type list of its own.
 
 The flag survives a restart: the event-store writer stamps a `failed` tag on
-those events, and the store's event listing (`GET /events` and the `events`
-query) reads it back. That listing deliberately never selects the payload
-column, so without the tag every historical failure would read back as a
-success.
-
-The projection itself is **not** seeded from the store when a process starts:
-its feed, its per-agent token totals and its spend rollup begin empty in each
-process and fill from the live stream. History from before the process
-started is on `GET /events`, `GET /tokens/breakdown` and the other store
-queries.
+those events, and the projection reads it back when it seeds its feed from the
+store at startup. The store's listing (`EventLog.List`) deliberately never
+selects the payload column, so without the tag every historical failure would
+read back as a success.
 
 ### The health envelope
 
