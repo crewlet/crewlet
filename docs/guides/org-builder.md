@@ -117,9 +117,12 @@ its kind or type and its handle, and the marks that apply:
 | Lead names no seat | the unit's lead names no seat of the company |
 | Datadog fallback | the seat an alert that names no seat wakes, while Datadog is enabled |
 
-A mark never changes the size of a card: the live state and the problem count
+The live state and the problem count never change the size of a card: they
 sit beside the name, which is shortened instead, so the chart does not move
-while seats work or while a check is on its way.
+while seats work or while a check is on its way. A mark about wiring (a
+placement, or a reference that names nothing) stays for as long as the node
+still writes what the check found, so a check on its way does not take it off
+the card either.
 
 A unit's card carries its **lead chip**: the lead it declares, the one it
 inherits from the unit above (marked inherited), or "No lead". Pressing the
@@ -316,8 +319,9 @@ workers, placement, learning, tool credentials (names only) and whether the
 seat is the Datadog fallback. Sandbox, placement, workers and tool credentials
 each depend on a company-level block the builder does not edit.
 
-A seat's kind is changed with **Change to a human seat** or **Change to an
-agent seat**, which is its own step because it removes fields.
+A seat's kind is changed with **Change to human seat** or **Change to agent
+seat**, in its menu or in the editor, which is its own step because it
+removes fields.
 
 A seat has no skills to edit. A skill is a knowledge base page the engine
 admits and injects per phase, and the learning subsystem drafts new ones from
@@ -442,7 +446,7 @@ seat goes:
 
 ## Changing a seat's kind
 
-**Change to a human seat** and **Change to an agent seat** are their own step,
+**Change to human seat** and **Change to agent seat** are their own step,
 because the change removes fields: the engine refuses a human seat every
 runtime field (models, token budget, workers, learning, schedules, chat app
 blocks, Jira and Confluence ownership, tool credentials, behavioral guidelines
@@ -584,7 +588,9 @@ opens and finds a kept draft:
 The kept draft is removed when you save, when you discard, when the operator
 token changes, and when the engine refuses the token, because each of those
 may mean the tab has changed hands. Session storage does not outlive the tab,
-so closing a tab that holds a draft with changes asks first.
+so while the draft holds changes the browser asks before the tab closes. It
+asks on a reload too, because a browser cannot tell the two apart; the draft
+itself survives the reload.
 
 A browser that refuses session storage (a private window, blocked site data)
 shows a caution: editing works, but the draft will not survive a reload or
