@@ -24,8 +24,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
@@ -475,6 +478,53 @@ func TestAMergedNodeServesItsOwnHealth(t *testing.T) {
 	}
 	if body["queue"] == "" || body["queue"] == nil {
 		t.Errorf("queue = %v, want the broker named", body["queue"])
+	}
+}
+
+func TestAMergedNodeSeedsItsDashboardFromItsStore(t *testing.T) {
+	t.Parallel()
+	// A RESTART IS NOT AN EMPTY COMPANY. Everything the live projection
+	// serves, the activity feed and the spend rollup alike, used to start at
+	// this process's boot beside a store that said otherwise. serveAPI is the
+	// one place that seeds it, so the case runs through serveAPI: a unit test
+	// of the seed alone would pass with the call deleted from the wiring.
+	e := testEngine(t)
+	ev := events.New(types.AgentPhaseCompleted{
+		RoleName: "CEO", Agent: "a-1", TurnID: "tn-1", Phase: types.PhaseExecute,
+		Model: "claude-sonnet-5", InputTokens: 20, OutputTokens: 22, TotalTokens: 42,
+	}, events.TraceContext{})
+	ev.Timestamp = time.Now().UTC().Add(-time.Hour)
+	rec, ok := observe.Record(ev)
+	if !ok {
+		t.Fatal("a phase completion did not render as a store row")
+	}
+	if err := e.Backends().Store.Events().Append(t.Context(), rec); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	boot := bootstrapFor(t, 0)
+	boot.API.Port = freePort(t)
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, logging.Get("test"))
+	if err != nil {
+		t.Fatalf("serveAPI: %v", err)
+	}
+	t.Cleanup(func() { surface.stop(context.Background(), logging.Get("test")) })
+	snapshot := getJSON(t, "http://127.0.0.1:"+strconv.Itoa(boot.API.Port)+"/stream/snapshot")
+
+	listed := false
+	feed, _ := snapshot["events"].([]any)
+	for _, row := range feed {
+		if fields, _ := row.(map[string]any); fields["id"] == rec.ID {
+			listed = true
+		}
+	}
+	if !listed {
+		t.Errorf("the snapshot's feed = %v, want the stored phase listed", feed)
+	}
+	rollup, _ := snapshot["tokens"].(map[string]any)
+	totals, _ := rollup["totals"].(map[string]any)
+	if totals["total_tokens"] != float64(42) {
+		t.Errorf("the snapshot's spend totals = %v, want the stored phase's 42 tokens", totals)
 	}
 }
 
