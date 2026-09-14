@@ -416,14 +416,18 @@ func patchDraft(req ApplyRequest) draft {
 			// merge base is. Everything above worked on the full document;
 			// encoding `incoming` alone would undo it at the last step.
 			// Restoring the redacted values is the only thing that changed
-			// the struct after the merge, so its own encoding is merged
-			// BACK OVER the document, which writes the fields this build
-			// knows and leaves untouched the ones it does not.
+			// the struct after the merge, so its own encoding is written
+			// BACK OVER the document where the patch named something,
+			// which is the only place a mask can be: see [writeBackNamed].
 			restored, err := json.Marshal(incoming)
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: encode the merged config: %w", err)
 			}
-			final, err := applyMergePatch(merged, restored)
+			named, err := readPatch(req.Patch)
+			if err != nil {
+				return nil, nil, &PatchError{Err: err}
+			}
+			final, err := writeBackNamed(merged, restored, named)
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: restore the merged config: %w", err)
 			}

@@ -11,3 +11,9 @@ type RevisionStore = revisionStore
 func (s *Service) WrapRevisions(wrap func(RevisionStore) RevisionStore) {
 	s.configs = wrap(s.configs)
 }
+
+// WriteBackNamed is [writeBackNamed], for the cases that pin where a patch's
+// restored encoding lands on trees no schema of this build holds yet.
+func WriteBackNamed(merged, restored []byte, patch map[string]any) ([]byte, error) {
+	return writeBackNamed(merged, restored, patch)
+}

@@ -88,8 +88,21 @@ func applyMergePatch(document, patch []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configapi: decode the active document: %w", err)
 	}
+	overlay, err := readPatch(patch)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := json.Marshal(mergePatch(target, overlay))
+	if err != nil {
+		return nil, fmt.Errorf("configapi: encode the patched document: %w", err)
+	}
+	return merged, nil
+}
+
+// readPatch reads a merge patch as the object it has to be.
+func readPatch(patch []byte) (map[string]any, error) {
 	var overlay any
-	if err = yaml.Unmarshal(patch, &overlay); err != nil {
+	if err := yaml.Unmarshal(patch, &overlay); err != nil {
 		return nil, fmt.Errorf("the patch is not valid JSON or YAML: %w", err)
 	}
 	if overlay == nil {
@@ -98,17 +111,77 @@ func applyMergePatch(document, patch []byte) ([]byte, error) {
 		// mint an epoch every node reconciles onto.
 		return nil, errEmptyPatch
 	}
-	if _, ok := overlay.(map[string]any); !ok {
+	object, ok := overlay.(map[string]any)
+	if !ok {
 		// A top-level scalar or list would REPLACE the whole company
 		// under RFC 7396, which is never what a caller meant on this
-		// route — and `PUT /config` is how you say that deliberately.
+		// route, and `PUT /config` is how you say that deliberately.
 		return nil, fmt.Errorf(
 			"a patch must be an object naming the sections to change, not %T",
 			overlay)
 	}
-	merged, err := json.Marshal(mergePatch(target, overlay))
+	return object, nil
+}
+
+// writeBackNamed writes restored, this build's encoding of a patched
+// document, over merged at exactly the places patch names, and leaves every
+// other value of merged as it was.
+//
+// # Why only there
+//
+// The encoding is written back because the struct is where the masks a
+// redacted read handed back were restored: the stored bytes have to carry
+// the credentials, not the markers. A mask can only be where the patch put
+// one, since the rest of merged is the stored document and a stored document
+// holds none. So nothing outside what the patch named has anything to take
+// from the encoding.
+//
+// And it has something to lose. The encoding holds only what this build can
+// represent, and it writes every list whole: written back everywhere, a
+// patch to the mission replaced every list in the company with this build's
+// copy of it, and every member of every list lost the fields a newer build
+// had written. [config.CarryUnknown] brings them back for a member it can
+// match by identity, and a schedule has none, so its fields were simply gone.
+//
+// Where the patch names an object and both sides hold one, the walk goes
+// inside, so a patch naming one provider's model writes back that model and
+// not the provider block. Anywhere else the encoding's value replaces
+// merged's, and a key the encoding holds as null or omits is left to what the
+// merge made of it, which is what a merge patch writing it back did too.
+func writeBackNamed(merged, restored []byte, patch map[string]any) ([]byte, error) {
+	into, err := decodeTree(merged)
+	if err != nil {
+		return nil, fmt.Errorf("configapi: decode the patched document: %w", err)
+	}
+	from, err := decodeTree(restored)
+	if err != nil {
+		return nil, fmt.Errorf("configapi: decode the restored document: %w", err)
+	}
+	target, ok1 := into.(map[string]any)
+	source, ok2 := from.(map[string]any)
+	if !ok1 || !ok2 {
+		return nil, fmt.Errorf("configapi: a patched document is not an object")
+	}
+	writeBack(target, source, patch)
+	out, err := json.Marshal(target)
 	if err != nil {
 		return nil, fmt.Errorf("configapi: encode the patched document: %w", err)
 	}
-	return merged, nil
+	return out, nil
+}
+
+// writeBack is [writeBackNamed] over decoded trees, in place.
+func writeBack(into, from, named map[string]any) {
+	for key, value := range named {
+		encoded, present := from[key]
+		nested, isObject := value.(map[string]any)
+		inner, intoObject := into[key].(map[string]any)
+		source, fromObject := encoded.(map[string]any)
+		switch {
+		case isObject && intoObject && fromObject:
+			writeBack(inner, source, nested)
+		case present && encoded != nil:
+			into[key] = encoded
+		}
+	}
 }

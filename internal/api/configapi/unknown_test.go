@@ -3,6 +3,7 @@ package configapi_test
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -167,6 +168,142 @@ func TestAPatchNamingNoArrayKeepsWhatThisBuildCannotRepresent(t *testing.T) {
 	seedNewerPeer(t, s)
 	patchOnly(t, s, `{"mission": "unrelated"}`, summaryHeader)
 	assertNewerKeysKept(t, s, "PATCH naming no array")
+}
+
+// A PATCH KEEPS EVERY LIST IT DID NOT NAME EXACTLY AS IT WAS STORED, one whose
+// members have no identity included.
+//
+// A schedule cannot be matched to a stored one (two of a seat's schedules
+// can share a cron and a task), so when a write REPLACES a list of them, the
+// fields a newer build wrote on each are gone, and the API reference says
+// so. A patch that names no schedule replaced none. It still lost them: the
+// merge wrote this build's encoding of the whole company back over the
+// stored document, which replaced every list in it, and the carry could
+// bring back only what it could match.
+func TestAPatchKeepsEveryListItDidNotName(t *testing.T) {
+	t.Parallel()
+	schedule := func(owner string) []any {
+		return []any{map[string]any{
+			"name": "standup", "cron": "0 9 * * 1-5", "task": "Post the standup",
+			"schedule_setting": owner,
+		}}
+	}
+	seed := func(t *testing.T) *surface {
+		s := newSurface(t, nil)
+		s.seedStored(t, newerPeerDoc, func(document map[string]any) {
+			document["units"].([]any)[0].(map[string]any)["schedules"] = schedule("unit")
+			document["roles"].([]any)[1].(map[string]any)["schedules"] = schedule("cto")
+		})
+		return s
+	}
+	setting := func(t *testing.T, s *surface, owner string) any {
+		t.Helper()
+		tree := storedTree(t, s)
+		var holder map[string]any
+		if owner == "unit" {
+			holder = tree["units"].([]any)[0].(map[string]any)
+		} else {
+			holder = seatByHandle(tree, owner)
+		}
+		schedules, _ := holder["schedules"].([]any)
+		if len(schedules) != 1 {
+			t.Fatalf("%s holds %d schedules, want its one: %v", owner, len(schedules), holder)
+		}
+		return schedules[0].(map[string]any)["schedule_setting"]
+	}
+
+	t.Run("a patch naming no list", func(t *testing.T) {
+		t.Parallel()
+		s := seed(t)
+		patchOnly(t, s, `{"mission": "unrelated", "providers": {"llm": {"zulu": {"model": "claude-opus-5"}}}}`, summaryHeader)
+		for _, owner := range []string{"unit", "cto"} {
+			if got := setting(t, s, owner); got != owner {
+				t.Errorf("the %s schedule's field became %v, want it kept", owner, got)
+			}
+		}
+		zulu := storedTree(t, s)["providers"].(map[string]any)["llm"].(map[string]any)["zulu"].(map[string]any)
+		if zulu["model"] != "claude-opus-5" {
+			t.Errorf("the named model was not written: %v", zulu)
+		}
+	})
+
+	// The contrast, which is the documented limit: a patch replacing the
+	// roster replaced the seats' schedules, and what it did not name keeps
+	// its own.
+	t.Run("a patch naming the roster", func(t *testing.T) {
+		t.Parallel()
+		s := seed(t)
+		document := read(t, s)
+		patch, err := json.Marshal(map[string]any{"roles": document["roles"]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		patchOnly(t, s, string(patch), summaryHeader)
+		if got := setting(t, s, "unit"); got != "unit" {
+			t.Errorf("the unit's schedule field became %v, want it kept", got)
+		}
+		if got := setting(t, s, "cto"); got != nil {
+			t.Errorf("the CTO's replaced schedule kept %v, which nothing can match it by", got)
+		}
+	})
+}
+
+// A PATCH'S RESTORED ENCODING LANDS ONLY WHERE THE PATCH NAMED SOMETHING.
+//
+// The case above holds the rule to this build's schema, where a list whose
+// members have no identity sits only inside a seat or a unit. This one holds
+// it where it has to keep holding when that changes: inside a block the patch
+// named one key of, the list beside that key is the stored one, and only the
+// named key takes the encoding's value.
+func TestAPatchWritesBackOnlyWhatItNamed(t *testing.T) {
+	t.Parallel()
+	const merged = `{"block": {"named": "from the merge", "beside": [{"k": 1, "future": "kept"}]},
+	                 "untouched": [{"k": 2, "future": "kept"}], "gone": "by the merge"}`
+	const restored = `{"block": {"named": "restored", "beside": [{"k": 1}]},
+	                   "untouched": [{"k": 2}], "listed": [{"k": 3}], "omitted": null}`
+	for _, tc := range []struct {
+		name, patch, want string
+	}{{
+		name:  "a key inside a block",
+		patch: `{"block": {"named": "sent"}}`,
+		want: `{"block": {"named": "restored", "beside": [{"k": 1, "future": "kept"}]},
+		        "untouched": [{"k": 2, "future": "kept"}], "gone": "by the merge"}`,
+	}, {
+		name:  "a whole block",
+		patch: `{"block": "sent whole"}`,
+		want: `{"block": {"named": "restored", "beside": [{"k": 1}]},
+		        "untouched": [{"k": 2, "future": "kept"}], "gone": "by the merge"}`,
+	}, {
+		// Null in the encoding, or no key at all, leaves what the merge
+		// made of it: a merge patch writing the encoding back never
+		// deleted anything by it either.
+		name:  "keys the encoding holds as null or omits",
+		patch: `{"omitted": "sent", "gone": null}`,
+		want: `{"block": {"named": "from the merge", "beside": [{"k": 1, "future": "kept"}]},
+		        "untouched": [{"k": 2, "future": "kept"}], "gone": "by the merge"}`,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var patch map[string]any
+			if err := json.Unmarshal([]byte(tc.patch), &patch); err != nil {
+				t.Fatal(err)
+			}
+			got, err := configapi.WriteBackNamed([]byte(merged), []byte(restored), patch)
+			if err != nil {
+				t.Fatalf("WriteBackNamed: %v", err)
+			}
+			var gotTree, wantTree any
+			if err := json.Unmarshal(got, &gotTree); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(tc.want), &wantTree); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(gotTree, wantTree) {
+				t.Errorf("wrote back\n  %s\nwant\n  %s", got, tc.want)
+			}
+		})
+	}
 }
 
 // A FULL PUT OF THE READ, WITH A SEAT MOVED, KEEPS THEM. Nobody sending a

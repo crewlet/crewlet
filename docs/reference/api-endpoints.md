@@ -566,6 +566,10 @@ build cannot represent that the write does not name.
   empty, matches nothing, so no seat's setting reaches another. A member of a
   list with no identity (a schedule, for example) keeps nothing the write
   replaced.
+- **A `PATCH` replaces only what it names.** Everything it does not name is
+  stored exactly as it was, so a list the patch leaves alone keeps every
+  member's settings, identity or not, and a schedule loses a newer build's
+  settings only when the patch replaces the seat or unit list that holds it.
 - **A reload and a revert store the document exactly as it was stored**, since
   neither changes it.
 - **A renamed seat or unit is a new identity**, so it keeps nothing of the old
