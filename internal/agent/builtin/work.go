@@ -1915,37 +1915,19 @@ func appendMissing(all []string, handle string, add bool) []string {
 }
 
 func patched(task tracker.Task, patch tracker.TaskPatch) tracker.Task {
-	if patch.Title != nil {
-		task.Title = *patch.Title
-	}
-	if patch.Body != nil {
-		task.Body = *patch.Body
-	}
-	if patch.Assignee != nil {
-		task.Assignee = *patch.Assignee
-	}
-	if patch.Status != nil {
-		task.Status = *patch.Status
-		task.StatusGroup = patch.Status.Group()
-	}
-	if patch.Priority != nil {
-		task.Priority = *patch.Priority
-	}
-	if patch.Tags != nil {
-		task.Tags = *patch.Tags
-	}
-	if patch.RoutingUnit != nil {
-		task.RoutingUnit = *patch.RoutingUnit
-	}
-	if patch.Watchers != nil {
-		task.Watchers = *patch.Watchers
-	}
-	if patch.Muted != nil {
-		task.Muted = *patch.Muted
-	}
+	// THE WRITER'S OWN MERGE, not a copy of it. This was a field-by-field
+	// reimplementation, so every field added to [tracker.TaskPatch] had to
+	// be remembered here too — and when the schedule fields arrived the
+	// durable row took them and this snapshot did not. [tracker.TaskDeltas]
+	// then compared a task against itself on exactly those fields, so a due
+	// date, an estimate, a size or a sprint a seat moved reached its
+	// notification as a change that changed nothing.
+	task = tracker.Patched(task, patch)
+
 	if patch.Watch != nil {
-		// THE GESTURE APPLIED TO THE SNAPSHOT THIS TOOL READ. The
-		// durable sets are the WRITER's, settled inside its own
+		// THE GESTURE APPLIED TO THE SNAPSHOT THIS TOOL READ, which is
+		// the one thing genuinely this caller's rather than the merge's.
+		// The durable sets are the WRITER's, settled inside its own
 		// transaction, and this is only the wake's recipient list — so
 		// it is the best answer the tool has rather than the authority.
 		// Leaving it out would be worse than approximating it: a person

@@ -1699,3 +1699,52 @@ func TestOnlyTheUpdateSchemaAcceptsANullClear(t *testing.T) {
 		}
 	}
 }
+
+// A SCHEDULE EDIT REACHES THE WAKE IT ANNOUNCES.
+//
+// The notification's deltas are computed between the task this tool READ and
+// a snapshot of it with the patch applied. That snapshot was a field-by-field
+// reimplementation of the writer's own merge, and it never learned the
+// schedule fields — so the durable row took the new due date while the
+// snapshot kept the old one, `TaskDeltas` compared a task against itself on
+// exactly those fields, and every date, estimate, size and sprint a seat moved
+// arrived as a change that changed nothing.
+//
+// The snapshot is the writer's merge now, so this asserts the CONSEQUENCE
+// rather than the copy: a test over the field list would pass again the day
+// somebody adds a field to the patch and forgets it, which is the bug.
+func TestASceduleEditReachesTheNotification(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	seed := trk.tasks["ENG-1"]
+	seed.Task.DueAt = nil
+	seed.Task.EstimateMinutes = 30
+	trk.tasks["ENG-1"] = seed
+	reg := workRegistry(t, builtin.WorkDeps{Reader: trk, Writer: trk.as})
+
+	got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
+		"item": "ENG-1", "due": "2031-04-16", "estimate_minutes": 90,
+	})
+	if got.Failed {
+		t.Fatalf("update failed: %s", got.Output)
+	}
+	notify := trk.notified[len(trk.notified)-1]
+	if notify == nil {
+		t.Fatal("the write carried no notification at all")
+	}
+	for _, field := range []string{"due", "estimate"} {
+		delta, held := notify.Fields[field]
+		if !held {
+			t.Errorf("the wake carries no %q delta, so the card announces a "+
+				"change that changed nothing (fields: %v)", field, notify.Fields)
+			continue
+		}
+		if delta.To == delta.From {
+			t.Errorf("%s moved from %q to %q — the snapshot was compared "+
+				"against itself", field, delta.From, delta.To)
+		}
+	}
+	if got := notify.Fields["estimate"]; got.From != "30m" || got.To != "90m" {
+		t.Errorf("estimate delta = %+v, want 30m → 90m", got)
+	}
+}
