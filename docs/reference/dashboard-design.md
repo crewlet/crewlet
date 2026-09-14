@@ -1053,7 +1053,13 @@ while the screen binds the real canvas, outline, editor and dialogs, and
   tab stops of its own, and they are the card's and the row's own list
   (`nodeActions.nodeMenu`) rather than a copy: the same entries, order, names
   and icons, Edit reports included. Open seat is offered only for a seat the
-  saved company has.
+  saved company has. A node's key can move under whatever holds it: the first
+  check keys a loaded base by the engine's handles, and a save keys the nodes
+  it created. The reducer lists what moved (`state.rekeyed`), and the
+  selection and an open dialog read their node through that list in the very
+  render the keys change. Each dialog is mounted once per opening, never keyed
+  by its node, so a key that moves under an open editor keeps its drawer, its
+  form and its focus.
 - **One polite live region** says what each operation, undo and redo did (an
   undo or a redo names itself, since the operation's own sentence is in the
   past tense and would announce the change as just made), and focus moves to

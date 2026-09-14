@@ -39,6 +39,7 @@ import {
   buildPatch,
   fromDocument,
   knownHandles,
+  rekeying,
   toDocument,
   type CheckedDocument,
   type IndexedDocument,
@@ -139,6 +140,16 @@ export interface BuilderState {
     readonly reason: RecordRefusal | "mode" | "not_keyed" | "has_changes";
     readonly message: string;
   } | null;
+  /**
+   * The keys the last keying of the base moved, old key to new: the engine's
+   * first description of a loaded base moves a seat declaring no handle from
+   * its path key to its handle, and a save moves a created node from the key
+   * it was minted with. A surface still holding an old key (an open dialog,
+   * the selection) reads its node through this in the very render the keys
+   * change, where a key followed a render later would find no node there and
+   * draw it as gone.
+   */
+  readonly rekeyed: ReadonlyMap<NodeKey, NodeKey>;
 }
 
 export type BuilderAction =
@@ -206,6 +217,7 @@ export const INITIAL_BUILDER: BuilderState = {
   update: null,
   last: null,
   refusal: null,
+  rekeyed: new Map(),
 };
 
 /**
@@ -462,6 +474,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
           baseDraft,
           draft: baseDraft,
           check: { ...next.check, sent, problems: placed(sent, outcome), derived },
+          rekeyed: rekeying(state.draft, baseDraft),
         };
       }
       return next;
@@ -484,6 +497,7 @@ export function builderReducer(state: BuilderState, action: BuilderAction): Buil
         base: { document, revision: action.revisionId, derived: action.derived },
         baseDraft,
         draft: baseDraft,
+        rekeyed: rekeying(state.draft, baseDraft),
         log: EMPTY_LOG,
         reports: [],
         generation: state.generation + 1,

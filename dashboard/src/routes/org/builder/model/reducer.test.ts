@@ -169,6 +169,47 @@ describe("keying the base", () => {
     expect(keyed.generation).toBe(loaded.generation);
   });
 
+  // A dialog or a selection still holding the old key reads its node through
+  // this list in the very render the keys change, rather than finding no
+  // node there and drawing it as gone for that render.
+  test("keying the base lists every key it moved, and a load starts the list again", () => {
+    const loaded = loadedEdit();
+    const keyed = run(
+      loaded,
+      checked(loaded, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    expect(keyed.rekeyed.get(seatPathKey("roles[0]"))).toBe("seat:ceo");
+    // A unit is keyed by its name either way, and moves nowhere.
+    expect(keyed.rekeyed.has("unit:Sales")).toBe(false);
+    // A later check keys nothing, and leaves the list as it was.
+    const again = run(
+      keyed,
+      checked(keyed, { status: "clean", warnings: [], derived: fixtureDerived(fixtureCompany()) }),
+    );
+    expect(again.rekeyed).toBe(keyed.rekeyed);
+    expect(
+      run(keyed, { type: "load", mode: "edit", document: fixtureCompany(), revision: "rev-2" })
+        .rekeyed.size,
+    ).toBe(0);
+
+    // A save keys the nodes it created by the engine's handles.
+    const added = run(keyed, {
+      type: "record",
+      intent: {
+        type: "addSeat",
+        key: "new:qa",
+        placement: { parent: COMPANY_KEY, after: null },
+        data: { name: "Quality Lead" },
+      },
+    });
+    const saved = run(added, {
+      type: "saved",
+      revisionId: "rev-2",
+      derived: fixtureDerived(toDocument(added.draft).document),
+    });
+    expect(saved.rekeyed.get("new:qa")).toBe("seat:quality-lead");
+  });
+
   test("nothing is recorded before the base is keyed, so no log ever names a path key", () => {
     // A base is re-keyed only while its log is empty, so an operation
     // recorded against a path key would keep that key for good: a reload or

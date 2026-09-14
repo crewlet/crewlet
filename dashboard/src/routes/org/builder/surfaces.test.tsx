@@ -236,9 +236,31 @@ test("an editor opened before the engine described the company keeps its node", 
   fireEvent.keyDown(row, { key: "Enter" });
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
 
+  const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
+
   engine.script = () => null;
   act(() => answer());
   await screen.findByText("No problems");
-  expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
   expect(screen.queryByText("This node is no longer in the draft")).toBeNull();
+  // The same editor, never one mounted again on the answer: a remount played
+  // the drawer's entrance a second time and threw away where focus was.
+  expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
+});
+
+// ONE FORM PER OPENING: the lens mounts a new editor for every one, so a node
+// opened after another starts from its own data, never from the last form.
+test("every opening of the editor builds its own node's form", async () => {
+  mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=outline",
+  });
+  await screen.findByText("No problems");
+  await typeIntoTheEditor();
+  const dev = within(screen.getByRole("treegrid", { name: "Organization outline" }))
+    .getAllByRole("row")
+    .find((r) => r.getAttribute("data-row-id") === "seat:dev")!;
+  fireEvent.keyDown(dev, { key: "Enter" });
+  const next = await screen.findByRole("dialog", { name: "Edit Dev" });
+  expect((within(next).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("");
 });

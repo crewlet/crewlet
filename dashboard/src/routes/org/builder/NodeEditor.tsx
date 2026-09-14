@@ -139,13 +139,16 @@ export function NodeEditor({
       </Drawer>
     );
   }
-  // KEYED BY THE NODE, so opening the editor on another node builds a new
-  // form from that node rather than keeping the one the last node filled: a
-  // form's fields are state, and React would otherwise reuse them.
+  // ONE FORM PER OPENING, NOT PER KEY. The Builder mounts a new editor for
+  // every opening (its dialog host keys each dialog by the opening), so
+  // another node, or the same one opened again, starts from its own data. A
+  // node's key can also change while its editor is open (the first check keys
+  // the base by the engine's handles), and the form and its drawer stay: keyed
+  // by the node here, they were torn down and built again on that answer.
   return found.kind === "unit" ? (
-    <UnitEditor key={found.node.key} unit={found.node} section={section} onClose={onClose} />
+    <UnitEditor unit={found.node} section={section} onClose={onClose} />
   ) : (
-    <SeatEditor key={found.node.key} seat={found.node} section={section} onClose={onClose} />
+    <SeatEditor seat={found.node} section={section} onClose={onClose} />
   );
 }
 

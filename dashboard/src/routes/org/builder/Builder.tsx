@@ -81,7 +81,6 @@ import {
   type ChartKind,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
-import { rekeying } from "./model/document.ts";
 import { allUnits, locate, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
@@ -163,11 +162,25 @@ export interface BuilderSurfaces {
   changeKind: ComponentType<NodeDialogProps>;
 }
 
-type OpenDialog =
+/** A dialog the lens is asked to open. */
+type DialogRequest =
   | { readonly type: "editor"; readonly key: NodeKey; readonly section?: EditorSectionName }
   | { readonly type: "move" | "remove" | "changeKind"; readonly key: NodeKey }
   | { readonly type: "add"; readonly parent: NodeKey | null; readonly kind?: AddKind }
   | { readonly type: "discard" };
+
+/**
+ * A dialog the lens has open, and which opening of it this is.
+ *
+ * ONE MOUNT PER OPENING. The host keys each dialog by `opening`, so every
+ * opening builds its form afresh (another node, or the same node again),
+ * while the node an open dialog is about can change its key under it without
+ * a remount: the first check keys the base by the engine's handles, and a
+ * dialog opened before that follows its node to the new key. Keyed by the
+ * node instead, that dialog was torn down and mounted again on the check's
+ * answer, which played its entrance again and threw away its focus.
+ */
+type OpenDialog = DialogRequest & { readonly opening: number };
 
 // ---------------------------------------------------------------------------
 // Posture
@@ -716,29 +729,33 @@ function Lens({
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
+  const openings = useRef(0);
+  const openDialog = useCallback(
+    (next: DialogRequest) => setDialog({ ...next, opening: ++openings.current }),
+    [],
+  );
 
-  // A NODE HELD BEFORE THE ENGINE KEYED THE BASE KEEPS ITS PLACE. Until the
-  // first check answers, a seat that declares no handle is keyed by its path;
-  // the answer re-keys the base by the engine's handles (`model/reducer.ts`),
-  // and an editor opened on the old key, or a selection holding it, would
-  // lose its node ("This node is no longer in the draft"). The re-keying
-  // keeps the document, so each old key is followed to the node at the same
-  // path. Before the selection effect below, which would otherwise clear a
-  // selection whose key has gone.
-  const unkeyed = useRef<Draft | null>(null);
+  // A NODE HELD ACROSS A KEYING OF THE BASE KEEPS ITS PLACE. Until the first
+  // check answers, a seat that declares no handle is keyed by its path, and
+  // the answer re-keys the base by the engine's handles; a save re-keys the
+  // nodes it created. The reducer lists what moved (`state.rekeyed`), and an
+  // open dialog or the selection reads its node through that list in the
+  // very render the keys change: followed a render later, an open editor was
+  // drawn as gone ("This node is no longer in the draft") for that render and
+  // then mounted again. The effect moves the held keys over for good, before
+  // the selection effect below, which would otherwise clear a selection whose
+  // key has gone.
+  const { rekeyed } = state;
+  const follow = useCallback((key: NodeKey) => rekeyed.get(key) ?? key, [rekeyed]);
   useEffect(() => {
-    const was = unkeyed.current;
-    unkeyed.current = isBaseKeyed(state) ? null : state.draft;
-    if (was === null || unkeyed.current !== null) return;
-    const moved = rekeying(was, state.draft);
-    if (moved.size === 0) return;
-    const follow = (key: NodeKey) => moved.get(key) ?? key;
+    if (rekeyed.size === 0) return;
     if (selectedRef.current !== null) {
       selectedRef.current = follow(selectedRef.current);
       setSelected(selectedRef.current);
     }
     setDialog((open) => (open && "key" in open ? { ...open, key: follow(open.key) } : open));
-  }, [state]);
+  }, [rekeyed, follow]);
+  const selection = selected === null ? null : follow(selected);
 
   // THE URL AND THE DRAFT BOTH MOVE THE SELECTION, and one effect answers
   // both: a link (or the command palette) naming a unit or a seat selects it,
@@ -784,14 +801,14 @@ function Lens({
 
   const closeDialog = useCallback(() => setDialog(null), []);
   const openIfWritable = useCallback(
-    (next: OpenDialog) => {
+    (next: DialogRequest) => {
       if (readOnlyReason !== null) {
         announce(`Editing is paused because ${readOnlyReason}.`);
         return;
       }
-      setDialog(next);
+      openDialog(next);
     },
-    [readOnlyReason, announce],
+    [readOnlyReason, announce, openDialog],
   );
 
   const exitFullscreen = useFullscreenExit();
@@ -1004,8 +1021,8 @@ function Lens({
             .filter((p) => p.severity === "problem")
             .map((p) => p.source as ConfigProblem)
         : [],
-      selection: { key: selected, select },
-      openEditor: (key, section) => setDialog({ type: "editor", key, section }),
+      selection: { key: selection, select },
+      openEditor: (key, section) => openDialog({ type: "editor", key, section }),
       openAdd: (parent, kind) => openIfWritable({ type: "add", parent, kind }),
       openMove: (key) => openIfWritable({ type: "move", key }),
       openDelete: (key) => openIfWritable({ type: "remove", key }),
@@ -1022,8 +1039,9 @@ function Lens({
     state,
     problemsCurrent,
     dispatch,
-    selected,
+    selection,
     select,
+    openDialog,
     openIfWritable,
     announce,
     focusNode,
@@ -1070,7 +1088,7 @@ function Lens({
     redo: () => dispatch({ type: "redo" }),
     expandAll: () => viewHandle.current?.expandAll(),
     collapseAll: () => viewHandle.current?.collapseAll(),
-    discard: () => setDialog({ type: "discard" }),
+    discard: () => openDialog({ type: "discard" }),
   };
   // THE TOOLBAR MIRRORS THE SELECTED NODE'S ACTIONS. A canvas card's own
   // buttons are pointer-only (a tree item may not contain tab stops), so this
@@ -1080,7 +1098,7 @@ function Lens({
   // same order under the same names and icons, Edit reports and the rule for
   // Open seat included, so what an operator learned on the canvas holds here.
   // With nothing selected it offers what the company's Add menu offers.
-  const selectedView = selected !== null ? structure.nodes.get(selected) : undefined;
+  const selectedView = selection !== null ? structure.nodes.get(selection) : undefined;
   const selectedName = selectedView
     ? selectedView.name || (selectedView.type === "company" ? "the company" : "the selected node")
     : "";
@@ -1516,6 +1534,7 @@ function Lens({
         {dialog && (
           <DialogHost
             dialog={dialog}
+            follow={follow}
             surfaces={surfaces}
             onClose={closeDialog}
             onDiscard={() => {
@@ -1614,11 +1633,14 @@ function isTextEntry(el: HTMLElement): boolean {
 
 function DialogHost({
   dialog,
+  follow,
   surfaces,
   onClose,
   onDiscard,
 }: {
   dialog: OpenDialog;
+  /** Reads a key the dialog holds through the base's last keying (`state.rekeyed`). */
+  follow: (key: NodeKey) => NodeKey;
   surfaces: BuilderSurfaces;
   onClose: () => void;
   onDiscard: () => void;
@@ -1644,15 +1666,29 @@ function DialogHost({
       );
     case "add": {
       const Add = surfaces.add;
-      return <Add parent={dialog.parent} kind={dialog.kind} onClose={onClose} />;
+      return (
+        <Add
+          key={dialog.opening}
+          parent={dialog.parent === null ? null : follow(dialog.parent)}
+          kind={dialog.kind}
+          onClose={onClose}
+        />
+      );
     }
     case "editor": {
       const Editor = surfaces.editor;
-      return <Editor nodeKey={dialog.key} section={dialog.section} onClose={onClose} />;
+      return (
+        <Editor
+          key={dialog.opening}
+          nodeKey={follow(dialog.key)}
+          section={dialog.section}
+          onClose={onClose}
+        />
+      );
     }
     default: {
       const Node = surfaces[dialog.type];
-      return <Node nodeKey={dialog.key} onClose={onClose} />;
+      return <Node key={dialog.opening} nodeKey={follow(dialog.key)} onClose={onClose} />;
     }
   }
 }

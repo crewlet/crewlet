@@ -349,10 +349,11 @@ function checkedHandle(
 
 /**
  * Where each node of `before` is in `after`, for two drafts of ONE document
- * keyed two ways: the base before and after the engine first described it,
- * when seats that declare no handle move from their path keys to their
- * handles. Each key is followed to the key of the node at the same authored
- * path; only keys that changed are listed.
+ * keyed two ways: the base before and after it is keyed, when the engine's
+ * first description of it moves the seats that declare no handle from their
+ * path keys to their handles, or a save moves the nodes it created from the
+ * keys they were minted with. Each key is followed to the key of the node at
+ * the same authored path; only keys that changed are listed.
  */
 export function rekeying(before: Draft, after: Draft): Map<NodeKey, NodeKey> {
   const was = toDocument(before).index;

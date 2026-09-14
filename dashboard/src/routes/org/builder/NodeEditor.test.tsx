@@ -11,7 +11,6 @@
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
@@ -287,24 +286,6 @@ describe("the unsaved-changes prompt", () => {
 });
 
 describe("seat fields", () => {
-  // The editor is one component in the Builder's dialog host: opening it on
-  // another node must build that node's form, not keep the last one's.
-  test("opening the editor on another node builds that node's form", () => {
-    function Switcher() {
-      const [key, setKey] = useState<NodeKey>("seat:dev");
-      return (
-        <>
-          <button onClick={() => setKey("seat:sre")}>Open SRE</button>
-          <NodeEditor nodeKey={key} onClose={() => {}} />
-        </>
-      );
-    }
-    renderInBuilder(keyedState(fixtureCompany()), <Switcher />);
-    type("Goal", "Ship");
-    fireEvent.click(screen.getByRole("button", { name: "Open SRE" }));
-    expect((field("Goal") as HTMLTextAreaElement).value).toBe("Keep it up");
-  });
-
   test("an existing seat's handle is read-only with the reason; a new seat's is editable", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     expect(screen.queryByLabelText(labelled("Handle"))).toBeNull();
