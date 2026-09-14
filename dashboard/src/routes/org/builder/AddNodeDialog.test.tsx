@@ -15,7 +15,7 @@ import { builderReducer, INITIAL_BUILDER } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import type { AddKind } from "./BuilderContext.tsx";
 import type { BuilderState } from "./model/reducer.ts";
-import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
+import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
 
 afterEach(cleanup);

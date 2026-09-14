@@ -20,7 +20,7 @@ import type { Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import { INITIAL_BUILDER, type BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
-import { answered, checkedEdit, PLACED, record, run } from "./stateTestkit.ts";
+import { answered, checkedEdit, PLACED, record, run } from "./testState.ts";
 import {
   chartInputs,
   CYCLE_GROUP,

@@ -1,13 +1,16 @@
 /**
- * A Builder stand-in for the canvas and outline suites. Imported by tests
- * only.
+ * A Builder stand-in for the view, editor and dialog suites. Imported by
+ * tests only.
  *
- * THE REAL REDUCER, A RECORDED CONTEXT. The views read and dispatch through
- * `BuilderContext`, so the harness provides one over `builderReducer` itself:
- * an operation a view records really changes the draft it draws next. What
- * belongs to `Builder.tsx` (dialogs, the check, the live region) is replaced
- * by spies, so a suite asserts what a view ASKED for (`openDelete` with this
- * key) rather than a dialog another track draws.
+ * THE REAL REDUCER, A RECORDED CONTEXT. Every surface reads and dispatches
+ * through `BuilderContext`, so the harness provides one over `builderReducer`
+ * itself: an operation a surface records really changes the draft it draws
+ * next. What belongs to `Builder.tsx` (the other dialogs, the check, the live
+ * region) is replaced by spies, so a suite asserts what a surface ASKED for
+ * (`openDelete` with this key) rather than a dialog another surface draws.
+ * ONE HARNESS builds the context every suite renders in, so a change to the
+ * Builder's contract is made to the test double once, as it is to the
+ * Builder.
  *
  * jsdom has no layout. The canvas measures its viewport and every card with
  * ResizeObserver, so [LayoutObserver] stands in for it: it records every
@@ -15,7 +18,7 @@
  * a fixed size and each card by what it holds.
  */
 
-import { act } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
 import { Router } from "~/app/router.tsx";
@@ -159,6 +162,40 @@ export function harnessProbe(): HarnessProbe {
     view: null,
     selection: null,
   };
+}
+
+/** What a suite may set on the harness. */
+export interface HarnessOptions {
+  readonly readOnly?: boolean;
+  readonly agents?: AgentRow[];
+  readonly sandboxes?: SandboxEntry[];
+}
+
+/**
+ * Renders `ui` inside the harness, starting from `initial`: the editor and
+ * dialog suites' entry, which read the state the last render saw and the
+ * spies rather than hold a probe.
+ */
+export function renderInBuilder(
+  initial: BuilderState,
+  ui: ReactNode,
+  options: HarnessOptions = {},
+): ReturnType<typeof render> & { state(): BuilderState; spies: BuilderSpies } {
+  const spies = builderSpies();
+  const probe = harnessProbe();
+  const rendered = render(
+    <BuilderHarness
+      initial={initial}
+      spies={spies}
+      probe={probe}
+      readOnly={options.readOnly}
+      agents={options.agents}
+      sandboxes={options.sandboxes}
+    >
+      {ui}
+    </BuilderHarness>,
+  );
+  return { ...rendered, state: () => probe.state, spies };
 }
 
 type Sizer = (el: Element) => { width: number; height: number } | null;

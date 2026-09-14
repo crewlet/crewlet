@@ -28,7 +28,7 @@ import { CanvasView } from "./CanvasView.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
-import { answered, checkedEdit, PLACED, record } from "./stateTestkit.ts";
+import { answered, checkedEdit, PLACED, record } from "./testState.ts";
 import {
   BuilderHarness,
   LayoutObserver,

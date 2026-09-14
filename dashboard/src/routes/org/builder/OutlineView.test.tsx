@@ -24,7 +24,7 @@ import { toDocument } from "./model/document.ts";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived, type DerivedOverrides } from "./model/testkit.ts";
-import { checkedEdit, PLACED } from "./stateTestkit.ts";
+import { checkedEdit, PLACED } from "./testState.ts";
 import {
   BuilderHarness,
   builderSpies,

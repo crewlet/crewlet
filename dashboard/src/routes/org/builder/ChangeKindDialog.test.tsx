@@ -17,7 +17,7 @@ import { getPath } from "./model/json.ts";
 import { builderReducer, type BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
-import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
+import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
 
 afterEach(cleanup);

@@ -22,7 +22,7 @@ import { builderReducer } from "./model/reducer.ts";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { EditorSectionName } from "./BuilderContext.tsx";
 import { NodeEditor } from "./NodeEditor.tsx";
-import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
+import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import {
   checkWithProblems,
   checkWithWarnings,

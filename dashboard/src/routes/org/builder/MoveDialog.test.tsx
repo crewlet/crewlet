@@ -16,7 +16,7 @@ import { locate } from "./model/draft.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany } from "./model/testkit.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
-import { renderInBuilder, type HarnessOptions } from "./testBuilder.tsx";
+import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
 
 afterEach(cleanup);
