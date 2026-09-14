@@ -57,6 +57,11 @@ describe("the save", () => {
     expect(_summary).toMatch(/^Edited 1 seat \(write [0-9a-f]{32}\)$/);
 
     expect(await screen.findByText("Saved. The engine is applying it.")).toBeDefined();
+    // Said once: the toast's host is a live region of its own, and the
+    // Builder's region repeating it had a screen reader read it twice.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(document.querySelector(".toast-host")!.textContent).toContain("Saved.");
+    expect(document.querySelector(".org-builder-live")!.textContent).not.toContain("Saved.");
     // The stored revision is loaded, and the kept draft is gone with the work saved.
     await waitFor(() => expect(engine.checks().at(-1)!.headers["If-Match"]).toBe('"r-saved"'));
     expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toBeNull();

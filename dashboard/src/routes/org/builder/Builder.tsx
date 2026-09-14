@@ -813,8 +813,10 @@ function Lens({
       dispatchRaw({ type: "saved", revisionId: landed.revisionId, derived: landed.derived });
       setReviewing(false);
       if (landed.mode === "create") setCreated(true);
+      // THE TOAST IS THE ANNOUNCEMENT: its host is a polite live region of
+      // its own, so saying the same sentence through the Builder's region as
+      // well had a screen reader read it twice.
       toast.ok("Saved. The engine is applying it.");
-      announce("Saved. The engine is applying it.");
       load(true);
     },
     onConflict: ({ reason, currentRevisionId }) => {
