@@ -18,11 +18,16 @@
  * reducer's handles already hold (`BuilderApi.derived`, `currentHandles`),
  * and a screen and the operation it records agree on what is known.
  *
- * Two small rules ARE restated, each because a screen has to say something
- * the engine does not report and each marked at its definition: which
- * provider an unpinned seat runs on (`agent/phase.Registry.Chain`), and which
- * integration block counts as connected. Neither decides anything the engine
- * validates.
+ * A few small rules ARE restated, each because a screen has to say something
+ * the engine does not report, and each marked at its definition: the order
+ * the company's providers are tried in and the one an unpinned seat runs on
+ * (`config.Providers.ProviderOrder`, `agent/phase.Registry.Chain`), which
+ * integration block counts as connected, a Mattermost bot's default username
+ * (`mattermost.BotUsername`), what makes a value a whole reference
+ * (`envref.Whole`), the unit `mcp_env` a seat receives (`org.inheritMCPEnv`)
+ * and the servers a provisioning vendor enrols a seat by, and what a
+ * placement block means (`config.RolePlacement`). None of them decides
+ * anything the engine validates.
  *
  * NAMES, NEVER VALUES. Every credential-adjacent helper here returns the
  * names a document uses (a tool server, a variable, a `${NAME}` reference),
