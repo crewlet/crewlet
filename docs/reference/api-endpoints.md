@@ -365,9 +365,10 @@ Four rules follow from that:
   handle strands that seat's diary, onboarding marker and counterparty
   profiles behind an id nothing derives any more; a unit's name is referenced
   by every `manages:` entry and root seat `unit:` that names it, and an MCP
-  server's name by every per-seat credential block keyed on it. For a role
-  the check is on the **derived** handle, so a body that omits `handle` and
-  changes `name` is refused too: that is a rename, just an accidental one.
+  server's name by every `mcp_env` block, a seat's or a unit's, keyed on it.
+  For a role the check is on the **derived** handle, so a body that omits
+  `handle` and changes `name` is refused too: that is a rename, just an
+  accidental one.
   Send the identity back unchanged (changing a seat's display name while
   keeping its handle is an ordinary edit); rename through `PUT /config`, where
   what has to move with it is visible.

@@ -63,8 +63,9 @@ var ErrNoSuchEntity = errors.New("configapi: no such entity")
 // and its counterparty profiles behind an id nothing derives any more, and
 // its inbox subject with them. A unit's name is referenced by every
 // `manages:` entry and root seat `unit:` that names it, and an MCP server's
-// name by every per-seat credential block keyed on it. None of that moves with
-// a splice, and the URL is left naming something that no longer exists.
+// name by every `mcp_env` block, a seat's or a unit's, keyed on it. None of
+// that moves with a splice, and the URL is left naming something that no
+// longer exists.
 var ErrIdentityMismatch = errors.New("configapi: identity mismatch")
 
 // identityMismatch names both halves, because the caller has to be able to
