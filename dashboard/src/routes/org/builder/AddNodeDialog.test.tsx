@@ -119,6 +119,17 @@ test("a key is minted where randomUUID does not exist", () => {
   expect(typeof crypto.randomUUID).toBe("function");
 });
 
+test("a unit that has left the draft takes nothing, and says so", () => {
+  const view = open(keyedState(fixtureCompany()), "unit:Gone");
+  expect(
+    screen.getByText("That unit is no longer in the draft, so nothing can be added to it."),
+  ).toBeDefined();
+  const add = screen.getByRole("button", { name: "Add agent seat" }) as HTMLButtonElement;
+  expect(add.disabled).toBe(true);
+  fireEvent.click(add);
+  expect(view.state().log.ops).toHaveLength(0);
+});
+
 test("a refusal keeps the dialog open and adds nothing", () => {
   const loaded = builderReducer(INITIAL_BUILDER, {
     type: "load",

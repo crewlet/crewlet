@@ -56,6 +56,9 @@ describe("a unit", () => {
       .getByRole("heading", { name: "Seats placed here by unit reference" })
       .closest("section") as HTMLElement;
     expect(within(section).getByText("Designer")).toBeDefined();
+    expect(
+      screen.getByText("Designer loses its unit reference to Platform and stays at the top level."),
+    ).toBeDefined();
     replaceFallback("ceo");
     fireEvent.click(deleteButton());
     expect(locate(view.state().draft, "seat:designer")).toBeDefined();

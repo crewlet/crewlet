@@ -94,6 +94,12 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
   });
   open(added, "new:qa");
   expect(screen.queryByText(/These stay until you decommission them/)).toBeNull();
+  // Never saved, so it never ran: nothing stops and no memory is kept.
+  expect(
+    screen.getByText(
+      "QA will not run: a human seat is a person in the chart, with no agent behind it.",
+    ),
+  ).toBeDefined();
 });
 
 test("a human seat is not made without a contact identity, and the change records one operation", () => {

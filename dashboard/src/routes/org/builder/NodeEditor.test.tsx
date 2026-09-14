@@ -398,6 +398,38 @@ describe("seat fields", () => {
     ).toBe(true);
   });
 
+  // The field coverage's read-only row: each setting the builder shows and
+  // does not edit, with the reason and where it is edited instead.
+  test("the settings the builder does not edit are shown, each with where it is edited", () => {
+    const doc = fixtureCompany();
+    Object.assign(doc.units![0]!.roles![1]!, {
+      llm_review: ["smart", "fast"],
+      llm_judge: "fast",
+      sandbox: { enabled: true, run_in: "e2b", env: { KEY: "__redacted__" } },
+      workers: ["researcher", "writer"],
+      learning_enabled: false,
+    });
+    edit(keyedState(doc), "seat:dev");
+    const section = screen
+      .getByRole("heading", { name: "Configured in the document" })
+      .closest("section") as HTMLElement;
+    const fact = (label: string) =>
+      within(section).getByText(label).closest(".builder-fact") as HTMLElement;
+    expect(fact("Models per phase").textContent).toContain("review: smart, then fast");
+    expect(fact("Models per phase").textContent).toContain("judge: fast");
+    expect(fact("Sandbox").textContent).toContain("Enabled, runs in e2b");
+    expect(fact("Workers").textContent).toContain("researcher, writer");
+    expect(fact("Learning").textContent).toContain("Off");
+    expect(fact("Datadog fallback").textContent).toContain("Not the Datadog fallback.");
+    expect(
+      within(section).getByText("5 settings the builder shows and does not edit."),
+    ).toBeDefined();
+    for (const label of ["Models per phase", "Sandbox", "Workers", "Learning"]) {
+      expect(within(fact(label)).getByRole("link").getAttribute("href")).toBe("#/config");
+    }
+    expect(section.innerHTML).not.toContain("__redacted__");
+  });
+
   test("a seat's placement is shown as the node and labels it names", () => {
     const doc = fixtureCompany();
     doc.units![0]!.roles![1]!.placement = { labels: { region: "eu" } };
@@ -671,6 +703,27 @@ describe("a unit", () => {
       "#/secrets",
     );
     expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
+  });
+
+  test("a unit's schedule says when it runs and who runs it", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.schedules!.push({ name: "triage", cron: "0 * * * *", task: "Triage the queue" });
+    edit(keyedState(doc), "unit:Engineering");
+    const standup = screen.getByRole("checkbox", { name: "Enabled: standup" });
+    const triage = screen.getByRole("checkbox", { name: "Enabled: triage" });
+    const described = (box: HTMLElement) =>
+      document.getElementById(box.getAttribute("aria-describedby") ?? "")?.textContent;
+    expect(described(standup)).toBe("0 9 * * 1-5, run by the unit lead. Run standup");
+    expect(described(triage)).toBe("0 * * * *, run by each agent member. Triage the queue");
+  });
+
+  test("an empty channel says what the unit inherits, as the check reported it", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.channel = "eng";
+    edit(keyedState(doc, { units: { "units[0]": { channel: "eng" } } }), "unit:Platform");
+    const channel = field("Channel") as HTMLInputElement;
+    expect(channel.placeholder).toBe("eng");
+    expect(screen.getByText("Empty inherits eng from Engineering.")).toBeDefined();
   });
 
   test("a unit schedule is toggled as part of the edit", () => {
