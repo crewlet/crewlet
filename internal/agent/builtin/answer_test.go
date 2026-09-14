@@ -37,6 +37,17 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 		{"get_work_item(include=comments)", onlyComments(whole)},
 		{"get_work_item(include=history)", onlyHistory(whole)},
 		{"get_work_item(include=links)", onlyLinks(whole)},
+		// THE READ THAT MAKES THE COMMENT EXCERPT HONEST. The page above
+		// carries excerpts precisely because twenty whole bodies is ten
+		// times this ceiling; that is only legitimate while opening ONE
+		// still fits, so a MaxCommentBody raised past this would leave
+		// what somebody wrote unreachable by any tool.
+		{"get_work_item(comment=…)", oneWholeComment(whole)},
+		// THE OTHER WHOLE-VALUE READ, and the one the ceiling used to
+		// make impossible: [tracker.MaxBody] was exactly
+		// [builtin.ToolAnswerBytes], so a body at its cap could not be
+		// sent beside any envelope at all.
+		{"get_work_item(body=true)", wholeBody(whole)},
 		{"get_work_catalogue", maximalCatalogue()},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -98,19 +109,45 @@ func onlyLinks(d tracker.TaskDetail) tracker.TaskDetail {
 	return d
 }
 
-// maximalDetail is one task carrying every collection at its cap.
+// wholeBody is what `body: true` answers: the item with its description at
+// [tracker.MaxBody] and nothing else beside it.
+func wholeBody(d tracker.TaskDetail) tracker.TaskDetail {
+	d.Comments, d.History, d.Links, d.CommentsCursor = nil, nil, nil, ""
+	d.Task.Body = strings.Repeat("b", tracker.MaxBody)
+	return d
+}
+
+// oneWholeComment is what `comment:` answers: that comment ALONE, at
+// [tracker.MaxCommentBody], with no page and no cursor behind it.
+func oneWholeComment(d tracker.TaskDetail) tracker.TaskDetail {
+	d.History, d.Links, d.CommentsCursor = nil, nil, ""
+	d.Comments = []tracker.Comment{{
+		ID: "c", Task: "id", Author: "ana",
+		Body:      strings.Repeat("c", tracker.MaxCommentBody),
+		CreatedAt: time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC),
+	}}
+	return d
+}
+
+// maximalDetail is one task carrying every collection at its cap, AS THE TOOL
+// SENDS IT — so the body is at [builtin.TaskBodyShown] rather than at
+// [tracker.MaxBody].
 //
-// THE BODY IS THE EXCEPTION and is deliberately not at [tracker.MaxBody]: a
-// 64 KiB body IS the answer somebody asked for, and eliding it would answer a
-// different question. What this measures is everything AROUND it — the parts
-// a caller did not ask for by name and which grow without them noticing.
+// That used to be an exception with a reason, and the reason was wrong. It
+// read: a 64 KiB body IS the answer somebody asked for, so eliding it would
+// answer a different question — true of a caller who NAMED the body, and
+// false of every other, which is all of them. `include` governs the
+// collections beside the task and never the task itself, so a caller handed
+// the weight refusal had no argument that would narrow it, and the body was
+// the one value on a detail read with no bound at all. It has one now, and a
+// caller who does mean the body says `body: true` and gets it whole.
 func maximalDetail() tracker.TaskDetail {
 	at := time.Date(2026, 3, 4, 9, 0, 0, 0, time.UTC)
 	detail := tracker.TaskDetail{
 		Task: tracker.Task{
 			ID: "id", Key: "ENG-1", Project: "ENG",
 			Title: strings.Repeat("t", tracker.MaxTitle),
-			Body:  strings.Repeat("b", 4<<10),
+			Body:  strings.Repeat("b", builtin.TaskBodyShown),
 		},
 		CommentsCursor: "1772614800:id",
 	}

@@ -153,7 +153,9 @@ func (s *Service) Revisions(ctx context.Context, limit, offset int) ([]map[strin
 // Diff compares one revision against another, or against the active one.
 //
 // Both sides redacted, so a rotated credential shows as a changed mask and
-// never as either value.
+// never as either value. The listing is cut at [MaxChanges] because this is
+// the side answering over a wire, and `changes_total` is always present so a
+// reader renders how many changed rather than how many arrived.
 func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[string]any, error) {
 	if s == nil {
 		return nil, fmt.Errorf("configapi: no store on this node")
@@ -181,7 +183,29 @@ func (s *Service) Diff(ctx context.Context, revisionID, against string) (map[str
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"from": base.ID, "to": target.ID, "changes": changes}, nil
+	// THE CUT, AND THE TOTAL BESIDE IT. A response body and a socket frame
+	// are the side with a size budget, so the bound is taken here rather
+	// than inside the walk — `crewlet config diff` writes to a terminal and
+	// prints the same comparison whole.
+	//
+	// Reported as a key rather than as an entry: the marker used to ride
+	// along IN the listing as a pathless Change whose To was a sentence,
+	// which every client then had to know was not a change. The dashboard
+	// did not, and drew it as a blank path turning undefined into prose.
+	total := len(changes)
+	if total > MaxChanges {
+		changes = changes[:MaxChanges:MaxChanges]
+	}
+	if changes == nil {
+		// An empty LIST for identical revisions, like every other listing
+		// this surface answers — `null` is a shape a typed client has to
+		// guard for a second time to learn nothing changed.
+		changes = []Change{}
+	}
+	return map[string]any{
+		"from": base.ID, "to": target.ID,
+		"changes": changes, "changes_total": total,
+	}, nil
 }
 
 // baseFor resolves the side a diff compares against.

@@ -363,6 +363,16 @@ func (w *Writer) UpdateTask(ctx context.Context, opID, id, project string,
 			"names no project — the caller resolved a key to reach this task "+
 			"and therefore holds one", id)
 	}
+	// THE COMMENT'S BODY IS CHECKED HERE TOO, because a comment rides a
+	// task write rather than having a write of its own — so this is the
+	// one place every comment in the engine passes through.
+	var commentBody *string
+	if patch.Comment != nil {
+		commentBody = &patch.Comment.Body
+	}
+	if err := checkTextCaps(id, patch.Title, patch.Body, commentBody); err != nil {
+		return WriteResult{}, err
+	}
 	if patch.Tags != nil {
 		// NORMALISED BEFORE THE PUBLISH, so the record carries the
 		// spelling the rows hold rather than the one somebody typed —

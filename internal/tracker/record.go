@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -37,10 +38,26 @@ import (
 // a value silently truncated is a value a person will look for later.
 const (
 	// MaxTitle and MaxBody bound a task's own text.
+	//
+	// MaxBody IS SIZED AGAINST THE ANSWER THAT RETURNS IT WHOLE, which is
+	// the relationship it did not have: at 64 KiB it was exactly
+	// [builtin.ToolAnswerBytes], so a body at its cap could not be sent
+	// beside ANY envelope — a task alone at the old cap encoded to 65,915
+	// bytes against a 65,536 ceiling, and `get_work_item` on it was
+	// refused for weight with no argument that would narrow it. A cap a
+	// read can never return is a cap that stores what nobody can get back.
+	//
+	// 32 KiB is ≈ 8,000 words, the same ceiling a comment takes, and it
+	// leaves the whole-body read a 2× margin for JSON escaping. Longer
+	// prose than that is a PAGE — `internal/pages` carries 512 KiB and has
+	// revisions, a title and a history — and the refusal says so, because
+	// a description that long is a document somebody should be able to
+	// find by name rather than a field on a task.
 	MaxTitle = 256
-	MaxBody  = 64 << 10
+	MaxBody  = 32 << 10
 
-	// MaxCommentBody is a comment's.
+	// MaxCommentBody is a comment's, and is the same figure for the same
+	// reason: it is what the single-comment read returns whole.
 	MaxCommentBody = 32 << 10
 
 	// MaxWatchers is the routing cap and the fan-out cap at once: an
@@ -131,6 +148,52 @@ const (
 	// rather than five thousand.
 	MaxReferencesPerBody = 64
 )
+
+// checkTextCaps refuses a write whose own text is past the cap its field
+// declares — [MaxTitle], [MaxBody], [MaxCommentBody].
+//
+// THE PRODUCER THOSE CAPS NEVER HAD. The block above has said since it was
+// written that each is "refused at WRITE naming the field, never cut", and
+// nothing refused any of them: a search for the three constants found their
+// declaration, one alias and four doc comments, and not one comparison. The
+// nearest bound that did fire was [MaxCommitBytes], about forty times these
+// and phrased about the RECORD rather than the field, so a caller past a cap
+// got either silence or a number they could not act on.
+//
+// A comment is where that cost is visible, because the read side was built on
+// the promise: the thread page carries [CommentBodyShown] precisely because a
+// whole body may be large, and the single-comment read exists to return the
+// rest. Both are sized against [MaxCommentBody] — so a body stored past it is
+// elided in the page, and refused for weight on the one read that would have
+// returned it, leaving what somebody wrote reachable through no tool at all.
+// The cap is what makes the elision a pointer rather than a loss.
+//
+// BYTES rather than runes, because every ceiling downstream of this is a byte
+// budget: a record's own encoded size, and one tool answer's. And pure over
+// values, for the reason coerce.go gives for the same shape — a rule that can
+// only be exercised through a database is a rule nobody re-reads.
+func checkTextCaps(id string, title, body, comment *string) error {
+	for _, c := range []struct {
+		field string
+		value *string
+		limit int
+	}{
+		{"title", title, MaxTitle},
+		{"body", body, MaxBody},
+		{"comment body", comment, MaxCommentBody},
+	} {
+		if c.value == nil || len(*c.value) <= c.limit {
+			continue
+		}
+		return fmt.Errorf("tracker: the %s on task %s is %d bytes and the "+
+			"maximum is %d — it is refused rather than cut, because a value "+
+			"silently truncated is one somebody will look for later; shorten "+
+			"it, or put the long form where it belongs (a page, or an "+
+			"attachment) and reference it here",
+			c.field, id, len(*c.value), c.limit)
+	}
+	return nil
+}
 
 // Spend is a task's running totals, for ever.
 //
@@ -1398,11 +1461,19 @@ type Position struct {
 // DERIVED FROM THE MAXIMAL TASK PATCH rather than from a body edit, and the
 // difference is 3×: rule 2 carries a touched collection WHOLE and no cap on
 // the patch is tighter than the record's own, so the worst commit is a patch
-// that touches every collection at every cap — a 64 KiB body at six-fold JSON
-// escaping (384 KiB) plus 128 field values at 4 KiB (512 KiB) plus four
+// that touches every collection at every cap — a 32 KiB body at six-fold JSON
+// escaping (192 KiB) plus 128 field values at 4 KiB (512 KiB) plus four
 // textareas at 16 KiB (64 KiB) plus 256 checklist items (100 KiB) plus 192
-// relations (22.5 KiB) plus watchers, tags and sprint stays, ≈ 1.06 MiB, plus
-// a maximal notification at 120 KiB.
+// relations (22.5 KiB) plus watchers, tags and sprint stays, plus a maximal
+// notification at 120 KiB.
+//
+// THE NUMBER DID NOT COME DOWN WITH [MaxBody], and that is deliberate: three
+// constants are sized from this one — the applier's fetch, its ack-pending
+// window and the reorder buffer — so lowering it to re-tighten a bound that
+// is already 6.6× inside the broker's ceiling would move three things to buy
+// nothing. What the halved body cap bought is headroom, and
+// TestTheMaximalCommitFitsItsDesignMaximum measures what is actually left
+// rather than restating it here.
 //
 // It is 6.6× inside the broker's own payload ceiling, so an oversized publish
 // is refused client-side rather than closing the connection, and inside the

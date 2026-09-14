@@ -278,8 +278,18 @@ changed path rather than a hunk of text.
 
 A string value is quoted and other values are not, because `"true"` and `true`
 are different settings and a renderer that printed both bare would show a type
-change as no change at all. A diff longer than the cap reports its own
-truncation rather than stopping silently.
+change as no change at all.
+
+**Where a long diff is cut belongs to whoever renders it, not to the differ.**
+The comparison reports every difference it found; the HTTP and socket answer
+cuts its listing at 500 entries because that side has a response budget, and
+says `changes_total` beside it so a short diff is never read as "that is all
+that changed". `crewlet config diff` writes to a terminal, which has no such
+budget and does have a pager, so it prints them all. Cutting inside the
+comparison instead had both costs: the CLI could not lift a bound it did not
+own, and the truncation had to be reported *in* the listing as an entry with
+no path — which every client then had to recognise as not-a-change, and the
+dashboard did not.
 
 **Both sides are always redacted, and there is no flag to turn that off.** A
 diff is what an operator pastes into a ticket to ask a colleague whether a

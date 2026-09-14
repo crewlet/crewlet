@@ -442,16 +442,17 @@ func diffRevisions(ctx context.Context, cs *configStore, revisionID, against str
 // scannable the way a line diff was — an operator reading this in a terminal
 // is looking for "what moved", and a block per change buries that under
 // formatting.
+//
+// EVERY change, however many there are. The API's own answer is cut at
+// configapi.MaxChanges because a response body and a socket frame have a
+// size budget; a terminal has none, and this is the one reader who can pipe
+// the output into a pager, a file or a grep. A diff that stopped at the same
+// 500 lines here would hide the rest from exactly the caller equipped to
+// read them — and it stopped with a PATHLESS entry every renderer then had
+// to recognise as not-a-change.
 func writeChanges(stdout io.Writer, from, to string, changes []configapi.Change) error {
 	fmt.Fprintf(stdout, "--- %s\n+++ %s\n", from, to)
 	for _, c := range changes {
-		if c.Path == "" {
-			// The truncation marker Changes appends when a diff exceeds
-			// its cap. Reported rather than silent: a diff that quietly
-			// stopped would be read as "that is all that changed".
-			fmt.Fprintf(stdout, "... %v\n", c.To)
-			continue
-		}
 		switch c.Kind {
 		case configapi.KindAdded:
 			fmt.Fprintf(stdout, "+ %s = %s\n", c.Path, renderValue(c.To))

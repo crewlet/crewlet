@@ -49,6 +49,16 @@ const diff = {
     { path: "integrations.gitlab.url", kind: "changed", from: "a", to: "b" },
     { path: "integrations.slack", kind: "removed", from: {} },
   ],
+  changes_total: 3,
+};
+
+// The same answer for a comparison too long to send whole: the listing is a
+// page of it and `changes_total` is how many there are. The server used to
+// report the cut as a pathless CHANGE inside `changes`, which this screen
+// drew as a blank path turning undefined into a sentence.
+const cutDiff = {
+  ...diff,
+  changes_total: 512,
 };
 
 class InertWebSocket {
@@ -60,7 +70,7 @@ class InertWebSocket {
   close(): void {}
 }
 
-function mount(hash: string) {
+function mount(hash: string, answer: unknown = diff) {
   location.hash = hash;
   const store = new Store();
   const socket = new LiveSocket(store);
@@ -68,7 +78,7 @@ function mount(hash: string) {
   // server, because what is under test is the rendering of an answer whose
   // shape is already pinned by the Go side.
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) =>
-    Promise.resolve(what === "config_audit" ? revisions : what === "config_diff" ? diff : {});
+    Promise.resolve(what === "config_audit" ? revisions : what === "config_diff" ? answer : {});
   return render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -114,4 +124,18 @@ test("a diff line carries the kind the server sends", async () => {
   // And the value column reads the side that exists for that kind.
   expect(screen.getByText('"sre-lead"')).toBeDefined();
   expect(screen.getByText('"a" → "b"')).toBeDefined();
+  // NOTHING SAYS IT WAS CUT, because it was not: changes_total equals the
+  // number of lines, and a "3 of 3 shown" note would be noise on every diff.
+  expect(screen.queryByText(/shown/)).toBeNull();
+});
+
+test("a cut diff says how many changes there are", async () => {
+  mount("#/config?lens=diff&revision=01JCFGAAAA0000000000000001", cutDiff);
+
+  // The count is the COMPARISON's, not the listing's — a screen that showed
+  // three would be reporting the response budget as the answer.
+  expect(await screen.findByText(/3 of 512 shown/)).toBeDefined();
+  // And where the whole thing is: the CLI writes to a terminal, which has no
+  // response budget, so it prints every change.
+  expect(screen.getByText("crewlet config diff")).toBeDefined();
 });

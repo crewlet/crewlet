@@ -654,7 +654,10 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Panel
                 title="Skills it taught itself"
                 icon="zap"
-                count={memory.data?.skills?.length ?? 0}
+                // `?? 0` for the ANSWER, never for the field: `skills_total`
+                // is always sent, so falling back to `skills.length` would
+                // only ever substitute the page size for the total.
+                count={memory.data?.skills_total ?? 0}
                 subtitle="drafted from its own past work, loadable mid-turn"
                 padding="none"
               >
@@ -673,6 +676,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                         {s.summary && <p className="t-caption">{s.summary}</p>}
                       </div>
                     ))}
+                    {memory.data.skills_total > memory.data.skills.length && (
+                      // THE CUT, SAID. The count above is the seat's whole
+                      // set and this list is a page of it, so without a line
+                      // here the two silently disagree.
+                      <div className="thread-entry t-caption faint">
+                        {memory.data.skills.length} of {memory.data.skills_total} shown
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <Empty

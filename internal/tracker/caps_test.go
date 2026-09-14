@@ -230,3 +230,84 @@ func TestAnAutomaticWatchIsSkippedRatherThanRefusingTheWrite(t *testing.T) {
 		}
 	}
 }
+
+// A TASK'S OWN TEXT IS REFUSED AT THE WRITE, WHICH IS WHAT THE CAPS SAID ALL
+// ALONG AND NOTHING DID.
+//
+// [tracker.MaxTitle], [tracker.MaxBody] and [tracker.MaxCommentBody] are
+// declared under a sentence promising each is "refused at WRITE naming the
+// field, never cut" — and not one of them had a comparison anywhere in the
+// tree. A search found the three constants, one alias and four doc comments.
+// The nearest bound that fired was MaxCommitBytes, about forty times these
+// and phrased about the record rather than the field, so a caller past a cap
+// got either silence or a number they could not act on.
+//
+// The comment is where the cost showed: the thread page elides at
+// [tracker.CommentBodyShown] BECAUSE a whole body may be large, and the
+// single-comment read exists to return the rest. Both are sized against
+// MaxCommentBody, so a body stored past it was elided in the page and too
+// heavy for the read that would have returned it — reachable through no tool
+// in the engine. The cap is what makes that elision a pointer instead of a
+// loss.
+//
+// PER FIELD, because a check that bounded two of three would pass any case
+// written about the interesting one.
+func TestATasksOwnTextIsRefusedPastItsCap(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		field string
+		max   int
+		// write applies a value of n bytes and returns what the writer said.
+		write func(*roundTrip, tracker.Task, int) error
+	}{
+		{"title", tracker.MaxTitle, func(r *roundTrip, task tracker.Task, n int) error {
+			_, err := r.writer.UpdateTask(r.t.Context(), "op-title", task.ID, "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Title: strptr(strings.Repeat("t", n))},
+				tracker.ChangeFields, nil)
+			return err
+		}},
+		{"body", tracker.MaxBody, func(r *roundTrip, task tracker.Task, n int) error {
+			_, err := r.writer.UpdateTask(r.t.Context(), "op-body", task.ID, "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Body: strptr(strings.Repeat("b", n))},
+				tracker.ChangeFields, nil)
+			return err
+		}},
+		{"comment body", tracker.MaxCommentBody, func(r *roundTrip, task tracker.Task, n int) error {
+			_, err := r.writer.UpdateTask(r.t.Context(), "op-comment", task.ID, "ENG",
+				tracker.NoIfMatch, tracker.TaskPatch{Comment: &tracker.Comment{
+					ID: "cm-cap", Task: task.ID, Author: "ana",
+					AuthorKind: tracker.AuthorHuman,
+					Body:       strings.Repeat("c", n), CreatedAt: wednesday,
+				}}, tracker.ChangeComment, nil)
+			return err
+		}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			t.Parallel()
+			r := newRoundTrip(t)
+			task := r.createTask("A task to write text onto")
+
+			// AT THE CAP IT LANDS, which is the half that keeps the
+			// refusal from being a cap somebody quietly lowered.
+			if err := tc.write(r, task, tc.max); err != nil {
+				t.Fatalf("a %s of exactly %d bytes was refused: %v",
+					tc.field, tc.max, err)
+			}
+			r.drain()
+
+			// ONE BYTE PAST IT IS REFUSED, NAMING THE FIELD — because a
+			// caller told only that "the record is too large" cannot tell
+			// which of the eleven things it sent was the problem.
+			err := tc.write(r, task, tc.max+1)
+			if err == nil {
+				t.Fatalf("a %s of %d bytes was accepted against a cap of %d — "+
+					"stored past what any read returns whole, which is where "+
+					"text goes to become unreachable", tc.field, tc.max+1, tc.max)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("the refusal does not name %q, so a caller cannot "+
+					"tell which value to shorten: %v", tc.field, err)
+			}
+		})
+	}
+}
