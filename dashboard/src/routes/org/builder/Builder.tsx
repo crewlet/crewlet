@@ -80,6 +80,7 @@ import {
   type ChartKind,
   type EditorSectionName,
 } from "./BuilderContext.tsx";
+import { rekeying } from "./model/document.ts";
 import { allUnits, locate, type Draft } from "./model/draft.ts";
 import { COMPANY_KEY, seatKey, type NodeKey } from "./model/keys.ts";
 import type { PlacedProblem } from "./model/problems.ts";
@@ -713,6 +714,30 @@ function Lens({
   const [selected, setSelected] = useState<NodeKey | null>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const [dialog, setDialog] = useState<OpenDialog | null>(null);
+
+  // A NODE HELD BEFORE THE ENGINE KEYED THE BASE KEEPS ITS PLACE. Until the
+  // first check answers, a seat that declares no handle is keyed by its path;
+  // the answer re-keys the base by the engine's handles (`model/reducer.ts`),
+  // and an editor opened on the old key, or a selection holding it, would
+  // lose its node ("This node is no longer in the draft"). The re-keying
+  // keeps the document, so each old key is followed to the node at the same
+  // path. Before the selection effect below, which would otherwise clear a
+  // selection whose key has gone.
+  const unkeyed = useRef<Draft | null>(null);
+  useEffect(() => {
+    const was = unkeyed.current;
+    unkeyed.current = isBaseKeyed(state) ? null : state.draft;
+    if (was === null || unkeyed.current !== null) return;
+    const moved = rekeying(was, state.draft);
+    if (moved.size === 0) return;
+    const follow = (key: NodeKey) => moved.get(key) ?? key;
+    if (selectedRef.current !== null) {
+      selectedRef.current = follow(selectedRef.current);
+      setSelected(selectedRef.current);
+    }
+    setDialog((open) => (open && "key" in open ? { ...open, key: follow(open.key) } : open));
+  }, [state]);
 
   // THE URL AND THE DRAFT BOTH MOVE THE SELECTION, and one effect answers
   // both: a link (or the command palette) naming a unit or a seat selects it,
@@ -756,7 +781,6 @@ function Lens({
 
   // ---- Dialogs ----------------------------------------------------------------
 
-  const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const closeDialog = useCallback(() => setDialog(null), []);
   const openIfWritable = useCallback(
     (next: OpenDialog) => {

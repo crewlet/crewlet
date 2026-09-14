@@ -417,6 +417,29 @@ describe("the selection in the URL", () => {
   });
 });
 
+// A seat declaring no handle is keyed by its path until the first check
+// names its handle; a selection made in between follows it rather than
+// being dropped when that key goes.
+test("a selection made before the engine described the company follows the seat", async () => {
+  const engine = new Engine(company());
+  let answer: () => void = () => {};
+  engine.script = (r, e) =>
+    r.query.get("dry_run") === "true"
+      ? new Promise<Response>((resolve) => {
+          answer = () => resolve(e.answer(r));
+        })
+      : null;
+  mountBuilder({ engine });
+  await waitFor(() => expect(engine.checks()).toHaveLength(1));
+  fireEvent.click(await screen.findByRole("button", { name: "Select CEO" }));
+  expect(await screen.findByRole("button", { name: "CEO" })).toBeDefined();
+  engine.script = () => null;
+  act(() => answer());
+  await screen.findByText("No problems");
+  await waitFor(() => expect(location.hash).toContain("seat=ceo"));
+  expect(screen.getByRole("button", { name: "CEO" })).toBeDefined();
+});
+
 describe("a revision saved by somebody else", () => {
   // NOTHING TO PROTECT, SO NOTHING TO ASK. A lens with no changes on it is
   // stood on the newer revision; the conflict banner, and the pause that

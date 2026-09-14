@@ -181,3 +181,31 @@ test("Back over a changed editor asks first, and keeping the changes keeps the p
   fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });
+
+// Until the first check answers, a seat that declares no handle is keyed by
+// its path, and the answer re-keys it by the handle the engine gives it. An
+// editor opened in between used to lose its node at that moment.
+test("an editor opened before the engine described the company keeps its node", async () => {
+  const engine = new Engine(company());
+  let answer: () => void = () => {};
+  engine.script = (r, e) =>
+    r.query.get("dry_run") === "true"
+      ? new Promise<Response>((resolve) => {
+          answer = () => resolve(e.answer(r));
+        })
+      : null;
+  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/org?lens=builder&view=outline" });
+  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
+  await waitFor(() => expect(engine.checks()).toHaveLength(1));
+  const row = within(grid)
+    .getAllByRole("row")
+    .find((r) => r.getAttribute("data-row-id") === "seat@roles[0]")!;
+  fireEvent.keyDown(row, { key: "Enter" });
+  expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
+
+  engine.script = () => null;
+  act(() => answer());
+  await screen.findByText("No problems");
+  expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
+  expect(screen.queryByText("This node is no longer in the draft")).toBeNull();
+});

@@ -33,6 +33,7 @@ import {
   NO_DERIVATION,
   pathOfSegments,
   placeDerivation,
+  rekeying,
   suggestUniqueName,
   toDocument,
 } from "./document.ts";
@@ -235,6 +236,19 @@ describe("placeDerivation", () => {
     const sent = toDocument(fromDocument(doc, null));
     const placed = placeDerivation(sent.index, fixtureDerived(doc));
     expect(placed.keyOfHandle.get("dev")).toBe(sent.index.byPath.get("roles[0]"));
+  });
+});
+
+describe("rekeying", () => {
+  test("follows each path key to the handle the engine gave the node at that path", () => {
+    const doc = fixtureCompany();
+    const before = fromDocument(doc, null);
+    const after = fromDocument(doc, fixtureDerived(doc));
+    const moved = rekeying(before, after);
+    expect(moved.get(seatPathKey("roles[0]"))).toBe(seatKey("ceo"));
+    // A unit is keyed by its name either way, and is not listed.
+    expect(moved.has(unitKey("Sales"))).toBe(false);
+    expect(rekeying(after, after).size).toBe(0);
   });
 });
 

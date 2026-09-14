@@ -347,6 +347,24 @@ function checkedHandle(
   return handle;
 }
 
+/**
+ * Where each node of `before` is in `after`, for two drafts of ONE document
+ * keyed two ways: the base before and after the engine first described it,
+ * when seats that declare no handle move from their path keys to their
+ * handles. Each key is followed to the key of the node at the same authored
+ * path; only keys that changed are listed.
+ */
+export function rekeying(before: Draft, after: Draft): Map<NodeKey, NodeKey> {
+  const was = toDocument(before).index;
+  const now = toDocument(after).index;
+  const out = new Map<NodeKey, NodeKey>();
+  for (const [key, path] of was.pathOf) {
+    const moved = now.byPath.get(path);
+    if (moved !== undefined && moved !== key) out.set(key, moved);
+  }
+  return out;
+}
+
 /** A JSON merge patch (RFC 7396): `null` removes a key, an object merges, anything else replaces. */
 export type MergePatch = JsonRecord;
 
