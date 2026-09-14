@@ -96,6 +96,24 @@ describe("the posture table", () => {
     expect(screen.getByRole("button", { name: "Set token" })).toBeDefined();
   });
 
+  // SETTING A TOKEN IS ALL IT TAKES. The posture is read again on the change,
+  // so an operator who was asked for a token edits without reloading the page.
+  test("setting a token the engine accepts opens edit mode without a reload", async () => {
+    const engine = new Engine(company());
+    engine.script = (r) =>
+      r.headers.Authorization === "Bearer good" ? null : json({ error: "unauthorized" }, 401);
+    mountBuilder({ engine });
+    expect(
+      await screen.findByText("Editing the organization needs an operator token."),
+    ).toBeDefined();
+    act(() => {
+      storeToken("good");
+    });
+    expect(await screen.findByText("No problems")).toBeDefined();
+    expect(screen.getByText("editable")).toBeDefined();
+    expect(engine.checks().at(-1)!.headers.Authorization).toBe("Bearer good");
+  });
+
   test("a refusal of a stored token says the token was refused", async () => {
     localStorage.setItem("crewlet_api_token", "stale");
     const engine = new Engine(company());
