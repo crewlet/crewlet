@@ -59,6 +59,17 @@ describe("a seat", () => {
     expect(view.onClose).toHaveBeenCalledTimes(1);
   });
 
+  // The credentials a move gives or takes are named by their SERVER, which is
+  // what a unit's mcp_env keys are; a value, masked or not, is never on screen.
+  test("the tool credentials a move changes are named by server, never by value", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.mcp_env = { tracker: { TOKEN: "__redacted__" } };
+    const view = open(withManager(doc), "seat:dev");
+    choose("Sales");
+    expect(screen.getByText("Dev loses the tool credentials of tracker.")).toBeDefined();
+    expect(view.container.ownerDocument.body.innerHTML).not.toContain("__redacted__");
+  });
+
   test("moving into a unit with a lead names the lead that manages its members", () => {
     open(withManager(), "seat:sre");
     choose("Engineering");
