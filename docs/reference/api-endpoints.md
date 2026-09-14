@@ -1131,9 +1131,11 @@ persisted events for the feed, and every phase record inside the 24-hour
 spend window. Without it every one of these surfaces started at this
 process's boot, so a restart, a deploy or a node joining a fleet showed an
 operator a company that had apparently done nothing beside a store that
-said otherwise. An event that is both in the store and already applied off
-the live stream is recognised by its id and counted once, and history is
-ordered behind the live rows it predates. On a fleet the seed is what
+said otherwise. An event that arrives both ways is recognised by its id and
+listed and counted once, in either order: the stream can deliver it before
+the read, and the read can find a row the publishing node wrote inline before
+the stream delivered it. History is ordered behind the live rows it predates.
+On a fleet the seed is what
 **this node** published (the event store is per node), while everything
 after the boot is the whole company's. A read that fails is logged as
 `live_projection_not_seeded` and costs the history, never the start-up:

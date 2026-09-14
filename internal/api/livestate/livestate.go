@@ -197,6 +197,12 @@ type LiveState struct {
 	feed      []FeedRow
 	feedLimit int
 
+	// feedIDs indexes the ids the ring holds, so an event is listed ONCE
+	// however it arrived: off the stream, out of the store at startup, or
+	// both, in either order. Exact rather than bounded like the sets below,
+	// because it tracks the ring and shrinks with it: see trimFeed.
+	feedIDs map[string]struct{}
+
 	// countedPhases is the id set that stops a seeded phase being counted
 	// twice against a streamed one.
 	countedPhases *boundedSet[struct{}]
@@ -240,6 +246,7 @@ func New(opts ...Option) *LiveState {
 		agents:        map[string]*agentLive{},
 		sandboxes:     map[string]*SandboxEntry{},
 		feedLimit:     EventFeedLimit,
+		feedIDs:       map[string]struct{}{},
 		countedPhases: newBoundedSet[struct{}](dedupeLimit),
 		finishedCalls: newBoundedSet[stamp](dedupeLimit),
 	}
@@ -465,10 +472,15 @@ func (s *LiveState) Apply(env *Envelope) Change {
 		return change
 	}
 
-	// Everything else carrying a category is a persisted event — mirror it
-	// into the activity buffer.
+	// Everything else carrying a category is a persisted event, mirrored into
+	// the activity buffer once by id.
+	//
+	// The push is owed whether or not the row was new. A row the startup seed
+	// already listed came out of the store without its payload, and the
+	// envelope is the only frame that carries it: a client keeps a completed
+	// phase's payload beside its feed, and dedupes the feed row itself by id.
 	if env.Category != "" {
-		s.recordEvent(env, payload)
+		s.recordEvent(env)
 		change.Events = true
 	}
 
@@ -661,7 +673,12 @@ func (s *LiveState) ensureAgent(role string) *agentLive {
 	return agent
 }
 
-func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
+// recordEvent lists one persisted event in the feed, unless the feed already
+// lists it.
+func (s *LiveState) recordEvent(env *Envelope) {
+	if !s.admitFeedID(env.ID) {
+		return
+	}
 	row := FeedRow{
 		ID: env.ID, Type: env.Type, Timestamp: env.Timestamp,
 		Source: env.Source, Actor: env.Actor, Summary: env.Summary,
@@ -673,13 +690,45 @@ func (s *LiveState) recordEvent(env *Envelope, _ map[string]any) {
 		Failed: env.Failed,
 	}
 	s.feed = append(s.feed, row)
-	if len(s.feed) > s.feedLimit {
-		// Re-sliced forward, which is enough for the same reason it is in
-		// boundedSet: the remaining capacity shrinks with every drop, so
-		// the next append past it reallocates and releases the evicted
-		// rows with the old array.
-		s.feed = s.feed[len(s.feed)-s.feedLimit:]
+	s.trimFeed()
+}
+
+// admitFeedID records that the feed lists an id, reporting false when it
+// already did.
+//
+// An EMPTY id is always admitted. Every stored row has one and so does every
+// envelope the engine builds, so a blank is a producer's bug; it is still
+// listed, rather than collapsed with some unrelated row that also lacked one.
+func (s *LiveState) admitFeedID(id string) bool {
+	if id == "" {
+		return true
 	}
+	if _, listed := s.feedIDs[id]; listed {
+		return false
+	}
+	s.feedIDs[id] = struct{}{}
+	return true
+}
+
+// trimFeed drops the oldest rows past the ring's limit, and their ids with
+// them.
+//
+// The ids go too because the index is the ring's own, not a history of every
+// id ever seen: kept, it would grow for the life of a process the ring exists
+// to keep bounded.
+func (s *LiveState) trimFeed() {
+	over := len(s.feed) - s.feedLimit
+	if over <= 0 {
+		return
+	}
+	for _, row := range s.feed[:over] {
+		delete(s.feedIDs, row.ID)
+	}
+	// Re-sliced forward, which is enough for the same reason it is in
+	// boundedSet: the remaining capacity shrinks with every drop, so the
+	// next append past it reallocates and releases the evicted rows with
+	// the old array.
+	s.feed = s.feed[over:]
 }
 
 // callKey is the identity of one phase invocation, shared by both its events.
