@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
@@ -383,14 +384,26 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 	// The probe cannot close the race and does not try; what it buys is the
 	// common case, named, in microseconds. The accept-timeout message below
 	// covers the rest.
-	if clustered && opts.Cluster.Port != 0 &&
-		!PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port) {
-
-		removeScratch(scratch)
-		return nil, fmt.Errorf("stream.cluster.port %d is already in use on %s, "+
-			"so this member's route listener cannot bind and it could never form "+
-			"a route to a peer — free that port or give this node a different one",
-			opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
+	if clustered && opts.Cluster.Port != 0 {
+		free, err := PortAvailable(ctx, opts.Cluster.Host, opts.Cluster.Port)
+		switch {
+		case err != nil:
+			// THE PROBE ITSELF COULD NOT ANSWER — the address is not one
+			// this host has, the port is privileged, or the caller is
+			// shutting down. Reported as what it was: calling any of
+			// those "already in use" sends the reader hunting for a
+			// process that does not exist.
+			removeScratch(scratch)
+			return nil, fmt.Errorf("stream.cluster.port %d on %s cannot be "+
+				"bound by this node: %w", opts.Cluster.Port,
+				routeHostLabel(opts.Cluster.Host), err)
+		case !free:
+			removeScratch(scratch)
+			return nil, fmt.Errorf("stream.cluster.port %d is already in use on %s, "+
+				"so this member's route listener cannot bind and it could never form "+
+				"a route to a peer — free that port or give this node a different one",
+				opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
+		}
 	}
 
 	ns, err := server.NewServer(opts)
@@ -740,13 +753,36 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 // EXPORTED because the test harness needs the identical check against members
 // it does not start itself (see jetstreamtest.PortFree), and two spellings of
 // "is this port free" is how one stops matching the other.
-func PortAvailable(ctx context.Context, host string, port int) bool {
+//
+// It answers (ok, err) rather than a bool because the CALLER'S MESSAGE depends
+// on which failure it was. Collapsing every listen error into "not free" made
+// a cancelled start, an address this host does not have, and a privileged port
+// all report themselves as a port somebody else is holding — three different
+// remedies behind one sentence, and two of them send the reader to look for a
+// process that does not exist. err is nil exactly when the probe ran and
+// answered.
+func PortAvailable(ctx context.Context, host string, port int) (bool, error) {
+	// CANCELLATION IS NOT AN ANSWER about the port, and it is checked
+	// BEFORE the probe rather than after: [net.ListenConfig.Listen] does
+	// not refuse on a dead context for a plain local bind — measured, it
+	// succeeds and hands back a listener — so a check on the error path
+	// alone would report a port free to a caller that is shutting down.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	var lc net.ListenConfig
 	l, err := lc.Listen(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
-	if err != nil {
-		return false
+	if err == nil {
+		return true, l.Close()
 	}
-	return l.Close() == nil
+	// IN USE is the one this exists to name. Everything else — a host
+	// address that is not this machine's, a port below 1024 without the
+	// capability — is a configuration error of a different kind, and it is
+	// handed back rather than renamed.
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return false, nil
+	}
+	return false, err
 }
 
 // routeHostLabel renders a cluster host for a message, naming the default

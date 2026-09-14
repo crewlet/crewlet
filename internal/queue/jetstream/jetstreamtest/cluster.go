@@ -308,7 +308,8 @@ func PortFree(ctx context.Context, port int) bool {
 	// a clustered member runs against its configured route port before it
 	// starts, and a harness asking the same question a different way is how
 	// one answer stops matching the other.
-	return js.PortAvailable(ctx, "127.0.0.1", port)
+	free, err := js.PortAvailable(ctx, "127.0.0.1", port)
+	return free && err == nil
 }
 
 // freePorts reserves n ports the OS is not using.
