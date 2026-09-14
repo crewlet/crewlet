@@ -156,8 +156,8 @@ type A2AMessageSent struct {
 // which is the inbox WAKE — this is the audit record of the same message.
 func (A2AMessageSent) EventType() string { return "a2a_message_sent" }
 
-// SummaryFor prefers the message's own sender, for the same reason MessageSent
-// does: the publisher is the bus, not the colleague who asked.
+// SummaryFor prefers the message's own sender over the actor: the publisher is
+// the A2A service, not the colleague whose answer this is.
 func (e A2AMessageSent) SummaryFor(actor string) string {
 	who := e.Sender
 	if who == "" {

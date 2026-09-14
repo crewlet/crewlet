@@ -199,19 +199,34 @@ authoritative list, checked against the engine's own map by a test, is
 this is the shape of it, with the notes that need a sentence.
 
 ```text
-# lifecycle: the config changes an operator goes looking for after the fact
+# lifecycle: the org coming and going, plus the config changes an operator
+#            goes looking for after the fact
+org_started, org_stopped
 config_revision_activated  # a new revision is the one to serve
 config_revision_applied    # one node's outcome, and how far it got
 
-# task: work assigned and done, including a detached coding run (the
-#       execution of a task) and a schedule firing (which assigns one)
+# not stored: a seat acquired or released by this node. Live-only, because
+# placement moves seats on every rebalance; they drive the live projection
+agent_spawned, agent_terminated
+
+# task: work reaching a seat, including a detached coding run (the execution
+#       of one) and a schedule firing (which creates one). There is no task
+#       lifecycle here: work's own record is the tracker's history
 task_assigned              # published to the seat's inbox by the scheduler
 sandbox_run_started, sandbox_clarification_requested
 sandbox_run_completed, sandbox_run_failed
 scheduled_task_fired
 
-# a2a: one ask, one answer, then closed
+# a2a: one ask, one answer, then closed. The ask and the answer also travel
+#      as inbox wakes (a2a_request, a2a_message), which are not stored
 a2a_channel_opened, a2a_message_sent, a2a_channel_closed
+
+# decision: DACI is behavioural guidance on the org's own chat surfaces, so
+#           NOTHING in Crewlet publishes these four. They stay mapped as the
+#           seam an extension that does model decisions writes through, and
+#           they are why the category exists to filter on at all
+decision_requested, decision_resolved
+contribution_requested, contribution_received
 
 # notification: what arrived from outside, and what the engine decided
 external_notification      # inbound from a third-party app webhook or chat socket
@@ -260,17 +275,23 @@ prompt.size                # one phase's final prompt, measured in BYTES
 ```
 
 **Categorised, and published by nothing in this build.** The category map also
-files types that no code path publishes, so a filter on them matches no rows:
-`org_started`, `org_stopped`, `agent_spawned`, `agent_terminated`,
-`agent_reassigned` and `role_updated` (lifecycle); `task_created`,
-`task_started`, `task_completed`, `task_failed` and `task_delegated` (task);
-`message_sent` (communication); `a2a_message_delivered` (a2a);
-`document_created` and `document_updated` (knowledge); and the four `decision`
-types, `decision_requested`, `decision_resolved`, `contribution_requested` and
+files four types no code path publishes, so a filter on them matches no rows:
+`decision_requested`, `decision_resolved`, `contribution_requested` and
 `contribution_received`. DACI is behavioural guidance on the org's own chat
-surfaces, so the decision types stay mapped as the seam an extension that does
-model decisions writes through, which is why the `decision` category exists to
-filter on at all.
+surfaces, so they stay mapped as the seam an extension that does model
+decisions writes through, which is why the `decision` category exists to filter
+on at all.
+
+They are what is left of a longer list. The eleven types that described an
+engine-owned task object, a role edited in place, a message the engine sent
+itself and a document it wrote (`agent_reassigned`, `role_updated`, the five
+`task_*`, `message_sent`, `a2a_message_delivered`, `document_created` and
+`document_updated`) were retired from the registry together with the live-state
+branches that read them, and the `communication` and `knowledge` categories
+left with the last type each held. The envelope still decodes every one of
+those names losslessly, because a node of an earlier build keeps publishing
+them through a rolling upgrade and rows already written are read back for as
+long as retention keeps them; none may be registered or categorised again.
 
 **Excluded from the store**, each for a stated reason: `agent_turn_progress` (a
 live-only per-round signal whose durable record is `agent_phase_completed`),
