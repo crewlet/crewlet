@@ -44,10 +44,9 @@ func TestAMeterReportLandsOnTheSeatAndTheOrg(t *testing.T) {
 
 func TestTheMeterNeverEntersTheActivityFeed(t *testing.T) {
 	t.Parallel()
-	// Stream-only for the reason the in-flight call is, and one stronger:
-	// these figures describe ONE engine run, so a persisted copy replayed
-	// from history would show a dead process's counters as the current
-	// ones.
+	// Stream-only: a report is a snapshot of a counter that moves every
+	// round, so a persisted copy replayed from history would show figures
+	// the counter left behind as the current ones.
 	s := livestate.New()
 	change := s.Apply(env("budget_reported", meterReport("m-1", 1)))
 	if change.Events {
@@ -90,18 +89,18 @@ func TestARepeatedSeqIsDropped(t *testing.T) {
 
 func TestANewMeterReplacesRatherThanMerges(t *testing.T) {
 	t.Parallel()
-	// The counters are a process-lifetime meter, so a restart legitimately
-	// zeroes them. Merging, or taking a maximum, would pin a phantom
+	// Each report is a complete snapshot of the shared counter, and a reset
+	// legitimately lowers it. Merging, or taking a maximum, would pin a
 	// high-water mark that no later report could clear.
 	s := livestate.New()
 	s.Apply(env("budget_reported", meterReport("m-1", 9, seatMeter("Lead", 900, 1000)), streamOnly))
 	s.Apply(env("budget_reported", meterReport("m-2", 1, seatMeter("Lead", 10, 1000)), streamOnly))
 
 	if got := s.Budget().MeterID; got != "m-2" {
-		t.Errorf("meter id = %q, want the new run's", got)
+		t.Errorf("meter id = %q, want the newer report's", got)
 	}
 	if got := overlayOf(t, s, "Lead").Budget.Used; got != 10 {
-		t.Errorf("used = %d, want 10: the new run's figures were merged with a dead one's", got)
+		t.Errorf("used = %d, want 10: the newer report was merged with an older one", got)
 	}
 }
 
@@ -238,34 +237,35 @@ func TestSpendRecordsDoNotAliasTheProjection(t *testing.T) {
 
 func TestARestartedEnginesFirstReportIsNotRefusedAsOld(t *testing.T) {
 	t.Parallel()
-	// Sequence numbers are per meter, so a new run's first report starts
-	// low. Comparing it against the held run's would refuse it, and the
-	// dashboard would show a dead process's counters until the new run
+	// Sequence numbers are per meter, so a restarted node's first report
+	// starts low. Comparing it against another meter's would refuse it,
+	// and the dashboard would hold a stale frame until the new meter
 	// happened to pass the old one's sequence.
 	s := livestate.New()
 	s.Apply(env("budget_reported", meterReport("m-1", 99, seatMeter("Lead", 900, 1000)), streamOnly))
 	s.Apply(env("budget_reported", meterReport("m-2", 1, seatMeter("Lead", 5, 1000)), streamOnly))
 
 	if got := s.Budget().Seq; got != 1 {
-		t.Errorf("seq = %d, want the new run's 1", got)
+		t.Errorf("seq = %d, want the new meter's 1", got)
 	}
 	if got := overlayOf(t, s, "Lead").Budget.Used; got != 5 {
-		t.Errorf("used = %d, want the new run's 5", got)
+		t.Errorf("used = %d, want the new meter's 5", got)
 	}
 }
 
 func TestANewMeterDropsASeatItDoesNotMention(t *testing.T) {
 	t.Parallel()
-	// The case that says a new run's report replaces rather than merges: a
-	// seat metered under the old run and absent from the new one must lose
-	// its bar, not keep a dead process's figure.
+	// The case that says another meter's report replaces rather than
+	// merges: a seat the newer report does not meter (a node already on a
+	// revision that dropped its cap) must lose its bar, not keep a figure
+	// nothing reports any more.
 	s := livestate.New()
 	s.Apply(env("budget_reported", meterReport("m-1", 4,
 		seatMeter("Lead", 900, 1000), seatMeter("Dev", 700, 1000)), streamOnly))
 	s.Apply(env("budget_reported", meterReport("m-2", 1, seatMeter("Lead", 5, 1000)), streamOnly))
 
 	if got := overlayOf(t, s, "Dev").Budget; got != nil {
-		t.Errorf("Dev budget = %+v, want none: it is a dead run's figure", got)
+		t.Errorf("Dev budget = %+v, want none: nothing meters it any more", got)
 	}
 }
 
@@ -330,5 +330,88 @@ func TestSpendRecordsAreCappedByCount(t *testing.T) {
 	}
 	if records[0].EventID == "p00000" {
 		t.Error("the oldest record survived a truncation past the cap")
+	}
+}
+
+func TestADelayedReportFromAnotherNodeCannotWalkTheMeterBackwards(t *testing.T) {
+	t.Parallel()
+	// Every node reports the same shared counter under its own meter id,
+	// and their sequence numbers are unrelated. A frame node B read ten
+	// seconds before node A's last one, delivered late, must not replace
+	// A's: it is the same counter, read earlier.
+	s := livestate.New()
+	s.Apply(env("budget_reported", meterReport("node-a", 6, seatMeter("Lead", 300, 400)),
+		streamOnly, at("2026-06-14T12:00:30Z")))
+	change := s.Apply(env("budget_reported", meterReport("node-b", 40, seatMeter("Lead", 250, 400)),
+		streamOnly, at("2026-06-14T12:00:20Z")))
+
+	if change.Moved() {
+		t.Error("an older read from another node moved the projection")
+	}
+	if got := overlayOf(t, s, "Lead").Budget.Used; got != 300 {
+		t.Errorf("used = %d, want the newer read's 300", got)
+	}
+	if got := s.Budget().MeterID; got != "node-a" {
+		t.Errorf("meter id = %q, want node-a's report held", got)
+	}
+
+	// And a LATER read from that node is taken, whatever its seq.
+	s.Apply(env("budget_reported", meterReport("node-b", 41, seatMeter("Lead", 320, 400)),
+		streamOnly, at("2026-06-14T12:00:45Z")))
+	if got := overlayOf(t, s, "Lead").Budget.Used; got != 320 {
+		t.Errorf("used = %d, want node-b's newer read of 320", got)
+	}
+}
+
+func TestAnUndatedReportDoesNotEraseTheReorderGuard(t *testing.T) {
+	t.Parallel()
+	// A report with no usable timestamp is applied, as every guard here
+	// lets one through, but the instant the next report is compared
+	// against must survive it.
+	s := livestate.New()
+	s.Apply(env("budget_reported", meterReport("node-a", 1, seatMeter("Lead", 300, 400)),
+		streamOnly, at("2026-06-14T12:00:30Z")))
+	s.Apply(env("budget_reported", meterReport("node-b", 1, seatMeter("Lead", 310, 400)),
+		streamOnly, at("")))
+	s.Apply(env("budget_reported", meterReport("node-c", 1, seatMeter("Lead", 100, 400)),
+		streamOnly, at("2026-06-14T12:00:10Z")))
+
+	if got := overlayOf(t, s, "Lead").Budget.Used; got != 310 {
+		t.Errorf("used = %d, want 310: a report older than the last dated one was applied", got)
+	}
+}
+
+func TestAMeterReportClaimsNothingAboutWhetherASeatIsRunning(t *testing.T) {
+	t.Parallel()
+	// A report names every capped seat whether or not anything is running
+	// it. The overlay it creates used to start at "offline" and overwrite
+	// the roster's own state, so the first report after a boot flipped
+	// every capped seat this node serves from idle to offline, on every
+	// open dashboard, until the seat took a turn.
+	s := livestate.New()
+	s.Apply(env("budget_reported", meterReport("m-1", 1, seatMeter("Lead", 100, 400)), streamOnly))
+
+	rows := s.MergeAgents([]map[string]any{{"role": "Lead", "handle": "lead", "state": "idle"}})
+	if got := rows[0]["state"]; got != "idle" {
+		t.Errorf("merged state = %v, want the roster's idle kept", got)
+	}
+	if rows[0]["budget"] == nil {
+		t.Error("the merged row lost the meter the report carried")
+	}
+	pushed := s.OverlayRows([]string{"Lead"})
+	if len(pushed) != 1 {
+		t.Fatalf("pushed rows = %v, want the one seat the report moved", pushed)
+	}
+	if got, present := pushed[0]["state"]; present {
+		t.Errorf("the agents push carried state %v, which a client merges over the one it holds", got)
+	}
+	if got := overlayOf(t, s, "Lead").State; got != "" {
+		t.Errorf("overlay state = %q, want none claimed", got)
+	}
+
+	// A spawn is the first thing that says the seat runs.
+	s.Apply(env("agent_spawned", map[string]any{"role": "Lead", "agent_id": "a-1"}))
+	if got := overlayOf(t, s, "Lead").State; got != "idle" {
+		t.Errorf("state after a spawn = %q, want idle", got)
 	}
 }

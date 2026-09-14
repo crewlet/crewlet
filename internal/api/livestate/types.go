@@ -130,8 +130,10 @@ type LiveCall struct {
 
 // Meter is a seat's or the org's live token budget.
 //
-// A PROCESS-LIFETIME meter, never to be compared against the 24-hour spend
-// rollup or the 7-day per-agent total that sit beside it on the same screen.
+// The fleet's SHARED counter as the gate enforces it: every node's spend,
+// since the last deliberate reset, against the cap in the active revision. It
+// is never to be compared with a spend rollup beside it on the same screen,
+// which covers a window of time rather than the life of the counter.
 type Meter struct {
 	Used      int    `json:"used"`
 	Max       int    `json:"max"`
@@ -140,7 +142,9 @@ type Meter struct {
 
 // Overlay is the live half of an agent row, merged onto its static config row.
 type Overlay struct {
-	State            string    `json:"state"`
+	// State is empty, and OMITTED on the wire, until an event says whether
+	// the seat is running: see ensureAgent for what claiming one cost.
+	State            string    `json:"state,omitempty"`
 	RuntimeID        string    `json:"runtime_id"`
 	CurrentPhase     *string   `json:"current_phase"`
 	CurrentIteration int       `json:"current_iteration"`
@@ -156,7 +160,7 @@ type Overlay struct {
 
 	// Budget is nil when there is no meter, which covers two situations
 	// that look the same from here: the seat has no per-agent budget, or
-	// no engine is reporting at all. Either way a bar drawn without one
+	// no report has arrived yet. Either way a bar drawn without one
 	// would be a claim nobody measured.
 	Budget *Meter `json:"budget"`
 
@@ -185,7 +189,7 @@ type SandboxEntry struct {
 }
 
 // OrgBudget is the org-wide half of the live meter, plus the identity and
-// sequence of the engine run reporting it.
+// sequence of the node incarnation whose report is held.
 type OrgBudget struct {
 	MeterID string `json:"meter_id"`
 	Seq     int    `json:"seq"`

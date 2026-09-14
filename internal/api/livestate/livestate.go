@@ -229,6 +229,9 @@ type LiveState struct {
 	spend []spendEntry
 
 	budget OrgBudget
+	// budgetAt is when the held report was read, the guard against a
+	// delayed report from another node. Internal, never re-emitted.
+	budgetAt stamp
 
 	// now is injectable so a test can pin the clock the sandbox sweep
 	// reads. Nil takes the wall clock.
@@ -451,12 +454,11 @@ func (s *LiveState) Apply(env *Envelope) Change {
 	// takes one: a value copy would be stamped and thrown away.
 	env.Failed = types.Failed(env.Type, flag(payload, "failed"), false)
 
-	// The live token meters. Stream-only for the same reason the in-flight
-	// call is, and one stronger: these figures describe ONE engine run, so
-	// a persisted copy replayed from history would show a dead process's
-	// counters as the current ones.
+	// The live token meters. Stream-only: a report is a snapshot of a counter
+	// that moves every round, so a copy replayed from history would show
+	// figures the counter left behind long ago as the current ones.
 	if env.Type == "budget_reported" {
-		return s.applyBudget(payload)
+		return s.applyBudget(*env, payload)
 	}
 
 	// The in-flight call is stream-only: update it, but never let it into
@@ -530,8 +532,9 @@ func (s *LiveState) applyState(agent *agentLive, env Envelope, payload map[strin
 		// A spawn is a NEW instance of the seat, so whatever stopped the
 		// last one is not this one's state. Without this the sticky-AFK
 		// hold outlives an engine restart and a healthy seat renders as
-		// broken until it happens to do some work.
-		if agent.state == "offline" || agent.state == "terminated" || agent.state == "afk" {
+		// broken until it happens to do some work. A seat the projection
+		// knew nothing about is idle from here too.
+		if agent.state == "" || agent.state == "terminated" || agent.state == "afk" {
 			agent.state = "idle"
 			agent.afkReason = ""
 			agent.lastError = nil
@@ -648,10 +651,20 @@ func endTurn(agent *agentLive, turnID string) {
 	agent.liveCall = nil
 }
 
+// ensureAgent returns the live entry for a role, creating one that claims NO
+// state.
+//
+// UNKNOWN, not offline, is what a new entry knows. Several things create one
+// without saying anything about whether the seat is running: a meter report
+// names every capped seat, and a spend record names the seat it billed. The
+// overlay used to start at "offline", and a merged overlay OVERWRITES the
+// roster's own state, so the first meter report after a boot turned every
+// capped seat this node was serving from idle to offline on every open
+// dashboard, and it stayed that way until the seat next took a turn.
 func (s *LiveState) ensureAgent(role string) *agentLive {
 	agent := s.agents[role]
 	if agent == nil {
-		agent = &agentLive{role: role, state: "offline"}
+		agent = &agentLive{role: role}
 		s.agents[role] = agent
 	}
 	return agent

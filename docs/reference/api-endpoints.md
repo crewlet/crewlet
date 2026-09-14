@@ -1031,7 +1031,10 @@ does not hold carries no state at all and the dashboard reads that as
 `offline` — which is right for a seat nothing has claimed, and is this node
 declining to claim knowledge of a seat a peer may be running. [Fleet](#fleet-sandbox-runs--schedules)
 answers "who holds what" from the lease table, which is the one place that
-knows.
+knows. The live overlay merged on top replaces that state only once an event
+says what the seat is doing (a spawn, a phase, a turn ending): a token meter
+report names every capped seat whether or not anything runs it, so it carries
+no state at all.
 
 The three config-derived sections are **re-sent on every config apply**, as
 `seats`, `org` and `tools` pushes. Nothing else would correct them: a
@@ -1243,34 +1246,43 @@ set of ten values, and which event type lands under which is in
 
 ### The live token meter
 
-`budget` carries the engine's in-memory token counters — the only figures
-that can honestly be divided into a configured cap, because both cover the
-same span: **the engine's run**. The dashboard's other two token figures
-are a 24-hour spend rollup and a 7-day per-agent total; dividing either
-into a cap produces a percentage wrong by however long the engine has been
-up.
+`budget` carries the fleet's **shared token counter** as the budget gate
+enforces it: every node's spend since the last deliberate reset
+(`POST /budgets/reset`), beside the cap in the active revision. It is the only
+figure that can honestly be divided into a configured cap, because both cover
+the same span. The dashboard's other token figures are spend rollups over a
+window of time; dividing one of those into a cap produces a percentage that is
+wrong by however much was spent outside the window.
 
-- `meter_id` identifies the reporting run. `used` is comparable only
-  within one `meter_id`; a new one means the engine restarted and every
-  prior figure is dead, so a consumer must **replace** what it holds
-  rather than merge or take a maximum.
+Every node publishes a `budget_reported` snapshot of the counter every
+**15 seconds** (`engine.BudgetReportInterval`), and the projection folds each
+one in as it arrives. A company with no cap anywhere publishes none.
+
+- `meter_id` identifies the node incarnation whose report is held. Every node
+  reads the same counter, so reports under different ids describe the same
+  figures read at different moments. A report is a complete snapshot, so a
+  consumer **replaces** what it holds rather than merging or taking a
+  maximum: a reset has to be able to lower the figure.
 - `seq` is monotonic within a `meter_id`. The feed it arrives on is
-  **best-effort**: the standalone API reads an ephemeral broadcast
-  subscription that takes no acks, starts at the stream's tail on every
-  (re)connect, and lets a slow consumer miss frames rather than hold
-  them. So a report at or below the held `seq` is dropped rather than
-  merged, and a gap is closed by the next report rather than replayed.
-- `refused_at` — when the cap last turned a charge away. That, and not
-  `used >= max`, is what "exhausted" means: a refused charge increments
-  nothing, so the counter stops short of the cap by the size of the round
-  that would not fit.
-- `{}` means no engine is reporting one (the standalone API has no meter
-  of its own). Per-agent, `budget: null` means the same, or that the seat
-  has no per-agent cap at all — the engine seeds one only for a non-zero
-  `token_budget`.
+  **best-effort**: an ephemeral broadcast subscription that takes no acks,
+  starts at the stream's tail on every (re)connect, and lets a slow consumer
+  miss frames rather than hold them. So a report at or below the held `seq`
+  from the same meter is dropped, a report from another meter that was read
+  **earlier** than the held one is dropped, and a gap is closed by the next
+  report rather than replayed.
+- `refused_at` is when the cap last turned a charge away, in UTC, and empty
+  while the scope is not refusing. That, and not `used >= max`, is what
+  "exhausted" means: a refused charge increments nothing, so the counter stops
+  short of the cap by the size of the round that would not fit. The stamp is
+  kept in the shared counter beside the spend, so every node reports the same
+  one, and it clears on the scope's next admitted charge (or a reset).
+- `{}` means no report has arrived yet. Per-agent, `budget: null` means the
+  same, or that the seat has no per-agent cap at all: the engine meters a seat
+  only for a non-zero `token_budget`.
 
-It is deliberately never persisted: replaying a live meter from history
-would show a dead process's counters as the current ones.
+It is deliberately never persisted: a report is a reading of a counter that
+moves every round, so a copy replayed from history would show figures the
+counter has since left behind as the current ones.
 
 Each agent's `live_call` is `null` between turns, or
 `{ turn_id, phase, iteration, model, prompt, prompt_messages, response,
@@ -1317,7 +1329,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
 | `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
+| `budget`   | After a node's token meter report is applied (every node reports every 15 seconds while anything is capped). | `{ meter_id, seq, org: { used, max, refused_at } }`, the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. See [the live token meter](#the-live-token-meter). |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |

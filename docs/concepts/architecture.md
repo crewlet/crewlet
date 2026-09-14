@@ -243,9 +243,9 @@ guarantee the other one was providing.
 
 The two sets are not identical, and each exception carries its reason in
 `internal/events`: a few types are live-only — a per-round progress signal, a
-snapshot of in-memory meters — because persisting them would fill the log with
-intermediate states of rows it already holds finished, or let a dashboard
-hydrate a dead process's counters and render them as current. What the
+snapshot of the shared token counter, because persisting them would fill the log with
+intermediate states of rows it already holds finished, or replay a reading
+of a counter that has moved on as though it were current. What the
 projection shows and what the store keeps are two questions with two answers.
 
 **Embedded and standalone are one wiring with one seam.** The API half runs in
