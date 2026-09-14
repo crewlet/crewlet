@@ -10,6 +10,7 @@
  */
 
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   Router,
@@ -209,4 +210,33 @@ test("a reload or a closed tab asks while a leave or an unload guard holds, and 
   expect(unload()).toBe(true);
   view.rerender(null, false);
   expect(unload()).toBe(false);
+});
+
+// A SCREEN MAY NAVIGATE IN ITS OWN FIRST EFFECT, which React runs before the
+// router's. After a reload the entry stands wherever the session had got to,
+// so the move takes its place from the entry, not from a router that has yet
+// to adopt it: stamped with another place, every Back after it would be
+// undone in the wrong direction.
+test("a move made before the router adopts its entry keeps the entry's place", async () => {
+  // A router that has stood on the session's first entry, as a fresh page's has.
+  history.replaceState(null, "", "#/");
+  render(<Router>{null}</Router>);
+  cleanup();
+
+  history.replaceState({ crewletIndex: 3 }, "", "#/org");
+  function Early() {
+    const navigator = useNavigator();
+    useEffect(() => navigator.filter({ unit: "Sales" }), [navigator]);
+    return null;
+  }
+  render(
+    <Router>
+      <Early />
+      <Probe guard={null} />
+    </Router>,
+  );
+  expect(location.hash).toBe("#/org?unit=Sales");
+  expect((history.state as { crewletIndex?: unknown }).crewletIndex).toBe(3);
+  act(() => nav!.to(["people"]));
+  expect((history.state as { crewletIndex?: unknown }).crewletIndex).toBe(4);
 });

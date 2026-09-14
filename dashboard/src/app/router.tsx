@@ -284,7 +284,13 @@ function go(hash: string, replace: boolean, agreed = false): void {
   const el = scrollTarget();
   if (from && el) positions.set(from, el.scrollTop);
 
-  const index = replace ? settled.index : settled.index + 1;
+  // THE PLACE IS THE ENTRY'S OWN. A screen can navigate in its first effect,
+  // which React runs before this router's own (`adoptEntry`), and after a
+  // reload the entry stands wherever the session had got to while `settled`
+  // still says 0: a replace would stamp the wrong place on it, and every Back
+  // after it would be undone in the wrong direction.
+  const here = entryIndex() ?? settled.index;
+  const index = replace ? here : here + 1;
   if (replace) history.replaceState({ crewletKey: from, crewletIndex: index }, "", hash);
   else history.pushState({ crewletIndex: index }, "", hash);
   settled = { hash: location.hash, index };
