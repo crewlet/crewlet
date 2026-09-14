@@ -41,9 +41,12 @@ const (
 
 // Sources are what the answers read from.
 //
-// Every field is optional, and an absent one leaves its questions UNREGISTERED
-// rather than answered emptily: "there is no tracker here" and "the tracker is
-// empty" are answers a screen must be able to tell apart.
+// Every field is optional, and an absent one leaves its questions UNREGISTERED,
+// so they come back as [ErrUnknown] (`unknown_query`, 404) rather than answered
+// emptily: "there is no tracker here" and "the tracker is empty" are answers a
+// screen must be able to tell apart, and "not here" is permanent in a way
+// [ErrUnavailable]'s "not yet" is not, so a Retry-After for a source this node
+// will never have would send a client round a loop.
 //
 // Only a few are absent on a real node: Work and Pages on a company that runs
 // the vendor tracker and wiki, Knowledge where no knowledge backend is
@@ -264,14 +267,18 @@ func (s Sources) clock() time.Time {
 }
 
 // ErrUnavailable is a question this node understood and cannot answer YET: its
-// copy of the company's records is still catching up with the log (see
-// unavailableIfBehind).
+// copy of the company's records is still catching up, or the coordination store
+// it reads could not be reached.
 //
 // Distinct from an empty answer, and the distinction is the point: a dashboard
-// that drew "there is no work" for "this node has not caught up yet" would
-// report a quiet company to somebody watching a restart. Distinct from
-// [ErrUnknown] too, the answer for a source this registry was never given,
-// which no amount of waiting changes.
+// that drew "there is no work" for "this node cannot read the work right now"
+// would report a quiet company during an outage. Distinct from [ErrUnknown]
+// too, which is the answer for a source this node does not have at all: that
+// one never clears by waiting, so it must not carry a Retry-After.
+//
+// Answers do not return it themselves. The registry classifies at one boundary
+// (see unavailableIfTransient), so an answer that reads a store which can be
+// briefly unreachable cannot forget to.
 var ErrUnavailable = errors.New("queries: not available on this node")
 
 // ErrNotFound is a question this surface understood, about a record it does

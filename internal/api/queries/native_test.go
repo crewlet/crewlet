@@ -3,6 +3,7 @@ package queries_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -499,6 +500,26 @@ func TestARefusalWaitingCannotClearIsNotAnInvitationToRetry(t *testing.T) {
 		t.Fatalf("a refusal waiting cannot clear was reported as %v — a client "+
 			"told to come back goes round a loop that cannot terminate",
 			queries.ErrUnavailable)
+	}
+}
+
+// A REFUSAL ABOUT THE REQUEST STAYS ONE, even when what it wraps is a refusal
+// the registry would otherwise call transient. The caller has to change the
+// request; "come back" would send the identical one round a loop.
+func TestARefusalAboutTheRequestIsNeverReclassifiedAsUnavailable(t *testing.T) {
+	t.Parallel()
+	behind := &statelog.Refused{Code: statelog.RefuseBehind, Level: statelog.ReadSession,
+		RetryAfter: time.Second}
+	work := &stubWork{err: fmt.Errorf("%w: %w", tracker.ErrTooBroad, behind)}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Work: work})
+
+	_, err := r.Answer(t.Context(), "work_items", map[string]any{}, "")
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Fatalf("err = %v, want ErrBadParams", err)
+	}
+	if errors.Is(err, queries.ErrUnavailable) {
+		t.Errorf("a refusal about the request was also reported as %v", queries.ErrUnavailable)
 	}
 }
 

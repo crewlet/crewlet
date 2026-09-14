@@ -58,7 +58,7 @@ func (s Sources) pageActivity(ctx context.Context, p Params) (any, error) {
 	}
 	answer, err := s.Pages.Activity(ctx, q)
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return answer, nil
 }
@@ -109,7 +109,7 @@ func (s Sources) pageRevision(ctx context.Context, p Params) (any, error) {
 	revision, held, err := s.Pages.Revision(ctx, page, version, fresh)
 	switch {
 	case err != nil:
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	case !held:
 		return nil, ErrNotFound
 	}

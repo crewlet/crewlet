@@ -78,7 +78,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 	}
 	answer, err := s.Work.Inbox(ctx, q, time.Now().UTC())
 	if err != nil {
-		return nil, unavailableIfBehind(err)
+		return nil, err
 	}
 	return answer, nil
 }

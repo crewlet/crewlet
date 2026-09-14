@@ -16,7 +16,7 @@
 import { api } from "./api.ts";
 import { apiToken } from "./authToken.ts";
 import type { Store } from "./store.ts";
-import type { Frame, QueryMap, QueryName } from "./types.ts";
+import type { Frame, QueryErrorCode, QueryMap, QueryName } from "./types.ts";
 
 const PATH = "/ws/stream";
 
@@ -52,6 +52,40 @@ const FALLBACK_MS = 5_000;
  * screen shows an error rather than an eternal skeleton.
  */
 const QUERY_TIMEOUT_MS = 10_000;
+
+/**
+ * Every {@link QueryErrorCode}, as a value a rejection's message can be tested
+ * against.
+ *
+ * A Record over the union rather than a list beside it: the compiler refuses a
+ * key the union lacks and a member left out, so the two cannot drift. The
+ * union itself is pinned to the engine's own codes by a Go test in
+ * `internal/api/stream` that reads it.
+ */
+const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
+  unknown_query: true,
+  unauthorized: true,
+  query_failed: true,
+  bad_params: true,
+  not_found: true,
+  unavailable: true,
+  timeout: true,
+  closed: true,
+};
+
+/**
+ * The query error code `value` is, or null for anything else: no failure at
+ * all, or prose a screen wrote itself.
+ *
+ * Branching on the narrowed value is what keeps a screen's handling inside the
+ * vocabulary. A comparison against a code the union lacks, such as the
+ * `no_event_store` the engine never sent, is then a type error rather than a
+ * branch that can never run. `Object.hasOwn`, because `in` would also accept
+ * `toString` and every other name an object inherits.
+ */
+export function queryErrorCode(value: string | null | undefined): QueryErrorCode | null {
+  return value && Object.hasOwn(QUERY_ERROR_CODES, value) ? (value as QueryErrorCode) : null;
+}
 
 interface Inflight {
   id: number;
@@ -132,7 +166,7 @@ export class LiveSocket {
    * in flight when the socket dropped is simply re-sent on reconnect.
    *
    * Rejects with an Error carrying the server's machine-readable code
-   * (`not_found`, `unauthorized`, `unknown_query`, …), `timeout` if a sent
+   * (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
    * query goes unanswered, or `closed` if the client shuts down.
    */
   query<K extends QueryName>(what: K, params?: Record<string, unknown>): Promise<QueryMap[K]> {
@@ -373,7 +407,9 @@ export class LiveSocket {
         this.settle(msg.id, null, msg.data);
         break;
       case "error":
-        this.settle(msg.id, msg.error || "error", null);
+        // An error frame always carries a code. One that does not is still
+        // a failure nobody explained, which is what `query_failed` means.
+        this.settle(msg.id, msg.error || "query_failed", null);
         break;
       case "pong":
         break;

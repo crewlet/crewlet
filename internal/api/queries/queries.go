@@ -18,6 +18,9 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+
+	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // Errors a query surface reports precisely. Everything else a query returns is
@@ -295,9 +298,55 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params, operat
 	}
 	// WHO IS ASKING, for the questions that answer differently per person.
 	// Set here rather than at each transport, because this is the one
-	// function both of them meet at — which is the same reason this package
+	// function both of them meet at, which is the same reason this package
 	// exists at all.
-	return e.answer(withOperator(ctx, operatorID), p)
+	data, err := e.answer(withOperator(ctx, operatorID), p)
+	return data, unavailableIfTransient(err)
+}
+
+// unavailableIfTransient turns a read this node could not serve YET into
+// [ErrUnavailable], leaving every other failure alone.
+//
+// AT THE REGISTRY, ONCE, rather than at each answer that reads something
+// that can be briefly unreachable. It was per answer, and the answers that
+// did not call it were exactly the ones reported: an unreadable lease table
+// reached `fleet` as a plain failure and `sandbox_runs` likewise, so a
+// coordination blip rendered as `query_failed` and a 500, telling a client to
+// give up on a screen that would work in a few seconds. The reference had
+// promised a 503 for both.
+//
+// Two sources of "not yet", and each is its own subsystem's classification
+// rather than a second list here:
+//
+//   - a state-log read refusal whose code is retryable
+//     ([statelog.ReadRefusal.Retryable]). A node that is behind will catch
+//     up; a node holding a record it cannot decode will not, however long a
+//     caller waits, so that one stays a failure.
+//   - [coord.ErrUnavailable], the coordination contract's own third answer:
+//     the store could not be reached, which is neither "held" nor "absent".
+//
+// A refusal about the REQUEST is never reclassified, even when it wraps one of
+// those: the caller has to change what it asks, and "come back" would send the
+// identical request round a loop.
+func unavailableIfTransient(err error) error {
+	switch {
+	case err == nil,
+		errors.Is(err, ErrUnavailable),
+		errors.Is(err, ErrBadParams),
+		errors.Is(err, ErrNotFound),
+		errors.Is(err, ErrUnauthorized):
+		return err
+	}
+	var refused *statelog.Refused
+	if errors.As(err, &refused) && refused.Code.Retryable() {
+		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and
+		// derived hint survive for [RetryAfter] and for the log.
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if errors.Is(err, coord.ErrUnavailable) {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	return err
 }
 
 // RequiresOperator reports whether a question needs one.

@@ -370,8 +370,9 @@ const REFUSALS: Record<QueryErrorCode, ReactNode> = {
   ),
   unavailable: (
     <Callout variant="neutral" icon={<ScheduleGlyph size="md" />}>
-      This node has not finished reading the company&rsquo;s own records yet — its projection is
-      still catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+      This node cannot answer yet: its copy of the company&rsquo;s records is still catching up, or
+      it could not reach the coordination store for a moment. Nothing is lost, and this screen asks
+      again on its own.
       <strong> This is not an empty company.</strong>
     </Callout>
   ),
