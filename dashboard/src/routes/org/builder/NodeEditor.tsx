@@ -111,10 +111,13 @@ export function NodeEditor({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       </Drawer>
     );
   }
+  // KEYED BY THE NODE, so opening the editor on another node builds a new
+  // form from that node rather than keeping the one the last node filled: a
+  // form's fields are state, and React would otherwise reuse them.
   return found.kind === "unit" ? (
-    <UnitEditor unit={found.node} onClose={onClose} />
+    <UnitEditor key={found.node.key} unit={found.node} onClose={onClose} />
   ) : (
-    <SeatEditor seat={found.node} onClose={onClose} />
+    <SeatEditor key={found.node.key} seat={found.node} onClose={onClose} />
   );
 }
 
