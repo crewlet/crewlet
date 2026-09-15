@@ -30,6 +30,10 @@ import { fileURLToPath } from "node:url";
 // nobody finds and a browser downloads rather than shows.
 const NOTICES = "THIRD_PARTY_NOTICES.txt";
 
+// The design system's own packages, as paths rather than imports: what is
+// taken from them here is files, not modules.
+const ICONS = "./node_modules/@crewlethq/icons";
+
 // The faces come from @crewlethq/tokens now, and so does their licence. Both
 // the notice below and the copy served beside the files read this one path, so
 // a font bump cannot leave the two disagreeing.
@@ -58,6 +62,34 @@ function fontLicence(): Plugin {
   };
 }
 
+// brandAssets emits the product's mark from the package that owns it.
+//
+// Both files are @crewlethq/icons', so the tab icon, the rail lockup, the
+// GitHub App landing page and the raster favicon a browser asks for unprompted
+// are one drawing with one source. They are emitted rather than imported
+// because nothing in the module graph references them: the shell names the SVG
+// in its head and the engine serves the .ico from a route of its own.
+const BRAND_ASSETS: readonly { from: string; to: string }[] = [
+  { from: `${ICONS}/svg/crewlet-icon.svg`, to: "crewlet-icon.svg" },
+  { from: `${ICONS}/favicon/crewlet.ico`, to: "favicon.ico" },
+];
+
+function brandAssets(): Plugin {
+  return {
+    name: "crewlet:brand-assets",
+    apply: "build",
+    generateBundle() {
+      for (const { from, to } of BRAND_ASSETS) {
+        this.emitFile({
+          type: "asset",
+          fileName: to,
+          source: readFileSync(fileURLToPath(new URL(from, import.meta.url))),
+        });
+      }
+    },
+  };
+}
+
 // SOURCE_NOTICES is the third-party material in the bundle that is not an npm
 // package, in the order it is appended. Each license file sits beside what it
 // covers, so the notice moves with the material it belongs to.
@@ -68,9 +100,14 @@ const SOURCE_NOTICES: readonly { heading: string; lead: string; file: string }[]
     file: FONT_LICENCE,
   },
   {
-    heading: "Icons: Feather Icons (MIT)",
-    lead: "The dashboard's icon set is drawn from paths adapted from Feather Icons.",
-    file: fileURLToPath(new URL("./src/ui/Icon.LICENSE.txt", import.meta.url)),
+    heading: "Icons: Material Symbols (Apache-2.0)",
+    lead: "The dashboard's glyphs are Material Symbols drawings, redistributed by @crewlethq/icons.",
+    file: fileURLToPath(new URL(`${ICONS}/symbols/LICENSE`, import.meta.url)),
+  },
+  {
+    heading: "Icons: Material Symbols, notice",
+    lead: "The notice the Apache License requires to travel with the drawings.",
+    file: fileURLToPath(new URL(`${ICONS}/symbols/NOTICE`, import.meta.url)),
   },
 ];
 
@@ -107,7 +144,7 @@ function sourceNotices(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), fontLicence(), sourceNotices()],
+  plugins: [react(), fontLicence(), brandAssets(), sourceNotices()],
   // The engine serves this tree from /static/dashboard/ and answers the shell
   // at both `/` and `/dashboard`. A relative base would resolve the shell's
   // own asset URLs against whichever of those the reader arrived at; an

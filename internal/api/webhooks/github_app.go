@@ -31,7 +31,7 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Crewlet: {{.Heading}}</title>
-    <link rel="icon" href="/static/crewlet-icon.svg">
+    <link rel="icon" href="/static/dashboard/crewlet-icon.svg">
     <style>
       /* The dashboard's own dark palette, restated rather than imported: this
          page is served by the webhook mux to a browser arriving from GitHub,
@@ -105,7 +105,7 @@ var githubAppPage = template.Must(template.New("github-app").Parse(`<!doctype ht
   </head>
   <body>
     <div class="wrap">
-      <img class="mark" src="/static/crewlet-icon.svg" alt="Crewlet">
+      <img class="mark" src="/static/dashboard/crewlet-icon.svg" alt="Crewlet">
       <h1>{{.Heading}}{{if .Seat}} <span class="seat">{{.Seat}}</span>{{end}}</h1>
       <div class="card">
         <div class="row">
