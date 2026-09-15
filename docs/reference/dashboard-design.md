@@ -298,6 +298,32 @@ and the query changes once per column rather than once per second; a list's are
 not. An interval never moves at all — it is the one window that is stable to
 link to.
 
+### An object's own facts
+
+`PropertiesRail` is the rail beside an object — its state, its people, its
+plan, its record. Two components did this: a flat `KeyValue` with no sections
+used by the event, the run, the turn and the seat, and the work item's own
+sectioned rail used by nothing else. They had different label widths, different
+gaps and different rules about an absent value, so the same kind of panel read
+differently depending on which screen it was on — and neither could say **who**
+set a fact, which on a product whose objects are mostly written by agents is
+the thing a reader asks about most. "In progress" is a different fact from
+"moved to in progress by ada, eleven minutes ago, in turn ↗".
+
+**An absent value is a decision.** Three different facts share one empty cell
+and they are not interchangeable:
+
+- the row is **dropped** — this object has no such property at all (a task with
+  no collaborators has no collaborators row);
+- the row is a **dash** — the property exists and holds nothing (a task with no
+  due date has a due date, unset);
+- the row **says something** — the empty state means something a reader should
+  know ("none — reflection uses the default").
+
+The caller says which, and there is no path by which forgetting produces a
+plausible-looking wrong one. `0` and `false` are values a property can hold and
+are rendered, never folded into "nothing set".
+
 ### A log is an axis, then its rows
 
 Two screens are log-shaped — the event log and the Inbox — and both had the

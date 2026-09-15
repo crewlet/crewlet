@@ -15,7 +15,6 @@ import {
   Badge,
   Button,
   Empty,
-  KeyValue,
   Meter,
   Panel,
   Skeleton,
@@ -50,6 +49,7 @@ import {
 import type { ConversationEntry, CounterpartyProfile, EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 
 type Tab = "overview" | "model" | "threads" | "memory" | "cost" | "access";
 
@@ -403,66 +403,76 @@ export function SeatScreen({ handle }: { handle: string }) {
 
             <div className="grid grid-auto-lg">
               <Panel title="Who this is" icon="user">
-                <KeyValue
-                  items={[
-                    ["Role", seat.name],
-                    [
-                      "Handle",
-                      <code key="h" className="inline">
-                        @{seat.handle}
-                      </code>,
-                    ],
-                    ["Kind", human ? "human teammate — never spawned by the engine" : "agent seat"],
-                    ["Goal", seat.goal || <span className="faint">not set</span>],
-                    ["Email", seat.email || <span className="faint">not set</span>],
-                    [
-                      "Unit",
-                      seat.unitChain.length ? (
-                        seat.unitChain.map((u) => u.name).join(" › ")
-                      ) : (
-                        <span className="faint">org-wide</span>
-                      ),
-                    ],
-                    [
-                      "Unit lead",
-                      seat.unitLead ? (
-                        <SeatChip
-                          name={seat.unitLead}
-                          handle={index.byName.get(seat.unitLead)?.handle}
-                        />
-                      ) : (
-                        <span className="faint">none</span>
-                      ),
-                    ],
-                    [
-                      "Reports to",
-                      manager ? (
-                        <SeatChip name={manager.name} handle={manager.handle} />
-                      ) : (
-                        <span className="faint">nobody</span>
-                      ),
-                    ],
-                    // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or a
-                    // per-phase mapping, so this is the flattened order the
-                    // provider chain actually walks — and an empty ARRAY is
-                    // truthy, which is why the fallback is an explicit length
-                    // test rather than `||`.
-                    [
-                      "Model",
-                      seat.llm.length ? (
-                        <ModelChain keys={seat.llm} />
-                      ) : (
-                        <span className="faint">default provider</span>
-                      ),
-                    ],
-                    [
-                      "Auxiliary model",
-                      seat.llmAuxiliary.length ? (
-                        <ModelChain keys={seat.llmAuxiliary} />
-                      ) : (
-                        <span className="faint">none — reflection uses the default</span>
-                      ),
-                    ],
+                <PropertiesRail
+                  groups={[
+                    {
+                      properties: [
+                        { label: "Role", value: seat.name },
+                        { label: "Handle", value: <code className="inline">@{seat.handle}</code> },
+                        {
+                          label: "Kind",
+                          value: human
+                            ? "human teammate — never spawned by the engine"
+                            : "agent seat",
+                        },
+                        {
+                          label: "Goal",
+                          value: seat.goal || <span className="faint">not set</span>,
+                        },
+                        {
+                          label: "Email",
+                          value: seat.email || <span className="faint">not set</span>,
+                        },
+                        {
+                          label: "Unit",
+                          value: seat.unitChain.length ? (
+                            seat.unitChain.map((u) => u.name).join(" › ")
+                          ) : (
+                            <span className="faint">org-wide</span>
+                          ),
+                        },
+                        {
+                          label: "Unit lead",
+                          value: seat.unitLead ? (
+                            <SeatChip
+                              name={seat.unitLead}
+                              handle={index.byName.get(seat.unitLead)?.handle}
+                            />
+                          ) : (
+                            <span className="faint">none</span>
+                          ),
+                        },
+                        {
+                          label: "Reports to",
+                          value: manager ? (
+                            <SeatChip name={manager.name} handle={manager.handle} />
+                          ) : (
+                            <span className="faint">nobody</span>
+                          ),
+                        },
+                        // A CHAIN, DRAWN AS ONE. `llm:` accepts a key, a list or
+                        // a per-phase mapping, so this is the flattened order the
+                        // provider chain actually walks — and an empty ARRAY is
+                        // truthy, which is why the fallback is an explicit length
+                        // test rather than `||`.
+                        {
+                          label: "Model",
+                          value: seat.llm.length ? (
+                            <ModelChain keys={seat.llm} />
+                          ) : (
+                            <span className="faint">default provider</span>
+                          ),
+                        },
+                        {
+                          label: "Auxiliary model",
+                          value: seat.llmAuxiliary.length ? (
+                            <ModelChain keys={seat.llmAuxiliary} />
+                          ) : (
+                            <span className="faint">none — reflection uses the default</span>
+                          ),
+                        },
+                      ],
+                    },
                   ]}
                 />
               </Panel>
@@ -1040,13 +1050,15 @@ export function SeatScreen({ handle }: { handle: string }) {
           <div className="col gap-4">
             <Panel title="Identity on other surfaces" icon="link">
               {Object.keys(seat.contact).length ? (
-                <KeyValue
-                  items={Object.entries(seat.contact).map(([k, v]) => [
-                    k.replace(/_/g, " "),
-                    <code key={k} className="inline">
-                      {v}
-                    </code>,
-                  ])}
+                <PropertiesRail
+                  groups={[
+                    {
+                      properties: Object.entries(seat.contact).map(([k, v]) => ({
+                        label: k.replace(/_/g, " "),
+                        value: <code className="inline">{v}</code>,
+                      })),
+                    },
+                  ]}
                 />
               ) : (
                 <Empty
@@ -1069,19 +1081,20 @@ export function SeatScreen({ handle }: { handle: string }) {
                   {Object.entries(seat.mcpEnv).map(([server, vars]) => (
                     <div key={server} className="col gap-1">
                       <div className="t-label">{server}</div>
-                      <KeyValue
-                        items={Object.entries(vars).map(([k, v]) => [
-                          <code key={k} className="inline">
-                            {k}
-                          </code>,
-                          // Values are `${VAR}` POINTERS in the config and are
-                          // stored verbatim; the engine resolves them only where
-                          // a transport is constructed. A literal here would be a
-                          // secret in a config, which the API redacts server-side.
-                          <code key={`${k}v`} className="inline">
-                            {v}
-                          </code>,
-                        ])}
+                      <PropertiesRail
+                        groups={[
+                          {
+                            properties: Object.entries(vars).map(([k, v]) => ({
+                              label: k,
+                              code: true,
+                              // Values are `${VAR}` POINTERS in the config and are
+                              // stored verbatim; the engine resolves them only where
+                              // a transport is constructed. A literal here would be a
+                              // secret in a config, which the API redacts server-side.
+                              value: <code className="inline">{v}</code>,
+                            })),
+                          },
+                        ]}
                       />
                     </div>
                   ))}

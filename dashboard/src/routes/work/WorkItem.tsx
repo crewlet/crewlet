@@ -49,6 +49,8 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { useViewer } from "~/lib/viewer.ts";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import type { PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
 import type {
   WorkChange,
   WorkComment,
@@ -734,181 +736,218 @@ export function ItemProps({
   const seatName = chrome.seatName ?? ((h: string) => h);
   const spend = item.spend;
 
-  const row = (label: string, value: React.ReactNode) => (
-    <>
-      <dt>{label}</dt>
-      <dd>{value}</dd>
-    </>
-  );
-  const dash = <span className="muted">—</span>;
-
-  return (
-    <dl className="work-props">
-      <div className="work-props-section">State</div>
-      {row("Status", <StatusBadge status={item.status} defs={chrome.statuses} />)}
-      {row(
-        "Priority",
-        item.priority && item.priority !== "none" ? (
-          <PriorityMark priority={item.priority} word />
-        ) : (
-          dash
-        ),
-      )}
-      {row(
-        "Type",
-        item.type ? (
-          <span className="row gap-1">
-            <TypeIcon type={item.type} types={chrome.types} />
-            {typeName(item.type, chrome.types)}
-          </span>
-        ) : (
-          dash
-        ),
-      )}
-
-      <div className="work-props-section">People</div>
-      {row(
-        "Assignee",
-        item.assignee ? (
-          <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
-        ) : (
-          <span className="muted">Unassigned</span>
-        ),
-      )}
-      {row(
-        "Reporter",
-        item.reporter ? <SeatChip name={seatName(item.reporter)} handle={item.reporter} /> : dash,
-      )}
-      {(item.collaborators ?? []).length > 0 &&
-        row(
-          "Collaborators",
-          <span className="row wrap gap-1">
-            {(item.collaborators ?? []).map((handle) => (
-              <SeatChip key={handle} name={seatName(handle)} handle={handle} />
-            ))}
-          </span>,
-        )}
-      {(item.watchers ?? []).length > 0 &&
-        row(
-          "Watching",
-          <span className="row wrap gap-1">
-            {(item.watchers ?? []).map((handle) => (
-              <span key={handle} className="row gap-1">
-                <SeatChip name={seatName(handle)} handle={handle} />
-                {/* MUTED IS NOT THE SAME AS NOT WATCHING, and both travel:
-                    a set that carried only the difference would silently
-                    re-add everybody on the next mention. */}
-                {(item.muted ?? []).includes(handle) && <span className="faint">(muted)</span>}
-              </span>
-            ))}
-          </span>,
-        )}
-
-      <div className="work-props-section">Plan</div>
-      {row(
-        "Sprint",
-        item.sprint !== undefined ? (
-          <a className="t-link" href={href(["work", item.project, "sprints"])}>
-            Sprint {item.sprint}
-          </a>
-        ) : (
-          <span className="muted">Backlog</span>
-        ),
-      )}
-      {row("Start", item.start_at ? fmtDate(item.start_at) : dash)}
-      {row(
-        "Due",
-        item.due_at ? (
-          <span className="row gap-1">
-            {fmtDate(item.due_at)}
-            {item.due_all_day && <span className="faint">all day</span>}
-          </span>
-        ) : (
-          dash
-        ),
-      )}
-      {row("Estimate", item.estimate_minutes ? fmtMinutes(item.estimate_minutes) : dash)}
-      {row("Points", item.points ? item.points : dash)}
-      {(item.tags ?? []).length > 0 &&
-        row(
-          "Tags",
-          <span className="row wrap gap-1">
-            {(item.tags ?? []).map((slug) => (
-              <Badge key={slug} outline>
-                {project?.tags?.find((t) => t.slug === slug)?.label ?? slug}
-              </Badge>
-            ))}
-          </span>,
-        )}
-
-      {(detail.fields ?? []).length > 0 && (
-        <>
-          <div className="work-props-section">Fields</div>
-          {(detail.fields ?? []).map((field) => {
-            const state = fieldValueState(field);
-            return (
-              <div key={field.id} style={{ display: "contents" }}>
-                <dt>{field.name || field.slug || field.id}</dt>
-                <dd>
-                  {fieldValueText(field, defs, seatName)}
-                  {state && <span className="work-field-state">{state}</span>}
-                </dd>
-              </div>
-            );
-          })}
-        </>
-      )}
-
-      {!compact && (
-        <>
-          <div className="work-props-section">Cost</div>
-          {/* THE REASSIGNMENT COUNT IS A BUDGET, not trivia: an item handed on
-              too many times has stopped being work and started being a hot
-              potato, and the engine refuses the next hand-off rather than
-              letting it circle. */}
-          {row(
-            "Hand-offs",
+  // EVERY ROW SAYS WHICH KIND OF ABSENCE IT HAS. A property left out of the
+  // list does not exist on this object; one with no `value` exists and holds
+  // nothing, and renders the dash; one whose empty state means something says
+  // that instead. See [PropertiesRail].
+  const groups: PropertyGroup[] = [
+    {
+      name: "State",
+      properties: [
+        { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
+        {
+          label: "Priority",
+          value:
+            item.priority && item.priority !== "none" ? (
+              <PriorityMark priority={item.priority} word />
+            ) : undefined,
+        },
+        {
+          label: "Type",
+          value: item.type ? (
             <span className="row gap-1">
-              {item.reassignments ?? 0}
-              {(item.reassignments ?? 0) >= 6 && <Icon name="alert" size="xs" />}
-            </span>,
-          )}
-          {row("Turns", spend?.turns ? spend.turns : dash)}
-          {row("Tokens", spend?.tokens ? fmtCount(spend.tokens) : dash)}
-          {row("Model time", spend?.wall_ms ? fmtDuration(spend.wall_ms) : dash)}
+              <TypeIcon type={item.type} types={chrome.types} />
+              {typeName(item.type, chrome.types)}
+            </span>
+          ) : undefined,
+        },
+      ],
+    },
+    {
+      name: "People",
+      properties: [
+        {
+          label: "Assignee",
+          value: item.assignee ? (
+            <SeatChip name={seatName(item.assignee)} handle={item.assignee} />
+          ) : (
+            <span className="muted">Unassigned</span>
+          ),
+        },
+        {
+          label: "Reporter",
+          value: item.reporter ? (
+            <SeatChip name={seatName(item.reporter)} handle={item.reporter} />
+          ) : undefined,
+        },
+        // DROPPED rather than dashed: a task nobody is collaborating on has
+        // no collaborators, which is not the same as an empty set of them.
+        ...((item.collaborators ?? []).length > 0
+          ? [
+              {
+                label: "Collaborators",
+                value: (
+                  <span className="row wrap gap-1">
+                    {(item.collaborators ?? []).map((handle) => (
+                      <SeatChip key={handle} name={seatName(handle)} handle={handle} />
+                    ))}
+                  </span>
+                ),
+              },
+            ]
+          : []),
+        ...((item.watchers ?? []).length > 0
+          ? [
+              {
+                label: "Watching",
+                value: (
+                  <span className="row wrap gap-1">
+                    {(item.watchers ?? []).map((handle) => (
+                      <span key={handle} className="row gap-1">
+                        <SeatChip name={seatName(handle)} handle={handle} />
+                        {/* MUTED IS NOT THE SAME AS NOT WATCHING, and both
+                            travel: a set that carried only the difference
+                            would silently re-add everybody on the next
+                            mention. */}
+                        {(item.muted ?? []).includes(handle) && (
+                          <span className="faint">(muted)</span>
+                        )}
+                      </span>
+                    ))}
+                  </span>
+                ),
+              },
+            ]
+          : []),
+      ],
+    },
+    {
+      name: "Plan",
+      properties: [
+        {
+          label: "Sprint",
+          value:
+            item.sprint !== undefined ? (
+              `Sprint ${item.sprint}`
+            ) : (
+              <span className="muted">Backlog</span>
+            ),
+          path: item.sprint !== undefined ? ["work", item.project, "sprints"] : undefined,
+        },
+        { label: "Start", value: item.start_at ? fmtDate(item.start_at) : undefined },
+        {
+          label: "Due",
+          value: item.due_at ? (
+            <span className="row gap-1">
+              {fmtDate(item.due_at)}
+              {item.due_all_day && <span className="faint">all day</span>}
+            </span>
+          ) : undefined,
+        },
+        {
+          label: "Estimate",
+          value: item.estimate_minutes ? fmtMinutes(item.estimate_minutes) : undefined,
+        },
+        { label: "Points", value: item.points ? item.points : undefined },
+        ...((item.tags ?? []).length > 0
+          ? [
+              {
+                label: "Tags",
+                value: (
+                  <span className="row wrap gap-1">
+                    {(item.tags ?? []).map((slug) => (
+                      <Badge key={slug} outline>
+                        {project?.tags?.find((t) => t.slug === slug)?.label ?? slug}
+                      </Badge>
+                    ))}
+                  </span>
+                ),
+              },
+            ]
+          : []),
+      ],
+    },
+  ];
 
-          <div className="work-props-section">Record</div>
-          {row("Created", item.created_at ? fmtDateTime(item.created_at) : dash)}
-          {row("Updated", item.updated_at ? fmtDateTime(item.updated_at) : dash)}
-          {row(
-            "In status since",
-            item.status_entered_at ? fmtDateTime(item.status_entered_at) : dash,
-          )}
-          {item.done_at ? row("Delivered", fmtDateTime(item.done_at)) : null}
-          {row(
-            "Filed into",
-            item.filed_unit ? (
+  if ((detail.fields ?? []).length > 0) {
+    groups.push({
+      name: "Fields",
+      properties: (detail.fields ?? []).map((field) => {
+        const state = fieldValueState(field);
+        return {
+          label: field.name || field.slug || field.id,
+          value: (
+            <>
+              {fieldValueText(field, defs, seatName)}
+              {state && <span className="work-field-state">{state}</span>}
+            </>
+          ),
+        };
+      }),
+    });
+  }
+
+  if (!compact) {
+    groups.push(
+      {
+        name: "Cost",
+        properties: [
+          // THE REASSIGNMENT COUNT IS A BUDGET, not trivia: an item handed on
+          // too many times has stopped being work and started being a hot
+          // potato, and the engine refuses the next hand-off rather than
+          // letting it circle.
+          {
+            label: "Hand-offs",
+            value: (
+              <span className="row gap-1">
+                {item.reassignments ?? 0}
+                {(item.reassignments ?? 0) >= 6 && <Icon name="alert" size="xs" />}
+              </span>
+            ),
+          },
+          { label: "Turns", value: spend?.turns ? spend.turns : undefined },
+          { label: "Tokens", value: spend?.tokens ? fmtCount(spend.tokens) : undefined },
+          { label: "Model time", value: spend?.wall_ms ? fmtDuration(spend.wall_ms) : undefined },
+        ],
+      },
+      {
+        name: "Record",
+        properties: [
+          { label: "Created", value: item.created_at ? fmtDateTime(item.created_at) : undefined },
+          { label: "Updated", value: item.updated_at ? fmtDateTime(item.updated_at) : undefined },
+          {
+            label: "In status since",
+            value: item.status_entered_at ? fmtDateTime(item.status_entered_at) : undefined,
+          },
+          ...(item.done_at ? [{ label: "Delivered", value: fmtDateTime(item.done_at) }] : []),
+          {
+            label: "Filed into",
+            value: item.filed_unit ? (
               <span className="truncate">{item.filed_unit}</span>
             ) : (
               <span className="muted">no unit</span>
             ),
-          )}
-          {/* ROUTING IS THE MUTABLE HALF — whose lead hears about this now —
-              and it is shown only where it has MOVED, because the pair being
-              equal is the ordinary case and repeating it is noise. */}
-          {item.routing_unit && item.routing_unit !== item.filed_unit
-            ? row("Routes to", item.routing_unit)
-            : null}
-          {(item.former_keys ?? []).length > 0
-            ? row(
-                "Former keys",
-                <span className="mono">{(item.former_keys ?? []).join(", ")}</span>,
-              )
-            : null}
-        </>
-      )}
-    </dl>
-  );
+          },
+          // ROUTING IS THE MUTABLE HALF — whose lead hears about this now —
+          // and it is shown only where it has MOVED, because the pair being
+          // equal is the ordinary case and repeating it is noise.
+          ...(item.routing_unit && item.routing_unit !== item.filed_unit
+            ? [{ label: "Routes to", value: item.routing_unit }]
+            : []),
+          ...((item.former_keys ?? []).length > 0
+            ? [
+                {
+                  label: "Former keys",
+                  value: <span className="mono">{(item.former_keys ?? []).join(", ")}</span>,
+                },
+              ]
+            : []),
+        ],
+      },
+    );
+  }
+
+  return <PropertiesRail groups={groups} />;
 }
 
 /**

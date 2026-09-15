@@ -905,20 +905,6 @@ export function Skeleton({ rows = 3, height = 14 }: { rows?: number; height?: nu
     </div>
   );
 }
-
-export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
-  return (
-    <dl className="kv">
-      {items.map(([k, v], i) => (
-        <div key={i} style={{ display: "contents" }}>
-          <dt>{k}</dt>
-          <dd>{v}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 /**
  * A block of preformatted text, optionally one that OWNS select-all.
  *
