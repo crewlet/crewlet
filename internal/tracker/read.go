@@ -1221,14 +1221,20 @@ type sortTerm struct {
 // sortColumns is what a caller may order by.
 var sortColumns = map[string]string{
 	"rank": "t.rank", "updated": "t.updated_at", "due": "t.due_at",
+	"start":    "t.start_at",
 	"priority": "t.prio_rank", "created": "t.created_at",
 	"title": "t.title", "estimate": "t.estimate_min", "points": "t.points",
 	"spend": "t.spend_tokens", "status_entered": "t.status_entered_at",
-	// THE TRASH'S OWN ORDER, and the only sort key that is about a row's
-	// removal rather than about its work. It sorts NULLS anywhere, because
-	// the only query that names it is one already filtered to removed rows.
-	"removed": "t.removed_at",
 }
+
+// EVERY KEY HERE IS ONE [sortKeys] ADMITS, and the two are checked against
+// each other because neither half fails loudly on its own: a key this map
+// holds and the parser refuses is unreachable, and one the parser admits and
+// this map lacks is DROPPED by [sortTerms] — the answer then comes back in the
+// default order with nothing saying the caller's own ordering was ignored.
+// `removed` was the first kind: it sat here with a comment about the trash's
+// order, while the trash is ordered by [sortTerms]'s own default branch and
+// `sort=removed` was refused by the parser before it could ever be read.
 
 // sortTerms compiles the sort, ALWAYS ENDING IN THE ID.
 //
@@ -1316,14 +1322,35 @@ func sortJoins(terms []sortTerm) (string, []any) {
 }
 
 // renderOrder renders compiled sort terms as SQL.
+// AN ABSENT VALUE SORTS LAST, IN BOTH DIRECTIONS, and it is stated rather than
+// inherited: SQLite's default puts NULLs FIRST on an ascending order, so
+// `sort=due` answered with every undated task ahead of the one due tomorrow —
+// on the list, on a board column and in every tool that reads this grammar.
+//
+// "Soonest first" and "latest first" are both questions about values, and a
+// row that has none is not the answer to either. Every tracker a person has
+// used puts the undated at the end, which is why nobody reports this as a bug
+// and everybody scrolls past the first page.
+//
+// It applies to every column rather than to a list of the nullable ones: on a
+// column that cannot be NULL the clause is a no-op, and a list would be a
+// second place the nullability is written down — one that drifts the first
+// time a migration relaxes a constraint. A custom-field sort is the case that
+// settles it, since a LEFT JOIN makes EVERY field's value nullable for a task
+// that does not carry the field.
+//
+// [keysetAfterOne] is the other half and the two may never disagree: a cursor
+// compares exactly the columns the order sorts by, so an order that moved its
+// NULLs while the comparison did not would resume a page in the middle of
+// them — silently, and only for callers who paged.
 func renderOrder(terms []sortTerm) string {
 	rendered := make([]string, 0, len(terms))
 	for _, term := range terms {
 		if term.Descending {
-			rendered = append(rendered, term.Column+" DESC")
+			rendered = append(rendered, term.Column+" DESC NULLS LAST")
 			continue
 		}
-		rendered = append(rendered, term.Column)
+		rendered = append(rendered, term.Column+" NULLS LAST")
 	}
 	return strings.Join(rendered, ", ")
 }
@@ -1438,18 +1465,23 @@ func keysetAfter(terms []sortTerm, keys []any) (string, []any) {
 
 // keysetAfterOne is "strictly after this key on this column", NULLs included.
 func keysetAfterOne(term sortTerm, key any) (string, []any) {
-	switch {
-	case key == nil && term.Descending:
-		// NOTHING IS AFTER A NULL IN A DESCENDING ORDER, and `0` says so
-		// literally rather than through a comparison that would be NULL.
+	// NOTHING IS AFTER A NULL IN EITHER DIRECTION, because [renderOrder]
+	// puts the absent values last both ways — and `0` says so literally
+	// rather than through a comparison that would itself be NULL.
+	if key == nil {
 		return "0", nil
-	case key == nil:
-		return term.Column + " IS NOT NULL", nil
-	case term.Descending:
+	}
+	// AND THE NULLS ARE AFTER EVERY VALUE, so a page resuming from one
+	// includes them. Symmetric in both directions for the same reason:
+	// this leg is the order's own comparison written out, and the moment
+	// the two spellings diverge a paged answer silently skips whatever
+	// falls between them.
+	if term.Descending {
 		return "(" + term.Column + " < ? OR " + term.Column + " IS NULL)",
 			[]any{key}
 	}
-	return term.Column + " > ?", []any{key}
+	return "(" + term.Column + " > ? OR " + term.Column + " IS NULL)",
+		[]any{key}
 }
 
 // keysetEqualOne is the tie-break leg: the same position on this column.
