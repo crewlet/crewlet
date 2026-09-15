@@ -34,6 +34,7 @@ import {
   BuilderHarness,
   LayoutObserver,
   builderSpies,
+  canvasWorld,
   harnessProbe,
   type BuilderSpies,
   type HarnessProbe,
@@ -629,7 +630,7 @@ describe("the reporting chart", () => {
   });
 
   test("says its lines are the last check's once the draft has moved past it", () => {
-    const { probe } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
+    const { probe, container } = mount(checkedEdit(loop, derivedLoop), { chart: "reporting" });
     const note = () => screen.queryByText(/These reporting lines are from the last check/);
     expect(note()).toBeNull();
     act(() =>
@@ -638,9 +639,11 @@ describe("the reporting chart", () => {
         intent: { type: "setManages", target: seatKey("chief"), manages: [] },
       }),
     );
-    // Drawn over the canvas, so it neither resizes the viewport nor takes a press.
+    // Drawn OVER the canvas rather than in it, so it neither resizes the
+    // viewport the layout is measured against nor moves when the chart pans.
     const shown = note()!;
-    expect(shown.closest(".canvas-overlay")).not.toBeNull();
+    expect(canvasWorld(container).contains(shown)).toBe(false);
+    expect(container.contains(shown)).toBe(true);
     expect(shown.textContent).not.toMatch(/current check/);
     // The chart itself is still the last check's forest.
     expect(nameOf(item("Ops"))).toBe("Ops");
@@ -742,7 +745,7 @@ describe("focus", () => {
       return { x: Number(x), y: Number(y) };
     };
     const place = (name: string) => {
-      const world = translate(container.querySelector<HTMLElement>(".canvas-world")!);
+      const world = translate(canvasWorld(container));
       const box = translate(boxOf(name));
       return { world: box, screen: { x: world.x + box.x, y: world.y + box.y } };
     };
@@ -788,7 +791,7 @@ describe("live state", () => {
         b,
         b.style.transform,
       ]),
-      world: container.querySelector<HTMLElement>(".canvas-world")!.style.transform,
+      world: canvasWorld(container).style.transform,
       links: container.querySelector(".bchart-links")!.innerHTML,
     });
     const before = layout();

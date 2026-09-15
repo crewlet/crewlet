@@ -18,10 +18,10 @@
  * tree pattern and the layout.
  *
  * THE KEYBOARD PATTERN IS A TREE, AND ITS ITEMS HOLD NOTHING FOCUSABLE. Each
- * card's header and each seat row is a `treeitem` with its level, position
+ * card's header and each seat row is a `treeitem` with its treeLevel, position
  * and expansion, and focus moves among them by a roving tab stop: arrows
- * walk the visible order, Right and Left open, close and climb, Home and End
- * jump, and typing finds a node by name (`ui/treeModel.ts`). A treeitem's own
+ * walk the treeVisible order, Right and Left open, close and climb, Home and End
+ * jump, and typing finds a node by name (the design system's tree model). A
  * keys act on it: Enter edits, Delete or Backspace deletes, the ContextMenu
  * key or Shift+F10 opens its menu. The buttons a pointer uses (expand, add,
  * more, the lead chip) sit BESIDE the treeitem in a strip hidden from
@@ -35,14 +35,14 @@
  *
  * FOCUS NEVER SCROLLS BEHIND THE TRANSFORM'S BACK. A node is focused with
  * `preventScroll` and then revealed by panning the canvas, and a node inside
- * a collapsed unit has its ancestors opened first. The Builder decides which
+ * a collapsed unit has its treeAncestors opened first. The Builder decides which
  * node is focused after an operation, an undo or a redo; this view performs
  * it through the handle it registers (`useBuilderView`).
  *
  * THE LAYOUT IS MEASURED. Every card is rendered at the card-width token and
- * measured (`ui/useMeasuredSizes.ts`), the gaps between cards are read from a
+ * measured (`useMeasuredSizes`), the gaps between cards are read from a
  * probe drawn with spacing tokens (so density scales them with everything
- * else), and the tidy tree layout (`ui/tidytree.ts`) places them. A relayout
+ * else), and the tidy tree layout (`layoutForest`) places them. A relayout
  * keeps the node the operator acted on still on screen. Live state is not an
  * input to any of it: a push changes a badge's text inside a slot that never
  * changes size, and nothing is laid out again.
@@ -59,19 +59,6 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
-import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
-import {
-  ancestors,
-  isExpandable,
-  level,
-  posInSet,
-  setSize,
-  type TreeInput,
-  type TreeModel,
-} from "~/ui/treeModel.ts";
-import { useLayoutAnchor, useMeasuredSizes } from "~/ui/useMeasuredSizes.ts";
-import type { Point, Rect } from "~/ui/viewport.ts";
 import { useBuilder, useBuilderView, type BuilderApi, type ChartKind } from "./BuilderContext.tsx";
 import {
   CYCLE_GROUP,
@@ -102,7 +89,7 @@ import {
   handleLabel,
   seatKindLabel,
 } from "./nodeMarks.tsx";
-import { treeStep, useOpenScreen, useReporting, useStructure, useTreeState } from "./useCharts.ts";
+import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import {
   AccountTreeGlyph,
   AddGlyph,
@@ -113,7 +100,33 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Avatar, EmptyState, IconButton, Menu, Tag, cx, type MenuEntry } from "@crewlethq/ui";
+import {
+  Avatar,
+  Canvas,
+  EmptyState,
+  IconButton,
+  Menu,
+  Tag,
+  cx,
+  layoutForest,
+  treeAncestors,
+  treeExpandable,
+  treeLevel,
+  treePosInSet,
+  treeSetSize,
+  treeStep,
+  useLayoutAnchor,
+  useMeasuredSizes,
+  useTreeState,
+  type CanvasHandle,
+  type CanvasPoint,
+  type CanvasRect,
+  type ForestLayout,
+  type LayoutNode,
+  type MenuEntry,
+  type TreeInput,
+  type TreeModel,
+} from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.
@@ -691,12 +704,12 @@ function TreeCanvas({
     return out;
   }, [boxForest]);
 
-  const previousLayout = useRef<Layout | null>(null);
+  const previousLayout = useRef<ForestLayout | null>(null);
   const layout = useMemo(() => {
     if (!measured([...boxIds, GAP_PROBE])) return previousLayout.current;
     const size = (id: string) => sizes.get(id)!;
     const gap = size(GAP_PROBE);
-    const toTree = (b: BoxInput): TreeNode => ({
+    const toTree = (b: BoxInput): LayoutNode => ({
       id: b.id,
       width: size(b.id).width,
       height: size(b.id).height,
@@ -708,12 +721,14 @@ function TreeCanvas({
 
   const positions = useMemo(
     () =>
-      layout ? new Map<string, Point>(layout.nodes.map((n) => [n.id, { x: n.x, y: n.y }])) : null,
+      layout
+        ? new Map<string, CanvasPoint>(layout.nodes.map((n) => [n.id, { x: n.x, y: n.y }]))
+        : null,
     [layout],
   );
 
   const canvas = useRef<CanvasHandle>(null);
-  const shownPositions = useRef<ReadonlyMap<string, Point> | null>(null);
+  const shownPositions = useRef<ReadonlyMap<string, CanvasPoint> | null>(null);
   // THE NODE THE OPERATOR ACTED ON stays where it was: the last operation's
   // node, else the node with focus. A node that did not exist before the
   // relayout (one just added) has no position to keep, so its nearest
@@ -723,7 +738,7 @@ function TreeCanvas({
     if (!was) return null;
     for (const candidate of [api.state.last?.focus, active]) {
       if (!candidate || !model.parent.has(candidate)) continue;
-      for (const id of [candidate, ...ancestors(model, candidate).reverse()]) {
+      for (const id of [candidate, ...treeAncestors(model, candidate).reverse()]) {
         const box = boxOf(id);
         if (was.has(box)) return box;
       }
@@ -761,7 +776,7 @@ function TreeCanvas({
       // is a layout value, unaffected by the canvas's transform.
       const box = el.closest<HTMLElement>(".bchart-box");
       const top = box ? offsetWithin(el, box) : 0;
-      const rect: Rect = {
+      const rect: CanvasRect = {
         x: placed.x,
         y: placed.y + top,
         width: placed.width,
@@ -839,10 +854,10 @@ function TreeCanvas({
     item: (id) => ({
       role: "treeitem",
       tabIndex: id === active ? 0 : -1,
-      "aria-level": level(model, id),
-      "aria-setsize": setSize(model, id),
-      "aria-posinset": posInSet(model, id),
-      "aria-expanded": isExpandable(model, id) ? expanded.has(id) : undefined,
+      "aria-level": treeLevel(model, id),
+      "aria-setsize": treeSetSize(model, id),
+      "aria-posinset": treePosInSet(model, id),
+      "aria-expanded": treeExpandable(model, id) ? expanded.has(id) : undefined,
       "aria-selected": id === selectedId,
       "data-tree-id": id,
       ref: refFor(id),
@@ -854,7 +869,7 @@ function TreeCanvas({
       onDoubleClick: () => act(id, "edit"),
     }),
     expanded: (id) => expanded.has(id),
-    expandable: (id) => isExpandable(model, id),
+    expandable: (id) => treeExpandable(model, id),
     toggle,
     activate: (id) => setActive(id),
     press: (id) => ({
@@ -877,7 +892,13 @@ function TreeCanvas({
 
   return (
     <div className="bchart">
-      <Canvas label={label} content={layout?.bounds ?? null} ref={canvas} overlay={note}>
+      <Canvas
+        className="bchart-canvas"
+        label={label}
+        content={layout?.bounds ?? null}
+        ref={canvas}
+        overlay={note}
+      >
         <div className="bchart-gap-probe" ref={measure(GAP_PROBE)} aria-hidden="true" />
         {layout && (
           <svg
@@ -934,7 +955,7 @@ function offsetWithin(el: HTMLElement, container: HTMLElement): number {
  * parent's bottom centre to halfway through the gap, across, and down into
  * the child's top centre.
  */
-function connectors(layout: Layout): string[] {
+function connectors(layout: ForestLayout): string[] {
   const out: string[] = [];
   for (const node of layout.nodes) {
     if (node.parent === null) continue;

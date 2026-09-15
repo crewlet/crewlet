@@ -3,7 +3,7 @@
  * the view the lens opens on at narrow widths and the one a keyboard or a
  * screen reader user works fastest in.
  *
- * A TREEGRID, NOT A TREE. Every row says its level, position and expansion
+ * A TREEGRID, NOT A TREE. Every row says its treeLevel, position and expansion
  * like a treeitem, and its cells are navigable like a grid's: Name, Kind or
  * type, Handle, Lead or reports to, Problems, and the row's actions. A row
  * holds focus by default and its keys act on the node (Enter edits, Delete or
@@ -49,15 +49,6 @@ import {
 } from "react";
 import type { Derived } from "~/protocol/index.ts";
 
-import {
-  isExpandable,
-  level,
-  nextVisible,
-  posInSet,
-  previousVisible,
-  setSize,
-} from "~/ui/treeModel.ts";
-import type { TreeInput } from "~/ui/treeModel.ts";
 import { useBuilder, useBuilderView, type AddKind, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { deriveChanges } from "./model/changes.ts";
@@ -80,7 +71,7 @@ import {
   managerLabel,
   seatKindLabel,
 } from "./nodeMarks.tsx";
-import { treeStep, useOpenScreen, useStructure, useTreeState } from "./useCharts.ts";
+import { useOpenScreen, useStructure } from "./useCharts.ts";
 import {
   ApartmentGlyph,
   ChevronRightGlyph,
@@ -90,8 +81,24 @@ import {
   KeyboardArrowDownGlyph,
   PersonAddGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Avatar, Button, IconButton, LAYER_REPOSITION_EVENT, LayerHost, Menu } from "@crewlethq/ui";
-import { LayerNode } from "~/ui/layerNode.tsx";
+import {
+  Avatar,
+  Button,
+  IconButton,
+  LAYER_REPOSITION_EVENT,
+  LayerHost,
+  Menu,
+  treeExpandable,
+  treeLevel,
+  treeNext,
+  treePosInSet,
+  treePrevious,
+  treeSetSize,
+  treeStep,
+  useTreeState,
+  type TreeInput,
+} from "@crewlethq/ui";
+import { LayerNode } from "~/lib/layerNode.tsx";
 
 /** The columns, in order. Their positions are the cells' `aria-colindex`. */
 const COLUMNS = ["Name", "Kind or type", "Handle", "Lead or reports to", "Problems", "Actions"];
@@ -382,11 +389,11 @@ export function OutlineView() {
           return;
         case "ArrowDown":
           handled();
-          sameColumn(nextVisible(model, expanded, id));
+          sameColumn(treeNext(model, expanded, id));
           return;
         case "ArrowUp":
           handled();
-          sameColumn(previousVisible(model, expanded, id));
+          sameColumn(treePrevious(model, expanded, id));
           return;
         default:
           // Enter and Space belong to the control in the cell.
@@ -395,7 +402,7 @@ export function OutlineView() {
     }
 
     // A row: Right opens a closed row, and steps into an open or leaf row's cells.
-    if (e.key === "ArrowRight" && !(isExpandable(model, id) && !expanded.has(id))) {
+    if (e.key === "ArrowRight" && !(treeExpandable(model, id) && !expanded.has(id))) {
       handled();
       focusAt(id, 1);
       return;
@@ -419,13 +426,13 @@ export function OutlineView() {
     "data-row-id": id,
     ref: rowRef(id),
     tabIndex: id === active && column === null ? 0 : -1,
-    "aria-level": level(model, id),
-    "aria-setsize": setSize(model, id),
-    "aria-posinset": posInSet(model, id),
-    "aria-expanded": isExpandable(model, id) ? expanded.has(id) : undefined,
+    "aria-level": treeLevel(model, id),
+    "aria-setsize": treeSetSize(model, id),
+    "aria-posinset": treePosInSet(model, id),
+    "aria-expanded": treeExpandable(model, id) ? expanded.has(id) : undefined,
     "aria-selected": extra.selected,
     "aria-label": extra.label,
-    style: { "--depth": level(model, id) - 1 } as CSSProperties,
+    style: { "--depth": treeLevel(model, id) - 1 } as CSSProperties,
     onClick: (event: MouseEvent<HTMLElement>) => {
       // A press on a control in the row is the control's; a press on the row
       // itself selects it and gives it focus.
@@ -525,7 +532,7 @@ export function OutlineView() {
                       api={api}
                       view={view}
                       expanded={expanded.has(id)}
-                      expandable={isExpandable(model, id)}
+                      expandable={treeExpandable(model, id)}
                       tabStop={stop(id, 1)}
                       onToggle={() => toggle(id)}
                       onPress={() => focusAt(id, null)}

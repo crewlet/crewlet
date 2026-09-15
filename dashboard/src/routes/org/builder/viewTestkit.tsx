@@ -262,8 +262,27 @@ export const CARD_WIDTH = 240;
 export const ROW_HEIGHT = 40;
 export const VIEWPORT = { width: 1200, height: 800 };
 
+/**
+ * The canvas viewport, found by what it IS rather than by what the design
+ * system calls its class: a focusable group announced as a canvas.
+ */
+export function isCanvasViewport(el: Element): boolean {
+  return el.getAttribute("aria-roledescription") === "canvas";
+}
+
+/**
+ * The panned and zoomed layer: the viewport's own child, which is where the
+ * transform lives. Reaching for it through a class would be a claim about the
+ * design system's markup rather than about this screen.
+ */
+export function canvasWorld(container: HTMLElement): HTMLElement {
+  const viewport = [...container.querySelectorAll("*")].find(isCanvasViewport);
+  if (!viewport) throw new Error("no canvas is mounted");
+  return viewport.firstElementChild as HTMLElement;
+}
+
 function defaultSizer(el: Element): { width: number; height: number } | null {
-  if (el.classList.contains("canvas-viewport")) return VIEWPORT;
+  if (isCanvasViewport(el)) return VIEWPORT;
   if (el.classList.contains("bchart-gap-probe")) return { width: 24, height: 32 };
   if (el.classList.contains("bchart-box")) {
     const items = el.querySelectorAll("[role='treeitem']").length;

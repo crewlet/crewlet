@@ -586,13 +586,16 @@
   height: 100%;
   min-height: 0;
 }
-.bchart > .canvas {
+/* The canvas is the design system's, and this is the only thing the builder
+   says about it: it takes what is left of the column under the toolbar. */
+.bchart-canvas {
   flex: 1;
+  min-height: 0;
 }
-/* Over the canvas's top edge, in the untransformed layer, so it neither
-   resizes the viewport as it comes and goes nor takes a press meant for the
-   chart beneath it. */
-.canvas-overlay > .bchart-note {
+/* Over the canvas's top edge, in its untransformed overlay layer, so it
+   neither resizes the viewport as it comes and goes nor takes a press meant
+   for the chart beneath it. */
+.bchart-note {
   position: absolute;
   top: var(--spacing-2);
   left: var(--spacing-2);

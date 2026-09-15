@@ -840,8 +840,9 @@ Every empty state names what would fill it.
 dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/protocol/             the wire, typed. NO React, NO DOM at module scope
   src/app/                  shell, hash router, IA, command palette
-  src/lib/                  store bindings, one clock, formatting, derivations
-  src/ui/                   the component library and the chart kit
+  src/lib/                  store bindings, formatting, derivations
+  src/components/           the pieces more than one screen draws, composed
+                            out of the design system
   src/routes/               one file per screen; a multi-lens screen keeps its
                             shell there and its lenses in routes/<screen>/
   src/styles/               tokens, base, components, shell, screens
@@ -938,15 +939,15 @@ rendered idle from the first phase to the last.
 ### The components come from the design system
 
 - **`@crewlethq/ui` draws it, and the engine composes it.** The palette, the
-  glyphs, the overlays, the layer stack and the primitives are the design
+  glyphs, the overlays, the layer stack, the primitives, the record table, the
+  list screen, the charts, the canvas and the tree model are the design
   system's, shared with the console and the documentation site, so a control
-  looks and behaves the same wherever somebody meets it. What is left in
-  `src/ui/` is the part of that move not yet made, and it imports nothing
-  outside itself: a primitive names a package or another file in `ui/`, and
-  never `~/protocol`, `~/lib`, `~/routes` or any other directory of this
-  application. Engine data reaches a primitive as a prop, which is what lets
-  the rest of it follow, and `ui/boundary.test.ts` fails the build on the
-  first import that would weld a screen's data model into it.
+  looks and behaves the same wherever somebody meets it. The dashboard has no
+  component library of its own at all: what `src/components/` holds is
+  COMPOSITION, each piece built out of the package and each one about this
+  engine's own domain (a seat, a phase, a turn, a configuration field), and
+  `designSystem.test.ts` fails the build on a recipe the package already
+  draws being written by hand beside it.
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
   (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the shell's own token dialog, search, engine

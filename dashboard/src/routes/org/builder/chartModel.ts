@@ -46,7 +46,7 @@
  */
 
 import type { CompanyDocument, ConfigWarning, DerivedSeat, DerivedUnit } from "~/protocol/index.ts";
-import type { TreeInput } from "~/ui/treeModel.ts";
+import type { TreeInput } from "@crewlethq/ui";
 import { checkedDocument, type BuilderState } from "./model/reducer.ts";
 import { COMPANY_KEY, handleOfKey, type NodeKey } from "./model/keys.ts";
 import {

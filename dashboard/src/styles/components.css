@@ -368,91 +368,19 @@ code.inline {
   }
 }
 
-/* ---- Canvas -------------------------------------------------------------
-   A bounded viewport (`ui/Canvas.tsx`). It fills the box it is given and
-   clips; the page's own scroller is never involved. */
+/* ---- The outline's own layer host ---------------------------------------
+   A surface anchored to a row inside a box that scrolls sideways is a surface
+   that box clips, so the outline gives its own host this class and the rows'
+   menus open into it. The canvas needs the same thing and has it built in:
+   its viewport, its panned world, its overlay and its controls are all the
+   design system's now, and so are the rules that used to live here. */
 
-.canvas {
-  position: relative;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--color-surface-background);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-}
-.canvas-viewport {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  cursor: grab;
-  /* Until it is tapped, one finger belongs to the page's vertical scroll. */
-  touch-action: pan-y;
-}
-/* Inset, because the canvas clips: an outset ring would be cut away. */
-.canvas-viewport:focus-visible {
-  outline-offset: -2px;
-}
-.canvas[data-touch-active="true"] .canvas-viewport {
-  touch-action: none;
-}
-.canvas[data-panning="true"] .canvas-viewport {
-  cursor: grabbing;
-  user-select: none;
-}
-.canvas-world {
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: 0 0;
-}
-/* Nothing is shown before the first fit: a chart that appears at the origin
-   and then jumps into place reads as the page misbehaving. */
-.canvas[data-ready="false"] .canvas-world {
-  visibility: hidden;
-}
-.canvas[data-panning="true"] .canvas-world {
-  will-change: transform;
-}
-/* Eased only when asked for (a fit, a zoom button, a reveal), never while a
-   finger or a wheel is moving it. */
-.canvas[data-animate="true"] .canvas-world {
-  transition: transform var(--motion-duration-base) var(--motion-easing-emphasized);
-}
-@media (prefers-reduced-motion: reduce) {
-  .canvas[data-animate="true"] .canvas-world {
-    transition: none;
-  }
-}
-/* Untransformed, over the viewport. Empty space passes presses through to the
-   viewport beneath; whatever is drawn inside takes its own. This layer carries
-   the canvas's own notes; an overlay that OPENS goes to the LayerHost beside
-   it instead, which is a layer of the design system's and paints above this
-   one. `.popup-layer` is the class the outline gives its host, for the same
-   reason a canvas needs one: a surface placed inside a box that scrolls
-   sideways is a surface that box clips. */
-.canvas-overlay,
 .popup-layer {
   position: absolute;
   inset: 0;
   z-index: 1;
   pointer-events: none;
 }
-.canvas-overlay > *,
 .popup-layer > * {
   pointer-events: auto;
-}
-.canvas-controls {
-  position: absolute;
-  right: var(--spacing-3);
-  bottom: var(--spacing-3);
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  padding: var(--spacing-1);
-  background: var(--color-surface-glass);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
 }
