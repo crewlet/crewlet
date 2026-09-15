@@ -257,7 +257,6 @@ export function Spend() {
         <Card as="section" padding="none">
           <Card.Header
             divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
             icon={<GroupGlyph size="sm" />}
             count={tokens?.by_agent?.length ?? 0}
           >
@@ -350,7 +349,6 @@ export function Spend() {
         <Card as="section" padding="none">
           <Card.Header
             divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
             icon={<LayersGlyph size="sm" />}
             count={tokens?.by_turn?.length ?? 0}
           >
@@ -421,7 +419,6 @@ export function Spend() {
         <Card as="section" padding="none">
           <Card.Header
             divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
             icon={<DatabaseGlyph size="sm" />}
             subtitle="the fleet's shared ledger, not this process's meter"
           >

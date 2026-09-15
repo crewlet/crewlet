@@ -131,12 +131,7 @@ export function Fleet() {
         }
       >
         <Card as="section" padding="none">
-          <Card.Header
-            divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-            icon={<DnsGlyph size="sm" />}
-            count={nodes.length}
-          >
+          <Card.Header divided icon={<DnsGlyph size="sm" />} count={nodes.length}>
             <Card.Title>Nodes</Card.Title>
           </Card.Header>
           <RecordTable
@@ -287,12 +282,7 @@ export function Fleet() {
 
         <div className="grid grid-auto-lg">
           <Card as="section" padding="none">
-            <Card.Header
-              divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-              icon={<GroupGlyph size="sm" />}
-              count={data?.seats?.length ?? 0}
-            >
+            <Card.Header divided icon={<GroupGlyph size="sm" />} count={data?.seats?.length ?? 0}>
               <Card.Title>Seat placement</Card.Title>
             </Card.Header>
             <RecordTable
@@ -348,12 +338,7 @@ export function Fleet() {
           </Card>
 
           <Card as="section" padding="none">
-            <Card.Header
-              divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-              icon={<MemoryGlyph size="sm" />}
-              count={data?.duties?.length ?? 0}
-            >
+            <Card.Header divided icon={<MemoryGlyph size="sm" />} count={data?.duties?.length ?? 0}>
               <Card.Title>Company-wide duties</Card.Title>
             </Card.Header>
             <RecordTable

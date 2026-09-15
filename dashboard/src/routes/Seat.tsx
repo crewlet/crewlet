@@ -565,7 +565,6 @@ export function SeatScreen({ handle }: { handle: string }) {
               <Card as="section" padding="none">
                 <Card.Header
                   divided
-                  style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
                   icon={<CalendarClockGlyph size="sm" />}
                   count={configRole?.schedules?.length ?? 0}
                 >
@@ -688,7 +687,6 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card as="section" padding="none">
                   <Card.Header
                     divided
-                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
                     icon={<Book2Glyph size="sm" />}
                     count={memory.data?.diary?.length ?? 0}
                     subtitle="what this seat chose to remember"
@@ -721,7 +719,6 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card as="section" padding="none">
                   <Card.Header
                     divided
-                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
                     icon={<LayersGlyph size="sm" />}
                     count={memory.data?.episodes?.length ?? 0}
                     subtitle="one row per completed turn, searched by similarity at turn start"
@@ -809,7 +806,6 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card as="section" padding="none">
                   <Card.Header
                     divided
-                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
                     icon={<BoltGlyph size="sm" />}
                     count={memory.data?.skills?.length ?? 0}
                     subtitle="drafted from its own past work, loadable mid-turn"
@@ -845,7 +841,6 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card as="section" padding="none">
                   <Card.Header
                     divided
-                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
                     icon={<GroupGlyph size="sm" />}
                     count={memory.data?.counterparties?.length ?? 0}
                   >
@@ -1000,11 +995,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               </div>
 
               <Card as="section" padding="none">
-                <Card.Header
-                  divided
-                  style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-                  icon={<LayersGlyph size="sm" />}
-                >
+                <Card.Header divided icon={<LayersGlyph size="sm" />}>
                   <Card.Title>Recent turns</Card.Title>
                 </Card.Header>
                 <RecordTable

@@ -172,7 +172,6 @@ export function ConfigScreen() {
               <Card as="section" padding="none">
                 <Card.Header
                   divided
-                  style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
                   icon={<ScheduleGlyph size="sm" />}
                   count={(audit.data ?? []).length}
                 >

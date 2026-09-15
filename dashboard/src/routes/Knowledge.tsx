@@ -167,12 +167,7 @@ export function Knowledge() {
           }
         >
           <Card as="section" padding="none">
-            <Card.Header
-              divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-              icon={<SearchGlyph size="sm" />}
-              count={data?.hits?.length ?? 0}
-            >
+            <Card.Header divided icon={<SearchGlyph size="sm" />} count={data?.hits?.length ?? 0}>
               <Card.Title>Results</Card.Title>
             </Card.Header>
             <Stack gap={0}>

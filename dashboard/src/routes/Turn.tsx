@@ -694,7 +694,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <Card as="section" padding="none">
             <Card.Header
               divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
               icon={<ErrorGlyph size="sm" />}
               count={story.wentWrong.length}
               subtitle="guard breaches, exhausted chains and refused calls, the reason to open this page"
@@ -735,7 +734,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <Card as="section" padding="none">
             <Card.Header
               divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
               icon={<BoltGlyph size="sm" />}
               count={story.did.length}
               subtitle="work outside the tool loop: coding runs, delegations, colleagues"
@@ -754,7 +752,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               // last phase, on auxiliary workers of its own, and everything in
               // it is something the seat now knows that it did not before.
               divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
               icon={<DatabaseGlyph size="sm" />}
               count={story.leftBehind.length}
               subtitle="the reflection pass, once the phases were done"
@@ -769,7 +766,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <Card as="section" padding="none">
             <Card.Header
               divided
-              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
               icon={<TimelineGlyph size="sm" />}
               count={story.rest.length}
               subtitle="rows this build has no particular place for"

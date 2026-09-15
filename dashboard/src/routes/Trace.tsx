@@ -155,11 +155,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         </StatGroup>
 
         <Card as="section" padding="none">
-          <Card.Header
-            divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-            icon={<ForkRightGlyph size="sm" />}
-          >
+          <Card.Header divided icon={<ForkRightGlyph size="sm" />}>
             <Card.Title>Spans</Card.Title>
           </Card.Header>
           <Stack gap={0}>

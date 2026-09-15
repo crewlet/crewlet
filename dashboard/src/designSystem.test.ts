@@ -543,6 +543,45 @@ test("nothing restyles a control the design system draws", () => {
 });
 
 /**
+ * A card's head keeps its own inset, and no screen restates it.
+ *
+ * Twenty-three heads here carried
+ * `style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}`,
+ * which is the padding `.crewlet-card__header` already sets: measured on a
+ * running build, a head is 48px tall and inset by 12px and 16px with the
+ * attribute and without it. Every one was the engine reaching past the design
+ * system for a value the design system owns, and a no-op is the worst shape
+ * that can take, because nothing it does can go wrong until the package
+ * changes the value underneath it and twenty-three screens quietly refuse the
+ * change. The head is also where a panel table's pager and cog are drawn now,
+ * so its inset is the gap those controls sit in.
+ *
+ * The scan is on the DECLARATION rather than on the element, because a style
+ * prop is what the rule is about: a screen that genuinely has to move a head
+ * would be making a claim about that one head, and this pattern would not
+ * catch it.
+ */
+const HEADER_INSET =
+  /paddingInline:\s*"var\(--spacing-4\)"\s*,\s*paddingTop:\s*"var\(--spacing-3\)"/;
+
+test("the card-head scan recognises what it polices", () => {
+  expect(
+    HEADER_INSET.test(
+      '<Card.Header style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}>',
+    ),
+  ).toBe(true);
+  // A head a screen genuinely moves says something the card does not.
+  expect(HEADER_INSET.test("<Card.Header style={{ paddingTop: 0 }}>")).toBe(false);
+});
+
+test("no screen restates the inset a card head already carries", () => {
+  const offenders = files(/\.tsx$/)
+    .filter(({ text }) => HEADER_INSET.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+/**
  * Colour comes from a token, never from a literal.
  *
  * A literal is measured by nothing: the palette suite reads the tokens, and a

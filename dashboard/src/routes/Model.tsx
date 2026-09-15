@@ -403,7 +403,6 @@ export function ModelActivity() {
         <Card as="section" padding="none">
           <Card.Header
             divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
             subtitle={`${plural(running.length, "phase")} mid-flight`}
             count={running.length}
           >

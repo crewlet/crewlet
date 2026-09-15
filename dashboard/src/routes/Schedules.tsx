@@ -85,12 +85,7 @@ export function Schedules() {
         }
       >
         <Card as="section" padding="none">
-          <Card.Header
-            divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-            icon={<CalendarClockGlyph size="sm" />}
-            count={schedules.length}
-          >
+          <Card.Header divided icon={<CalendarClockGlyph size="sm" />} count={schedules.length}>
             <Card.Title>Defined</Card.Title>
           </Card.Header>
           <RecordTable
@@ -178,12 +173,7 @@ export function Schedules() {
         </Card>
 
         <Card as="section" padding="none">
-          <Card.Header
-            divided
-            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
-            icon={<ScheduleGlyph size="sm" />}
-            count={runs.length}
-          >
+          <Card.Header divided icon={<ScheduleGlyph size="sm" />} count={runs.length}>
             <Card.Title>Recent runs</Card.Title>
           </Card.Header>
           <RecordTable
