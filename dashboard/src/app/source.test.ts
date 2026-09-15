@@ -18,8 +18,8 @@ import { RAIL } from "./nav.ts";
 
 const SRC = fileURLToPath(new URL("..", import.meta.url));
 
-/** Every component source, excluding the suites themselves. */
-function sources(): { path: string; text: string }[] {
+/** Every source file of the given extensions, excluding the suites. */
+function sources(exts: string[] = [".tsx"]): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   (function walk(dir: string): void {
     for (const entry of readdirSync(dir)) {
@@ -28,7 +28,7 @@ function sources(): { path: string; text: string }[] {
         walk(full);
         continue;
       }
-      if (!full.endsWith(".tsx")) continue;
+      if (!exts.some((ext) => full.endsWith(ext))) continue;
       if (full.includes(".test.")) continue;
       out.push({ path: relative(SRC, full), text: readFileSync(full, "utf8") });
     }
@@ -91,12 +91,19 @@ test("no JSX guard is a bare number", () => {
  * The check is on the FIRST SEGMENT, because that is what route dispatch
  * switches on: a literal that names a segment no workspace owns cannot reach
  * a screen whatever follows it.
+ *
+ * TWO SPELLINGS AND BOTH EXTENSIONS. A link is written either as `href([...])`
+ * or as a bare `path: [...]` on a value some other component turns into one,
+ * and the second lives in plain `.ts` — which is how the ENTIRE attention
+ * queue kept pointing at `spend`, `fleet`, `runs`, `config` and `seats` after
+ * every one of those moved. That is the Inbox's "needs a person" band: ten
+ * rows, all of them dead, in a file this gate was not reading.
  */
 test("every href names a segment a workspace owns", () => {
   const owned = new Set(RAIL.flatMap((r) => r.owns));
-  const literal = /href\(\[\s*"([a-z0-9_-]+)"/g;
+  const literal = /(?:href\(|\bpath:\s*)\[\s*"([a-z0-9_-]+)"/g;
   const dead: string[] = [];
-  for (const { path, text } of sources()) {
+  for (const { path, text } of sources([".tsx", ".ts"])) {
     const lines = text.split("\n");
     lines.forEach((line, i) => {
       literal.lastIndex = 0;
