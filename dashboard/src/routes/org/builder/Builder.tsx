@@ -46,6 +46,7 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
@@ -116,6 +117,8 @@ import {
   FullscreenExitGlyph,
   FullscreenGlyph,
   KeyGlyph,
+  KeyboardArrowDownGlyph,
+  KeyboardArrowUpGlyph,
   ListGlyph,
   MemoryGlyph,
   MoreVertGlyph,
@@ -141,6 +144,7 @@ import {
   LayerHost,
   Menu,
   type MenuEntry,
+  ConfirmModal,
   Modal,
   SegmentedControl,
   Skeleton,
@@ -181,7 +185,22 @@ export interface AddDialogProps {
  * screen that apologises at run time.
  */
 export interface BuilderSurfaces {
-  canvas: ComponentType<{ chart: ChartKind }>;
+  canvas: ComponentType<{
+    chart: ChartKind;
+    /**
+     * What the chart draws in its OWN corner, where the console chart keeps
+     * it: the fullscreen toggle at the end of the zoom bar, and the switch
+     * between the two charts as a bar under it. They were two controls in
+     * the page toolbar, 800px from the canvas they act on.
+     */
+    chrome?: { controls?: ReactNode; switcher?: ReactNode };
+    /**
+     * The node an open surface is about, so the chart can ease onto it and
+     * push the rest of itself back behind the decision. `null` gives the
+     * reader their view back.
+     */
+    about?: string | null;
+  }>;
   table: ComponentType;
   editor: ComponentType<EditorDialogProps>;
   add: ComponentType<AddDialogProps>;
@@ -1167,6 +1186,50 @@ function Lens({
   const noProvider = state.mode === "edit" && !(isRecord(llm) && Object.keys(llm).length > 0);
   const documentProblems = problemsCurrent ? state.check.problems.document : [];
 
+  /*
+   * WHAT THE CHART DRAWS IN ITS OWN CORNER. The console chart keeps one group
+   * at the top right of the canvas: the zoom bar with the fullscreen toggle
+   * at its end, then the switch between the two charts as a bar under it.
+   * Both were controls of the page toolbar here, 800px from the chart they
+   * act on, and the switch named two things that only exist inside it.
+   *
+   * The toggle follows the VIEW rather than living in one place: the table has
+   * no canvas to hang it in, so it stays in the toolbar there. One control, in
+   * the one place that view puts it.
+   */
+  const chartChrome = {
+    controls: <FullscreenToggle container={container} />,
+    switcher: (
+      <SegmentedControl
+        label="Chart"
+        semantics="tabs"
+        panelId={chartPanel}
+        value={chart}
+        onValueChange={setChart}
+        size="sm"
+        options={[
+          { value: "structure", label: "Structure" },
+          { value: "reporting", label: "Reporting" },
+        ]}
+      />
+    ),
+  };
+
+  /*
+   * WHICH NODE THE OPEN SURFACE IS ABOUT, for the chart behind it. An add is
+   * about the parent the child will hang from, every other dialog about its
+   * own node, and the discard question about the whole draft. The chart eases
+   * onto it and pushes the rest of itself back, which is what the console
+   * chart does while a node is being added, and gives the reader their view
+   * back when the surface closes.
+   */
+  const about =
+    dialog === null || dialog.type === "discard"
+      ? null
+      : dialog.type === "add"
+        ? (dialog.parent ?? COMPANY_KEY)
+        : dialog.key;
+
   const handlers = {
     undo: () => dispatch({ type: "undo" }),
     redo: () => dispatch({ type: "redo" }),
@@ -1207,20 +1270,23 @@ function Lens({
       disabled: !canRedo,
       hint: <Kbd keys={REDO_KEYS} />,
     },
-    // The narrow toolbar's menu offers the same two, and leaves them out on
-    // the same view, for the same reason.
-    ...(view === "visualization"
-      ? ([
-          { kind: "separator", key: "s1" },
-          { key: "expand", label: "Expand all", icon: <AddGlyph />, onSelect: handlers.expandAll },
-          {
-            key: "collapse",
-            label: "Collapse all",
-            icon: <RemoveGlyph />,
-            onSelect: handlers.collapseAll,
-          },
-        ] satisfies MenuEntry[])
-      : []),
+    // The narrow toolbar's menu offers the same two, under the marks the
+    // design system's own tree controls draw for them: down for the state an
+    // open row's chevron points at, up for the closed one. They wore the plus
+    // and the minus, which is the drawing the Add beside them wears.
+    { kind: "separator", key: "s1" },
+    {
+      key: "expand",
+      label: "Expand all",
+      icon: <KeyboardArrowDownGlyph />,
+      onSelect: handlers.expandAll,
+    },
+    {
+      key: "collapse",
+      label: "Collapse all",
+      icon: <KeyboardArrowUpGlyph />,
+      onSelect: handlers.collapseAll,
+    },
     { kind: "separator", key: "s2" },
     {
       key: "discard",
@@ -1251,20 +1317,6 @@ function Lens({
                 { value: "table", label: "Table", icon: <ListGlyph /> },
               ]}
             />
-            {view === "visualization" && (
-              <SegmentedControl
-                label="Chart"
-                semantics="tabs"
-                panelId={chartPanel}
-                value={chart}
-                onValueChange={setChart}
-                size="sm"
-                options={[
-                  { value: "structure", label: "Structure" },
-                  { value: "reporting", label: "Reporting" },
-                ]}
-              />
-            )}
             <span className="org-builder-wide row gap-1">
               <IconButton
                 label="Undo"
@@ -1282,22 +1334,20 @@ function Lens({
                 disabled={!canRedo}
                 aria-keyshortcuts="Shift+Control+Z Shift+Meta+Z"
               />
-              {/* THE TWO THAT BELONG TO THE VISUALIZATION. Expanding and
-                  collapsing act on the chart's cards, and the table has no
-                  such thing: every node is a row of its own and nothing is
-                  ever closed. Offered there they were two buttons that did
-                  nothing, on the one view where a reader would try them
-                  first. */}
-              {view === "visualization" && (
-                <>
-                  <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
-                    Expand all
-                  </Button>
-                  <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
-                    Collapse all
-                  </Button>
-                </>
-              )}
+              {/* THE PAIR LIVES HERE, ON BOTH VIEWS. The table's rows close
+                  as the chart's cards do (a unit's row carries its own
+                  chevron), so the guard that kept these two off it was wrong
+                  about what it draws, and the design system's own pair over
+                  the table was a second implementation of one action: two
+                  buttons that moved from the toolbar to the table's top edge
+                  when the reader changed view. `TableView` passes
+                  `controls={false}` so this is the only one. */}
+              <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
+                Expand all
+              </Button>
+              <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
+                Collapse all
+              </Button>
             </span>
             <span className="org-builder-narrow">
               <Menu label="More builder actions" items={more} />
@@ -1309,7 +1359,9 @@ function Lens({
               trigger={selectedView ? selectedName : "Add"}
             />
             <span className="spacer" />
-            <FullscreenToggle container={container} />
+            {/* ON THE TABLE ONLY: the visualization draws it at the end of the
+                chart's own zoom bar, where the console chart keeps it. */}
+            {view === "table" && <FullscreenToggle container={container} />}
             <Tag variant={look.tone} leadingIcon={<look.icon />}>
               {look.label}
             </Tag>
@@ -1550,7 +1602,7 @@ function Lens({
           <TabPanel id={viewPanel} value={view}>
             {view === "visualization" ? (
               <TabPanel id={chartPanel} value={chart}>
-                <Canvas chart={chart} />
+                <Canvas chart={chart} chrome={chartChrome} about={about} />
               </TabPanel>
             ) : (
               <Table />
@@ -1761,26 +1813,26 @@ function DialogHost({
 }) {
   switch (dialog.type) {
     case "discard":
+      /*
+       * ONE QUESTION, ONE ANSWER, in the shape every other confirmation in
+       * this lens takes: the node editor asks the same thing and asks it as a
+       * prompt. Written here as a framed Modal it carried a head band, a
+       * pencil-sized mark and a close control that did exactly what the Keep
+       * editing two inches below it did, so one question was drawn two ways on
+       * one screen. `destructive` makes it an alertdialog, which asks a
+       * reader's software to announce the consequence with the name.
+       */
       return (
-        <Modal
+        <ConfirmModal
           open
-          stackBody
-          title="Discard changes"
-          icon={<DeleteGlyph />}
+          destructive
+          title="Discard changes?"
+          message="Every change in this draft is discarded. The saved configuration is not touched."
+          cancelLabel="Keep editing"
+          confirmLabel="Discard changes"
           onClose={onClose}
-          footer={
-            <>
-              <Button variant="secondary" onClick={onClose}>
-                Keep editing
-              </Button>
-              <Button variant="danger" onClick={onDiscard}>
-                Discard changes
-              </Button>
-            </>
-          }
-        >
-          <p>Every change in this draft is discarded. The saved configuration is not touched.</p>
-        </Modal>
+          onConfirm={onDiscard}
+        />
       );
     case "add": {
       const Add = surfaces.add;

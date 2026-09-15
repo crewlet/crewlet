@@ -240,12 +240,22 @@ describe("the rows", () => {
 });
 
 describe("opening and closing the hierarchy", () => {
-  /* Its own, because the lens toolbar's pair belongs to the visualization. */
-  test("Collapse all closes a unit's rows and Expand all brings them back", async () => {
-    mount();
-    fireEvent.click(screen.getByRole("button", { name: "Collapse all" }));
+  /*
+   * THE PAIR IS THE LENS TOOLBAR'S, ON BOTH VIEWS, so this table draws none of
+   * its own (`controls={false}`): the design system's pair over the table and
+   * the toolbar's pair above it were one action with two implementations, each
+   * hidden on the view where the other was drawn, so the control moved 800px
+   * when a reader changed view. What is asserted here is that the table draws
+   * neither and still opens and closes through the handle it registers, which
+   * is what the toolbar's buttons call.
+   */
+  test("the table draws no controls of its own and closes through its handle", async () => {
+    const { view } = mount();
+    expect(screen.queryByRole("button", { name: "Collapse all" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Expand all" })).toBeNull();
+    act(() => view()!.collapseAll());
     await waitFor(() => expect(names()).not.toContain("SRE"));
-    fireEvent.click(screen.getByRole("button", { name: "Expand all" }));
+    act(() => view()!.expandAll());
     await waitFor(() => expect(names()).toContain("SRE"));
   });
 
@@ -408,11 +418,20 @@ describe("acting on a row", () => {
      learns, and an operator has to be able to see that Delete exists. */
   test("read-only refuses every change and still offers every reading", async () => {
     const { spies } = mount({ readOnly: true });
+    /*
+     * READ-ONLY DISABLES, IT DOES NOT HIDE, and that holds for the two moves
+     * as well: a seat with siblings to pass is offered both, refused. They
+     * used to vanish while Move to beside them stayed and said it was
+     * unavailable, which told an operator this seat could not be reordered at
+     * all.
+     */
     expect(actions("Dev")).toEqual([
       ["Open seat", false],
       ["Edit reports", false],
       ["Change to human seat", true],
       ["Move to", true],
+      ["Move up", true],
+      ["Move down", true],
     ]);
     fireEvent.keyDown(screen.getByRole("menu", { name: "Actions for Dev" }), { key: "Escape" });
     expect(

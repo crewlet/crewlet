@@ -318,11 +318,29 @@ export function FakeView() {
   );
 }
 
-/** The canvas stand-in, which draws whichever chart the Builder hands it. */
-export function FakeCanvas({ chart }: { chart: ChartKind }) {
+/**
+ * The canvas stand-in, which draws whichever chart the Builder hands it.
+ *
+ * IT DRAWS THE CHROME TOO, because the real canvas does: the fullscreen
+ * toggle and the switch between the two charts sit in the chart's own corner
+ * rather than in the page toolbar, so a Builder suite that did not render
+ * them could not reach either.
+ */
+export function FakeCanvas({
+  chart,
+  chrome = {},
+  about = null,
+}: {
+  chart: ChartKind;
+  chrome?: { controls?: ReactNode; switcher?: ReactNode };
+  about?: string | null;
+}) {
   return (
     <div>
       <p>{`Drawing the ${chart} chart`}</p>
+      {about !== null && <p>{`About ${about}`}</p>}
+      {chrome.controls}
+      {chrome.switcher}
       <FakeView />
     </div>
   );

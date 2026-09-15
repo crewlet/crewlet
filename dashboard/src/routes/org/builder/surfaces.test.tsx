@@ -18,7 +18,7 @@ import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { countingKeys } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
 import { company, Engine, mountBuilder } from "./testkit.tsx";
-import { menuEntryLabel } from "~/testing.tsx";
+import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testing.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -116,12 +116,18 @@ const entries = (menu: HTMLElement) =>
       disabled: item.getAttribute("aria-disabled") === "true",
     }));
 
-// THE TOOLBAR IS WHERE A KEYBOARD REACHES A CARD'S ACTIONS, since a tree item
-// may hold no tab stop of its own. It once built its own list, which put the
-// entries in another order, left out Edit reports and offered Open seat for a
-// seat that existed only in the draft.
-test("the toolbar offers the selected seat's own card menu: its entries, order and icons", async () => {
-  const { view } = mountBuilder({
+/*
+ * THE TOOLBAR IS WHERE A KEYBOARD REACHES A CARD'S ACTIONS, since a tree item
+ * may hold no tab stop of its own. It once built its own list, which put the
+ * entries in another order, left out Edit reports and offered Open seat for a
+ * seat that existed only in the draft.
+ *
+ * IT CARRIES THE WHOLE LIST, because it draws none of the controls a card and
+ * a row draw for themselves: the toolbar has no pencil and no trash of its
+ * own, so every action of the node is in the menu it opens.
+ */
+test("the toolbar offers the selected seat's whole list: its entries, order and icons", async () => {
+  mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
     hash: "#/org?lens=builder&view=visualization&seat=ceo",
@@ -129,17 +135,45 @@ test("the toolbar offers the selected seat's own card menu: its entries, order a
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
   const toolbar = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
-  fireEvent.keyDown(screen.getByRole("menu", { name: "Actions for CEO" }), { key: "Escape" });
-  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  const labels = toolbar.map((e) => e.label);
+  expect(labels).toContain("Edit reports");
+  // The three a card and a row draw as controls of their own, which only the
+  // toolbar has to put in words.
+  expect(labels).toContain("Edit");
+  expect(labels).toContain("Delete");
+});
 
+/*
+ * ONE NODE, ONE MENU, WHICHEVER VIEW IS DRAWING IT. A card on the chart and a
+ * row in the table draw the same add pill, the same pencil and the same trash,
+ * so both carry the same remainder (`nodeActions.surfaceMenu`). Written out
+ * separately they were two menus on one node: the card kept an Edit and a
+ * Delete it had drawn two inches to the left and dropped the Move up and Move
+ * down the row beside it offered.
+ */
+test("a node's card menu and its row menu are the same list", async () => {
+  const { view } = mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=visualization&seat=ceo",
+  });
+  await screen.findByText("No problems");
   const card = view.container.querySelector<HTMLElement>(
     '[role="treeitem"][data-tree-id="seat:ceo"]',
   )!;
   card.focus();
   fireEvent.keyDown(card, { key: "ContextMenu" });
-  const own = await screen.findByRole("menu", { name: "Actions for CEO" });
-  expect(toolbar).toEqual(entries(own));
-  expect(toolbar.map((e) => e.label)).toContain("Edit reports");
+  const onCard = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
+  fireEvent.keyDown(screen.getByRole("menu", { name: "Actions for CEO" }), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  // Neither of the two the card draws beside it.
+  expect(onCard.map((e) => e.label)).not.toContain("Edit");
+  expect(onCard.map((e) => e.label)).not.toContain("Delete");
+
+  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Actions for CEO" }));
+  const onRow = entries(await screen.findByRole("menu", { name: "Actions for CEO" }));
+  expect(onCard).toEqual(onRow);
 });
 
 test("the toolbar offers no screen for a seat that exists only in the draft", async () => {
@@ -317,4 +351,48 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
     expect(last.headers["If-Match"]).toBe('"r2"');
     expect(JSON.stringify(last.body)).toContain("Grow");
   });
+});
+
+/*
+ * ONE NODE READS THE SAME WAY ON BOTH VIEWS.
+ *
+ * The chart and the table are two arrangements of one draft, drawn from one
+ * module each for the words (`nodeMarks`), the actions (`nodeActions`) and the
+ * hue (`nodeTone`). Written out twice they drifted in exactly the places two
+ * people would not think to compare: a unit's own type read "Department" on
+ * the card and "department" on the row, and the mark beside it came from one
+ * list on the chart and another on the row it named.
+ */
+test("a unit says the same word and wears the same mark on the chart and in the table", async () => {
+  const { view } = mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=visualization",
+  });
+  await screen.findByText("No problems");
+  const node = orgNodeParts();
+  const table = orgTableParts();
+  const card = view.container.querySelector<HTMLElement>('[data-tree-id="unit:Engineering"]')!;
+  const onChart = {
+    // The caption under the name, which is where both surfaces write the type.
+    caption: drawnPart(card, node.caption)?.textContent,
+    mark: drawnPart(card, node.icon)?.querySelector("path")?.getAttribute("d"),
+  };
+
+  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+  const row = await waitFor(() => {
+    const found = view.container.querySelector<HTMLElement>(
+      '[role="row"][data-tree-id="unit:Engineering"]',
+    );
+    if (!found) throw new Error("no row for the unit");
+    return found;
+  });
+  const onRow = {
+    caption: drawnPart(row, table.caption)?.textContent,
+    mark: drawnPart(row, table.icon)?.querySelector("path")?.getAttribute("d"),
+  };
+
+  expect(onChart.caption).toBe("Department");
+  expect(onRow.caption).toBe(onChart.caption);
+  expect(onRow.mark).toBe(onChart.mark);
 });

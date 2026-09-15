@@ -21,8 +21,6 @@ import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
 import { toneOfKey } from "./nodeTone.ts";
 import { Callout, Combobox, FormField, InlineCode } from "@crewlethq/ui";
-import { CrewletIcon } from "@crewlethq/icons";
-import { AccountTreeGlyph, ApartmentGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -123,31 +121,6 @@ export function ReadOnlyFact({
       </p>
     </div>
   );
-}
-
-/** What a node IS, as far as its mark is concerned. */
-export type NodeGlyphKind = "company" | "unit" | "agent" | "human";
-
-/*
- * The agent mark is the Crewlet figure, which is an SVG sized by its own
- * width and height rather than by a glyph step, so the two steps this screen
- * draws are named here once. They are the icons package's own `sm` and `md`.
- */
-const GLYPH_PIXELS: Readonly<Record<"sm" | "md", number>> = { sm: 14, md: 16 };
-
-/**
- * A node's mark: a building for the company, a tree for a unit, a person for
- * a human seat and the Crewlet figure for an agent seat.
- *
- * ONE MAPPING, because a node marked three ways is a node a reader has to
- * learn three times. The editor's own head used to draw a pencil on all four,
- * which said the panel edits rather than what it is editing.
- */
-export function NodeGlyph({ kind, size = "sm" }: { kind: NodeGlyphKind; size?: "sm" | "md" }) {
-  if (kind === "company") return <ApartmentGlyph size={size} />;
-  if (kind === "unit") return <AccountTreeGlyph size={size} />;
-  if (kind === "human") return <PersonGlyph size={size} />;
-  return <CrewletIcon width={GLYPH_PIXELS[size]} height={GLYPH_PIXELS[size]} />;
 }
 
 /**

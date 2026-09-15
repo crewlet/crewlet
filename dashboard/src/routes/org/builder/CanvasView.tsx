@@ -73,38 +73,38 @@ import {
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
+  cardMenu,
   isDeletable,
   leadLabel,
   leadMenu,
   leadSentence,
   moveKey,
-  nodeMenu,
   reportingMenu,
   type OpenScreen,
 } from "./nodeActions.tsx";
 import {
   LiveState,
+  NodeGlyph,
   ProblemCount,
   ReportingMarks,
   SeatMarks,
   UnitMarks,
   handleLabel,
+  nodeGlyphKind,
   seatKindLabel,
+  unitTypeLabel,
 } from "./nodeMarks.tsx";
 import { nodeTone, seatTone } from "./nodeTone.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
-import { CrewletIcon } from "@crewlethq/icons";
 import {
   AccountTreeGlyph,
-  ApartmentGlyph,
   ChevronRightGlyph,
   CloseGlyph,
   CycleGlyph,
   DeleteGlyph,
   EditGlyph,
   KeyboardArrowDownGlyph,
-  PersonGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
   AddPill,
@@ -534,7 +534,7 @@ function StructureCard({
       <>
         <div {...card.item(id)} title={seatTitle(view)}>
           <OrgNodeLabel
-            icon={view.kind === "human" ? <PersonGlyph size="sm" /> : <CrewletIcon />}
+            icon={<NodeGlyph kind={nodeGlyphKind(view)} />}
             iconRing={view.kind === "human" ? "dashed" : "none"}
             // AN AGENT SEAT WEARS THE LARGE MARK. The chart this is drawn from
             // sizes a mark by what it stands for: a container at half its icon
@@ -573,7 +573,7 @@ function StructureCard({
       <>
         <div {...card.item(id)} title={counts}>
           <OrgNodeLabel
-            icon={<ApartmentGlyph />}
+            icon={<NodeGlyph kind="company" />}
             name={view.name || "Unnamed company"}
             caption="Company"
             trailing={<ProblemCount api={api} nodeKey={id} />}
@@ -597,9 +597,9 @@ function StructureCard({
     <>
       <div {...card.item(id)} title={counts}>
         <OrgNodeLabel
-          icon={<AccountTreeGlyph />}
+          icon={<NodeGlyph kind="unit" />}
           name={view.name}
-          caption={unitCaption(view)}
+          caption={unitTypeLabel(view)}
           captionMarks={<UnitMarks view={view} />}
           trailing={<ProblemCount api={api} nodeKey={id} />}
         />
@@ -618,13 +618,6 @@ function StructureCard({
       <LeadChip api={api} structure={structure} unit={view} card={card} />
     </>
   );
-}
-
-/** A unit's caption: the type it writes, capitalised, or the word for one that writes none. */
-function unitCaption(view: UnitView): string {
-  const type = view.unitType.trim();
-  if (type === "") return "Unit";
-  return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
 /**
@@ -670,7 +663,7 @@ function ReportingCard({
     <>
       <div {...card.item(item.id)} title={title}>
         <OrgNodeLabel
-          icon={item.kind === "human" ? <PersonGlyph size="sm" /> : <CrewletIcon />}
+          icon={<NodeGlyph kind={item.kind === "human" ? "human" : "agent"} />}
           iconRing={item.kind === "human" ? "dashed" : "none"}
           iconSize={item.kind === "human" ? "md" : "lg"}
           name={item.name}
@@ -726,15 +719,15 @@ function nameOfItem(chart: { items: ReadonlyMap<string, ReportingItem> }, id: st
  * The column down a node's right edge: what it can be expanded into, Edit, and
  * Delete.
  *
- * TWO ACTIONS, where the node's whole menu has six. Edit and Delete are what
+ * TWO ACTIONS, where the node's whole menu has eight. Edit and Delete are what
  * the console chart puts on a node and what this chart's own keys already do
  * (Enter, Delete), so they are the pair a pointer gets without opening
  * anything, and two is also what a node one rank tall can split into cells a
  * finger can hit. Everything else (Add, Move to, Open seat, Edit reports,
- * Change kind) is one list, in `nodeActions.nodeMenu`, and it is reached three
- * ways that are all still here: the ContextMenu key or Shift+F10 on the node,
- * the toolbar, which mirrors the selected node, and the Add on the branch
- * below.
+ * Change kind, Move up and Move down) is one list, in `nodeActions`, and it is
+ * reached three ways that are all still here: the ContextMenu key or Shift+F10
+ * on the node, the toolbar, which mirrors the selected node, and the Add on
+ * the branch below.
  *
  * THE EXPANDER IS NOT HERE, it is on the branch beside the Add. Both are about
  * a node's CHILDREN rather than about the node, and the branch below the node
@@ -790,14 +783,17 @@ function NodeActions({
         />
       )}
       {/*
-        THE MENU IS `nodeMenu` ITSELF, entry for entry, because the toolbar
-        mirrors a selected node's card menu and that is how a keyboard reader
-        reaches it at all: a tree item holds no tab stop of its own. Move up
-        and Move down are NOT here for that reason, while the toolbar cannot
-        carry them; the key that moves a node is bound on the chart instead,
-        and the outline's row menu still offers the pair in words.
+        THE MENU IS WHAT THIS CARD DOES NOT ALREADY REACH (`cardMenu`), which
+        is the question the table's row asks through the same subtraction.
+        Written out as `nodeMenu` itself, it opened with an Edit drawn two
+        inches to its left and ended with the Delete beside it, and dropped the
+        Move up and Move down the row offered: one node, two menus, on two
+        views of one draft. The three ADDS stay, because this is a tree and a
+        tree item may hold no tab stop: the pill on the branch is pointer-only,
+        so its kinds have nowhere else a key reaches. The toolbar draws no
+        control of its own and keeps the whole list.
       */}
-      <KeyboardMenu card={card} id={id} label={label} items={nodeMenu(api, view, open)} />
+      <KeyboardMenu card={card} id={id} label={label} items={cardMenu(api, view, open, reorder)} />
     </div>
   );
 }

@@ -24,6 +24,7 @@ import {
   OrgTable,
   OrgTableActions,
   OrgTableAdd,
+  OrgNodeLabel,
   OrgTableName,
   TreeCanvas,
   type TreeCardContext,
@@ -257,6 +258,45 @@ export function orgTableParts(): {
   unmount();
   for (const [part, found] of Object.entries(names)) {
     if (!found) throw new Error(`the org table draws no ${part} this harness can find`);
+  }
+  return names;
+}
+
+/**
+ * The parts of a chart NODE, asked of the design system, so the same claim can
+ * be made about a card and about the row that names it.
+ *
+ * `orgTableParts` answers for the table and this for the chart; the two are
+ * separate because the components are, and the pair exists so a suite can hold
+ * one node to reading the same way on both views without naming a package
+ * class anywhere.
+ */
+export function orgNodeParts(): {
+  /** The zone the card's mark sits in. */
+  icon: string;
+  /** The line under the name, which the caption and its marks ride. */
+  caption: string;
+} {
+  const { container, unmount } = render(
+    createElement(OrgNodeLabel, {
+      icon: createElement("svg"),
+      name: "A",
+      caption: REFERENCE_CAPTION,
+    }),
+  );
+  const kind = [...container.querySelectorAll("*")].find(
+    (el) => el.children.length === 0 && el.textContent === REFERENCE_CAPTION,
+  );
+  const names = {
+    // The label is a FRAGMENT: the zone, the text block and whatever else the
+    // card was given sit beside each other, so the mark's zone is the first
+    // element of the render rather than the first child of a wrapper.
+    icon: className(container.firstElementChild),
+    caption: className(kind?.parentElement),
+  };
+  unmount();
+  for (const [part, found] of Object.entries(names)) {
+    if (!found) throw new Error(`an org node draws no ${part} this harness can find`);
   }
   return names;
 }

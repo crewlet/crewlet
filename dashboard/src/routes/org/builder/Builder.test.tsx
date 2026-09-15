@@ -216,14 +216,95 @@ describe("the views the lens hosts", () => {
     expect(count.n).toBe(registered);
   });
 
-  test("the canvas is handed the chart the toolbar chooses", async () => {
+  /*
+   * THE SWITCH BETWEEN THE TWO CHARTS IS DRAWN BY THE CHART, in the canvas's
+   * own corner where the console keeps it, and the page still owns it: it
+   * writes the lens's own section param. It sat in the page toolbar, naming
+   * two things that exist only inside the canvas, 800px from them.
+   */
+  test("the canvas is handed the chart the toolbar chooses, and the switch that chooses it", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine });
+    const { view } = mountBuilder({ engine });
     expect(await screen.findByText("Drawing the structure chart")).toBeDefined();
-    fireEvent.click(screen.getByRole("tab", { name: "Reporting" }));
+    // Inside what the lens hands the canvas, not in the toolbar beside it.
+    const toolbar = view.container.querySelector(".org-builder-toolbar")!;
+    const reporting = screen.getByRole("tab", { name: "Reporting" });
+    expect(toolbar.contains(reporting)).toBe(false);
+    fireEvent.click(reporting);
     expect(await screen.findByText("Drawing the reporting chart")).toBeDefined();
     // A section, so the chart on screen is in the URL and a link opens it.
     expect(location.hash).toContain("chart=reporting");
+  });
+
+  /*
+   * AND SO IS THE FULLSCREEN TOGGLE, at the end of the chart's own zoom bar.
+   * The table has no canvas to hang it in, so it stays in the toolbar there:
+   * one control, in the one place each view puts it, never both.
+   */
+  test("the fullscreen toggle follows the view: the chart's corner, or the toolbar", async () => {
+    Object.defineProperty(Element.prototype, "requestFullscreen", {
+      configurable: true,
+      value: () => Promise.resolve(),
+    });
+    Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: true });
+    const engine = new Engine(company());
+    const { view } = mountBuilder({ engine });
+    await screen.findByText("Drawing the structure chart");
+    const toolbar = () => view.container.querySelector(".org-builder-toolbar")!;
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Fullscreen" })).not.toBeNull(),
+    );
+    const toggle = () => screen.getByRole("button", { name: "Fullscreen" });
+    expect(toolbar().contains(toggle())).toBe(false);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+    await waitFor(() => expect(screen.queryByText("Drawing the structure chart")).toBeNull());
+    expect(toolbar().contains(toggle())).toBe(true);
+  });
+
+  /*
+   * ONE QUESTION, ONE SHAPE. The node editor asks exactly this and asks it as
+   * a prompt; the lens's own asked it as a framed dialog with a head band, a
+   * mark and a close control that did what the Keep editing two inches below
+   * it did. Announced as an `alertdialog`, so the consequence is read with the
+   * name rather than after it.
+   */
+  test("discarding the draft is asked as a prompt, not a framed dialog", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Discard changes" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Discard changes" }));
+    const prompt = await screen.findByRole("alertdialog", { name: "Discard changes?" });
+    // The two answers and NOTHING ELSE: a framed dialog draws a close control
+    // in its head band that does exactly what Keep editing does two inches
+    // below it, which is the third control this prompt does not have.
+    expect(
+      [...prompt.querySelectorAll("button")].map(
+        (b) => b.getAttribute("aria-label") ?? b.textContent,
+      ),
+    ).toEqual(["Keep editing", "Discard changes"]);
+  });
+
+  /*
+   * WHICH NODE A SURFACE IS ABOUT reaches the chart, so it can ease onto it
+   * and push the rest of itself back: an add is about the PARENT the child
+   * will hang from, and closing gives the reader their view back.
+   */
+  test("the chart is told which node an open surface is about", async () => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    expect(screen.queryByText(/^About /)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Select CEO" }));
+    fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Edit reports" }));
+    expect(await screen.findByText("About seat:ceo")).toBeDefined();
   });
 });
 

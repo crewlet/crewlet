@@ -8,12 +8,12 @@
  * critical tone; a reference that names no unit is a caution; a seat's live
  * state is the `StateBadge` every other screen uses.
  *
- * TWO DRAWINGS OF ONE FACT, because the two surfaces have different room. A
- * table cell has a line to itself, so a wiring mark is a `Tag` with the
- * sentence written out. A chart node is ONE RANK TALL and as wide as its own
- * name, so the same fact is a glyph riding the caption, named for a reader who
- * cannot see it and titled for one who can. Both come from this module, so
- * what the chart marks and what the table marks cannot drift apart.
+ * ONE DRAWING OF ONE FACT, on both surfaces. A wiring mark is a fixed-size
+ * glyph riding the caption, named for a reader who cannot see it and titled
+ * for one who can. It used to be a `Tag` with the sentence written out in the
+ * table, on the reading that a table cell has a line to spare; the treegrid
+ * row is a RANK tall, so a tag in it took the row from 36px to 36.6 and made a
+ * row as tall as its own wiring, which this module promises it is not.
  *
  * A LIVE PUSH NEVER MOVES A NODE, AND NEITHER DOES A CHECK. The live state
  * badge and the problem count sit in slots that keep their room whether or not
@@ -30,14 +30,74 @@ import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import { runState, stateLabel, toneOf } from "~/lib/seats.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
-import type { ReportingItem, SeatView, UnitView } from "./chartModel.ts";
+import type { NodeView, ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
-import { CycleGlyph, LinkGlyph, NotificationsGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { CrewletIcon } from "@crewlethq/icons";
+import {
+  AccountTreeGlyph,
+  ApartmentGlyph,
+  CycleGlyph,
+  LinkGlyph,
+  NotificationsGlyph,
+  PersonGlyph,
+  WarningGlyph,
+  cssLength,
+  type GlyphSize,
+} from "@crewlethq/icons/glyphs";
 import { StatusDot, Tag, VisuallyHidden } from "@crewlethq/ui";
 
 /** "Agent seat" or "Human seat". */
 export function seatKindLabel(view: Pick<SeatView, "kind">): string {
   return view.kind === "human" ? "Human seat" : "Agent seat";
+}
+
+/**
+ * A unit's own type, capitalised: the word a chart node and a table row write
+ * under the unit's name.
+ *
+ * CAPITALISED, and in ONE place. The type is the founder's own word from the
+ * document, so the first letter is the only thing touched; written out on both
+ * surfaces it drifted, and one draft read "Team" on the card and "team" on the
+ * row beside it.
+ */
+export function unitTypeLabel(view: Pick<UnitView, "unitType">): string {
+  const type = view.unitType.trim();
+  if (type === "") return "Unit";
+  return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+/** Which of the four things a node is, for the mark that stands for it. */
+export type NodeGlyphKind = "company" | "unit" | "agent" | "human";
+
+/** The kind of mark a node view wears. */
+export function nodeGlyphKind(view: NodeView): NodeGlyphKind {
+  if (view.type === "company") return "company";
+  if (view.type === "unit") return "unit";
+  return view.kind === "human" ? "human" : "agent";
+}
+
+/**
+ * A node's mark: a building for the company, a tree for a unit, a person for a
+ * human seat and the Crewlet figure for an agent seat.
+ *
+ * ONE MAPPING FOR EVERY SURFACE, because a node marked three ways is a node a
+ * reader has to learn three times. The chart's cards, the table's rows and the
+ * head of the editor over either of them all draw this: the editor's own head
+ * used to draw a pencil on all four, which said the panel edits rather than
+ * what it is editing, and the table and the chart each held a copy of the
+ * mapping beside it.
+ *
+ * SIZE IS THE CALLER'S, and its absence means the mark takes the font size of
+ * the zone it is in, which is how the chart gives an agent seat three quarters
+ * of its icon zone and a unit half of it. Every drawing here answers `1em` by
+ * default, the Crewlet figure included.
+ */
+export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSize }) {
+  if (kind === "company") return <ApartmentGlyph size={size} />;
+  if (kind === "unit") return <AccountTreeGlyph size={size} />;
+  if (kind === "human") return <PersonGlyph size={size} />;
+  const side = cssLength(size);
+  return <CrewletIcon width={side} height={side} />;
 }
 
 /** A seat's handle as written beside its name, or what stands in for one not reported yet. */
@@ -220,52 +280,5 @@ function Mark({
     <span className="bnode-mark" title={note}>
       <Drawing title={note} />
     </span>
-  );
-}
-
-/**
- * The same marks as tags, for a surface with a line to spare: the table's name
- * cell. The words are the glyphs' own names, so the two surfaces say the same
- * thing about one fact.
- */
-export function UnitTags({ view }: { view: UnitView }) {
-  if (view.danglingLead === null) return null;
-  return (
-    <Tag variant="warning" leadingIcon={<WarningGlyph />} title={view.danglingNote}>
-      Lead names no seat
-    </Tag>
-  );
-}
-
-/** The wiring marks of a seat, as tags: see [UnitTags]. */
-export function SeatTags({ view }: { view: SeatView }) {
-  const dangling = view.danglingUnitRef;
-  if (!view.placedByRef && !dangling && !view.datadogFallback) return null;
-  return (
-    <>
-      {view.placedByRef && (
-        <Tag
-          appearance="outline"
-          leadingIcon={<LinkGlyph />}
-          title="Declared at the root with a unit reference"
-        >
-          Placed by unit reference
-        </Tag>
-      )}
-      {dangling && (
-        <Tag variant="warning" leadingIcon={<WarningGlyph />} title={view.danglingNote}>
-          {`No unit named ${dangling}`}
-        </Tag>
-      )}
-      {view.datadogFallback && (
-        <Tag
-          appearance="outline"
-          leadingIcon={<NotificationsGlyph />}
-          title="Alerts that name no seat wake this seat"
-        >
-          Datadog fallback
-        </Tag>
-      )}
-    </>
   );
 }

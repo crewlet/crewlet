@@ -28,7 +28,9 @@ import type { Reorder } from "./reorder.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   AccountTreeGlyph,
+  ArrowDownwardGlyph,
   ArrowOutwardGlyph,
+  ArrowUpwardGlyph,
   DeleteGlyph,
   EditGlyph,
   MoveItemGlyph,
@@ -181,6 +183,124 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     { kind: "separator", key: "sep-delete" },
     remove,
   ];
+}
+
+/**
+ * Move up and Move down, as a node's menu offers them.
+ *
+ * ALWAYS MEANINGFUL, because both surfaces draw the siblings in the chart's
+ * own order: there is no sort to take "the one before" away from the sibling
+ * the move would pass. A node that cannot move at all (the company, and a root
+ * seat a unit reference placed, which lives in the company's list) is offered
+ * neither rather than two entries that would write somewhere else. A node that
+ * CAN move under a posture that refuses every write is offered both, refused,
+ * like every other entry in this module.
+ */
+export function moveEntries(api: BuilderApi, reorder: Reorder, key: NodeKey): MenuEntry[] {
+  if (!reorder.movable(key)) return [];
+  return [
+    { kind: "separator", key: "sep-move" },
+    {
+      key: "move-up",
+      label: "Move up",
+      icon: <ArrowUpwardGlyph />,
+      disabled: api.readOnly,
+      onSelect: () => reorder.move(key, -1),
+    },
+    {
+      key: "move-down",
+      label: "Move down",
+      icon: <ArrowDownwardGlyph />,
+      disabled: api.readOnly,
+      onSelect: () => reorder.move(key, 1),
+    },
+  ];
+}
+
+/**
+ * WHAT A SURFACE ALREADY OFFERS WITHOUT ITS MENU, by the keys the entries
+ * above carry. A key rather than a label, because a label is what a menu SAYS
+ * and two of these say different things on different nodes ("Change to human
+ * seat"), and because a renamed label would silently stop matching and put the
+ * entry back on the surface twice.
+ *
+ * THE TWO LISTS DIFFER BY THE THREE ADDS, and by exactly one thing: whether
+ * the reader reading the menu can reach the control that draws them.
+ *
+ * - The chart is a `tree`, and a tree item may hold no tab stop of its own, so
+ *   every control on a card is pointer-only. Edit and Delete are still reached
+ *   by a key (Enter, Delete), so a menu carrying them offers a second way to
+ *   do what the reader already has one for. The add pill has no key of its
+ *   own, so its three kinds stay in the menu: taken out they would be pointer-
+ *   only on that surface, and a tree's menu is where the pattern puts a per-
+ *   item control anyway.
+ * - The table is a `treegrid`, whose cell-entry model reaches every control in
+ *   a row, the add pill included (`grid.opened`). So all five come out.
+ *
+ * Both lists take Edit and Delete out, which is the duplication the console
+ * has none of: a card's menu opened with an Edit drawn two inches to its left
+ * and ended with a Delete beside it.
+ */
+const REACHED_ON_A_CARD = new Set(["edit", "delete"]);
+const REACHED_ON_A_ROW = new Set(["add-unit", "add-agent", "add-human", "edit", "delete"]);
+
+/** The chart's own: a card draws the pencil and the trash, and keys reach both. */
+export function cardMenu(
+  api: BuilderApi,
+  view: NodeView,
+  open: OpenScreen,
+  reorder: Reorder,
+): MenuEntry[] {
+  return surfaceMenu(api, view, open, reorder, REACHED_ON_A_CARD);
+}
+
+/** The table's own: a row draws the add pill as well, and the grid reaches it. */
+export function rowMenu(
+  api: BuilderApi,
+  view: NodeView,
+  open: OpenScreen,
+  reorder: Reorder,
+): MenuEntry[] {
+  return surfaceMenu(api, view, open, reorder, REACHED_ON_A_ROW);
+}
+
+/**
+ * The menu of a node on a surface that draws some of its actions itself: every
+ * action the surface does not already offer, plus the two moves among its
+ * siblings.
+ *
+ * ONE SUBTRACTION FOR BOTH, because the question is the same one and the two
+ * answers drifted when they were written out separately: the card's menu kept
+ * an Edit and a Delete it had drawn itself and dropped the Move up and Move
+ * down the row beside it offered, so one node read two ways on two views of
+ * one draft. The toolbar draws no control of its own and therefore keeps
+ * `nodeMenu` whole.
+ *
+ * SEPARATORS ARE PART OF THE SUBTRACTION. `nodeMenu` groups its entries with
+ * rules, and taking the adds and Delete out of a unit's menu left a rule at
+ * the top, a rule at the bottom and two in a row in the middle: a menu of
+ * three actions drawn as five. One survives only between two actions.
+ */
+function surfaceMenu(
+  api: BuilderApi,
+  view: NodeView,
+  open: OpenScreen,
+  reorder: Reorder,
+  reached: ReadonlySet<string>,
+): MenuEntry[] {
+  const kept = [...nodeMenu(api, view, open), ...moveEntries(api, reorder, view.key)].filter(
+    (entry) => entry.kind === "separator" || !reached.has(entry.key),
+  );
+  const menu: MenuEntry[] = [];
+  for (const entry of kept) {
+    if (entry.kind !== "separator") {
+      menu.push(entry);
+      continue;
+    }
+    if (menu.length > 0 && menu[menu.length - 1]!.kind !== "separator") menu.push(entry);
+  }
+  if (menu.length > 0 && menu[menu.length - 1]!.kind === "separator") menu.pop();
+  return menu;
 }
 
 /**

@@ -544,13 +544,20 @@ describe("keys", () => {
     const menu = screen.getByRole("menu", { name: "Actions for Dev" });
     // Over the chart rather than in it, so the zoom neither scales nor clips it.
     expect(canvasWorld(container).contains(menu)).toBe(false);
+    /*
+     * NEITHER OF THE TWO THE CARD DRAWS BESIDE IT. Edit and Delete are buttons
+     * on this card's own right edge and the keys that do them are Enter and
+     * Delete, so a menu offering them again is one action with two entries
+     * (`nodeActions.cardMenu`). The two moves among the siblings are here
+     * because this is the surface that draws the siblings in that order.
+     */
     expect(within(menu).getAllByRole("menuitem").map(label)).toEqual([
-      "Edit",
       "Open seat",
       "Edit reports",
       "Change to human seat",
       "Move to",
-      "Delete",
+      "Move up",
+      "Move down",
     ]);
     press("Escape");
     expect(screen.queryByRole("menu")).toBeNull();
@@ -561,9 +568,9 @@ describe("keys", () => {
     expect(spies.openMove).toHaveBeenCalledWith(seatKey("dev"));
     expect(document.activeElement).toBe(dev);
 
-    // Edit opens the whole form; Edit reports opens it at the seat's reports.
-    press("ContextMenu");
-    fireEvent.click(screen.getAllByRole("menuitem").find((m) => label(m) === "Edit")!);
+    // Edit is the card's own control and Enter, not a menu entry; Edit reports
+    // opens the same form at the seat's reports and is only in the menu.
+    press("Enter");
     expect(spies.openEditor).toHaveBeenLastCalledWith(seatKey("dev"));
     press("ContextMenu");
     fireEvent.click(screen.getByRole("menuitem", { name: "Edit reports" }));
@@ -683,9 +690,12 @@ describe("what a node offers a pointer", () => {
 
   /*
    * THE MENU IS STILL THERE FOR THE KEY THAT OPENS IT. Its trigger is drawn
-   * nowhere, and what it offers is the one list every surface offers.
+   * nowhere, and what it offers is everything the card does not already reach:
+   * the three kinds, whose pill on the branch is pointer-only, and the moves.
+   * Edit and Delete are not in it, because the card draws both and the keys
+   * Enter and Delete do both.
    */
-  test("the ContextMenu key still opens the node's whole menu", () => {
+  test("the ContextMenu key opens what the card does not already reach", () => {
     mount();
     item("Engineering").focus();
     press("ContextMenu");
@@ -693,9 +703,9 @@ describe("what a node offers a pointer", () => {
       "Add unit",
       "Add agent seat",
       "Add human seat",
-      "Edit",
       "Move to",
-      "Delete",
+      "Move up",
+      "Move down",
     ]);
   });
 });
@@ -806,12 +816,21 @@ describe("menus", () => {
     const names = screen
       .getAllByRole("menuitem")
       .map((m) => [label(m), m.getAttribute("aria-disabled") === "true"]);
+    /*
+     * READ-ONLY DISABLES, IT DOES NOT HIDE. Edit and Delete are the card's own
+     * two controls rather than menu entries, and they carry the refusal there;
+     * a seat that exists only in the draft has no screen, so Open seat is
+     * absent rather than disabled. The two moves are DRAWN AND REFUSED like
+     * the rest: a seat this draft added to a unit has siblings to pass, and
+     * whether the posture allows the write is the same question every other
+     * entry here answers with `aria-disabled`.
+     */
     expect(names).toEqual([
-      ["Edit", false],
       ["Edit reports", false],
       ["Change to human seat", true],
       ["Move to", true],
-      ["Delete", true],
+      ["Move up", true],
+      ["Move down", true],
     ]);
   });
 

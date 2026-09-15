@@ -108,9 +108,17 @@ export function useReorder(api: BuilderApi, structure: Structure): Reorder {
     if (lines.length > 0) announce(`The new order changes a primary manager. ${lines.join(" ")}`);
   }, [state, announce]);
 
+  /*
+   * WHETHER THIS NODE HAS SIBLINGS TO PASS, which is a question about the
+   * organization and not about the posture. READ-ONLY DISABLES, IT NEVER
+   * HIDES (`nodeActions`), so a guarded draft's menu draws the two moves and
+   * refuses them; answering false here instead took them out of the menu
+   * while Move to beside them stayed and said it was unavailable, which told
+   * an operator that this node cannot be reordered at all.
+   */
   const movable = (id: NodeKey): boolean => {
     const view = structure.nodes.get(id);
-    if (!view || view.type === "company" || api.readOnly) return false;
+    if (!view || view.type === "company") return false;
     return !(view.type === "seat" && view.placedByRef);
   };
 

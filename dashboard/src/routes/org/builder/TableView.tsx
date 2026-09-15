@@ -46,29 +46,22 @@ import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { addSections, isDeletable, leadLabel, nodeMenu, type OpenScreen } from "./nodeActions.tsx";
+import { addSections, isDeletable, leadLabel, rowMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
+  NodeGlyph,
   SeatMarks,
   UnitMarks,
   handleLabel,
   managerLabel,
+  nodeGlyphKind,
   seatKindLabel,
+  unitTypeLabel,
 } from "./nodeMarks.tsx";
 import { nodeTone } from "./nodeTone.ts";
 import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useStructure } from "./useCharts.ts";
-import { CrewletIcon } from "@crewlethq/icons";
-import {
-  AccountTreeGlyph,
-  ApartmentGlyph,
-  ArrowDownwardGlyph,
-  ArrowUpwardGlyph,
-  DeleteGlyph,
-  EditGlyph,
-  MoreVertGlyph,
-  PersonGlyph,
-} from "@crewlethq/icons/glyphs";
+import { DeleteGlyph, EditGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
 import {
   EmptyValue,
   IconButton,
@@ -143,88 +136,13 @@ const ACTIONS = 5;
 
 /**
  * "Company", the unit's own type, or which kind of seat: the word a row writes
- * under its name.
- *
- * CAPITALISED, because it is a caption rather than a value, and because the
- * chart writes the same word on the same node: one draft read "Team" on the
- * card and "team" on the row. The type is the founder's own word from the
- * document, so the first letter is the only thing touched.
+ * under its name. Each of the three words comes from `nodeMarks`, which is
+ * where the chart's cards take the same words from.
  */
 function kindLabel(view: NodeView): string {
   if (view.type === "company") return "Company";
   if (view.type === "seat") return seatKindLabel(view);
-  const type = view.unitType.trim();
-  if (type === "") return "Unit";
-  return type.charAt(0).toUpperCase() + type.slice(1);
-}
-
-/** A node's mark: the same one the chart draws for it, from the same list. */
-function nodeIcon(view: NodeView) {
-  if (view.type === "company") return <ApartmentGlyph />;
-  if (view.type === "unit") return <AccountTreeGlyph />;
-  return view.kind === "human" ? <PersonGlyph size="sm" /> : <CrewletIcon />;
-}
-
-/**
- * Move up and Move down, as the row's menu offers them.
- *
- * ALWAYS MEANINGFUL HERE, because the rows are always in the chart's own
- * order: there is no sort to take "the row above" away from the sibling the
- * move would pass. A node that cannot move at all (the company, and a root
- * seat a unit reference placed, which lives in the company's list) is offered
- * neither rather than two entries that would write somewhere else.
- */
-function moveEntries(reorder: Reorder, key: NodeKey): MenuEntry[] {
-  if (!reorder.movable(key)) return [];
-  return [
-    { kind: "separator", key: "sep-move" },
-    {
-      key: "move-up",
-      label: "Move up",
-      icon: <ArrowUpwardGlyph />,
-      onSelect: () => reorder.move(key, -1),
-    },
-    {
-      key: "move-down",
-      label: "Move down",
-      icon: <ArrowDownwardGlyph />,
-      onSelect: () => reorder.move(key, 1),
-    },
-  ];
-}
-
-/**
- * WHAT THE STRIP ALREADY DRAWS, by the keys `nodeActions` gives those entries.
- * A key rather than a label, because a label is what a menu SAYS and two of
- * these say different things on different nodes ("Change to human seat"), and
- * because a renamed label would silently stop matching and put the entry back
- * on the row twice.
- */
-const DRAWN_ON_THE_ROW = new Set(["add-unit", "add-agent", "add-human", "edit", "delete"]);
-
-/**
- * A row's menu: every action of the node that the row does not already draw as
- * a control of its own, plus the two moves among its siblings.
- *
- * SEPARATORS ARE PART OF THE SUBTRACTION. `nodeMenu` groups its entries with
- * rules, and taking the adds and Delete out of a unit's menu left a rule at
- * the top, a rule at the bottom and two in a row in the middle: a menu of
- * three actions drawn as five. One survives only between two actions.
- */
-function rowMenu(api: BuilderApi, view: NodeView, open: OpenScreen, reorder: Reorder): MenuEntry[] {
-  const kept = [...nodeMenu(api, view, open), ...moveEntries(reorder, view.key)].filter(
-    (entry) => entry.kind === "separator" || !DRAWN_ON_THE_ROW.has(entry.key),
-  );
-  const menu: MenuEntry[] = [];
-  for (const entry of kept) {
-    if (entry.kind !== "separator") {
-      menu.push(entry);
-      continue;
-    }
-    if (menu.length > 0 && menu[menu.length - 1]!.kind !== "separator") menu.push(entry);
-  }
-  if (menu.length > 0 && menu[menu.length - 1]!.kind === "separator") menu.pop();
-  return menu;
+  return unitTypeLabel(view);
 }
 
 export function TableView() {
@@ -264,7 +182,7 @@ export function TableView() {
                cell happens to mention a name. */
             <OrgTableName
               className="btable-name"
-              icon={nodeIcon(view)}
+              icon={NodeGlyph({ kind: nodeGlyphKind(view) })}
               iconRing={view.type === "seat" && view.kind === "human" ? "dashed" : "none"}
               name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
               caption={kindLabel(view)}
@@ -358,6 +276,14 @@ export function TableView() {
   return (
     <OrgTable
       label="Organization"
+      /*
+       * THE PAIR LIVES IN THE PAGE TOOLBAR, on both views. The design system
+       * draws its own Expand all and Collapse all over this table, and the
+       * lens draws the same two in its toolbar: one action pair, two
+       * implementations, each hidden on the view where the other was drawn,
+       * so the control moved 800px when a reader changed view.
+       */
+      controls={false}
       columns={COLUMNS}
       rows={structure.tree}
       ref={grid}
