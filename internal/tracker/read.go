@@ -1262,6 +1262,18 @@ type sortTerm struct {
 	Column     string
 	Descending bool
 
+	// NeverNull marks a column the schema declares NOT NULL, whose NULL
+	// ordering is therefore moot.
+	//
+	// SAYING SO IS NOT COSMETIC. A `NULLS LAST` on an ASCENDING term is not
+	// the order an index stores, so the planner cannot satisfy the ORDER BY
+	// from one and sorts the whole scope in a temp b-tree instead. The id
+	// TIEBREAK is the case that matters, because [sortTerms] appends it to
+	// every order this grammar compiles: spelling it `t.id NULLS LAST` cost
+	// `tracker_tasks_updated_idx` its only reader, and with it the
+	// workspace's own default listing.
+	NeverNull bool
+
 	// Join is the LEFT JOIN a custom-field sort needs, empty for a plain
 	// column. LEFT because a field the task never set must still appear:
 	// an inner join would silently drop every task with no value, which
@@ -1354,7 +1366,9 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 			terms = append(terms, sortTerm{Column: "t.updated_at", Descending: true})
 		}
 	}
-	return append(terms, sortTerm{Column: "t.id"})
+	// The primary key, which the schema declares NOT NULL — so it takes no
+	// NULL clause, and the order stays one an index can serve.
+	return append(terms, sortTerm{Column: "t.id", NeverNull: true})
 }
 
 // orderBy renders a query's sort as SQL.
@@ -1377,22 +1391,28 @@ func sortJoins(terms []sortTerm) (string, []any) {
 }
 
 // renderOrder renders compiled sort terms as SQL.
-// AN ABSENT VALUE SORTS LAST, IN BOTH DIRECTIONS, and it is stated rather than
-// inherited: SQLite's default puts NULLs FIRST on an ascending order, so
-// `sort=due` answered with every undated task ahead of the one due tomorrow —
-// on the list, on a board column and in every tool that reads this grammar.
+//
+// AN ABSENT VALUE SORTS LAST, IN BOTH DIRECTIONS. Descending is SQLite's own
+// default — NULL compares smaller than every value, so it lands at the end —
+// and ascending is not, which is why `sort=due` answered with every undated
+// task ahead of the one due tomorrow: on the list, on a board column and in
+// every tool that reads this grammar.
 //
 // "Soonest first" and "latest first" are both questions about values, and a
 // row that has none is not the answer to either. Every tracker a person has
 // used puts the undated at the end, which is why nobody reports this as a bug
 // and everybody scrolls past the first page.
 //
-// It applies to every column rather than to a list of the nullable ones: on a
-// column that cannot be NULL the clause is a no-op, and a list would be a
-// second place the nullability is written down — one that drifts the first
-// time a migration relaxes a constraint. A custom-field sort is the case that
-// settles it, since a LEFT JOIN makes EVERY field's value nullable for a task
-// that does not carry the field.
+// SO THE CLAUSE IS WRITTEN WHERE IT CHANGES THE ANSWER AND NOWHERE ELSE, which
+// is a planner rule rather than a style one: a NULL ordering that is not the
+// one an index stores cannot be satisfied FROM that index, so a redundant
+// clause turns a seek into a scan of the whole scope through a temp b-tree.
+// Written on every term, it cost the workspace's default listing its index.
+// It is still never a list of which columns are nullable — a term says only
+// that its column CANNOT be null, beside the column itself, and the default is
+// to assume it can. A custom-field sort is why that direction is the safe one:
+// its LEFT JOIN makes every field's value nullable for a task that does not
+// carry the field.
 //
 // [keysetAfterOne] is the other half and the two may never disagree: a cursor
 // compares exactly the columns the order sorts by, so an order that moved its
@@ -1401,11 +1421,14 @@ func sortJoins(terms []sortTerm) (string, []any) {
 func renderOrder(terms []sortTerm) string {
 	rendered := make([]string, 0, len(terms))
 	for _, term := range terms {
-		if term.Descending {
-			rendered = append(rendered, term.Column+" DESC NULLS LAST")
-			continue
+		switch {
+		case term.Descending:
+			rendered = append(rendered, term.Column+" DESC")
+		case term.NeverNull:
+			rendered = append(rendered, term.Column)
+		default:
+			rendered = append(rendered, term.Column+" NULLS LAST")
 		}
-		rendered = append(rendered, term.Column+" NULLS LAST")
 	}
 	return strings.Join(rendered, ", ")
 }
