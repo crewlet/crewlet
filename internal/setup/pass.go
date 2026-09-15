@@ -1,8 +1,10 @@
 package setup
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"time"
 
@@ -527,6 +529,46 @@ func (r *Runner) Get(id string) (*Run, bool) {
 	defer r.mu.Unlock()
 	run, ok := r.runs[id]
 	return run, ok
+}
+
+// Recent is the passes this node remembers for one surface, newest first.
+//
+// PER NODE AND IT SAYS SO. A run is executed by whichever node held the
+// surface's lease and is remembered in that node's own process, bounded by
+// [maxRuns] — so this is "what did THIS node last do here", not the fleet's
+// history. The fleet's own record is the reconcile State, which carries the
+// conclusion rather than the findings.
+//
+// The reason it exists: `GET /setup/integrations/{kind}/runs/{id}` could
+// answer one pass and nothing could name an id, so the route was reachable
+// only by a caller that had just started a pass itself. An operator opening a
+// Findings tab had no way in at all.
+func (r *Runner) Recent(kind integration.Kind, limit int) []*Run {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// NIL WHEN THERE IS NOTHING, deliberately: the JSON surface above is
+	// the one place that owes a caller an allocated list, and two places
+	// normalising it is how one of them stops. A nil Runner and a runner
+	// that has executed nothing here answer alike, which is what makes the
+	// handler's own guard the single rule rather than a second one.
+	var out []*Run
+	for _, run := range r.runs {
+		if run.Kind == kind {
+			out = append(out, run)
+		}
+	}
+	// NEWEST FIRST, and the id breaks a tie: map order is not
+	// deterministic, and two passes can start inside one clock tick.
+	slices.SortFunc(out, func(a, b *Run) int {
+		return cmp.Or(b.StartedAt.Compare(a.StartedAt), cmp.Compare(a.ID, b.ID))
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 // claim takes the in-process half of the guard, reporting whether it got it.
