@@ -533,6 +533,19 @@
 
 /* ---- Org builder: the lens ------------------------------------------------ */
 
+/* THE CARD WIDTH IS A KNOB THE CONSUMER SETS. `--crewlet-tree-canvas-card-width`
+   is the design system's own variable for a tree card, and the design system
+   reads it with a fallback because a component has to draw without a consumer.
+   Nothing here does: the builder's chart and its outline both read it bare,
+   and an undeclared custom property takes the whole declaration with it, so
+   the cards went to `width: auto` and the outline's sideways scroller lost its
+   minimum. One declaration, on the builder's own root, is what both views
+   read, and it is what will retint the design system's TreeCanvas the day the
+   builder renders one. */
+.org-builder {
+  --crewlet-tree-canvas-card-width: 15rem;
+}
+
 /* THE CANVAS VIEW FILLS THE SCREEN, and `.screen` has nothing to scroll. The
    screen's own column, the lens panel and the builder become flex columns
    with a definite height, so the canvas takes what is left under the toolbar

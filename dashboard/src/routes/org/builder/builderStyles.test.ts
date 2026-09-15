@@ -52,11 +52,42 @@ test("the outline scrolls sideways in its own box, which contains everything it 
   expect(rule(".boutline-wrap")).toMatch(/position:\s*relative/);
 });
 
+// Both views read the design system's own tree-card variable, and they read it
+// BARE: the fallback in `var(--x, 15rem)` belongs to a component that must draw
+// without a consumer, and this application is the consumer. An undeclared
+// custom property is invalid at computed-value time and takes its whole
+// declaration with it, so a missing declaration is not a wrong width but no
+// width at all: cards at `width: auto` and an outline whose sideways scroller
+// has no minimum. Nothing in jsdom computes a custom property, so the
+// declaration is read from the stylesheet.
+test("the card width the chart and the outline both read is declared", () => {
+  expect(rule(".org-builder")).toMatch(/--crewlet-tree-canvas-card-width:\s*\S/);
+  expect(rule(".bchart-box")).toMatch(/width:\s*var\(--crewlet-tree-canvas-card-width\)/);
+  expect(rule(".boutline")).toMatch(/var\(--crewlet-tree-canvas-card-width\)/);
+});
+
+/**
+ * A status, data or phase hue, under the names the design system gives them.
+ *
+ * Spelled as a pattern over the FAMILY rather than over each token, and paired
+ * with the case below, because this guard was already dead once: it matched
+ * `--data-*` while the tokens were named `--viz-*`, and the rename to the
+ * design system's names made it unable to match anything at all.
+ */
+const CARRIED_HUE = /var\(--color-(feedback|data|phase)-[-\w]*\)/;
+
 test("a builder card or row takes no status or data hue, only the accent for the selection", () => {
   const builder = rules(css).filter(([selector]) => /\.(bchart|boutline|bnode)/.test(selector));
   expect(builder.length).toBeGreaterThan(10);
-  const hues = builder
-    .filter(([, body]) => /var\(--(positive|caution|critical|info|data|phase)[-\w]*\)/.test(body))
-    .map(([selector]) => selector);
+  const hues = builder.filter(([, body]) => CARRIED_HUE.test(body)).map(([selector]) => selector);
   expect(hues).toEqual([]);
+});
+
+test("the hue guard recognises a hue, and lets the accent through", () => {
+  expect(CARRIED_HUE.test("color: var(--color-feedback-danger-ink);")).toBe(true);
+  expect(CARRIED_HUE.test("background: var(--color-data-3);")).toBe(true);
+  expect(CARRIED_HUE.test("border-color: var(--color-phase-execute-soft);")).toBe(true);
+  // Where the reader is, which is the one colour a builder card may carry.
+  expect(CARRIED_HUE.test("background: var(--color-brand-accent-soft);")).toBe(false);
+  expect(CARRIED_HUE.test("color: var(--color-text-tertiary);")).toBe(false);
 });
