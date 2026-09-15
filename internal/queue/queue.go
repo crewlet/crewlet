@@ -279,8 +279,20 @@ type EventQueue interface {
 
 	// EnsureSubscription creates the durable subscription if absent,
 	// with NO consumer attached, positioned at the earliest message.
-	// Reports whether this call created it; creating an existing
-	// subscription is success.
+	// Creating an existing subscription is success.
+	//
+	// The bool reports whether this call found it absent AND then
+	// provisioned it. That is exact on a backend with one writer, and on
+	// a fleet it is the closest thing to an answer there is: two nodes
+	// that create the same subscription in the same instant both receive
+	// it, because a broker that returns the object either way gives a
+	// client no way to tell "I made this" from "this was already here".
+	// So on a simultaneous boot more than one node can report true.
+	//
+	// Deliberately NOT a three-valued answer, and nothing in the engine
+	// branches on it: it is a count in a log line. A tri-state nobody
+	// reads would be machinery invented to describe a race the broker
+	// does not expose, rather than an answer anyone could act on.
 	EnsureSubscription(ctx context.Context, topic, group string) (bool, error)
 
 	// DeleteSubscription destroys the subscription and its retained

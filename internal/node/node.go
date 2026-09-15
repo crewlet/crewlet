@@ -279,7 +279,14 @@ func (n *Node) EnsureMailboxes(ctx context.Context) {
 			created++
 		}
 	}
-	n.log.Info("seat_mailboxes_ready", "seats", len(n.cfg.Seats()), "created", created)
+	// "provisioned" RATHER THAN "created", because on a fleet booting
+	// together this counts what THIS node found absent and then made —
+	// and two members that create one mailbox in the same instant are
+	// both handed it, with no way to tell which one's create did it. See
+	// [queue.EventQueue.EnsureSubscription]. Reading these lines across a
+	// fleet, the counts can sum to more than the company has seats.
+	n.log.Info("seat_mailboxes_ready", "seats", len(n.cfg.Seats()),
+		"provisioned", created)
 }
 
 // Stop gives up every seat and stops consuming.
