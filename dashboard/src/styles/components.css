@@ -673,25 +673,6 @@ fieldset.field {
   color: var(--color-text-secondary);
 }
 
-/* ---- Key/value ---------------------------------------------------------- */
-
-.kv {
-  display: grid;
-  grid-template-columns: minmax(120px, max-content) 1fr;
-  gap: var(--spacing-2) var(--spacing-4);
-  font-size: var(--font-size-compact);
-  align-items: baseline;
-}
-.kv > dt {
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-}
-.kv > dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 /* ---- Code --------------------------------------------------------------- */
 
 code.inline {

@@ -51,7 +51,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Disclosure, KeyValue } from "~/ui/primitives.tsx";
+import { Disclosure } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -95,6 +95,7 @@ import {
   Card,
   CodeBlock,
   CopyButton,
+  DescriptionList,
   EmptyValue,
   Skeleton,
   StatCard,
@@ -792,7 +793,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <Card.Body padding="tight">
               <div className="col gap-2">
                 {conversation && (
-                  <KeyValue
+                  <DescriptionList
                     items={[
                       [
                         "Conversation",

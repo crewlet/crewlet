@@ -38,23 +38,6 @@ import {
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
 
-// ---------------------------------------------------------------------------
-// States
-// ---------------------------------------------------------------------------
-
-export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
-  return (
-    <dl className="kv">
-      {items.map(([k, v], i) => (
-        <div key={i} style={{ display: "contents" }}>
-          <dt>{k}</dt>
-          <dd>{v}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
 /**
  * A labelled section the reader opens.
  *

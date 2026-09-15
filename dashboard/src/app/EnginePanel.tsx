@@ -19,11 +19,18 @@
  */
 
 import { useRef } from "react";
-import { KeyValue } from "~/ui/primitives.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { Button, EmptyValue, Modal, RelativeTime, Tag, useNow } from "@crewlethq/ui";
+import {
+  Button,
+  DescriptionList,
+  EmptyValue,
+  Modal,
+  RelativeTime,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import {
   CloseGlyph,
   InfoGlyph,
@@ -102,7 +109,7 @@ export function EnginePanel({
         </div>
       )}
 
-      <KeyValue
+      <DescriptionList
         items={[
           ["Status", engine?.status ?? health.status ?? "unknown"],
           [

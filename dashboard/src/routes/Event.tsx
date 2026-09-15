@@ -8,7 +8,6 @@
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { KeyValue } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
@@ -18,6 +17,7 @@ import {
   Card,
   CodeBlock,
   CopyButton,
+  DescriptionList,
   EmptyValue,
   RelativeTime,
   Skeleton,
@@ -111,7 +111,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
               <Card.Header icon={<DescriptionGlyph size="sm" />}>
                 <Card.Title>Envelope</Card.Title>
               </Card.Header>
-              <KeyValue
+              <DescriptionList
                 items={[
                   [
                     "Id",
@@ -226,7 +226,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 <Card.Header icon={<TagGlyph size="sm" />}>
                   <Card.Title>Tags</Card.Title>
                 </Card.Header>
-                <KeyValue
+                <DescriptionList
                   items={Object.entries(data.tags).map(([k, v]) => [
                     k,
                     <code key={k} className="inline">

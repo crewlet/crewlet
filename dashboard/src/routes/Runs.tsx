@@ -14,7 +14,6 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { KeyValue } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
@@ -23,6 +22,7 @@ import type { SandboxRun } from "~/protocol/index.ts";
 import {
   Button,
   Card,
+  DescriptionList,
   IconButton,
   RelativeTime,
   Skeleton,
@@ -295,7 +295,7 @@ export function Runs() {
               </span>
             </div>
           )}
-          <KeyValue
+          <DescriptionList
             items={[
               ["Task", detail.task_description || "—"],
               [

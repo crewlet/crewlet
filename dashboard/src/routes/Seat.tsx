@@ -21,7 +21,6 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { KeyValue } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -59,6 +58,7 @@ import {
   Avatar,
   Button,
   Card,
+  DescriptionList,
   EmptyState,
   EmptyValue,
   Meter,
@@ -371,7 +371,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 <Card.Header icon={<PersonGlyph size="sm" />}>
                   <Card.Title>Who this is</Card.Title>
                 </Card.Header>
-                <KeyValue
+                <DescriptionList
                   items={[
                     ["Role", seat.name],
                     [
@@ -456,7 +456,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   seat={seat}
                 >
                   {configRole && (
-                    <KeyValue
+                    <DescriptionList
                       items={[
                         ["Email", configRole.email || <span className="muted">not set</span>],
                         ["Model", <Model key="m" llm={configRole.llm} />],
@@ -1030,7 +1030,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     <Card.Title>Identity on other surfaces</Card.Title>
                   </Card.Header>
                   {Object.keys(configRole.contact ?? {}).length ? (
-                    <KeyValue
+                    <DescriptionList
                       items={Object.entries(configRole.contact ?? {}).map(([k, v]) => [
                         humanize(k),
                         <ConfigValue key={k} value={v} />,
@@ -1256,7 +1256,7 @@ function SeatIntegrations({ role }: { role: ConfigRole }) {
       />
     );
   }
-  return <KeyValue items={items} />;
+  return <DescriptionList items={items} />;
 }
 
 /**
@@ -1282,7 +1282,7 @@ function ToolCredentials({
       {entries.map(([server, vars]) => (
         <div key={server} className="col gap-1">
           <div className="t-label">{server}</div>
-          <KeyValue
+          <DescriptionList
             items={Object.entries(vars).map(([name, value]) => [
               <code key={name} className="inline">
                 {name}
