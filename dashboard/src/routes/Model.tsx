@@ -38,7 +38,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
-import { Button, EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Button, EmptyState, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
@@ -190,7 +190,7 @@ export function ModelActivity() {
         header: "Outcome",
         cell: (r) =>
           r.failed ? (
-            <Badge tone="critical">{r.errorKind || "failed"}</Badge>
+            <Tag variant="danger">{r.errorKind || "failed"}</Tag>
           ) : r.live ? (
             <span className="t-caption">running</span>
           ) : r.decision ? (
@@ -258,9 +258,9 @@ export function ModelActivity() {
         badges={
           <>
             {liveCount > 0 && (
-              <Badge tone="info" dot>
+              <Tag variant="info" dot>
                 {liveCount} running
-              </Badge>
+              </Tag>
             )}
             {/* The count IS the control. It used to be a stat tile that said
                 "4 failed" and did nothing, next to a separate chip that did
@@ -276,7 +276,7 @@ export function ModelActivity() {
                 {failedCount} failed
               </Badge>
             )}
-            <Badge outline>{plural(filtered.length, "phase")} loaded</Badge>
+            <Tag appearance="outline">{plural(filtered.length, "phase")} loaded</Tag>
           </>
         }
       />

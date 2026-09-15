@@ -21,7 +21,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { Avatar, Badge, KeyValue, Stat, StatRow, TabPanel, Tabs } from "~/ui/primitives.tsx";
+import { Avatar, KeyValue, Stat, StatRow, TabPanel, Tabs } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -63,6 +63,7 @@ import {
   Meter,
   RelativeTime,
   Skeleton,
+  Tag,
   useNow,
 } from "@crewlethq/ui";
 import {
@@ -226,15 +227,15 @@ export function SeatScreen({ handle }: { handle: string }) {
         sub={seat.goal || statusLine(agent, { sandbox, seat })}
         badges={
           <>
-            <Badge mono outline>
+            <Tag monospace appearance="outline">
               @{seat.handle}
-            </Badge>
+            </Tag>
             {human ? (
-              <Badge outline>human seat</Badge>
+              <Tag appearance="outline">human seat</Tag>
             ) : (
               <StateBadge agent={agent} sandboxes={sandboxes} />
             )}
-            {seat.unit && <Badge outline>{seat.unit.name}</Badge>}
+            {seat.unit && <Tag appearance="outline">{seat.unit.name}</Tag>}
           </>
         }
         actions={
@@ -532,7 +533,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           <span className="truncate t-caption">{r.goal || r.unit?.name}</span>
                         </span>
                         {r.kind === "human" ? (
-                          <Badge outline>human</Badge>
+                          <Tag appearance="outline">human</Tag>
                         ) : (
                           <StateBadge
                             agent={agents.find((a) => a.role === r.name)}
@@ -677,7 +678,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       {memory.data.diary.map((d, i) => (
                         <div key={d.id ?? i} className="thread-entry">
                           <div className="row gap-1">
-                            <Badge outline>{d.retention || d.scope || "note"}</Badge>
+                            <Tag appearance="outline">{d.retention || d.scope || "note"}</Tag>
                             <span className="spacer" />
                             <span className="t-caption">{fmtDateTime(d.created_at)}</span>
                           </div>
@@ -735,13 +736,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                         sortValue: (e) => e.review_outcome ?? e.outcome ?? "",
                         cell: (e) =>
                           e.review_outcome || e.outcome ? (
-                            <Badge
-                              tone={
-                                (e.review_outcome ?? e.outcome) === "done" ? "positive" : "caution"
+                            <Tag
+                              variant={
+                                (e.review_outcome ?? e.outcome) === "done" ? "success" : "warning"
                               }
                             >
                               {e.review_outcome ?? e.outcome}
-                            </Badge>
+                            </Tag>
                           ) : (
                             <EmptyValue label="Not reported" />
                           ),
@@ -784,7 +785,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                         <div key={s.id ?? s.key ?? i} className="thread-entry">
                           <div className="row gap-1">
                             <strong className="t-body">{s.title}</strong>
-                            {s.version != null && <Badge outline>v{s.version}</Badge>}
+                            {s.version != null && <Tag appearance="outline">v{s.version}</Tag>}
                             <span className="spacer" />
                             {s.updated_at && (
                               <span className="t-caption">{fmtDateTime(s.updated_at)}</span>

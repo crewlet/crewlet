@@ -13,12 +13,12 @@
  */
 
 import { useState } from "react";
-import { Badge, PhaseTag } from "~/ui/primitives.tsx";
+import { PhaseTag } from "~/ui/primitives.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
-import { Button, RelativeTime, cx, useNow } from "@crewlethq/ui";
+import { Button, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
 import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 export function TurnCard({
@@ -75,16 +75,16 @@ export function TurnCard({
             rather than hunt a row — and a source is exactly the kind of thing
             somebody scans down. */}
         {trigger?.integration && (
-          <Badge outline mono title="where this turn's trigger came from">
+          <Tag appearance="outline" monospace title="where this turn's trigger came from">
             {trigger.integration}
-          </Badge>
+          </Tag>
         )}
         {group.live && (
-          <Badge tone="info" dot>
+          <Tag variant="info" dot>
             running
-          </Badge>
+          </Tag>
         )}
-        {group.failed && <Badge tone="critical">failed</Badge>}
+        {group.failed && <Tag variant="danger">failed</Tag>}
         <span className="phase-meta t-num" title="tokens across every phase of this turn">
           {group.totalTokens ? fmtCount(group.totalTokens) : "—"}
         </span>

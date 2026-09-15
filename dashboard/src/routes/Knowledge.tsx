@@ -17,7 +17,7 @@ import { useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, SearchInput } from "~/ui/primitives.tsx";
+import { SearchInput } from "~/ui/primitives.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -32,7 +32,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, EmptyState, Skeleton } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -50,7 +50,7 @@ export function Knowledge() {
       <ScreenHead
         title="Knowledge"
         sub="The company knowledge base, searched live the way an agent searches it — there is no local copy, so what you see here is what the backend holds right now."
-        badges={data?.backend ? <Badge outline>{data.backend}</Badge> : undefined}
+        badges={data?.backend ? <Tag appearance="outline">{data.backend}</Tag> : undefined}
       />
 
       <form
@@ -170,7 +170,7 @@ export function Knowledge() {
                     {hit.title} <OpenInNewGlyph size="xs" style={{ display: "inline" }} />
                   </a>
                   <div className="row gap-1">
-                    {hit.container && <Badge outline>{hit.container}</Badge>}
+                    {hit.container && <Tag appearance="outline">{hit.container}</Tag>}
                     {hit.updated_at && (
                       <span className="t-caption">updated {fmtDateTime(hit.updated_at)}</span>
                     )}

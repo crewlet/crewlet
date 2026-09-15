@@ -19,11 +19,11 @@
  */
 
 import { useRef } from "react";
-import { Badge, KeyValue } from "~/ui/primitives.tsx";
+import { KeyValue } from "~/ui/primitives.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { Button, EmptyValue, Modal, RelativeTime, useNow } from "@crewlethq/ui";
+import { Button, EmptyValue, Modal, RelativeTime, Tag, useNow } from "@crewlethq/ui";
 import {
   CloseGlyph,
   InfoGlyph,
@@ -62,13 +62,13 @@ export function EnginePanel({
       onClose={onClose}
     >
       <div className="row">
-        <Badge tone={connected ? "positive" : authRejected ? "critical" : "caution"} dot>
+        <Tag variant={connected ? "success" : authRejected ? "danger" : "warning"} dot>
           {connected ? "connected" : authRejected ? "refused" : "unreachable"}
-        </Badge>
-        {health.shutting_down && <Badge tone="caution">draining</Badge>}
-        {engine?.configured === false && <Badge tone="critical">no active config</Badge>}
+        </Tag>
+        {health.shutting_down && <Tag variant="warning">draining</Tag>}
+        {engine?.configured === false && <Tag variant="danger">no active config</Tag>}
         {engine?.posture && engine.posture !== "serve" && (
-          <Badge tone="caution">posture: {engine.posture}</Badge>
+          <Tag variant="warning">posture: {engine.posture}</Tag>
         )}
       </div>
 

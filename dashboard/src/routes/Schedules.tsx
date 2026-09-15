@@ -4,20 +4,21 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
-import { Card, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyValue, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import type { Tone } from "@crewlethq/ui";
 import { CalendarClockGlyph, ErrorGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
-const OUTCOME_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
-  fired: "positive",
-  ok: "positive",
-  skipped: "caution",
-  missed: "caution",
-  failed: "critical",
-  error: "critical",
+const OUTCOME_TONE: Record<string, Tone> = {
+  fired: "success",
+  ok: "success",
+  skipped: "warning",
+  missed: "warning",
+  failed: "danger",
+  error: "danger",
 };
 
 export function Schedules() {
@@ -35,7 +36,7 @@ export function Schedules() {
       <ScreenHead
         title="Schedules"
         sub="Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up, and a run is capped on wall clock."
-        badges={<Badge outline>{plural(schedules.length, "schedule")} defined</Badge>}
+        badges={<Tag appearance="outline">{plural(schedules.length, "schedule")} defined</Tag>}
       />
 
       <Card padding="none">
@@ -55,7 +56,7 @@ export function Schedules() {
           <Stat
             icon={ErrorGlyph}
             label="Recent failures"
-            value={runs.filter((r) => OUTCOME_TONE[r.outcome] === "critical").length}
+            value={runs.filter((r) => OUTCOME_TONE[r.outcome] === "danger").length}
             sub={`in the last ${runs.length} recorded runs`}
           />
         </StatRow>
@@ -100,7 +101,7 @@ export function Schedules() {
                   s.scope === "role" ? (
                     <SeatChip name={s.scope_name} handle={s.scope_name} />
                   ) : (
-                    <Badge outline>{s.scope_name}</Badge>
+                    <Tag appearance="outline">{s.scope_name}</Tag>
                   ),
               },
               {
@@ -144,9 +145,9 @@ export function Schedules() {
                     <span className="row gap-1">
                       <RelativeTime className="t-caption" value={s.last_run} now={now} />
                       {s.last_outcome && (
-                        <Badge tone={OUTCOME_TONE[s.last_outcome] ?? "neutral"}>
+                        <Tag variant={OUTCOME_TONE[s.last_outcome] ?? "neutral"}>
                           {s.last_outcome}
-                        </Badge>
+                        </Tag>
                       )}
                     </span>
                   ) : (
@@ -174,7 +175,7 @@ export function Schedules() {
               title: "No runs recorded",
               hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
             }}
-            isFailed={(r) => OUTCOME_TONE[r.outcome] === "critical"}
+            isFailed={(r) => OUTCOME_TONE[r.outcome] === "danger"}
             columns={[
               {
                 key: "fired",
@@ -188,14 +189,14 @@ export function Schedules() {
                 key: "scope",
                 header: "Scope",
                 shrink: true,
-                cell: (r) => <Badge outline>{r.scope_name}</Badge>,
+                cell: (r) => <Tag appearance="outline">{r.scope_name}</Tag>,
               },
               {
                 key: "outcome",
                 header: "Outcome",
                 shrink: true,
                 sortValue: (r) => r.outcome,
-                cell: (r) => <Badge tone={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Badge>,
+                cell: (r) => <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>,
               },
               {
                 key: "detail",

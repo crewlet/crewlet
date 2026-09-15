@@ -51,7 +51,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Badge, Disclosure, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Disclosure, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -90,7 +90,7 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, CodeBlock, CopyButton, Skeleton, cx } from "@crewlethq/ui";
+import { Button, Card, CodeBlock, CopyButton, Skeleton, Tag, cx } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -180,9 +180,9 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
                   header. The integration is the one thing the sentence does
                   not reliably carry. */}
               {trigger?.integration && (
-                <Badge outline mono title="where this turn's trigger came from">
+                <Tag appearance="outline" monospace title="where this turn's trigger came from">
                   {trigger.integration}
-                </Badge>
+                </Tag>
               )}
               <span className="spacer" />
               {triggerId && (
@@ -521,17 +521,17 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         sub={<code className="inline">{turnId}</code>}
         badges={
           <>
-            {role && <Badge outline>{role}</Badge>}
-            <Badge outline>{own.length} phases</Badge>
+            {role && <Tag appearance="outline">{role}</Tag>}
+            <Tag appearance="outline">{own.length} phases</Tag>
             {/* FROM WHAT ACTUALLY WENT WRONG, not from the phase records
                 alone. `phases.some(p => p.failed)` misses every turn the
                 engine killed BETWEEN phases — a refused charge, an exhausted
                 chain, a guard that fired — which are precisely the turns with
                 no failed phase record to find. */}
             {trouble > 0 && (
-              <Badge tone="critical" icon={ErrorGlyph}>
+              <Tag variant="danger" leadingIcon={<ErrorGlyph />}>
                 {trouble === 1 ? "1 problem" : `${trouble} problems`}
-              </Badge>
+              </Tag>
             )}
             {/* A HEADER BADGE, not a banner at the foot of the page. "This
                 turn was clean" is a property of the turn, so it belongs where
@@ -541,13 +541,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 weight, after everything, reading as an announcement about
                 nothing. */}
             {clean && (
-              <Badge
-                tone="positive"
-                icon={CheckGlyph}
+              <Tag
+                variant="success"
+                leadingIcon={<CheckGlyph />}
                 title="no guard fired, no provider fell through, no call was refused"
               >
                 nothing went wrong
-              </Badge>
+              </Tag>
             )}
           </>
         }

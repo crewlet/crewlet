@@ -9,7 +9,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Badge } from "~/ui/primitives.tsx";
+import { Avatar } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -24,7 +24,7 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { Button, RelativeTime, cx, formatRelative, useNow } from "@crewlethq/ui";
+import { Button, RelativeTime, Tag, cx, formatRelative, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   ErrorGlyph,
@@ -83,9 +83,9 @@ export function StateBadge({
 }) {
   const state = runState(agent, sandboxes);
   return (
-    <Badge tone={toneOf(state)} dot>
+    <Tag variant={toneOf(state)} dot>
       {stateLabel(state)}
-    </Badge>
+    </Tag>
   );
 }
 
@@ -111,7 +111,7 @@ export function SeatCard({
           {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
         </div>
         {seat.kind === "human" ? (
-          <Badge outline>human</Badge>
+          <Tag appearance="outline">human</Tag>
         ) : (
           <StateBadge agent={agent} sandboxes={sandboxes} />
         )}
@@ -119,7 +119,7 @@ export function SeatCard({
       <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
       {call?.in_progress && (
         <div className="row gap-1">
-          <Badge tone="info">{call.phase}</Badge>
+          <Tag variant="info">{call.phase}</Tag>
           <span className="t-caption t-num">
             round {call.round_num >= 0 ? call.round_num + 1 : "—"}
           </span>

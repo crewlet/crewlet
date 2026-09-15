@@ -11,12 +11,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
-import { Badge, Chip, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Chip, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
-import { Card, EmptyState } from "@crewlethq/ui";
+import { Card, EmptyState, Tag } from "@crewlethq/ui";
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -55,7 +55,7 @@ export function Tools() {
       <ScreenHead
         title="Tools"
         sub="What the models can actually call. A planner sees only the server names; the tool names below are discovered and activated during a turn."
-        badges={<Badge outline>{plural(tools.length, "tool")} registered</Badge>}
+        badges={<Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>}
       />
 
       <Card padding="none">
@@ -130,7 +130,7 @@ export function Tools() {
                   const { kind, detail } = originOf(t.source);
                   return (
                     <span className="row gap-1">
-                      <Badge outline>{kind}</Badge>
+                      <Tag appearance="outline">{kind}</Tag>
                       {detail && <span className="t-caption mono">{detail}</span>}
                     </span>
                   );

@@ -40,7 +40,6 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge } from "~/ui/primitives.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -55,7 +54,7 @@ import {
   LinkGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Modal, useToast } from "@crewlethq/ui";
+import { Button, Modal, Tag, useToast } from "@crewlethq/ui";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -975,9 +974,9 @@ export function SetupDialog({
                 {/* SOLID WHEN IT IS DONE. Outlined, the one row a reader
                     scans for (the finished one) was the quietest thing on the
                     card. */}
-                <Badge tone={done ? "positive" : "caution"} outline={!done}>
+                <Tag variant={done ? "success" : "warning"} appearance="outline">
                   {done ? "Configured" : "Needs setup"}
-                </Badge>
+                </Tag>
               </summary>
               <div className="int-seat-fields">
                 {/* NO DELIVERY-ADDRESS BANNER. This agent's route is IN the

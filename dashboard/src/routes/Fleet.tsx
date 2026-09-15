@@ -9,12 +9,13 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
-import { Card, EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyState, EmptyValue, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import type { Tone } from "@crewlethq/ui";
 import {
   DnsGlyph,
   ErrorGlyph,
@@ -33,10 +34,10 @@ import {
  */
 const POLL_MS = 15_000;
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
-  ok: "positive",
-  degraded: "caution",
-  error: "critical",
+const STATUS_TONE: Record<string, Tone> = {
+  ok: "success",
+  degraded: "warning",
+  error: "danger",
 };
 
 export function Fleet() {
@@ -56,8 +57,8 @@ export function Fleet() {
         sub="Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that cannot reach the configuration it should be running releases its seats rather than serving stale work."
         badges={
           <>
-            <Badge outline>{plural(nodes.length, "node")}</Badge>
-            {data?.this_node && <Badge tone="accent">you are on {data.this_node}</Badge>}
+            <Tag appearance="outline">{plural(nodes.length, "node")}</Tag>
+            {data?.this_node && <Tag variant="brand">you are on {data.this_node}</Tag>}
           </>
         }
       />
@@ -144,8 +145,8 @@ export function Fleet() {
                 cell: (n) => (
                   <span className="row gap-1">
                     <code className="inline">{n.id}</code>
-                    {n.id === data?.this_node && <Badge tone="accent">this one</Badge>}
-                    {n.draining && <Badge tone="caution">draining</Badge>}
+                    {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
+                    {n.draining && <Tag variant="warning">draining</Tag>}
                   </span>
                 ),
               },
@@ -156,9 +157,9 @@ export function Fleet() {
                 cell: (n) => (
                   <span className="row wrap gap-1">
                     {n.roles.map((r) => (
-                      <Badge key={r} outline>
+                      <Tag key={r} appearance="outline">
                         {r}
-                      </Badge>
+                      </Tag>
                     ))}
                   </span>
                 ),
@@ -186,7 +187,7 @@ export function Fleet() {
                 sortValue: (n) => n.posture ?? "",
                 cell: (n) =>
                   n.posture ? (
-                    <Badge tone={n.posture === "serve" ? "positive" : "caution"}>{n.posture}</Badge>
+                    <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
                   ) : (
                     <EmptyValue label="Not reported" />
                   ),
@@ -198,9 +199,9 @@ export function Fleet() {
                 sortValue: (n) => n.config_status ?? "",
                 cell: (n) => (
                   <span className="row gap-1">
-                    <Badge tone={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
+                    <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
                       {n.config_status || "unknown"}
-                    </Badge>
+                    </Tag>
                     {data && (n.config_epoch ?? 0) < data.target_epoch && (
                       <span
                         className="t-caption"

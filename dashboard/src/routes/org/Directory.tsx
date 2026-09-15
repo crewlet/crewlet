@@ -13,8 +13,7 @@ import { SeatChip, StateBadge } from "~/components/common.tsx";
 import { statusLine, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Badge } from "~/ui/primitives.tsx";
-import { Card } from "@crewlethq/ui";
+import { Card, Tag } from "@crewlethq/ui";
 
 export function Directory({ index }: { index: OrgIndex }) {
   const agents = useAgents();
@@ -84,7 +83,7 @@ export function Directory({ index }: { index: OrgIndex }) {
             sortValue: (s) => (s.kind === "human" ? "human" : (seatFor(s)?.state ?? "offline")),
             cell: (s) =>
               s.kind === "human" ? (
-                <Badge outline>human</Badge>
+                <Tag appearance="outline">human</Tag>
               ) : (
                 <StateBadge agent={seatFor(s)} sandboxes={sandboxes} />
               ),

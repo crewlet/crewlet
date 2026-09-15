@@ -1,3 +1,4 @@
+import type { Tone } from "@crewlethq/ui";
 /**
  * What a seat IS, and what it is doing.
  *
@@ -476,16 +477,16 @@ export function seatTone(agent: AgentRow | null | undefined, sandboxes: SandboxE
   return "quiet";
 }
 
-export function toneOf(state: RunState): "positive" | "caution" | "critical" | "info" | "neutral" {
+export function toneOf(state: RunState): Tone {
   switch (state) {
     case "working":
     case "awaiting_sandbox":
       return "info";
     case "idle":
-      return "positive";
+      return "success";
     case "afk":
     case "failed":
-      return "critical";
+      return "danger";
     default:
       return "neutral";
   }

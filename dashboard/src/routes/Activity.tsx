@@ -24,12 +24,12 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Badge, Chip, SearchInput } from "~/ui/primitives.tsx";
+import { Chip, SearchInput } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { CloseGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Card, Skeleton } from "@crewlethq/ui";
+import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -138,7 +138,7 @@ export function Activity() {
       <ScreenHead
         title="Event log"
         sub="Everything the engine published, live and then paged out of the store. This tab holds the last 400 in memory; older rows are fetched."
-        badges={<Badge outline>{plural(rows.length, "event")} shown</Badge>}
+        badges={<Tag appearance="outline">{plural(rows.length, "event")} shown</Tag>}
         actions={
           filtered ? (
             <Button

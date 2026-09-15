@@ -24,6 +24,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView } from "./CanvasView.tsx";
+import { Tag } from "@crewlethq/ui";
+import { isDrawnAs } from "~/testing.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
@@ -217,7 +219,7 @@ describe("the tree", () => {
     expect(item("Scout").getAttribute("aria-level")).toBe("2");
     const mark = within(item("Scout")).getByText("No unit named Ghost");
     // The engine's own sentence, carried on the mark it explains.
-    expect(mark.closest(".badge")!.getAttribute("title")).toBe(
+    expect(mark.closest("[title]")!.getAttribute("title")).toBe(
       "Seat Scout names unit Ghost, which is no unit.",
     );
     expect(within(item("SRE")).getByText("Datadog fallback")).toBeDefined();
@@ -247,7 +249,16 @@ describe("the tree", () => {
     });
     const { probe } = mount(state);
     const badge = within(item("Account Executive")).getByText("1 problem");
-    expect(badge.closest(".badge")!.classList.contains("critical")).toBe(true);
+    // The claim is the VARIANT the builder passes, so the element is compared
+    // against the one uilet draws for it rather than against a class name.
+    expect(
+      isDrawnAs(
+        badge.closest(".bnode-count")!.firstElementChild!,
+        Tag,
+        { variant: "danger", children: "1 problem" },
+        { children: "1 problem" },
+      ),
+    ).toBe(true);
     expect(within(item("Sales")).getByText("1 problem")).toBeDefined();
     expect(within(item("Engineering")).queryByText(/problem/)).toBeNull();
     // IN THE FIRST LINE'S SLOT, which stays when a check is out and the count
@@ -290,7 +301,7 @@ describe("the tree", () => {
     });
     const { probe } = mount(state);
     const mark = within(item("Sales")).getByText("Lead names no seat");
-    expect(mark.closest(".badge")!.getAttribute("title")).toBe(
+    expect(mark.closest("[title]")!.getAttribute("title")).toBe(
       "Unit Sales names lead Ghost, which is no seat.",
     );
     expect(within(item("Engineering")).queryByText("Lead names no seat")).toBeNull();

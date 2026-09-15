@@ -14,13 +14,13 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Segmented, Stat, StatRow, TabPanel } from "~/ui/primitives.tsx";
+import { Segmented, Stat, StatRow, TabPanel } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
-import { Card, EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyValue, Meter, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   AutorenewGlyph,
@@ -95,7 +95,7 @@ export function Spend() {
       <ScreenHead
         title="Spend & budgets"
         sub="What the company's model calls actually cost, and how much headroom the budget gate has left."
-        badges={tokens ? <Badge outline>{tokens.since_days}-day window</Badge> : undefined}
+        badges={tokens ? <Tag appearance="outline">{tokens.since_days}-day window</Tag> : undefined}
         actions={
           <Segmented
             ariaLabel="Window"
@@ -161,7 +161,7 @@ export function Spend() {
             <Card.Header
               icon={<TargetGlyph size="sm" />}
               subtitle="process-lifetime, not the window above"
-              actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
+              actions={org.refused_at ? <Tag variant="danger">refusing charges</Tag> : undefined}
             >
               <Card.Title>Company budget meter</Card.Title>
             </Card.Header>

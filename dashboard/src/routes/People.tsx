@@ -17,12 +17,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Segmented, SearchInput, TabPanel } from "~/ui/primitives.tsx";
+import { Segmented, SearchInput, TabPanel } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { GroupGlyph } from "@crewlethq/icons/glyphs";
-import { EmptyState } from "@crewlethq/ui";
+import { EmptyState, Tag } from "@crewlethq/ui";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -107,9 +107,9 @@ export function People() {
         sub="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
         badges={
           <>
-            <Badge outline>{plural(agentSeats, "agent seat")}</Badge>
+            <Tag appearance="outline">{plural(agentSeats, "agent seat")}</Tag>
             {index.seats.length - agentSeats > 0 && (
-              <Badge outline>{plural(index.seats.length - agentSeats, "human")}</Badge>
+              <Tag appearance="outline">{plural(index.seats.length - agentSeats, "human")}</Tag>
             )}
           </>
         }

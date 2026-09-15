@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
@@ -40,6 +40,7 @@ import {
   IconButton,
   RelativeTime,
   Skeleton,
+  Tag,
   useNow,
   useToast,
 } from "@crewlethq/ui";
@@ -162,7 +163,7 @@ export function Secrets() {
       <ScreenHead
         title="Secrets"
         sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
-        badges={<Badge outline>{plural(list.length, "credential")} held</Badge>}
+        badges={<Tag appearance="outline">{plural(list.length, "credential")} held</Tag>}
         actions={
           <Button
             leadingIcon={<AddGlyph />}
@@ -253,7 +254,7 @@ export function Secrets() {
                 header: "Source",
                 shrink: true,
                 sortValue: (s) => s.source,
-                cell: (s) => <Badge outline>{s.source}</Badge>,
+                cell: (s) => <Tag appearance="outline">{s.source}</Tag>,
               },
               {
                 key: "key",
@@ -348,8 +349,8 @@ function Readers({ paths }: { paths: string[] | null }) {
     return <EmptyValue label="No field reads it" />;
   }
   return (
-    <Badge outline title={paths.join("\n")}>
+    <Tag appearance="outline" title={paths.join("\n")}>
       {plural(paths.length, "field")}
-    </Badge>
+    </Tag>
   );
 }

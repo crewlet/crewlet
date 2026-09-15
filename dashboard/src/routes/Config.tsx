@@ -24,7 +24,7 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { Badge, Segmented, TabPanel } from "~/ui/primitives.tsx";
+import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
@@ -38,6 +38,7 @@ import {
   EmptyValue,
   RelativeTime,
   Skeleton,
+  Tag,
   useNow,
 } from "@crewlethq/ui";
 import {
@@ -202,7 +203,7 @@ export function ConfigScreen() {
                       cell: (r) => (
                         <span className="row gap-1">
                           <code className="inline">{r.revision_id.slice(0, 10)}</code>
-                          {r.is_active && <Badge tone="positive">active</Badge>}
+                          {r.is_active && <Tag variant="success">active</Tag>}
                         </span>
                       ),
                     },

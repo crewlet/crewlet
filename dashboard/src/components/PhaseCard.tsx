@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Disclosure, PhaseTag } from "~/ui/primitives.tsx";
+import { Disclosure, PhaseTag } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -53,7 +53,7 @@ import {
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-import { CodeBlock, RelativeTime, cx, useNow } from "@crewlethq/ui";
+import { CodeBlock, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import {
   ChevronRightGlyph,
@@ -278,14 +278,14 @@ export function PhaseCard({
           </span>
         )}
         {record.worker && (
-          <Badge outline mono title="worker template">
+          <Tag appearance="outline" monospace title="worker template">
             {record.worker}
-          </Badge>
+          </Tag>
         )}
         {!!nested?.length && (
-          <Badge outline title="calls this phase made">
+          <Tag appearance="outline" title="calls this phase made">
             {nested.length} {nested.length === 1 ? "worker" : "workers"}
-          </Badge>
+          </Tag>
         )}
         {showRole && record.role && <span className="t-cell truncate">{record.role}</span>}
 
@@ -294,38 +294,38 @@ export function PhaseCard({
         {/* Everything below is present on BOTH a live and a finished phase, in
             the same order, so the row does not reshape when it completes. */}
         {record.decision && (
-          <Badge tone={record.decision === "self_iterate" ? "caution" : "neutral"}>
+          <Tag variant={record.decision === "self_iterate" ? "warning" : "neutral"}>
             {decisionLabel(record.phase, record.decision)}
-          </Badge>
+          </Tag>
         )}
         {record.exhaustedRounds && (
-          <Badge tone="caution" title="the phase ran out of tool rounds">
+          <Tag variant="warning" title="the phase ran out of tool rounds">
             round cap
-          </Badge>
+          </Tag>
         )}
         {record.emptyAnswerRounds > 0 && (
-          <Badge
-            tone="caution"
+          <Tag
+            variant="warning"
             title="the model answered with nothing — no response and no tool call — and was re-asked"
           >
             {record.emptyAnswerRounds} empty
-          </Badge>
+          </Tag>
         )}
         {record.rescueFired && (
-          <Badge tone="caution" title="the phase did not submit on its first run and was re-asked">
+          <Tag variant="warning" title="the phase did not submit on its first run and was re-asked">
             rescued
-          </Badge>
+          </Tag>
         )}
         {record.backend === "sandbox" && (
-          <Badge tone="info" icon={TerminalGlyph}>
+          <Tag variant="info" leadingIcon={<TerminalGlyph />}>
             {record.codingAgent || "sandbox"}
-          </Badge>
+          </Tag>
         )}
-        {record.failed && <Badge tone="critical">{record.errorKind || "failed"}</Badge>}
+        {record.failed && <Tag variant="danger">{record.errorKind || "failed"}</Tag>}
         {record.live && (
-          <Badge tone={stale === "stalled" ? "critical" : stale ? "caution" : "info"} dot>
+          <Tag variant={stale === "stalled" ? "danger" : stale ? "warning" : "info"} dot>
             {stale === "stalled" ? "no update in 10m" : stale ? "no update in 2m" : "running"}
-          </Badge>
+          </Tag>
         )}
 
         <span className="phase-meta mono">{record.model || "—"}</span>
@@ -486,9 +486,9 @@ export function PhaseCard({
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolsAvailable.map((t) => (
-                        <Badge key={t} mono outline>
+                        <Tag key={t} monospace appearance="outline">
                           {t}
-                        </Badge>
+                        </Tag>
                       ))}
                     </div>
                   </div>
@@ -501,9 +501,9 @@ export function PhaseCard({
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolCatalogue.map((t) => (
-                        <Badge key={t} mono outline>
+                        <Tag key={t} monospace appearance="outline">
                           {t}
-                        </Badge>
+                        </Tag>
                       ))}
                     </div>
                   </div>

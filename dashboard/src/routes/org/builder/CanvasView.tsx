@@ -60,7 +60,7 @@ import {
 } from "react";
 import { plural } from "~/lib/format.ts";
 import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Avatar, Badge } from "~/ui/primitives.tsx";
+import { Avatar } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
   ancestors,
@@ -114,7 +114,7 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
-import { EmptyState, IconButton, Menu, cx, type MenuEntry } from "@crewlethq/ui";
+import { EmptyState, IconButton, Menu, Tag, cx, type MenuEntry } from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.
@@ -452,11 +452,11 @@ function ReportingCard({
           {seat && <ProblemCount api={api} nodeKey={seat.key} />}
         </span>
         <span className="bchart-marks">
-          {item.root && <Badge outline>No manager</Badge>}
+          {item.root && <Tag appearance="outline">No manager</Tag>}
           {item.cycleSize !== undefined && (
-            <Badge tone="caution" icon={CycleGlyph}>
+            <Tag variant="warning" leadingIcon={<CycleGlyph />}>
               {`In a reporting cycle of ${plural(item.cycleSize, "seat")}`}
-            </Badge>
+            </Tag>
           )}
         </span>
       </div>

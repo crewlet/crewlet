@@ -14,13 +14,14 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
-import { Button, Card, IconButton, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Button, Card, IconButton, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import type { Tone } from "@crewlethq/ui";
 import {
   CloseGlyph,
   ErrorGlyph,
@@ -29,12 +30,12 @@ import {
   TerminalGlyph,
 } from "@crewlethq/icons/glyphs";
 
-const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
+const STATUS_TONE: Record<string, Tone> = {
   running: "info",
-  awaiting_input: "caution",
-  succeeded: "positive",
-  completed: "positive",
-  failed: "critical",
+  awaiting_input: "warning",
+  succeeded: "success",
+  completed: "success",
+  failed: "danger",
   cancelled: "neutral",
   reclaimed: "neutral",
 };
@@ -94,12 +95,12 @@ export function Runs() {
         badges={
           <>
             {running > 0 && (
-              <Badge tone="info" dot>
+              <Tag variant="info" dot>
                 {running} running
-              </Badge>
+              </Tag>
             )}
             {waiting > 0 && (
-              <Badge tone="caution">{plural(waiting, "run")} waiting on a person</Badge>
+              <Tag variant="warning">{plural(waiting, "run")} waiting on a person</Tag>
             )}
           </>
         }
@@ -164,9 +165,9 @@ export function Runs() {
                 shrink: true,
                 sortValue: (r) => r.status,
                 cell: (r) => (
-                  <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
+                  <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
                     {r.status.replace(/_/g, " ")}
-                  </Badge>
+                  </Tag>
                 ),
               },
               {
@@ -186,9 +187,9 @@ export function Runs() {
                 shrink: true,
                 sortValue: (r) => r.coding_agent,
                 cell: (r) => (
-                  <Badge outline mono>
+                  <Tag appearance="outline" monospace>
                     {r.coding_agent || "—"}
-                  </Badge>
+                  </Tag>
                 ),
               },
               {
@@ -197,9 +198,9 @@ export function Runs() {
                 shrink: true,
                 sortValue: (r) => r.placement,
                 cell: (r) => (
-                  <Badge outline mono>
+                  <Tag appearance="outline" monospace>
                     {r.placement || "—"}
-                  </Badge>
+                  </Tag>
                 ),
               },
               {

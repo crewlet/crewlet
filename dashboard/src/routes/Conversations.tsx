@@ -19,13 +19,13 @@
 import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
-import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { tsKey } from "~/lib/format.ts";
-import { Card, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
 import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 
 export function Conversations() {
@@ -111,9 +111,9 @@ export function Conversations() {
                   shrink: true,
                   sortValue: (c) => (c.closed_at ? "closed" : "open"),
                   cell: (c) => (
-                    <Badge tone={c.closed_at ? "neutral" : "info"} dot>
+                    <Tag variant={c.closed_at ? "neutral" : "info"} dot>
                       {c.closed_at ? "closed" : "open"}
-                    </Badge>
+                    </Tag>
                   ),
                 },
                 {

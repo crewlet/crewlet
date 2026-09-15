@@ -12,7 +12,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -24,7 +24,7 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, Skeleton } from "@crewlethq/ui";
+import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -91,8 +91,8 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         sub={<code className="inline">{traceId}</code>}
         badges={
           <>
-            <Badge outline>{events.length} events</Badge>
-            {truncated && <Badge tone="caution">oldest {events.length} shown</Badge>}
+            <Tag appearance="outline">{events.length} events</Tag>
+            {truncated && <Tag variant="warning">oldest {events.length} shown</Tag>}
           </>
         }
         actions={

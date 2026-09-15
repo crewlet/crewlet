@@ -25,7 +25,7 @@
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge } from "~/ui/primitives.tsx";
+import { Avatar } from "~/ui/primitives.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,9 +48,8 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, ButtonLink, EmptyState, Skeleton } from "@crewlethq/ui";
-
-type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
+import { Button, ButtonLink, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import type { Tone } from "@crewlethq/ui";
 
 /**
  * What agents need in order to work, in the order the console asks about
@@ -193,11 +192,11 @@ export const IN_FLIGHT = new Set(["awaiting_admin", "provisioning", "activating"
 export function phaseTone(phase: string): Tone {
   switch (phase) {
     case "ready":
-      return "positive";
+      return "success";
     case "degraded":
-      return "caution";
+      return "warning";
     case "unconfigured":
-      return "critical";
+      return "danger";
     // IN PROGRESS IS NOT NEUTRAL. Every one of these is an integration
     // that does not work YET — setting up agents, waiting for the provider,
     // waiting for a person, being taken away — and neutral is the tone this
@@ -208,7 +207,7 @@ export function phaseTone(phase: string): Tone {
     case "provisioning":
     case "activating":
     case "disconnecting":
-      return "caution";
+      return "warning";
     default:
       // A phase a newer node wrote. Rendered as-is in a neutral tone
       // rather than guessed at: claiming a surface is fine on the
@@ -399,7 +398,7 @@ export function rollUp(
     // engine is still working through, where telling a person to act would be
     // asking them to interrupt it.
     if (ingress && phase === "ready") {
-      return { tag: "Action needed", tone: "caution", outline: false };
+      return { tag: "Action needed", tone: "warning", outline: false };
     }
     return {
       // The ENGINE's word for the phase, not this screen's. `phase_label`
@@ -442,8 +441,8 @@ export function rollUp(
   // anything else is.
   if (tools.length > 0 && !tools.some((t) => t.can_provision)) {
     return ingress
-      ? { tag: "Action needed", tone: "caution", outline: false }
-      : { tag: "Connected", tone: "positive", outline: false };
+      ? { tag: "Action needed", tone: "warning", outline: false }
+      : { tag: "Connected", tone: "success", outline: false };
   }
   // CONFIGURED, AND THE LOOP HAS NOT REPORTED YET. That is a window of one
   // reconcile interval after connecting, not a resting state, so the word is
@@ -458,7 +457,7 @@ export function rollUp(
     tag: "Connecting",
     // Amber for the same reason every in-progress phase is: this is the
     // window before the loop's first report, and it is not yet working.
-    tone: "caution",
+    tone: "warning",
     outline: true,
     busy: true,
   };
@@ -818,33 +817,33 @@ function SurfaceRow({
 
       <div className="int-row-badges">
         {row.secret_usable === false && (
-          <Badge
-            tone="caution"
-            outline
+          <Tag
+            variant="warning"
+            appearance="outline"
             title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
           >
             secret unresolved
-          </Badge>
+          </Tag>
         )}
         {row.routes === false && (
-          <Badge
-            tone="caution"
-            outline
+          <Tag
+            variant="warning"
+            appearance="outline"
             title="deliveries are verified and stored, and no parser turns them into work for a seat"
           >
             routes nowhere
-          </Badge>
+          </Tag>
         )}
         {row.endpoint_current === false && (
-          <Badge
-            tone="caution"
-            outline
+          <Tag
+            variant="warning"
+            appearance="outline"
             title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
           >
             address moved
-          </Badge>
+          </Tag>
         )}
-        {row.enabled === false && <Badge outline>paused</Badge>}
+        {row.enabled === false && <Tag appearance="outline">paused</Tag>}
       </div>
       {/* BOTH ADDRESSES, because the fix is to replace one with the other
           at the third-party app and a reader cannot do that from a badge.
@@ -1259,9 +1258,9 @@ export function EntryRow({
   const actions = (
     <>
       {state.tag !== "" && (
-        <Badge tone={state.tone} outline={state.outline}>
+        <Tag variant={state.tone} appearance="outline">
           {state.tag}
-        </Badge>
+        </Tag>
       )}
       {action && onConnect && (
         <Button size="small" variant="primary" onClick={() => onConnect()}>
@@ -1524,15 +1523,15 @@ function SeatBadge({ satisfied, finding }: { satisfied: boolean; finding?: Recon
     // A red agent under a surface saying "nothing has to be done" would be
     // the same contradiction in the other direction.
     return (
-      <Badge tone="caution" outline>
+      <Tag variant="warning" appearance="outline">
         not ready
-      </Badge>
+      </Tag>
     );
   }
   return (
-    <Badge tone={satisfied ? "positive" : "neutral"} outline={!satisfied}>
+    <Tag variant={satisfied ? "success" : "neutral"} appearance="outline">
       {satisfied ? "ready" : "not set up"}
-    </Badge>
+    </Tag>
   );
 }
 
@@ -1695,9 +1694,9 @@ export function Integrations() {
         title="Integrations"
         sub="The tools the company works in. Each agent acts as itself on these, with its own credentials."
         badges={
-          <Badge outline>
+          <Tag appearance="outline">
             {configured.length} of {CATALOG.length} configured
-          </Badge>
+          </Tag>
         }
       />
 

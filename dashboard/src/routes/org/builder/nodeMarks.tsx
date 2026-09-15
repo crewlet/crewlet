@@ -21,11 +21,11 @@
 
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
-import { Badge } from "~/ui/primitives.tsx";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
 import { ErrorGlyph, LinkGlyph, NotificationsGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { Tag } from "@crewlethq/ui";
 
 /** "Agent seat" or "Human seat". */
 export function seatKindLabel(view: Pick<SeatView, "kind">): string {
@@ -59,9 +59,9 @@ export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeK
   return (
     <span className="bnode-count">
       {count > 0 && (
-        <Badge tone="critical" icon={ErrorGlyph}>
+        <Tag variant="danger" leadingIcon={<ErrorGlyph />}>
           {plural(count, "problem")}
-        </Badge>
+        </Tag>
       )}
     </span>
   );
@@ -95,9 +95,9 @@ export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
 export function UnitMarks({ view }: { view: UnitView }) {
   if (view.danglingLead === null) return null;
   return (
-    <Badge tone="caution" icon={WarningGlyph} title={view.danglingNote}>
+    <Tag variant="warning" leadingIcon={<WarningGlyph />} title={view.danglingNote}>
       Lead names no seat
-    </Badge>
+    </Tag>
   );
 }
 
@@ -108,19 +108,27 @@ export function SeatMarks({ view }: { view: SeatView }) {
   return (
     <>
       {view.placedByRef && (
-        <Badge outline icon={LinkGlyph} title="Declared at the root with a unit reference">
+        <Tag
+          appearance="outline"
+          leadingIcon={<LinkGlyph />}
+          title="Declared at the root with a unit reference"
+        >
           Placed by unit reference
-        </Badge>
+        </Tag>
       )}
       {dangling && (
-        <Badge tone="caution" icon={WarningGlyph} title={view.danglingNote}>
+        <Tag variant="warning" leadingIcon={<WarningGlyph />} title={view.danglingNote}>
           {`No unit named ${dangling}`}
-        </Badge>
+        </Tag>
       )}
       {view.datadogFallback && (
-        <Badge outline icon={NotificationsGlyph} title="Alerts that name no seat wake this seat">
+        <Tag
+          appearance="outline"
+          leadingIcon={<NotificationsGlyph />}
+          title="Alerts that name no seat wake this seat"
+        >
           Datadog fallback
-        </Badge>
+        </Tag>
       )}
     </>
   );

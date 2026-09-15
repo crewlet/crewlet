@@ -26,7 +26,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
@@ -42,7 +42,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { Button, Card, EmptyState, Meter, useNow } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Meter, Tag, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -169,8 +169,8 @@ export function Overview() {
         }
         badges={
           <>
-            <Badge outline>{plural(seatCount, "agent seat")}</Badge>
-            {humanCount > 0 && <Badge outline>{plural(humanCount, "human")}</Badge>}
+            <Tag appearance="outline">{plural(seatCount, "agent seat")}</Tag>
+            {humanCount > 0 && <Tag appearance="outline">{plural(humanCount, "human")}</Tag>}
           </>
         }
         actions={

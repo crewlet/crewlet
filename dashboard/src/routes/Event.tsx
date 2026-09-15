@@ -8,7 +8,7 @@
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { Badge, KeyValue } from "~/ui/primitives.tsx";
+import { KeyValue } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
@@ -21,6 +21,7 @@ import {
   EmptyValue,
   RelativeTime,
   Skeleton,
+  Tag,
   useNow,
 } from "@crewlethq/ui";
 import {
@@ -50,8 +51,8 @@ export function EventScreen({ eventId }: { eventId: string }) {
         badges={
           data ? (
             <>
-              <Badge outline>{humanize(data.category) || "system"}</Badge>
-              {data.source && <Badge outline>{data.source}</Badge>}
+              <Tag appearance="outline">{humanize(data.category) || "system"}</Tag>
+              {data.source && <Tag appearance="outline">{data.source}</Tag>}
             </>
           ) : undefined
         }

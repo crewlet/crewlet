@@ -27,9 +27,9 @@ import { seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
-import { Avatar, Badge } from "~/ui/primitives.tsx";
+import { Avatar } from "~/ui/primitives.tsx";
 import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
-import { ButtonLink, Callout, Card, EmptyState, cx } from "@crewlethq/ui";
+import { ButtonLink, Callout, Card, EmptyState, Tag, cx } from "@crewlethq/ui";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -150,20 +150,20 @@ function UnitBlock({ unit, live, selection }: { unit: Unit; live: Live; selectio
         >
           {unit.name}
         </button>
-        <Badge outline>{unit.type || "unit"}</Badge>
+        <Tag appearance="outline">{unit.type || "unit"}</Tag>
         {/* A unit with no lead of its own inherits the nearest ancestor's, and
             the chart says which it is: an inherited lead behaves identically
             to an explicit one everywhere in the engine, and hiding the
             difference is how an operator comes to think a unit is unmanaged. */}
         {unit.lead && (
-          <Badge
-            tone="neutral"
-            icon={CrownGlyph}
+          <Tag
+            variant="neutral"
+            leadingIcon={<CrownGlyph />}
             title={unit.leadInherited ? "Inherited from a parent unit" : "This unit's own lead"}
           >
             {unit.lead.name}
             {unit.leadInherited && <span className="muted"> (inherited)</span>}
-          </Badge>
+          </Tag>
         )}
         <span className="spacer" />
         <span className="t-caption">{plural(unit.seats.length, "seat")}</span>
@@ -203,7 +203,7 @@ function SeatNode({ seat, live, selected }: { seat: Seat; live: Live; selected: 
         {seat.placedByRef && <span className="truncate t-caption">Placed by unit reference</span>}
       </span>
       {human ? (
-        <Badge outline>human</Badge>
+        <Tag appearance="outline">human</Tag>
       ) : (
         <StateBadge
           agent={live.agents.find((a) => a.role === seat.name)}

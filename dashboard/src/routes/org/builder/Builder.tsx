@@ -54,7 +54,8 @@ import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hook
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Badge, Segmented, TabPanel, type Tone } from "~/ui/primitives.tsx";
+import { Segmented, TabPanel } from "~/ui/primitives.tsx";
+import type { Tone } from "@crewlethq/ui";
 import {
   BuilderContext,
   keepsTheLens,
@@ -137,6 +138,7 @@ import {
   Menu,
   Modal,
   Skeleton,
+  Tag,
   ToastProvider,
   cx,
   isComposing,
@@ -289,19 +291,19 @@ function statusLook(status: CheckStatus, problems: number, tokenStored: boolean)
     case "checking":
       return { label: "Checking", tone: "neutral", icon: RefreshGlyph };
     case "clean":
-      return { label: "No problems", tone: "positive", icon: CheckGlyph };
+      return { label: "No problems", tone: "success", icon: CheckGlyph };
     case "problems":
-      return { label: plural(problems, "problem"), tone: "critical", icon: ErrorGlyph };
+      return { label: plural(problems, "problem"), tone: "danger", icon: ErrorGlyph };
     case "unreachable":
-      return { label: "Could not reach the engine to check", tone: "caution", icon: CableGlyph };
+      return { label: "Could not reach the engine to check", tone: "warning", icon: CableGlyph };
     case "readonly":
       return { label: "Read-only here", tone: "neutral", icon: VisibilityGlyph };
     case "conflict":
-      return { label: "The configuration changed", tone: "caution", icon: WarningGlyph };
+      return { label: "The configuration changed", tone: "warning", icon: WarningGlyph };
     case "guarded":
       return {
         label: tokenStored ? "The engine refused the token" : "Needs an operator token",
-        tone: "critical",
+        tone: "danger",
         icon: KeyGlyph,
       };
   }
@@ -1272,9 +1274,9 @@ function Lens({
             />
             <span className="spacer" />
             <FullscreenToggle container={container} />
-            <Badge tone={look.tone} icon={look.icon}>
+            <Tag variant={look.tone} leadingIcon={<look.icon />}>
               {look.label}
-            </Badge>
+            </Tag>
             <span className="org-builder-wide">
               <Button
                 size="small"
