@@ -7,6 +7,25 @@
  * that reconnects whenever somebody refactors a provider.
  */
 
+// The design system, in cascade order: the variables, then the themes that
+// repaint them, then density, the faces and the document baseline. themes.css
+// and tokens.css share the :root selector and neither adds specificity, so
+// the later import is the one that paints.
+//
+// FIRST IN THE FILE, ABOVE EVERY MODULE IMPORT. An import statement is
+// evaluated in source order, and the module graph under `./app/App.tsx`
+// carries a side-effect stylesheet per uilet component, so a baseline
+// imported below it is emitted below all of them. Order decides a tie, and
+// there is one: `:focus-visible` in the baseline and `.crewlet-btn` in the
+// component both count as a single class, so a baseline that came last gave
+// every focused control the baseline's own radius and squared off every
+// button the moment a reader tabbed to it.
+import "@crewlethq/tokens/css";
+import "@crewlethq/tokens/css/themes";
+import "@crewlethq/tokens/css/density";
+import "@crewlethq/tokens/css/fonts";
+import "@crewlethq/tokens/css/base";
+
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App.tsx";
@@ -15,16 +34,8 @@ import { ClientContext } from "./lib/store-hooks.ts";
 import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
 import { applyStoredPreferences } from "@crewlethq/ui";
 
-// The design system, in cascade order: the variables, then the themes that
-// repaint them, then density, the faces and the document baseline. themes.css
-// and tokens.css share the :root selector and neither adds specificity, so
-// the later import is the one that paints.
-import "@crewlethq/tokens/css";
-import "@crewlethq/tokens/css/themes";
-import "@crewlethq/tokens/css/density";
-import "@crewlethq/tokens/css/fonts";
-import "@crewlethq/tokens/css/base";
-
+// The engine's own sheets last, so a screen rule outranks the component rule
+// it sits on rather than the other way round.
 import "./styles/base.css";
 import "./styles/components.css";
 import "./styles/shell.css";
