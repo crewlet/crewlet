@@ -518,7 +518,7 @@ func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error
 	// THROUGH THE PACKAGE'S ONE DURABLE-CONSUMER PATH, so a group every
 	// node of a fleet ensures at boot survives a peer winning the race —
 	// see [Queue.ensureDurableConsumer].
-	cons, err := l.q.ensureDurableConsumer(ctx, l.name, jetstream.ConsumerConfig{
+	cons, _, err := l.q.ensureDurableConsumer(ctx, l.name, jetstream.ConsumerConfig{
 		Durable:       safe,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       domainConsumerAckWait,

@@ -141,7 +141,7 @@ func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
 	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
 
 	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what a boot passes.
-	_, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
+	_, _, _ = q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
 		jetstream.ConsumerConfig{Durable: "agent-ceo"})
 
 	if !js.had {
@@ -152,5 +152,63 @@ func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
 	if left := time.Until(js.until); left <= jsprovision.SlowAfter {
 		t.Errorf("the create got %v, which is inside the %v slow threshold — "+
 			"the breadcrumb could never fire", left, jsprovision.SlowAfter)
+	}
+}
+
+// racedJS is a broker on which THIS node's create loses: the create reports
+// the consumer already there, and the read-back finds it.
+type racedJS struct {
+	jetstream.JetStream
+	created int
+}
+
+func (f *racedJS) CreateConsumer(context.Context, string,
+	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.created++
+	return nil, jetstream.ErrConsumerExists
+}
+
+// The read-back answers, which is the whole point: the consumer exists,
+// somebody else made it, and the boot must carry on.
+func (f *racedJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
+	return nil, nil
+}
+
+// A CONSUMER THE READ-BACK RECOVERED WAS NOT CREATED BY THIS CALL.
+//
+// # Why the bool is worth being exact about
+//
+// [queue.EventQueue] says EnsureSubscription "reports whether this call
+// created it", and the read-back is the one path that can answer wrongly: it
+// exists precisely because somebody ELSE's create is what put the consumer
+// there. Derived from the preceding lookup alone, every member of a fleet
+// booting together reported that it had made every mailbox — the lookup says
+// not-found on all of them, and the recovery is invisible to it.
+//
+// Nothing branches on the bool today; it is a log line and a contract the
+// conformance suite holds both backends to. That is the reason to keep it
+// honest rather than to let it drift: a count that is wrong on every node is
+// worse than no count, because it reads exactly like a correct one.
+func TestAConsumerFoundByTheReadBackIsNotReportedAsCreated(t *testing.T) {
+	t.Parallel()
+	js := &racedJS{}
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	cons, won, err := q.ensureDurableConsumer(t.Context(), "CREWLET_AGENT",
+		jetstream.ConsumerConfig{Durable: "agent-ceo"})
+	if err != nil {
+		t.Fatalf("a consumer a peer created failed the boot: %v", err)
+	}
+	if cons != nil {
+		t.Errorf("the fake returns a nil consumer; got %v", cons)
+	}
+	if won {
+		t.Error("a consumer recovered by the read-back was reported as created " +
+			"by this call — on a fleet booting together every member claims to " +
+			"have made every mailbox")
+	}
+	if js.created != 1 {
+		t.Errorf("the create ran %d times, want exactly one attempt", js.created)
 	}
 }

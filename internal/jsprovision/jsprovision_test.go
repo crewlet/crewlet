@@ -441,3 +441,43 @@ func TestTheCallersDeadlineWinsWhenItIsShorter(t *testing.T) {
 			20*time.Millisecond, waited, ReadBack)
 	}
 }
+
+// THE TWO PREDICATES ARE DISJOINT, which is what lets a create failure be
+// routed to exactly one of waiting for peers and waiting for propagation.
+//
+// # Why that matters at the create sites
+//
+// A create that came back [Unplaceable] was REFUSED by the metadata leader, so
+// nothing was placed and nothing can become visible: a read-back there spends
+// the whole window asking after an object nobody made, and then appends a
+// not-found to an error that already said what was wrong. Every create site
+// therefore returns an unplaceable error before the read-back — and if these
+// predicates overlapped, that gate would swallow the propagation case the
+// read-back exists for.
+func TestPlacementAndPropagationAreDisjoint(t *testing.T) {
+	t.Parallel()
+
+	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
+	if !Unplaceable(placement) {
+		t.Fatal("a placement refusal is not recognised as one")
+	}
+	if NotYetVisible(placement) {
+		t.Error("a placement refusal reads as a propagation delay, so a create " +
+			"the cluster refused would be waited out as if the object existed")
+	}
+
+	for _, absent := range []error{
+		jetstream.ErrStreamNotFound,
+		jetstream.ErrBucketNotFound,
+		jetstream.ErrConsumerNotFound,
+	} {
+		if !NotYetVisible(absent) {
+			t.Errorf("%v is not recognised as a propagation delay, so its "+
+				"read-back gives up on the first 404", absent)
+		}
+		if Unplaceable(absent) {
+			t.Errorf("%v reads as a placement refusal, so the gate before the "+
+				"read-back would return it instead of waiting it out", absent)
+		}
+	}
+}

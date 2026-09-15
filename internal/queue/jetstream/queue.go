@@ -542,6 +542,18 @@ func (q *Queue) createOrObserveStream(
 	if createErr == nil {
 		return nil
 	}
+	if jsprovision.Unplaceable(createErr) {
+		// STILL FORMING and it stayed that way for the whole budget,
+		// which createStream has already waited out. The metadata
+		// leader REFUSED to place this stream, so nothing was placed
+		// and there is nothing to become visible — reading back would
+		// spend the window asking after an object nobody made, and
+		// append a misleading not-found to the error that says what is
+		// actually wrong. [openBucket] has always gated this; the
+		// stream path did not, which is the same rule written twice
+		// and drifting.
+		return fmt.Errorf("ensure stream %s: %w", spec.name, createErr)
+	}
 	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
 	// rather than one.
 	//
@@ -872,7 +884,7 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
 	}
 
-	if _, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
+	_, won, err := q.ensureDurableConsumer(ctx, stream, jetstream.ConsumerConfig{
 		Durable:       name,
 		FilterSubject: topic,
 		AckPolicy:     jetstream.AckExplicitPolicy,
@@ -882,10 +894,23 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 		DeliverPolicy: jetstream.DeliverAllPolicy,
 		AckWait:       q.ackWait(),
 		MaxDeliver:    budgetFor(q.cfg),
-	}); err != nil {
+	})
+	if err != nil {
 		return false, fmt.Errorf("ensure consumer %s: %w", name, err)
 	}
-	return !existed, nil
+	// BOTH HALVES, because either alone misreports. The lookup says this
+	// node did not already see it; won says this node's own create is what
+	// put it there. Without won, a consumer recovered by the read-back —
+	// a peer's, or this node's from an earlier boot — was reported as
+	// created by THIS call, so on a fleet booting together every member
+	// claimed to have made every mailbox.
+	//
+	// One ambiguity is the broker's and cannot be closed here: a create
+	// whose configuration exactly matches an existing consumer returns
+	// that consumer with no error, and is indistinguishable from having
+	// made it. It costs a log line rather than a decision — nothing in the
+	// engine branches on this bool.
+	return !existed && won, nil
 }
 
 // ensureDurableConsumer creates a durable consumer, tolerating a PEER having
@@ -909,10 +934,10 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 // way. It gets its OWN context, because the caller's may be the deadline that
 // just expired.
 func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
-	cfg jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+	cfg jetstream.ConsumerConfig) (jetstream.Consumer, bool, error) {
 
 	if cfg.Durable == "" {
-		return nil, fmt.Errorf("jetstream: ensureDurableConsumer on %s was "+
+		return nil, false, fmt.Errorf("jetstream: ensureDurableConsumer on %s was "+
 			"given no durable name — an ephemeral consumer is this caller's "+
 			"alone and races nobody, so it does not belong here", stream)
 	}
@@ -944,7 +969,12 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	cons, createErr := q.js.CreateConsumer(createCtx, stream, cfg)
 	stop()
 	if createErr == nil {
-		return cons, nil
+		return cons, true, nil
+	}
+	if jsprovision.Unplaceable(createErr) {
+		// NOTHING WAS PLACED, so there is nothing to read back — the
+		// same gate the stream and bucket creates take.
+		return nil, false, createErr
 	}
 	// RE-ASKED, like the stream and bucket read-backs: a peer's create is
 	// visible to this member only on its next metadata update, so one
@@ -958,9 +988,10 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 		return e
 	})
 	if err != nil {
-		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+		return nil, false, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
-	return cons, nil
+	// FOUND, NOT MADE — somebody else's create is what put it there.
+	return cons, false, nil
 }
 
 // DeleteSubscription destroys the durable consumer and the mail it retains.
