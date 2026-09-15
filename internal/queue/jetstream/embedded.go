@@ -444,16 +444,14 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 			// port collision.
 			err := notReadyError(budget, clustered, opts.Cluster.Port,
 				opts.Cluster.Host, ns.ClusterAddr() != nil)
-			ns.Shutdown()
-			removeScratch(scratch)
+			shutdownAndClean(ns, scratch)
 			return nil, err
 		}
 	case <-ctx.Done():
 		// Shutdown makes the in-flight ReadyForConnections return, so the
 		// goroutine above finishes into its buffered channel rather than
 		// leaking.
-		ns.Shutdown()
-		removeScratch(scratch)
+		shutdownAndClean(ns, scratch)
 		return nil, fmt.Errorf("start embedded nats: %w", ctx.Err())
 	}
 	return &embeddedServer{
@@ -579,10 +577,25 @@ func (e *embeddedServer) connect() (*nats.Conn, error) {
 	return nats.Connect(e.ns.ClientURL())
 }
 
-func (e *embeddedServer) shutdown() {
-	e.ns.Shutdown()
-	e.ns.WaitForShutdown()
-	removeScratch(e.scratch)
+func (e *embeddedServer) shutdown() { shutdownAndClean(e.ns, e.scratch) }
+
+// shutdownAndClean stops the server and removes its scratch store, IN THAT
+// ORDER AND WAITING IN BETWEEN.
+//
+// [server.Server.Shutdown] is asynchronous — it signals and returns, while the
+// server's own goroutine is still closing listeners and flushing its file
+// store. Removing the directory without waiting races that goroutine, so the
+// store is deleted underneath a broker still writing to it.
+//
+// It exists because the two shapes had drifted: the ordinary teardown waited
+// and the two failure paths inside [startEmbedded] did not, which is the
+// harder half to notice — those run when a boot is already going wrong, and a
+// RemoveAll that raced left an error about a scratch directory on top of the
+// failure the operator actually needed to read.
+func shutdownAndClean(ns *server.Server, scratch string) {
+	ns.Shutdown()
+	ns.WaitForShutdown()
+	removeScratch(scratch)
 }
 
 // removeScratch deletes a scratch store directory. A failure is logged rather
