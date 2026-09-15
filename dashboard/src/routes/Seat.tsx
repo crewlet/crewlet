@@ -945,14 +945,14 @@ export function SeatScreen({ handle }: { handle: string }) {
                   used={agent.budget.used}
                   max={agent.budget.max}
                   ariaLabel={`${agent.role}'s token budget`}
-                  label={agent.budget.refused_at ? "Refusing charges" : "Used"}
+                  label="Used"
                   right={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
-                  tone={agent.budget.refused_at ? "critical" : undefined}
+                  tone={agent.budget.used >= agent.budget.max ? "critical" : undefined}
                 />
-                {agent.budget.refused_at && (
+                {agent.budget.used >= agent.budget.max && (
                   <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-                    Turns for this seat are being declined at the budget gate. Last refusal{" "}
-                    {fmtDateTime(agent.budget.refused_at)}.
+                    This seat&rsquo;s meter is at its cap, so its turns are being declined at the
+                    gate.
                   </p>
                 )}
               </Panel>

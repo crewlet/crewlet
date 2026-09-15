@@ -133,9 +133,8 @@ type LiveCall struct {
 // A PROCESS-LIFETIME meter, never to be compared against the 24-hour spend
 // rollup or the 7-day per-agent total that sit beside it on the same screen.
 type Meter struct {
-	Used      int    `json:"used"`
-	Max       int    `json:"max"`
-	RefusedAt string `json:"refused_at"`
+	Used int `json:"used"`
+	Max  int `json:"max"`
 }
 
 // Overlay is the live half of an agent row, merged onto its static config row.

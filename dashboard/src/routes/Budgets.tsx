@@ -77,8 +77,22 @@ export function Budgets() {
                   key: "live",
                   header: "This process",
                   align: "right",
-                  sortValue: (s) => s.live_used,
-                  cell: (s) => fmtExact(s.live_used),
+                  // NULL IS NOT ZERO, and the two are the whole point of
+                  // this column: the answer sends null for a seat this
+                  // node holds no live meter for — a seat it has never
+                  // run — and `fmtExact` drew a confident 0 for it, one
+                  // column away from a durable total that says otherwise.
+                  // Sorted to -1 so the unmetered seats group together at
+                  // one end rather than among the genuine zeroes.
+                  sortValue: (s) => s.live_used ?? -1,
+                  cell: (s) =>
+                    s.live_used === null || s.live_used === undefined ? (
+                      <span className="faint" title="this node holds no live meter for this seat">
+                        —
+                      </span>
+                    ) : (
+                      fmtExact(s.live_used)
+                    ),
                 },
                 {
                   key: "max",

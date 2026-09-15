@@ -144,7 +144,7 @@ export function Spend() {
           title="Company budget meter"
           icon="target"
           subtitle="process-lifetime — not the window above"
-          actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
+          actions={org.used >= org.max ? <Badge tone="critical">spent</Badge> : undefined}
         >
           <Meter
             fullMeans="spent"
@@ -156,12 +156,16 @@ export function Spend() {
             ariaLabel="Company token budget"
             label={`${fmtPct(org.used, org.max, 1)} of the meter used`}
             right={`${fmtExact(org.used)} / ${fmtExact(org.max)}`}
-            tone={org.refused_at ? "critical" : undefined}
+            tone={org.used >= org.max ? "critical" : undefined}
           />
-          {org.refused_at && (
+          {org.used >= org.max && (
+            // AT THE CAP IS WHAT THE SHARED COUNTER CAN SAY. It is
+            // sufficient and not necessary — a refused charge increments
+            // nothing, so a company that is refusing can sit just short of
+            // its cap — which is why the attention queue also warns at 90%.
             <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
-              Turns are being declined at the budget gate. Last refusal{" "}
-              {fmtDateTime(org.refused_at)}.
+              The meter is at its cap, so no further charge can be accepted and turns are being
+              declined at the gate.
             </p>
           )}
         </Panel>

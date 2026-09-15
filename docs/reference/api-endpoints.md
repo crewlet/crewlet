@@ -1263,10 +1263,17 @@ up.
   (re)connect, and lets a slow consumer miss frames rather than hold
   them. So a report at or below the held `seq` is dropped rather than
   merged, and a gap is closed by the next report rather than replayed.
-- `refused_at` — when the cap last turned a charge away. That, and not
-  `used >= max`, is what "exhausted" means: a refused charge increments
-  nothing, so the counter stops short of the cap by the size of the round
-  that would not fit.
+- **There is no `refused_at`.** It was on this payload, read by the
+  dashboard to draw a "refusing charges" badge, and never written — so
+  the badge was unreachable on every company. It could not have been
+  written from here either: this report is built per NODE from the
+  fleet's shared counter, and a refusal happens inside one node's tool
+  loop, so a node that refused nothing would report no refusal while the
+  company next door was turning charges away. A refused charge also
+  increments nothing, which is why the counter itself cannot carry the
+  fact. What a refusal DOES leave is durable and fleet-wide: the phase
+  records its outcome as `budget_exhausted` in the event log, with the
+  seat, the turn and the instant.
 - `{}` means no engine is reporting one (the standalone API has no meter
   of its own). Per-agent, `budget: null` means the same, or that the seat
   has no per-agent cap at all — the engine seeds one only for a non-zero
@@ -1320,7 +1327,7 @@ Upgrades to a WebSocket.  All frames are JSON envelopes of the form
 | `seats`    | After a config revision changed the roster. | The COMPLETE seat list, replacing what the client holds. Distinct from `agents` on purpose: that one is a per-role merge, and a merge cannot express the deletion of a role a revision removed. |
 | `sandboxes`| After a detached sandbox run started, asked a question, or finished. | The full in-flight sandbox list. |
 | `tokens`   | After a phase completed, coalesced to at most one per second. | The spend rollup, same shape as `GET /tokens/breakdown`. |
-| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max, refused_at } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
+| `budget`   | After the engine reported a moved token meter (coalesced engine-side to at most one report per second). | `{ meter_id, seq, org: { used, max } }` — the org-wide half. Per-seat figures ride on each agent's overlay in the `agents` push. |
 | `org` / `tools` / `schedules` | After a config revision is activated. | The new org tree / tool surface / schedule list, so open tabs stop showing seats that no longer exist. |
 | `health`   | Pulsed every 5s by a **single shared tick** (one timer for all clients, not one per connection). | The health envelope — see [below](#the-health-envelope). |
 | `result`   | Reply to a client `query` that succeeded. | `{ id, what, data }` — `id` echoes the request's. |
@@ -2041,7 +2048,7 @@ restarts" — because the durable half was reachable only from
   "org": {
     "max_tokens": 5000000, "durable_used": 1284410,
     "durable_updated_at": "2026-06-08T07:30:02+00:00",
-    "live_used": 91200, "live_max": 5000000, "refused_at": ""
+    "live_used": 91200
   },
   "seats": [
     {
