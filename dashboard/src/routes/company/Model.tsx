@@ -27,7 +27,7 @@ import type { GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
+import { fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
@@ -41,6 +41,7 @@ import {
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 
 const PAGE = 60;
 
@@ -212,7 +213,7 @@ export function ModelActivity() {
         header: "Rounds",
         align: "right",
         shrink: true,
-        cell: (r) => Math.max(r.roundsUsed, r.roundNum + 1) || "—",
+        cell: (r) => <NumberCell value={Math.max(r.roundsUsed, r.roundNum + 1)} />,
         sortValue: (r) => Math.max(r.roundsUsed, r.roundNum + 1),
       },
       {
@@ -220,7 +221,7 @@ export function ModelActivity() {
         header: "Tokens",
         align: "right",
         shrink: true,
-        cell: (r) => (r.totalTokens ? fmtCount(r.totalTokens) : "—"),
+        cell: (r) => <TokenCell value={r.totalTokens} />,
         sortValue: (r) => r.totalTokens,
       },
       {

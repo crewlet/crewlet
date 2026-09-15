@@ -37,10 +37,11 @@ import { Badge, Button, Segmented, Skeleton } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { fmtCount, fmtDateTime, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { ModelActivity } from "../company/Model.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type { TurnRow } from "~/protocol/index.ts";
 
@@ -226,7 +227,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               shrink: true,
               align: "right",
               sortValue: (t) => t.rounds,
-              cell: (t) => <span className="mono t-caption">{t.rounds || "—"}</span>,
+              cell: (t) => <NumberCell value={t.rounds} />,
             },
             {
               key: "phases",
@@ -234,7 +235,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               shrink: true,
               align: "right",
               sortValue: (t) => t.phases,
-              cell: (t) => <span className="mono t-caption">{t.phases}</span>,
+              cell: (t) => <NumberCell value={t.phases} />,
             },
             {
               key: "tokens",
@@ -242,7 +243,7 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               shrink: true,
               align: "right",
               sortValue: (t) => t.total_tokens,
-              cell: (t) => <span className="mono t-caption">{fmtCount(t.total_tokens)}</span>,
+              cell: (t) => <TokenCell value={t.total_tokens} />,
             },
             {
               key: "took",

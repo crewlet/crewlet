@@ -10,13 +10,29 @@
  * Nothing here fetches, and nothing here decides what a value MEANS — a status
  * glyph's tone comes from the status vocabulary, and these render what they
  * are handed.
+ *
+ * # Nothing here restates a format either
+ *
+ * `lib/format.ts` owns how a number, a duration and an instant are SPELLED,
+ * and these compose it. They did not: `DurationCell` wrote "500ms" where
+ * `fmtDuration` writes "500 ms", and `TokenCell` abbreviated five thousand as
+ * "5.0k" where `fmtCount` writes "5,000". Two rules for one value is the
+ * shape `textcut` was created to end on the engine side, and here it was
+ * worse than a drift — it was a TRAP: adopting a cell would have silently
+ * changed every figure in the column, so the module built to make the product
+ * consistent could not be adopted without making it inconsistent.
+ *
+ * What a cell adds over calling the formatter directly is the part a
+ * formatter cannot have: an ABSENT value renders a dash that says what kind
+ * of absence it is, and the value wears the tabular face so a column of them
+ * lines up.
  */
 
 import type { ReactNode } from "react";
 import { href } from "../router.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { Badge, cx, type Tone } from "~/ui/primitives.tsx";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
 
 /** An identifier — a key, a handle, an id. Monospaced, and usually a link. */
 export function KeyCell({ value, path }: { value: string; path?: string[] }) {
@@ -49,7 +65,7 @@ export function NumberCell({
   if (value == null) return <Dash title="nothing recorded" />;
   return (
     <span className="t-num" title={title}>
-      {value.toLocaleString()}
+      {fmtCount(value)}
       {suffix}
     </span>
   );
@@ -126,20 +142,13 @@ export function StatusCell({
 /** A duration in milliseconds, rendered at the coarsest honest unit. */
 export function DurationCell({ ms }: { ms?: number | null }) {
   if (ms == null) return <Dash title="not measured" />;
-  if (ms < 1_000) return <span className="t-num">{Math.round(ms)}ms</span>;
-  if (ms < 60_000) return <span className="t-num">{(ms / 1_000).toFixed(1)}s</span>;
-  const minutes = Math.floor(ms / 60_000);
-  const seconds = Math.round((ms % 60_000) / 1_000);
-  if (minutes < 60) return <span className="t-num">{`${minutes}m ${seconds}s`}</span>;
-  return <span className="t-num">{`${Math.floor(minutes / 60)}h ${minutes % 60}m`}</span>;
+  return <span className="t-num">{fmtDuration(ms)}</span>;
 }
 
-/** Tokens, abbreviated the way a spend table is read. */
+/** Tokens, abbreviated the way `fmtCount` abbreviates every other count. */
 export function TokenCell({ value }: { value?: number | null }) {
   if (value == null) return <Dash title="nothing recorded" />;
-  if (value < 1_000) return <span className="t-num">{value}</span>;
-  if (value < 1_000_000) return <span className="t-num">{(value / 1_000).toFixed(1)}k</span>;
-  return <span className="t-num">{(value / 1_000_000).toFixed(2)}M</span>;
+  return <span className="t-num">{fmtCount(value)}</span>;
 }
 
 /** Tags, capped with a count rather than wrapping a row to three lines. */
