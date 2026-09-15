@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
 
@@ -384,5 +385,55 @@ func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	for leftover := range phrased {
 		t.Errorf("the client phrases %q and nothing writes it — a renamed reason "+
 			"leaves exactly this behind", leftover)
+	}
+}
+
+// AND EVERY DIMENSION THE COST AXIS OFFERS IS ONE THE ENGINE ACCEPTS.
+//
+// `token_series` refuses an unknown `group` naming what it takes, which is the
+// right refusal — and it turns a control offering a seventh value into a chart
+// that never loads rather than one drawn on the wrong dimension. The screen's
+// list and [tokens.Groups] are therefore one closed set written twice, and
+// this is the gate that says so.
+//
+// The client's table is read from ITS OWN SOURCE rather than restated here,
+// the `rooms` idiom: a gate carrying its own copy of the list drifts towards
+// claiming the pair agree. A value the client offers and the engine dropped is
+// checked too — that is how a renamed group leaves a dead control behind.
+func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile(filepath.Join(dashboardTree, "routes", "Spend.tsx"))
+	if err != nil {
+		t.Fatalf("the cost screen could not be read, so this gate certifies "+
+			"nothing: %v", err)
+	}
+	// THE `GROUPS` TABLE ITSELF, not every `{value, label}` pair on the
+	// screen: the compare control is the same shape one line away, and a
+	// sweep over the whole file read its "previous" as a seventh dimension.
+	block := regexp.MustCompile(`(?s)const GROUPS = \[(.*?)\] as const;`).
+		FindStringSubmatch(string(source))
+	if block == nil {
+		t.Fatal("the screen's GROUPS table was not found, so this gate " +
+			"certifies nothing")
+	}
+	entry := regexp.MustCompile(`value: "([a-z_]+)"`)
+	offered := map[string]bool{}
+	for _, m := range entry.FindAllStringSubmatch(block[1], -1) {
+		offered[m[1]] = true
+	}
+	if len(offered) == 0 {
+		t.Fatal("no dimensions were found at all, so this gate certifies nothing")
+	}
+	for _, group := range tokens.Groups {
+		if !offered[string(group)] {
+			t.Errorf("the engine buckets by %q and the screen does not offer it, "+
+				"so a dimension the company can be read on is unreachable", group)
+		}
+		delete(offered, string(group))
+	}
+	for leftover := range offered {
+		t.Errorf("the screen offers %q and the engine refuses it, so picking it "+
+			"draws no chart at all — a renamed group leaves exactly this behind",
+			leftover)
 	}
 }

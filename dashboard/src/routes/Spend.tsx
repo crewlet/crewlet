@@ -15,23 +15,199 @@ import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Meter, Panel, Segmented, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
+import {
+  BarList,
+  Legend,
+  StackedBar,
+  StackedTimeSeries,
+  phaseColor,
+  vizColor,
+} from "~/ui/charts.tsx";
+import {
+  SPEND_WINDOWS,
+  bandsOf,
+  bucketFor,
+  columnsOf,
+  ghostHeights,
+  spendWindow,
+  unbandedTokens,
+} from "~/lib/spend.ts";
+import type { SpendWindow } from "~/lib/spend.ts";
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
+import {
+  fmtCount,
+  fmtDate,
+  fmtDateTime,
+  fmtExact,
+  fmtPct,
+  fmtSpend,
+  relTime,
+  tsKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
-const WINDOWS = ["1", "7", "30"] as const;
+/**
+ * Which dimension the time axis is split on.
+ *
+ * The engine's own closed set minus nothing: a value it does not know is
+ * refused naming what it accepts, so this list and `tokens.Groups` have to
+ * agree — and they are checked against each other by the engine's own gate
+ * over this file.
+ */
+const GROUPS = [
+  { value: "phase", label: "Phase" },
+  { value: "model", label: "Model" },
+  { value: "seat", label: "Seat" },
+  { value: "unit", label: "Unit" },
+  { value: "worker", label: "Worker" },
+  { value: "turn", label: "Turn" },
+] as const;
+
+/**
+ * The window's two edges, ROUNDED TO THE BUCKET.
+ *
+ * A window computed from the ticking clock changes every second, and every
+ * change is a new query — sixty round trips a minute for a chart whose newest
+ * column moves once an hour. Rounding to the bucket the axis is drawn in means
+ * the edges change exactly when a new column appears, which is also when the
+ * answer actually differs.
+ *
+ * The top edge is the END of the bucket in progress, so the current hour is on
+ * the chart while it is still being spent rather than appearing once it ends.
+ */
+function windowFor(edge: number, days: number, step: number): [string, string] {
+  const until = Math.ceil(edge / step) * step;
+  return [
+    new Date(until - days * 24 * 60 * 60 * 1000).toISOString(),
+    new Date(until).toISOString(),
+  ];
+}
+
+/**
+ * The spend, over time, split into bands.
+ *
+ * THE ONE THING THE BREAKDOWN CANNOT SAY. Every row of `tokens` is a sum over
+ * the whole window, so a runaway loop, a spike and a quiet weekend all look
+ * like the same number. The bucketing is the engine's — the browser holds at
+ * most the live window's records, so an axis folded here would be right for a
+ * day and absent for every other range.
+ */
+function SpendOverTime({ window }: { window: SpendWindow }) {
+  const now = useNow();
+  const [group, setGroup] = useParam("group", "phase", "section");
+  const [compare, setCompare] = useParam("compare", "", "section");
+  const bucket = bucketFor(window);
+  // Rounded to the bucket, so the identity of the window — and therefore the
+  // query — changes once per column rather than once per second.
+  const step = bucket === "day" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
+  const edge = Math.ceil(now / step) * step;
+  const [since, until] = useMemo(() => windowFor(edge, Number(window), step), [edge, window, step]);
+
+  const params = { group, bucket, since, until };
+  const series = useQuery("token_series", params);
+  // The previous period is a SECOND query with the same shape, shifted by the
+  // engine: subtracting here would be a local-time subtraction, and across a
+  // DST boundary the two windows would be different lengths — a change the
+  // chart would report and nobody made.
+  const prior = useQuery(
+    "token_series",
+    { ...params, previous: true },
+    { enabled: compare === "previous" },
+  );
+
+  const data = series.data;
+  const bands = useMemo(() => bandsOf(data), [data]);
+  const columns = useMemo(() => columnsOf(data, bands), [data, bands]);
+  const ghost = useMemo(() => ghostHeights(prior.data), [prior.data]);
+  const unbanded = unbandedTokens(data);
+
+  return (
+    <Panel
+      title="Over time"
+      icon="activity"
+      subtitle={bucket === "day" ? "one column per day" : "one column per hour"}
+    >
+      <QueryState
+        error={series.error}
+        loading={series.loading}
+        empty={
+          data && data.totals.calls === 0 ? { title: "No model calls in this window" } : undefined
+        }
+      >
+        {data && (
+          <div className="col gap-3">
+            {/* THE CONTROLS ARE IN THE BODY, not the panel header. Six
+                dimensions and a comparison toggle do not fit beside a title
+                at a laptop width — the header truncates rather than wraps,
+                so the title read "Over ti…" and the last dimension was
+                clipped off the right edge. */}
+            <div className="row wrap gap-2">
+              <Segmented
+                ariaLabel="Split by"
+                value={group}
+                onChange={setGroup}
+                options={GROUPS.map((g) => ({ value: g.value, label: g.label }))}
+              />
+              <span className="spacer" />
+              <Segmented
+                ariaLabel="Compare"
+                value={compare}
+                onChange={setCompare}
+                options={[
+                  { value: "", label: "This period" },
+                  { value: "previous", label: "vs previous" },
+                ]}
+              />
+            </div>
+            <StackedTimeSeries
+              buckets={columns}
+              bands={bands}
+              ghost={compare === "previous" ? ghost : undefined}
+              format={(n) => `${fmtCount(n)} tokens`}
+              label={(at) => (bucket === "day" ? fmtDate(at) : fmtDateTime(at))}
+            />
+            <div className="row wrap gap-2">
+              <span className="t-caption">{fmtDateTime(data.since)}</span>
+              <span className="spacer" />
+              <span className="t-caption">{fmtDateTime(data.until)}</span>
+            </div>
+            <Legend items={bands.map((b) => ({ label: b.label, color: b.color }))} />
+            {unbanded > 0 && (
+              // THE GAP IS SAID OUT LOUD. Grouping by worker leaves out every
+              // phase that is not a worker's, and a chart whose bands sum to
+              // less than the window's total otherwise reads as spend that
+              // went missing.
+              <p className="t-caption">
+                {fmtCount(unbanded)} tokens in this window fall under no {group} and are not in the
+                bands above — the window's own total is {fmtExact(data.totals.total_tokens)}.
+              </p>
+            )}
+            {data.totals.priced_calls > 0 && (
+              <p className="t-caption">
+                {fmtSpend(data.totals.cost_usd, data.totals.priced_calls)} billed over{" "}
+                {fmtExact(data.totals.priced_calls)} of {fmtExact(data.totals.calls)} calls — only a
+                subscription coding CLI reports a price, so the rest quote none.
+              </p>
+            )}
+          </div>
+        )}
+      </QueryState>
+    </Panel>
+  );
+}
 
 export function Spend() {
   const nav = useNavigator();
   const pushed = useTokens();
   const orgBudget = useOrgBudget();
   const now = useNow();
-  const [days, setDays] = useParam("window", "1", "section");
+  const [windowParam, setDays] = useParam("window", "1", "section");
+  // READ AS A MEMBER OF ITS OWN SET, never as a raw number: see [spendWindow].
+  const days = spendWindow(windowParam);
 
   // The pushed rollup covers the default window. Any other window is a query,
   // and while it loads the pushed one stays on screen rather than blanking.
@@ -89,7 +265,7 @@ export function Spend() {
             ariaLabel="Window"
             value={days}
             onChange={setDays}
-            options={WINDOWS.map((d) => ({ value: d, label: `${d}d` }))}
+            options={SPEND_WINDOWS.map((d) => ({ value: d, label: `${d}d` }))}
           />
         }
       </PageActions>
@@ -138,6 +314,8 @@ export function Spend() {
           />
         </StatRow>
       </Panel>
+
+      <SpendOverTime window={days} />
 
       {org && org.max > 0 && (
         <Panel

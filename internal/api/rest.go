@@ -54,6 +54,10 @@ var namedRoutes = []struct {
 	// records it.
 	{method: "GET", pattern: "/turns", what: "turns"},
 	{method: "GET", pattern: "/tokens/breakdown", what: "tokens"},
+	// THE SAME SPEND WITH A TIME AXIS. Beside the breakdown rather than a
+	// parameter of it: the two answers have different shapes, and one route
+	// returning either would make every caller branch on what came back.
+	{method: "GET", pattern: "/tokens/series", what: "token_series"},
 	{method: "GET", pattern: "/schedules", what: "schedules"},
 	// ONE SCHEDULE'S OWN HISTORY. Three path segments because a schedule's
 	// identity is all three — two units may each declare a "standup", and a

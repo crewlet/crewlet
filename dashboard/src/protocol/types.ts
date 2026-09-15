@@ -291,6 +291,17 @@ export interface Bucket {
   output_tokens: number;
   total_tokens: number;
   calls: number;
+  /**
+   * What the calls in this bucket were billed, and how many of them quoted
+   * anything at all.
+   *
+   * TWO NUMBERS, because only a subscription coding CLI reports a price. A
+   * `cost_usd` of 0 over `priced_calls: 0` means nobody said what this cost;
+   * over 2 it means two runs were billed nothing. Rendering the first as
+   * "$0.00" states a price nobody quoted — see `fmtSpend`.
+   */
+  cost_usd: number;
+  priced_calls: number;
 }
 
 export interface PhaseRow extends Bucket {
@@ -329,6 +340,48 @@ export interface Rollup {
   by_turn: TurnSpendRow[];
   /** High-water mark: live completions past it are folded in, earlier ones skipped. */
   aggregated_through: string;
+}
+
+/**
+ * THE SAME SPEND WITH A TIME AXIS — `token_series`.
+ *
+ * `Rollup` is a breakdown whose every row is a sum over the whole window, so
+ * it cannot say WHEN. The engine buckets because it is the one place that can:
+ * the browser holds at most the live window's records, so an axis folded here
+ * would be correct for a day and absent for every other range.
+ */
+export interface SeriesBand extends Bucket {
+  /** The band's key in each point's `groups`. Empty on, and only on, `other`. */
+  group: string;
+  handle?: string;
+  /** The residual: every group past the chart's cap, and how many it stands for. */
+  other: boolean;
+  folded: number;
+}
+
+export interface SeriesPoint extends Bucket {
+  /** The bucket's START, RFC 3339 in UTC — never its middle or its end. */
+  at: string;
+  groups: Record<string, Bucket>;
+  other: Bucket;
+}
+
+export interface TokenSeries {
+  group: "phase" | "model" | "seat" | "unit" | "worker" | "turn";
+  bucket: "hour" | "day";
+  /** The window COVERED, which the store may have floored below what was asked. */
+  since: string;
+  until: string;
+  series: SeriesPoint[];
+  by_group: SeriesBand[];
+  /**
+   * Every record in the window, INCLUDING the ones this grouping places in no
+   * band — so `totals` is not the sum of `by_group`, and `grouped` is what the
+   * bands do cover. Grouping by worker leaves out every phase that is not a
+   * worker's, and the gap is the answer to "why is this less than the rollup".
+   */
+  totals: Bucket;
+  grouped: Bucket;
 }
 
 /** The org-wide live meter, plus the identity of the engine run reporting it. */
@@ -2805,6 +2858,7 @@ export interface QueryMap {
   turns: TurnsAnswer;
   phases: PhasesPage;
   tokens: Rollup;
+  token_series: TokenSeries;
   stream: EngineHealth;
   fleet: FleetAnswer;
   budgets: BudgetsAnswer;

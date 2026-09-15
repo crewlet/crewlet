@@ -880,8 +880,52 @@ type PhaseTokenQuery struct {
 	// takes DefaultPhaseTokenDays.
 	SinceDays int
 
+	// Since and Until name the window as INSTANTS, which SinceDays cannot:
+	// a time-range control produces two edges, and a cost explorer's
+	// compare-to-previous asks for the window immediately before the one on
+	// screen — neither of which is "N days back from now".
+	//
+	// Since at its zero value falls back to SinceDays. Until at its zero
+	// value is unbounded, and it is EXCLUSIVE, so two adjacent windows
+	// share their boundary instant without double-counting it.
+	//
+	// Since is floored at MaxPhaseTokenDays back whichever way it was
+	// named: a request further back cannot return more rows, and honouring
+	// it would make a scan of the whole table look like a supported query.
+	Since time.Time
+	Until time.Time
+
 	// AgentRole restricts the rollup to one seat. Empty is the whole org.
 	AgentRole string
+}
+
+// Window reports the instants this query actually covers, after the floor.
+//
+// Exported because the CALLER labels the answer: a rollup headed with the
+// window that was asked for, over rows from the window that was served, is a
+// lie about the numbers beside it — and the clamp lives here, where the floor
+// is defined, rather than being re-derived at every surface.
+func (q PhaseTokenQuery) Window(now time.Time) (since, until time.Time) {
+	floor := now.Add(-time.Duration(MaxPhaseTokenDays) * 24 * time.Hour)
+	since = q.Since
+	if since.IsZero() {
+		days := q.SinceDays
+		if days <= 0 {
+			days = DefaultPhaseTokenDays
+		}
+		since = now.Add(-time.Duration(days) * 24 * time.Hour)
+	}
+	if since.Before(floor) {
+		since = floor
+	}
+	until = q.Until
+	// An inverted window is a caller error that must not read as a quiet
+	// company: it collapses to an empty one at the later edge, so the
+	// answer covers nothing and SAYS it covers nothing.
+	if !until.IsZero() && until.Before(since) {
+		since = until
+	}
+	return since.UTC(), until.UTC()
 }
 
 const (
@@ -914,10 +958,17 @@ const (
 	// would only reintroduce an undercount that looks like an underspend.
 )
 
+// The price is the one value here still read out of the PAYLOAD, and
+// deliberately: it is set by a single backend on a minority of phases, so
+// promoting it would be a migration and a column that is NULL on almost every
+// row of the table. The extraction is free of a scan cost the filter does not
+// already pay — the event_type and event_time predicates are what choose the
+// rows, and json_extract runs only on the ones they keep.
 const phaseTokenSQL = `
 SELECT event_time, event_id, agent_id, agent_role,
        phase, host_phase, worker, model, turn_id, iteration,
-       input_tokens, output_tokens, total_tokens
+       input_tokens, output_tokens, total_tokens,
+       COALESCE(json_extract(payload, '$.cost_usd'), 0)
 FROM crewlet_events
 WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
@@ -1077,17 +1128,17 @@ const MaxPhasePage = 60
 // every other row in the table. The filterable dimensions — the ones a query
 // selects ON — are the promoted ones.
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
-	days := q.SinceDays
-	switch {
-	case days <= 0:
-		days = DefaultPhaseTokenDays
-	case days > MaxPhaseTokenDays:
-		days = MaxPhaseTokenDays
-	}
-	since := now().Add(-time.Duration(days) * 24 * time.Hour)
+	since, until := q.Window(now())
 
 	sql := phaseTokenSQL
 	args := []any{EncodeTime(since)}
+	if !until.IsZero() {
+		// EXCLUSIVE, matching the half-open window the bucketing folds
+		// over, so a record on the boundary belongs to exactly one of two
+		// adjacent windows.
+		sql += " AND event_time < ?"
+		args = append(args, EncodeTime(until))
+	}
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)
@@ -1112,6 +1163,7 @@ func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens
 			&rec.Phase, &rec.HostPhase, &rec.Worker, &rec.Model,
 			&rec.TurnID, &rec.Iteration,
 			&rec.InputTokens, &rec.OutputTokens, &rec.TotalTokens,
+			&rec.CostUSD,
 		); err != nil {
 			return nil, fmt.Errorf("store: phase tokens: scan: %w", err)
 		}

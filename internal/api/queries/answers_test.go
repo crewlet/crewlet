@@ -145,14 +145,16 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// `turn` is what made "everything that happened in this unit of
 		// work" askable at all (see migration 0014); `turns` is the list
 		// of them, which the dashboard used to fake by paging the raw
-		// feed; and `phases` is the company-wide phase record WITH its
-		// payloads, which the event listing deliberately cannot serve.
+		// feed; `phases` is the company-wide phase record WITH its
+		// payloads, which the event listing deliberately cannot serve;
+		// and `token_series` is the spend with a time axis, which the
+		// breakdown has no dimension for.
 		{"the event log alone", queries.Sources{Events: db.Events()},
-			[]string{"event", "events", "phases", "trace", "turn", "turns", "viewer"}},
+			[]string{"event", "events", "phases", "token_series", "trace", "turn", "turns", "viewer"}},
 		{"both, plus health", queries.Sources{
 			State: state, Events: db.Events(),
 			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-		}, []string{"agent", "event", "events", "phases", "stream",
+		}, []string{"agent", "event", "events", "phases", "stream", "token_series",
 			"tokens", "trace", "turn", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {

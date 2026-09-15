@@ -1441,3 +1441,58 @@ kbd {
   height: 28px;
   overflow: visible;
 }
+
+/* A stacked column per time bucket — see StackedTimeSeries.
+ *
+ * The columns FLEX EQUALLY and never wrap: one bucket is one column whatever
+ * the window's length, so 24 hours and 30 days draw the same chart at two
+ * densities rather than one chart and one overflowing row. A minimum width of
+ * one pixel is what keeps an empty bucket's gap visible at the widest window.
+ */
+.stackseries {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+}
+.stackseries-col {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 1px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+.stackseries-stack {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  min-height: 1px;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+  background: var(--surface-inset);
+}
+.stackseries-stack > span {
+  display: block;
+  width: 100%;
+}
+/* The prior period as a MARK AT ITS OWN HEIGHT, not a second set of bands: a
+ * comparison needs a height, and a ghost drawn in its own hues is a chart with
+ * twice the legend.
+ *
+ * ABOVE the stack (z-index), not behind it. Drawn behind, the mark vanished
+ * the moment the current period was the larger of the two — so "last week was
+ * smaller" and "there is no last week" rendered identically, which is exactly
+ * the comparison this is for. A one-pixel dash over an opaque column reads in
+ * both directions. */
+.stackseries-ghost {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 2;
+  pointer-events: none;
+  border-top: 1px dashed var(--text-secondary);
+}
