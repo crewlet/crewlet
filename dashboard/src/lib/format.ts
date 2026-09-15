@@ -125,6 +125,27 @@ export function fmtDate(ts: string | null | undefined): string {
 }
 
 /**
+ * A timestamp to the MINUTE — no seconds.
+ *
+ * For a value a reader CHOSE at minute resolution, where the seconds are
+ * always `:00` and are therefore fourteen characters of noise per window in a
+ * label that has to sit in a page bar beside everything else. Distinct from
+ * [fmtDateTime], which renders an instant the ENGINE recorded and where the
+ * second is a real part of the answer.
+ */
+export function fmtMinute(ts: string | null | undefined): string {
+  const d = parseUTC(ts);
+  if (!d) return "—";
+  return d.toLocaleString(dateLocale(), {
+    ...dateParts(),
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: zone(),
+  });
+}
+
+/**
  * A timestamp's full identity, for a `title` on anything that shows a short
  * one.
  *
@@ -351,4 +372,105 @@ export function splitConversationKey(key: string): { source: string; local: stri
  */
 export function plural(n: number, one: string, many?: string): string {
   return `${n.toLocaleString()} ${n === 1 ? one : (many ?? `${one}s`)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Wall clock
+// ---------------------------------------------------------------------------
+
+/**
+ * An instant as `<input type="datetime-local">` carries it, and back.
+ *
+ * THE INPUT IS ALWAYS IN THE BROWSER'S ZONE and the dashboard renders in the
+ * VIEWER'S CHOSEN one, so the naive `new Date(value)` / `toISOString().slice()`
+ * pair is wrong for every reader who set the preference: a reader in `UTC`
+ * whose company runs in `Asia/Tokyo` typed 09:00, meant 09:00 Tokyo, and got a
+ * window starting nine hours late. These two convert through the chosen zone,
+ * so what a reader types is what the heading above the rows says.
+ */
+
+/** The wall-clock reading of an instant, `YYYY-MM-DDTHH:mm`. */
+export function toWall(at: number): string {
+  const p = wallParts(at, zone());
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`;
+}
+
+/**
+ * The instant a wall-clock reading names, or null when it names none.
+ *
+ * TWO PASSES, because the offset is a function of the instant and the instant
+ * is what is being solved for. Read the wall time as if it were UTC, subtract
+ * the zone's offset AT THAT GUESS to land near the answer, then subtract the
+ * offset at the answer — which is the correction that matters on the two days
+ * a year the first guess straddles a DST change. Inside a skipped hour there
+ * is no such instant and inside a repeated one there are two; both land on a
+ * defensible reading rather than on an error nobody could act on.
+ */
+export function fromWall(wall: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(wall.trim());
+  if (!m) return null;
+  const naive = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+  if (Number.isNaN(naive)) return null;
+  const tz = zone();
+  const near = naive - zoneOffset(naive, tz);
+  return naive - zoneOffset(near, tz);
+}
+
+/**
+ * How far ahead of UTC a zone is at one instant, in milliseconds.
+ *
+ * Derived by formatting rather than by a table: `Intl` already holds every
+ * zone's rules including the ones that changed last year, and a second copy of
+ * them here would be wrong the first time a government moved a date.
+ */
+function zoneOffset(at: number, tz: string): number {
+  const p = wallParts(at, tz);
+  const asUTC = Date.UTC(
+    Number(p.year),
+    Number(p.month) - 1,
+    Number(p.day),
+    Number(p.hour),
+    Number(p.minute),
+    Number(p.second),
+  );
+  return asUTC - at;
+}
+
+/** One instant's calendar fields in a zone, zero-padded. */
+function wallParts(at: number, tz: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of wallFormatter(tz).formatToParts(new Date(at))) {
+    if (part.type !== "literal") out[part.type] = part.value;
+  }
+  return out;
+}
+
+// One formatter per zone. Constructing an Intl.DateTimeFormat is the expensive
+// half of this file, and a range picker rebuilds its two fields on every
+// keystroke.
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function wallFormatter(tz: string): Intl.DateTimeFormat {
+  let f = formatters.get(tz);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      // `hourCycle: "h23"` RATHER THAN `hour12: false`, which is the legacy
+      // spelling and selects h24 in some engines: midnight comes back as
+      // "24", the previous day's twenty-fourth hour, and fed to Date.UTC it
+      // rolls the day forward and lands a whole day out. `h23` is the
+      // explicit 00–23 cycle, so there is no reading to fold back — and
+      // `hour12` takes precedence over `hourCycle` where both are given, so
+      // it is absent rather than set to false.
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+    formatters.set(tz, f);
+  }
+  return f;
 }

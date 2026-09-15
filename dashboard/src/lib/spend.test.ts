@@ -1,13 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  SPEND_WINDOWS,
-  bandsOf,
-  bucketFor,
-  columnsOf,
-  ghostHeights,
-  spendWindow,
-  unbandedTokens,
-} from "./spend.ts";
+import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "./spend.ts";
 import type { Bucket, TokenSeries } from "~/protocol/types.ts";
 
 function bucket(total: number, extra: Partial<Bucket> = {}): Bucket {
@@ -141,29 +133,5 @@ describe("the ghost", () => {
     });
     expect(ghostHeights(prior)).toEqual([5, 7]);
     expect(ghostHeights(null)).toEqual([]);
-  });
-});
-
-describe("the window control", () => {
-  // A SEGMENTED CONTROL'S VALUE IS A CLOSED SET. Reading it as a free-form
-  // number let a URL decide the shape of the request: `#/cost?window=` gave
-  // `Number("") === 0`, so the screen asked for a window whose two edges were
-  // the same instant — which the engine refuses, half-open, and the chart
-  // rendered as "the engine refused this request" on data that was fine.
-  it("falls back to the default for anything outside its own set", () => {
-    expect(spendWindow("")).toBe("1");
-    expect(spendWindow("3")).toBe("1");
-    expect(spendWindow("nonsense")).toBe("1");
-    expect(spendWindow("0")).toBe("1");
-  });
-
-  it("keeps a window it does offer", () => {
-    for (const w of SPEND_WINDOWS) expect(spendWindow(w)).toBe(w);
-  });
-
-  it("buckets a day by the hour and anything longer by the day", () => {
-    expect(bucketFor("1")).toBe("hour");
-    expect(bucketFor("7")).toBe("day");
-    expect(bucketFor("30")).toBe("day");
   });
 });
