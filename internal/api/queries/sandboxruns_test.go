@@ -2,6 +2,10 @@ package queries_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,11 +40,18 @@ func seedRuns(t *testing.T, runs ...sandbox.PendingRun) *sandbox.CoordStore {
 
 func askRuns(t *testing.T, store queries.PendingRuns) []map[string]any {
 	t.Helper()
+	return askRunsWith(t, store, nil)
+}
+
+func askRunsWith(t *testing.T, store queries.PendingRuns,
+	params map[string]any) []map[string]any {
+
+	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, queries.Sources{Sandbox: store})
-	got, err := r.Answer(t.Context(), "sandbox_runs", nil, "")
+	got, err := r.Answer(t.Context(), "sandbox_runs", params, "")
 	if err != nil {
-		t.Fatalf("sandbox_runs: %v", err)
+		t.Fatalf("sandbox_runs%v: %v", params, err)
 	}
 	payload, ok := got.(map[string]any)
 	if !ok {
@@ -224,5 +235,108 @@ func TestTheBoardSaysWhereEachRunIs(t *testing.T) {
 		if got := where[turn]; got != want {
 			t.Errorf("run %s reports placement %v, want %q", turn, got, want)
 		}
+	}
+}
+
+// A RUN'S RECORD OUTLIVES ITS RUN, and the board never served it.
+//
+// The answer read `ListActive`, which is the RECOVERY path's question — what
+// still owns engine state — so a finished or failed run left the screen at the
+// exact moment somebody would go looking for it. "What did the coding runs do
+// today" had no answer anywhere in the product, while the store held every one
+// of them.
+func TestTheRetainedRunsAreServableAndActiveIsTheDefault(t *testing.T) {
+	t.Parallel()
+	store := seedRuns(t,
+		sandbox.PendingRun{TurnID: "t-live", Role: "Dev", Status: sandbox.StatusRunning},
+		sandbox.PendingRun{TurnID: "t-done", Role: "Dev", Status: sandbox.StatusDone},
+		sandbox.PendingRun{TurnID: "t-bad", Role: "Dev", Status: sandbox.StatusFailed},
+	)
+	ids := func(params map[string]any) []string {
+		t.Helper()
+		out := []string{}
+		for _, row := range askRunsWith(t, store, params) {
+			out = append(out, fmt.Sprint(row["turn_id"]))
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	// ACTIVE BY DEFAULT, which is what a board watching a working company
+	// is for — and is what already shipped, so a caller naming nothing sees
+	// no change.
+	if got := ids(nil); !slices.Equal(got, []string{"t-live"}) {
+		t.Errorf("the default gave %v, want only the active run", got)
+	}
+	if got := ids(map[string]any{"status": "done"}); !slices.Equal(got, []string{"t-done"}) {
+		t.Errorf("status=done gave %v", got)
+	}
+	if got := ids(map[string]any{"status": "failed"}); !slices.Equal(got, []string{"t-bad"}) {
+		t.Errorf("status=failed gave %v", got)
+	}
+	if got := ids(map[string]any{"status": "all"}); !slices.Equal(got,
+		[]string{"t-bad", "t-done", "t-live"}) {
+
+		t.Errorf("status=all gave %v, want every run this store holds", got)
+	}
+}
+
+// A STATUS NOBODY DEFINES IS REFUSED NAMING THE FOUR, rather than silently
+// answering the default — which would hand a caller the active runs under a
+// heading saying "failed".
+func TestAnUnknownRunStatusIsRefusedNamingTheSets(t *testing.T) {
+	t.Parallel()
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Sandbox: seedRuns(t)})
+	_, err := r.Answer(t.Context(), "sandbox_runs", map[string]any{"status": "parked"}, "")
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Fatalf("status=parked answered %v, want bad params", err)
+	}
+	if !strings.Contains(err.Error(), "active") || !strings.Contains(err.Error(), "all") {
+		t.Errorf("the refusal is %q and does not name what would have worked", err)
+	}
+}
+
+// THE THREE FACTS A PARKED RUN HAS AND THE BOARD COULD NOT SHOW: who is
+// waiting on it, what it called through the bridge, and the identifiers that
+// find it in somebody else's system.
+//
+// `reply` is persisted precisely because the resumed turn does not see its
+// trigger; `bridge_calls` is the ONLY copy of a bridged run's tool log, since
+// those calls are made by a process outside the engine minutes apart and
+// possibly across a restart. Without them the run page's Calls tab had nothing
+// to render and "is anybody waiting on this" had no answer.
+func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
+	t.Parallel()
+	called := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	store := seedRuns(t, sandbox.PendingRun{
+		TurnID: "t-1", Role: "Dev", Status: sandbox.StatusAwaiting,
+		Reply:     "chat:C1",
+		SessionID: "sess-9", CommandID: "cmd-3",
+		DelegationChain: []string{"agent-pm", "agent-swe"},
+		BridgeCalls: []sandbox.BridgeCall{
+			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
+		},
+		BridgeCallsElided: 4,
+	})
+	row := askRuns(t, store)[0]
+	switch {
+	case row["reply"] != "chat:C1":
+		t.Errorf("reply = %v, want who is waiting", row["reply"])
+	case row["session_id"] != "sess-9":
+		t.Errorf("session_id = %v", row["session_id"])
+	case row["command_id"] != "cmd-3":
+		t.Errorf("command_id = %v", row["command_id"])
+	case row["bridge_calls_elided"] != 4:
+		t.Errorf("bridge_calls_elided = %v — a log that silently skips is a "+
+			"log that lies about what the run did", row["bridge_calls_elided"])
+	}
+	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
+	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
+		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
+	}
+	chain, ok := row["delegation_chain"].([]string)
+	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
+		t.Fatalf("delegation_chain = %#v", row["delegation_chain"])
 	}
 }

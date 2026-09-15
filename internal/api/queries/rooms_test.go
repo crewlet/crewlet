@@ -29,7 +29,7 @@ import (
 // about which names exist, not what they answer.
 type memorySandbox struct{}
 
-func (memorySandbox) ListActive(context.Context) ([]sandbox.PendingRun, error) {
+func (memorySandbox) ListWithStatus(context.Context, []string) ([]sandbox.PendingRun, error) {
 	return nil, nil
 }
 

@@ -2,6 +2,8 @@ package queries
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -32,12 +34,42 @@ import (
 //
 // Declared here rather than imported as a concrete store so this package
 // depends on the shape, and so the memory twin answers it too.
+//
+// ONE METHOD, TAKING THE STATUSES. It was `ListActive`, which is the recovery
+// path's question — "what still owns engine state" — and the wrong one here: a
+// run's record OUTLIVES its run so a reviewer can read what it did, and a
+// board that only ever showed the active set never served the retained record
+// to anybody. A run that failed vanished from the screen at the moment
+// somebody would go looking for it.
 type PendingRuns interface {
-	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
+	ListWithStatus(ctx context.Context, want []string) ([]sandbox.PendingRun, error)
 }
 
-func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
-	runs, err := s.Sandbox.ListActive(ctx)
+// runStatusSets are what `status=` selects, by name.
+//
+// NAMES RATHER THAN A CSV OF STATUSES, because the three a reader wants are
+// not three status values: "active" is five of them and "done" is the two
+// terminal ones. A caller spelling out `launching,running,awaiting_...` would
+// be restating a set the engine already defines and would drift from it on the
+// day a sixth status lands.
+var runStatusSets = map[string][]string{
+	"active": sandbox.Active,
+	"done":   {sandbox.StatusDone},
+	"failed": {sandbox.StatusFailed},
+	// EMPTY IS EVERY RUN this store still holds — not a sixth set to keep
+	// in step.
+	"all": nil,
+}
+
+func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
+	// ACTIVE BY DEFAULT, because that is what a board watching a working
+	// company is for; the finished runs are a history somebody asks for.
+	name := firstOf(p.String("status"), "active")
+	want, known := runStatusSets[name]
+	if !known {
+		return nil, badParams("status", name, slices.Sorted(maps.Keys(runStatusSets)))
+	}
+	runs, err := s.Sandbox.ListWithStatus(ctx, want)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +77,7 @@ func (s Sources) sandboxRuns(ctx context.Context, _ Params) (any, error) {
 	for _, run := range runs {
 		out = append(out, serialiseRun(run))
 	}
-	return map[string]any{"runs": out}, nil
+	return map[string]any{"runs": out, "status": name}, nil
 }
 
 func serialiseRun(run sandbox.PendingRun) map[string]any {
@@ -76,6 +108,28 @@ func serialiseRun(run sandbox.PendingRun) map[string]any {
 		"started_at":         isoOrEmpty(run.CreatedAt),
 		"updated_at":         isoOrEmpty(run.UpdatedAt),
 		"answerable_in_chat": answerableInChat(run.ConversationKey),
+		// WHO IS WAITING, which is the question a board full of parked
+		// runs exists to answer and had no field for. Persisted rather
+		// than re-derived precisely because the resumed turn does not see
+		// its trigger — empty means nobody is waiting, which is the safe
+		// half.
+		"reply": run.Reply,
+		// THE BRIDGE'S OWN TOOL LOG. A native loop keeps its calls in
+		// memory and the turn writes them at the end; a bridged run's are
+		// made by a process outside the engine, minutes or hours apart
+		// and possibly across a restart, so this row is the only copy
+		// there is. `bridge_calls_elided` says how many were cut from the
+		// middle, because a log that silently skips is a log that lies
+		// about what the run did.
+		"bridge_calls":        run.BridgeCalls,
+		"bridge_calls_elided": run.BridgeCallsElided,
+		// THE THREE IDENTIFIERS a person needs to find this run in
+		// somebody else's system: the coding CLI's own session, the
+		// command the engine launched, and the chain of asks that led
+		// here.
+		"session_id":       run.SessionID,
+		"command_id":       run.CommandID,
+		"delegation_chain": run.DelegationChain,
 	}
 }
 
