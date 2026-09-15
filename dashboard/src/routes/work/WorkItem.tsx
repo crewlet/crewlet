@@ -47,6 +47,8 @@ import {
 } from "~/lib/work.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { ToolCallBlock } from "~/components/ToolCall.tsx";
+import { useViewer } from "~/lib/viewer.ts";
 import type {
   WorkChange,
   WorkComment,
@@ -290,6 +292,11 @@ export function ItemBody({
   flush?: boolean;
 }) {
   const item = detail.task;
+  // WHOSE NAME WOULD LAND on a change made from the block at the foot — the
+  // token's own, not a seat's, which is what an operator write is attributed
+  // to. Here rather than passed in, because the peek renders this same body
+  // and would otherwise have to thread it through for one line of prose.
+  const viewer = useViewer();
   const [tab, setTab] = useParam("thread", "comments");
   // WHICH CHANGE'S ROUTING IS OPEN. A filter rather than a section: stepping
   // through the announced changes must not fill the back stack.
@@ -384,6 +391,10 @@ export function ItemBody({
           <History detail={detail} chrome={chrome} now={now} />
         )}
       </Panel>
+      {/* THE READ-ONLY PRODUCT'S ANSWER TO AN EDIT BUTTON. Closed by default:
+          it is what to do when somebody wants to change this, not what the
+          screen is about. */}
+      <ToolCallBlock subject={{ kind: "item", id: detail.task.key }} viewer={viewer.handle} />
     </>
   );
 }

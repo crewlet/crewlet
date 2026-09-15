@@ -1264,6 +1264,35 @@ Every empty state names what would fill it.
 
 ---
 
+## Changing what you are looking at
+
+**The dashboard only reads.** Every change in a Crewlet company is attributed
+to whoever made it, and a browser form posting as "the dashboard" would be the
+one actor an audit trail cannot name — so there is no edit button anywhere in
+it, and that is a decision rather than a gap.
+
+What an object page offers instead is a closed disclosure, **Change this with
+your assistant**, holding the operator MCP calls that would make the change,
+with this object's ids already in them:
+
+```
+update_work_item {"item":"ENG-8","status":"in_progress"}
+comment_on_work_item {"item":"ENG-8","body":"…"}
+remove_work_item {"item":"ENG-8"}
+```
+
+Copy one, edit it, and send it to whatever assistant you have connected to
+`/operator/mcp`. Anything irreversible is last and says so. One line under the
+block names who would be attributed — your token, as an operator, never a seat.
+
+The calls are checked against the real operator catalogue by a test
+(`TestEveryToolCallTheScreenOffersIsOneAnOperatorHas`): every tool named
+exists, every argument filled is one that tool takes, and none of them is a
+read. A block of tool names written by hand is a documentation surface that
+starts lying on the first rename, and it lies in the worst way — a copied call
+the engine refuses, on the one screen whose whole promise is that this is what
+to send.
+
 ## How it is built
 
 ```
