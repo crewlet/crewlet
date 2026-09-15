@@ -86,6 +86,12 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// opens fifteen of these in a row and logs nothing between them, so a
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
+	//
+	// STOPPED WHERE THE CREATE ENDS rather than where this function does,
+	// because the line NAMES the create: left armed across the replica
+	// observation below it, a slow status read reports a bucket that is
+	// "still being created" when the create has already finished, and
+	// sends whoever is diagnosing a clustered boot at the wrong call.
 	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
 			"replicas", cfg.Replicas, "waited", after,
@@ -93,15 +99,20 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 				"a metadata group that has not settled, and the next line from "+
 				"this node says whether it got past it")
 	})
-	defer stop()
 
 	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
 	case err == nil:
-		return bucket, observeReplicas(createCtx, bucket, cfg)
+		stop()
+		// ON ctx, NOT createCtx: a slow lookup can leave the per-create
+		// deadline spent, and the observation would then fail on a
+		// bucket it had just found. observeReplicas owns its own term.
+		return bucket, observeReplicas(ctx, bucket, cfg)
 	case !errors.Is(err, jetstream.ErrBucketNotFound):
+		stop()
 		return nil, err
 	}
 	bucket, createErr := createKeyValue(createCtx, js, cfg)
+	stop()
 	if createErr == nil {
 		// THIS NODE MADE IT, at the count it asked for. Nothing to
 		// observe, and no round trip spent observing it.
@@ -173,6 +184,13 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 //
 // Equal or higher passes, so a single-replica development node against a
 // three-replica fleet's buckets still starts.
+//
+// ctx IS THE BOOT'S and the term is derived here, for the reason
+// [jsprovision.Settle] gives: the per-create deadline may be spent by the time
+// this runs — a slow lookup is enough — and an observation handed it fails
+// instantly on a bucket that was just found. [jsprovision.ReadBack] rather
+// than a create's budget, because this is an ordinary metadata read against a
+// group that has already answered.
 func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 	cfg jetstream.KeyValueConfig) error {
 
@@ -181,6 +199,8 @@ func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 		// Nothing to be short of, and no round trip spent asking.
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
+	defer cancel()
 	status, err := bucket.Status(ctx)
 	if err != nil {
 		return fmt.Errorf("read %s status: %w", cfg.Bucket, err)
