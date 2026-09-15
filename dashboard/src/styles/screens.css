@@ -293,7 +293,7 @@
   font-family: var(--font-sans);
   font-size: var(--fs-xs);
   line-height: var(--lh-relaxed);
-  color: var(--text-primary);
+  color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-width: 78ch;
