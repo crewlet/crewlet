@@ -366,3 +366,85 @@ func TestEveryOperatorToolIsAnnotatedDeliberately(t *testing.T) {
 			"nothing")
 	}
 }
+
+// sprintSpy records the one call the sprint tool makes.
+type sprintSpy struct {
+	started int
+}
+
+func (s *sprintSpy) StartSprint(context.Context, string, string, int) (
+	tracker.WriteResult, error) {
+
+	s.started++
+	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+func (s *sprintSpy) CloseSprint(context.Context, string, string, int) (
+	tracker.WriteResult, error) {
+
+	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+func (s *sprintSpy) RolloverSprint(context.Context, string, string, int,
+	tracker.RolloverTarget) (int, bool, error) {
+
+	return 0, false, nil
+}
+
+// AND AN OPERATOR MANAGES A SPRINT, which is the same hole one tool over.
+//
+// `manage_sprint` gated on the LEAD lookup alone, and that lookup is asked
+// about the actor's handle — which for an operator is an API token's name and
+// never a handle in the org chart. So starting or closing a sprint was
+// refused for every operator in every company, through the only surface a
+// founder has: the capacities a workload screen is read against are declared
+// on a policy, and a policy's capacities count only while a sprint is
+// RUNNING, so this gate is what stood between the two halves of that screen.
+func TestAnOperatorCarriesTheAuthorityToManageASprint(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		kind      tracker.AuthorKind
+		wantStart int
+	}{
+		"an operator token": {tracker.AuthorOperator, 1},
+		"a human":           {tracker.AuthorHuman, 1},
+		// A SEAT STILL NEEDS THE LEAD RELATION, which the seam below
+		// answers no to for every handle. A sprint decision belongs to
+		// whoever plans the team's fortnight.
+		"a seat": {tracker.AuthorAgent, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sprints := &sprintSpy{}
+			reg := tools.NewRegistry()
+			for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+				Work: builtin.WorkDeps{
+					Reader:       newFakeTracker(),
+					Writer:       newFakeTracker().as,
+					SprintWriter: func(builtin.Actor) builtin.SprintWriter { return sprints },
+					Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+						return builtin.Actor{Handle: "ops", Kind: tc.kind}, nil
+					},
+				},
+				// THE CHART SAYS NO TO EVERYBODY, which is exactly the
+				// state an operator is in: they are not a seat, so
+				// there is no handle for it to say yes about.
+				LeadsProject: func(context.Context, string, string) bool { return false },
+			}) {
+				if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
+					t.Fatalf("register %s: %v", tool.Name(), err)
+				}
+			}
+			got := callWork(t, reg, tracker.ManageSprintTool, map[string]any{
+				"project": "ENG", "action": "start", "sprint": 1,
+			})
+			if sprints.started != tc.wantStart {
+				t.Fatalf("the sprint was started %d times, want %d — %q",
+					sprints.started, tc.wantStart, got.Output)
+			}
+			if tc.wantStart == 0 && !strings.Contains(got.Output, "person's own") {
+				t.Errorf("the refusal does not name the other way in: %q",
+					got.Output)
+			}
+		})
+	}
+}

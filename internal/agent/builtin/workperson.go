@@ -161,8 +161,7 @@ func (t *setPriorities) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// handle in the chart — so no ancestor walk can ever match it,
 		// `Lead` is false for every operator by construction, and the
 		// only shipped surface for the verb could not use it.
-		Person: actor.Kind == tracker.AuthorHuman ||
-			actor.Kind == tracker.AuthorOperator,
+		Person: actor.Kind.Person(),
 	}
 	// AND THE LEAD RELATION IS RESOLVED HERE and passed as a value,
 	// because the tracker has no chart — see the file head. A surface that

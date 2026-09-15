@@ -83,12 +83,26 @@ func (e ProjectEdit) Empty() bool {
 }
 
 // ProjectAuthority is what a caller may do to a project's policy.
+//
+// TWO AUTHORITIES, EITHER OF WHICH IS ENOUGH for the three facets a lead owns,
+// and this is [PersonAuthority]'s shape rather than a ladder. An OPERATOR is a
+// person acting through their own credential — the founder at the dashboard,
+// or the assistant they run the company through — and they are not a seat at
+// all, so a gate that admitted only the lead refused the one actor the whole
+// operator surface exists for. It was reachable: `/operator/mcp` resolves the
+// lead from the ORG CHART by handle, an operator token carries its own name
+// rather than a seat's, so the lookup answered false and `write_project` was
+// refused for every operator in every company — including the founder setting
+// the sprint capacities a workload screen is read against.
 type ProjectAuthority struct {
 	// Lead reports whether the actor leads the project or sits above it.
 	Lead bool
 
 	// Operator reports whether the actor is acting through a person's own
-	// credential rather than as a seat. Archiving takes it.
+	// credential rather than as a seat. It is authority over the policy in
+	// its own right, and archiving takes it SPECIFICALLY — a lead may say
+	// how their project's work is filed, and only a person may take the
+	// project out of circulation.
 	Operator bool
 }
 
@@ -104,11 +118,12 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 		return WriteResult{}, fmt.Errorf("tracker: a project edit of %s sets "+
 			"nothing — the name, purpose and owning unit come from the org "+
 			"chart, and the tags are write_project(tags.add)", key)
-	case !authority.Lead:
+	case !authority.Lead && !authority.Operator:
 		return WriteResult{}, fmt.Errorf("tracker: %s's field declarations, "+
-			"sprint policy and default assignee are the project lead's — they "+
-			"decide how everybody's work in it is filed and planned, which is "+
-			"not a call one seat makes for the team", key)
+			"sprint policy and default assignee are the project lead's or a "+
+			"person's own — they decide how everybody's work in it is filed "+
+			"and planned, which is not a call one other seat makes for the "+
+			"team", key)
 	case edit.Archived != nil && !authority.Operator:
 		// NAMED SEPARATELY FROM THE LEAD GATE, because a lead who hit
 		// this one did have authority over the other three facets and

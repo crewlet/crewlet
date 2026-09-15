@@ -100,6 +100,29 @@ var AuthorKinds = []AuthorKind{
 // Valid reports whether an author kind off the wire is one this build knows.
 func (a AuthorKind) Valid() bool { return slices.Contains(AuthorKinds, a) }
 
+// Person reports an actor acting through a PERSON's own credential rather
+// than as a seat: somebody at the dashboard, or the token they run the company
+// through.
+//
+// IT IS THE PREDICATE EVERY AUTHORITY GATE ASKS, and it is here because it was
+// written out at each of them and they did not agree: `set_priorities` tested
+// both kinds, while `write_project` and `manage_sprint` tested only
+// `operator`. So a human teammate could arrange somebody's priority list from
+// the dashboard and could not start their own team's sprint — one rule, two
+// answers, and no single place a reader could go to find out which was meant.
+//
+// (`pages` carries its own `Actor.IsHuman` over its own three-valued
+// `AuthorKind`. That is a different closed set answering a different question
+// — who a NOTIFICATION treats as a person — and folding the two would make one
+// name mean both.)
+//
+// A METHOD ON THE CLOSED SET rather than a helper beside one caller, for
+// [AuthorKind.Valid]'s reason: a fifth kind is added here, and a predicate
+// over the set belongs where the set is.
+func (a AuthorKind) Person() bool {
+	return a == AuthorHuman || a == AuthorOperator
+}
+
 // TermKind is what a scope term names.
 type TermKind string
 
