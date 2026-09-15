@@ -120,9 +120,11 @@ test("a cut view names the middle as the gap, not the ending", async () => {
   mount({ events: [phase("2026-09-13T10:01:30Z", 90_000)], truncated: true });
   expect(await screen.findByText(/middle not shown/)).toBeTruthy();
   expect(screen.getByText(/what is missing is the middle/)).toBeTruthy();
-  // Neither caption may state what it used to: "no turn record" is a claim
-  // about the TURN, and "spanning the turn's first and last event" is a claim
-  // about a window this page can no longer assume is whole.
+  // Neither note may state what it used to: "no turn record" is a claim about
+  // the TURN, and "spanning the turn's first and last event" is a claim about
+  // a window this page can no longer assume is whole. Both are `Fact.note`
+  // now rather than a tile's caption, and the assertion is unchanged by that
+  // on purpose — what must not appear is the sentence, wherever it is drawn.
   expect(screen.queryByText("no turn record")).toBeNull();
   expect(screen.queryByText("spanning the turn's first and last event")).toBeNull();
 });
@@ -144,11 +146,12 @@ test("a cut view still reports the outcome, off the recovered record", async () 
       }),
     ],
   });
-  // BOTH FRAMES REPORT IT — the header's fact line, which the peek renders
-  // from the same builder, and the outcome tile, whose `sub` says WHERE the
-  // word came from. This case is about the tile: a cut view recovers the
-  // turn's ending from the record rather than from the rows it holds, and
-  // `delivered the work` is that recovery being read.
+  // BOTH FRAMES REPORT IT, because both render `turnFacts`: the word is the
+  // fact's value and WHOSE word it is — the reviewer's verdict or the
+  // executor's own — is its note. This case is about the note: a cut view
+  // recovers the turn's ending from the record rather than from the rows it
+  // holds, and `delivered the work` is that recovery being read. It used to
+  // reach only the page, through a tile the rail had no room for.
   expect((await screen.findAllByText("done")).length).toBeGreaterThan(0);
   expect(screen.getByText("delivered the work")).toBeTruthy();
 });

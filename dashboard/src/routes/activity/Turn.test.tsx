@@ -11,8 +11,8 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { outcomeOf, problemCount, turnSpan } from "./Turn.tsx";
-import type { Timed } from "~/lib/phases.ts";
+import { outcomeOf, problemCount, turnFacts, turnSpan, type TurnView } from "./Turn.tsx";
+import type { PhaseRecord, Timed } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 
 function record(payload: Record<string, unknown>): EventRecord {
@@ -194,5 +194,94 @@ describe("outcomeOf", () => {
     expect(out.word).toBe("done");
     expect(out.tone).toBe("positive");
     expect(out.sub).toBe("delivered the work");
+  });
+});
+
+/**
+ * The fact line is what the page and the rail BOTH wear, so what it says about
+ * a number is said once. Two of its facts carry a note, and a note is a claim
+ * about where a number came from — which is exactly the kind of claim that
+ * goes stale silently, because nothing on screen contradicts it.
+ *
+ * These pin the branches rather than the prose: a duration is captioned only
+ * when it was NOT measured, a token figure only when workers are outside it.
+ */
+describe("turnFacts", () => {
+  function view(over: Partial<TurnView>): TurnView {
+    return {
+      turnId: "t",
+      loading: false,
+      error: null,
+      events: [],
+      cut: false,
+      phases: [],
+      own: [{} as PhaseRecord],
+      nested: new Map(),
+      rec: {} as TurnView["rec"],
+      role: "",
+      trigger: null,
+      outcome: outcomeOf({} as TurnView["rec"]),
+      running: false,
+      durationMs: null,
+      span: { from: 0, to: 0 },
+      tokens: 0,
+      toolCalls: 0,
+      workerTokens: 0,
+      workerCount: 0,
+      rounds: 0,
+      ...over,
+    };
+  }
+
+  function fact(v: TurnView, label: string) {
+    return turnFacts(v).find((f) => f.label === label);
+  }
+
+  test("the engine's own milliseconds carry no note", () => {
+    // A caption under every duration is a caption nobody reads, and then the
+    // one time it says something else it is missed. Measured is the silent
+    // case precisely so the derived one is loud.
+    expect(fact(view({ durationMs: 121, span: { from: 10, to: 900 } }), "Took")?.note).toBe(
+      undefined,
+    );
+  });
+
+  test("a duration this page derived says so, and says which window", () => {
+    const spanned = fact(view({ span: { from: 1_000, to: 4_000 } }), "Took");
+    expect(spanned?.note).toBe("spanning the turn's first and last event");
+    // A CUT VIEW HOLDS BOTH ENDS — the span is the turn's real window — but
+    // the record carrying the engine's own measurement is missing from a turn
+    // this page has both ends of, and those are different sentences.
+    const cut = fact(view({ cut: true, span: { from: 1_000, to: 4_000 } }), "Took");
+    expect(cut?.note).toBe("spanning the turn's ends — its own record is not among them");
+  });
+
+  test("a turn with neither a measurement nor a window states no duration", () => {
+    const f = fact(view({ span: { from: 0, to: 0 } }), "Took");
+    expect(f?.value).toBe("");
+    expect(f?.note).toBe(undefined);
+  });
+
+  test("the token figure names its workers, and stays silent where there are none", () => {
+    // `subagent_tokens` is deliberately outside `total_tokens` at the engine,
+    // so the note is the only thing on either surface that answers "how much
+    // of this turn was fan-out".
+    expect(fact(view({ tokens: 900, workerTokens: 400, workerCount: 1 }), "Tokens")?.note).toBe(
+      "+400 in 1 worker",
+    );
+    expect(fact(view({ tokens: 900, workerTokens: 400, workerCount: 3 }), "Tokens")?.note).toBe(
+      "+400 in 3 workers",
+    );
+    expect(fact(view({ tokens: 900 }), "Tokens")?.note).toBe(undefined);
+  });
+
+  test("a turn with no phase record in hand counts nothing, and notes nothing", () => {
+    // "0 phases · 0 rounds · 0 tokens" is a claim the turn did nothing. A turn
+    // still loading has not been shown to have done nothing — and a note
+    // hanging under an absent value would outlive the value it qualifies.
+    const empty = view({ own: [], workerTokens: 400, workerCount: 2 });
+    expect(fact(empty, "Tokens")?.value).toBe("");
+    expect(fact(empty, "Tokens")?.note).toBe(undefined);
+    expect(fact(empty, "Phases")?.value).toBe("");
   });
 });

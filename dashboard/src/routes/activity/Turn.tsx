@@ -62,8 +62,6 @@ import {
   Panel,
   PhaseTag,
   Skeleton,
-  Stat,
-  StatRow,
   cx,
 } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -277,7 +275,7 @@ export interface TurnView {
   durationMs: number | null;
   /** The window everything this frame holds falls inside — see [turnSpan]. */
   span: { from: number; to: number };
-  /** The turn's own token bill, without the workers — see the Tokens tile. */
+  /** The turn's own token bill, without the workers — see [turnFacts]. */
   tokens: number;
   toolCalls: number;
   workerTokens: number;
@@ -430,10 +428,21 @@ export function turnTitle(view: TurnView): string {
  * is a claim that this turn did nothing — which is exactly what a turn still
  * loading, or one whose events fell out of the store's window, has NOT been
  * shown to have done.
+ *
+ * THREE OF THEM CARRY A NOTE, and they are the three a reader can reasonably
+ * doubt: whether a duration was measured or derived, what a token figure
+ * covers, and whose word an outcome is. The page used to answer that in a
+ * four-tile strip directly under this line, which restated `Seat`, `Took`,
+ * `Tokens` and `Outcome` at three times the size and — because a tile is
+ * narrower than the line above it — ellipsed the seat name the line rendered
+ * whole. Its fourth caption was filler ("ran this turn", under a seat's own
+ * name); the other three are here, which is also how they reach the RAIL,
+ * where no tile ever rendered and a reader had nothing at all.
  */
 export function turnFacts(view: TurnView): Fact[] {
   const counted = view.own.length > 0;
   const { from, to } = view.span;
+  const spanned = view.durationMs == null && to > from;
   return [
     {
       label: "Seat",
@@ -441,25 +450,64 @@ export function turnFacts(view: TurnView): Fact[] {
       // inside the fact's own anchor is markup no browser agrees about.
       value: view.role ? <SeatChip name={view.role} handle={view.role} /> : "the engine",
     },
-    // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an em dash
-    // for a caller that has a tile to fill. A fact line has no tile: the
-    // fact is dropped and the status beside the title says "running".
-    { label: "Outcome", value: view.outcome.word === "—" ? "" : view.outcome.word },
+    {
+      // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an em
+      // dash for a caller that has a tile to fill. A fact line has no tile:
+      // the fact is dropped and the status beside the title says "running" —
+      // and the note goes with it, since a caption under nothing is a caption
+      // about nothing.
+      label: "Outcome",
+      value: view.outcome.word === "—" ? "" : view.outcome.word,
+      // WHOSE WORD THIS IS. `done` is the reviewer's verdict and `delivered`
+      // is the executor's own, and the badge renders one word for both — so
+      // without this a reader cannot tell a turn the reviewer passed from one
+      // that merely reported itself finished. On a failure it is the engine's
+      // `error_kind`, which is the difference between a turn that was stopped
+      // and one that decided against itself.
+      note: view.outcome.word === "—" ? undefined : view.outcome.sub || undefined,
+    },
     {
       label: "Took",
       // THE ENGINE'S OWN MEASUREMENT where a record carries one, and the
-      // window over everything this frame holds otherwise — the same two
-      // terms in the same order the page's tile names underneath.
+      // window over everything this frame holds otherwise.
       value:
         view.durationMs != null
           ? fmtDuration(view.durationMs)
-          : to > from
+          : spanned
             ? fmtDuration(to - from)
             : "",
+      // WHICH OF THE TWO THIS NUMBER IS. Only on the derived branch: a fact
+      // that says "measured" under every duration teaches a reader to stop
+      // reading the line, and then the one time it says something else they
+      // miss it. A CUT VIEW HOLDS BOTH ENDS, so the span is the turn's real
+      // window — but it is still the window rather than the engine's own
+      // milliseconds, and on that branch the record carrying them is missing
+      // from a turn this page has both ends of.
+      note: spanned
+        ? view.cut
+          ? "spanning the turn's ends — its own record is not among them"
+          : "spanning the turn's first and last event"
+        : undefined,
     },
     { label: "Phases", value: counted ? view.own.length : "" },
     { label: "Rounds", value: counted ? view.rounds : "" },
-    { label: "Tokens", value: counted ? fmtCount(view.tokens) : "" },
+    {
+      label: "Tokens",
+      value: counted ? fmtCount(view.tokens) : "",
+      // THE TURN'S OWN PHASES, and the note is what says so. A worker's
+      // tokens are already charged through the shared meter, which is why the
+      // engine keeps them out of `total_tokens` and reports them as
+      // `subagent_tokens` — so a figure summing every record disagreed with
+      // the very record shown further down this page. The split is also the
+      // only thing that answers "how much of this turn was fan-out" when a
+      // seat's spend jumps and its own rounds did not.
+      note:
+        counted && view.workerTokens > 0
+          ? `+${fmtCount(view.workerTokens)} in ${view.workerCount} worker${
+              view.workerCount === 1 ? "" : "s"
+            }`
+          : undefined,
+    },
   ];
 }
 
@@ -767,7 +815,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // a bug report.
   const view = useTurnView(turnId);
   const { loading, error, events, cut, phases, own, nested, rec, role, trigger } = view;
-  const { outcome, running, durationMs, workerTokens, workerCount } = view;
+  const { running, durationMs } = view;
   const phaseEvents = usePhaseEvents();
 
   const story = useMemo(() => tellStory(events), [events]);
@@ -1015,93 +1063,6 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             </span>
           </div>
         )}
-
-        {/* THE SAME FOUR NUMBERS THE FACT LINE ABOVE STATES, and deliberately
-            so: the header states them in the order every frame states them,
-            and this strip says WHERE EACH ONE CAME FROM — whether "Took" is
-            the engine's own measurement or the span of what this page holds,
-            whether an outcome is the reviewer's word or the executor's, how
-            much of the bill was fan-out. A fact line has no room for that,
-            and a reader who thinks a number looks wrong needs exactly it. */}
-        <Panel padding="none">
-          <StatRow cols={4}>
-            <Stat
-              icon="user"
-              label="Seat"
-              value={role ? <SeatChip name={role} handle={role} size="md" /> : "—"}
-              // The conversation key used to sit here, raw and truncated —
-              // "mattermost:9zd7xj4mqj8hf8fy4gt7aitiny:cnjzasu…" under a seat's
-              // name, with nothing saying what it was. It is a property of the
-              // TURN, not of the seat, and it is explained below rather than
-              // dumped here.
-              sub={running ? "running now" : "ran this turn"}
-            />
-            <Stat
-              icon="clock"
-              label="Took"
-              value={
-                durationMs != null
-                  ? fmtDuration(durationMs)
-                  : to > from
-                    ? fmtDuration(to - from)
-                    : "—"
-              }
-              sub={
-                durationMs != null
-                  ? "the engine's own measurement"
-                  : running
-                    ? "still running"
-                    : cut
-                      ? // A CUT VIEW HOLDS BOTH ENDS, so the span is the
-                        // turn's real window — but it is the window rather
-                        // than the engine's own measurement, and on this
-                        // branch the record that carries that measurement is
-                        // missing from a turn that has both its ends. Say
-                        // which of the two the number is.
-                        "spanning the turn's ends — its own record is not among them"
-                      : "spanning the turn's first and last event"
-              }
-            />
-            <Stat
-              icon="coin"
-              label="Tokens"
-              // THE TURN'S OWN PHASES. A worker's tokens are already charged
-              // through the shared meter, which is why the engine keeps them
-              // out of `total_tokens` and reports them as `subagent_tokens` —
-              // so summing every record made this tile disagree with the very
-              // record shown further down the same page. The split is also
-              // the only thing that answers "how much of this turn was
-              // fan-out" when a seat's spend jumps and its own rounds did not.
-              value={fmtCount(own.reduce((n, p) => n + p.totalTokens, 0))}
-              sub={
-                workerTokens > 0
-                  ? `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls · +${fmtCount(
-                      workerTokens,
-                    )} in ${workerCount} worker${workerCount === 1 ? "" : "s"}`
-                  : `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls`
-              }
-            />
-            <Stat
-              icon="check"
-              label="Outcome"
-              value={outcome.word}
-              tone={outcome.tone}
-              sub={
-                outcome.sub ||
-                (running
-                  ? "still running"
-                  : cut
-                    ? // "no turn record" is a claim about the TURN, and on a
-                      // cut view it would be a claim about the READ. The
-                      // answer recovers the turn's ending precisely so this
-                      // branch is rare: reaching it means the records are
-                      // genuinely absent from a view that holds both ends.
-                      "no turn record, and this view holds both ends"
-                    : "no turn record")
-              }
-            />
-          </StatRow>
-        </Panel>
 
         <TurnBrief view={view} omit={title} />
 

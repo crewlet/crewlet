@@ -33,6 +33,20 @@ export interface Fact {
   path?: string[];
   query?: Record<string, string>;
   setBy?: SetBy;
+  /**
+   * WHERE THIS VALUE CAME FROM, for a fact a reader can reasonably doubt.
+   *
+   * Distinct from [SetBy], which names WHO changed a recorded field. A note
+   * answers the other question: whether the number was MEASURED by the engine
+   * or DERIVED by this page, and what it covers. A turn's duration is the
+   * worked case — the engine's own milliseconds where a turn record carries
+   * them, the span of the events this frame holds where it does not, and the
+   * two differ by however much of the turn fell outside the read.
+   *
+   * Only for facts where the answer is not obvious. A fact with a note on
+   * every value is a fact line nobody reads.
+   */
+  note?: string;
 }
 
 export function FactLine({ facts }: { facts: Fact[] }) {
@@ -52,6 +66,10 @@ export function FactLine({ facts }: { facts: Fact[] }) {
               fact.value
             )}
           </span>
+          {/* A NOTE AND A `setBy` ARE NOT EXCLUSIVE, and the note comes
+              first: it qualifies the value directly above it, where "set by"
+              is about a person and reads as a footnote to both. */}
+          {fact.note && <span className="fact-note">{fact.note}</span>}
           {/* NEVER "set by —". A fact nothing recorded a change for renders
               no line at all: an em dash there would claim the engine keeps a
               record it does not. */}
