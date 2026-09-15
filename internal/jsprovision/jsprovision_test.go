@@ -481,3 +481,70 @@ func TestPlacementAndPropagationAreDisjoint(t *testing.T) {
 		}
 	}
 }
+
+// A PLACEMENT REFUSAL IS WAITED OUT, and the answer at the end names it.
+//
+// # Why this is one helper and not four loops
+//
+// Because three of the four creates had the loop and the fourth did not, and
+// the fourth was a durable consumer — placed by the same metadata group, on
+// the same stream, at the same moment of the same boot as the stream that had
+// it. So the clustered budget bought the consumer creates nothing: the single
+// condition the budget exists to wait out was the condition they returned on
+// immediately, and a node could fail its boot on "no suitable peers" while the
+// group it was asking was still forming.
+func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
+	t.Parallel()
+
+	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
+
+	// IT CLEARS: the members arrive and the create succeeds.
+	calls, announced := 0, 0
+	err := Place(t.Context(), func(context.Context) error {
+		calls++
+		if calls < 3 {
+			return placement
+		}
+		return nil
+	}, func() { announced++ })
+	if err != nil {
+		t.Errorf("a create that succeeded on the third attempt reported %v", err)
+	}
+	if calls != 3 {
+		t.Errorf("tried %d times, want 3", calls)
+	}
+	// ANNOUNCED ONCE, not per poll: the useful facts are that this
+	// started and whether it ended.
+	if announced != 1 {
+		t.Errorf("said it was waiting %d times, want exactly one line", announced)
+	}
+
+	// ANYTHING ELSE IS TERMINAL AT ONCE. Waiting out a bad configuration
+	// turns a mistake into a two-minute hang with the same message at the
+	// end.
+	calls = 0
+	bad := errors.New("invalid consumer config")
+	if err := Place(t.Context(), func(context.Context) error {
+		calls++
+		return bad
+	}, nil); !errors.Is(err, bad) {
+		t.Errorf("a terminal create error came back as %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("a terminal error was retried %d times", calls)
+	}
+
+	// AND A BUDGET THAT RUNS OUT REPORTS THE REFUSAL, not its own
+	// deadline: "no suitable peers" names the condition to go and look
+	// at, and "deadline exceeded" names nothing.
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	err = Place(ctx, func(context.Context) error { return placement }, nil)
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("an exhausted budget reported its own deadline (%v) rather "+
+			"than the refusal that explains it", err)
+	}
+	if !errors.Is(err, placement) {
+		t.Errorf("reported %v, want the placement refusal", err)
+	}
+}

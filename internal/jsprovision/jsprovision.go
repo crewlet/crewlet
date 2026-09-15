@@ -200,6 +200,46 @@ func Settle(ctx context.Context, ask func(context.Context) error) error {
 	}
 }
 
+// Place runs create until the cluster stops refusing to place the object, for
+// as long as ctx allows.
+//
+// # Why this is not each caller's own loop
+//
+// Because three of the four had one and the fourth did not, which is this
+// package's founding argument arriving a second time. A replicated stream and a
+// replicated KV bucket each retried [Unplaceable] at [PlacementRetry] until
+// their budget ran out; a durable consumer — placed by the same metadata group,
+// on the same stream, at the same moment of the same boot — returned on the
+// first refusal. So the clustered budget bought the consumer creates nothing at
+// all: the one condition the budget exists to wait out was the one condition
+// they did not wait on, and a node could fail its boot on "no suitable peers"
+// while the group it was asking was still forming.
+//
+// awaiting is called ONCE, before the first wait, and is where a caller says
+// which object is being waited for. Once rather than per attempt for
+// [WhenSlow]'s reason: the useful facts are that this started and whether it
+// ended, and a line per poll answers the first question hundreds of times.
+//
+// THE ERROR IT RETURNS IS THE CREATE'S OWN, never the context's: "no suitable
+// peers" says what is wrong and names the condition to go and look at, and
+// "deadline exceeded" says neither.
+func Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
+	for attempt := 0; ; attempt++ {
+		err := create(ctx)
+		if err == nil || !Unplaceable(err) {
+			return err
+		}
+		if attempt == 0 && awaiting != nil {
+			awaiting()
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(PlacementRetry):
+		}
+	}
+}
+
 // Clustered is whether this node's broker has peers, which is what decides
 // every budget above.
 //

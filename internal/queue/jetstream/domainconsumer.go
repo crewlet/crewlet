@@ -162,7 +162,21 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	cons, err := q.js.Consumer(createCtx, stream, name)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
-		cons, err = q.js.CreateConsumer(createCtx, stream, config)
+		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
+		// gives: this consumer is placed by the same metadata group as
+		// the stream it reads, so "no suitable peers" is transient here
+		// too and the budget above is worth nothing without the retry.
+		err = jsprovision.Place(createCtx, func(ctx context.Context) error {
+			var e error
+			cons, e = q.js.CreateConsumer(ctx, stream, config)
+			return e
+		}, func() {
+			q.log.Info("jetstream_consumer_awaiting_peers", "stream", stream,
+				"consumer", name,
+				"detail", "the cluster has not yet seen enough members to "+
+					"place this state-log consumer; retrying until the "+
+					"provisioning deadline")
+		})
 		stop()
 		if err != nil && !jsprovision.Unplaceable(err) {
 			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so

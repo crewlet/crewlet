@@ -350,7 +350,7 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 // would turn a config mistake into a thirty-second hang with the same
 // message at the end.
 func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
-	for attempt := 0; ; attempt++ {
+	return jsprovision.Place(ctx, func(ctx context.Context) error {
 		// CREATE, NOT CreateOrUpdate, and the difference is the whole
 		// race guard above rather than a preference.
 		//
@@ -369,23 +369,13 @@ func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig)
 		// configuration at boot is how a ceiling an operator raised gets
 		// silently lowered".
 		_, err := q.js.CreateStream(ctx, config)
-		if err == nil || !jsprovision.Unplaceable(err) {
-			return err
-		}
-		if attempt == 0 {
-			q.log.Info("jetstream_stream_awaiting_peers", "stream", config.Name,
-				"replicas", config.Replicas,
-				"detail", "the cluster has not yet seen enough members to place "+
-					"this stream; retrying until the provisioning deadline")
-		}
-		select {
-		case <-ctx.Done():
-			// The ORIGINAL error, not the context's: "no suitable peers"
-			// says what is wrong and "deadline exceeded" does not.
-			return err
-		case <-time.After(jsprovision.PlacementRetry):
-		}
-	}
+		return err
+	}, func() {
+		q.log.Info("jetstream_stream_awaiting_peers", "stream", config.Name,
+			"replicas", config.Replicas,
+			"detail", "the cluster has not yet seen enough members to place "+
+				"this stream; retrying until the provisioning deadline")
+	})
 }
 
 // provisionBudget is how long one stream create on this queue gets, which
@@ -979,14 +969,31 @@ func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 			"detail", "this durable consumer is still being created; on a fleet "+
 				"that is a metadata group that has not settled")
 	})
-	cons, createErr := q.js.CreateConsumer(createCtx, stream, cfg)
+	var cons jetstream.Consumer
+	// WAITED OUT, like the stream and bucket creates. A durable consumer
+	// on a replicated stream is placed by the same metadata group at the
+	// same moment of the same boot, so "no suitable peers" is exactly as
+	// transient here — and without the retry the clustered budget above
+	// bought this call nothing, because the one condition it exists to
+	// wait out was the one condition this create did not wait on.
+	createErr := jsprovision.Place(createCtx, func(ctx context.Context) error {
+		var e error
+		cons, e = q.js.CreateConsumer(ctx, stream, cfg)
+		return e
+	}, func() {
+		q.log.Info("jetstream_consumer_awaiting_peers", "stream", stream,
+			"consumer", cfg.Durable,
+			"detail", "the cluster has not yet seen enough members to place "+
+				"this consumer; retrying until the provisioning deadline")
+	})
 	stop()
 	if createErr == nil {
 		return cons, true, nil
 	}
 	if jsprovision.Unplaceable(createErr) {
-		// NOTHING WAS PLACED, so there is nothing to read back — the
-		// same gate the stream and bucket creates take.
+		// STILL UNPLACEABLE after the whole budget, so nothing was
+		// placed and there is nothing to read back — the same gate the
+		// stream and bucket creates take.
 		return nil, false, createErr
 	}
 	// RE-ASKED, like the stream and bucket read-backs: a peer's create is

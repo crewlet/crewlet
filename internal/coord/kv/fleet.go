@@ -235,26 +235,21 @@ func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
 func createKeyValue(ctx context.Context, js jetstream.JetStream,
 	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
-	for attempt := 0; ; attempt++ {
-		bucket, err := js.CreateKeyValue(ctx, cfg)
-		if err == nil || !jsprovision.Unplaceable(err) {
-			return bucket, err
-		}
-		if attempt == 0 {
-			log.InfoContext(ctx, "coord_kv_bucket_awaiting_peers",
-				"bucket", cfg.Bucket, "replicas", cfg.Replicas,
-				"detail", "the cluster has not yet seen enough members to place "+
-					"this bucket; retrying until the provisioning deadline")
-		}
-		select {
-		case <-ctx.Done():
-			// THE ORIGINAL ERROR, not the context's: "no suitable
-			// peers" says what is wrong and "deadline exceeded"
-			// does not.
-			return nil, err
-		case <-time.After(jsprovision.PlacementRetry):
-		}
+	var bucket jetstream.KeyValue
+	err := jsprovision.Place(ctx, func(ctx context.Context) error {
+		var e error
+		bucket, e = js.CreateKeyValue(ctx, cfg)
+		return e
+	}, func() {
+		log.InfoContext(ctx, "coord_kv_bucket_awaiting_peers",
+			"bucket", cfg.Bucket, "replicas", cfg.Replicas,
+			"detail", "the cluster has not yet seen enough members to place "+
+				"this bucket; retrying until the provisioning deadline")
+	})
+	if err != nil {
+		return nil, err
 	}
+	return bucket, nil
 }
 
 // The fleet-shared state on JetStream KV.
