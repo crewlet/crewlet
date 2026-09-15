@@ -265,7 +265,7 @@ sprint **number**. Rolling into a closed sprint, or into the sprint being
 rolled, is refused — either would put the work back where the rollover was
 called to take it out of.
 
-The policy itself is the project **lead's**, written with
+The policy itself is the project **lead's or a person's own**, written with
 `write_project(sprints: {...})`. Sending `enabled: false` stops the cadence and
 does **not** close a running sprint — the pointer belongs to the lifecycle, and
 a settings change that ended a team's commitment as a side effect would be the
@@ -274,9 +274,20 @@ keeps at most 12 minted ahead; every one of those is refused at the write
 rather than at the duty, which runs on another node where nobody is watching.
 
 `manage_sprint` is an **operator** tool and is additionally gated on leading
-the project: a sprint is a commitment a team made together, so starting one
-changes what everybody is expected to work on and closing one decides what
-counted. A seat that could do either would be deciding its own team's plan.
+the project **or holding a person's own credential**: a sprint is a commitment
+a team made together, so starting one changes what everybody is expected to
+work on and closing one decides what counted. A seat that could do either would
+be deciding its own team's plan; a person is not a seat.
+
+**Capacity.** `sprints.capacity` is what each seat can take in a sprint, keyed
+by handle and stated in that project's own measure — `{"ada": {"points": 8}}`.
+A seat named there is compared against it, in the sprint report and on the
+company-wide workload; a seat that is not has **no capacity**, which is not a
+capacity of zero. Sending the object **replaces** the whole set, because a
+merge could not express a removal: zero is a real capacity, so there is no
+value meaning "this seat no longer has one". `sprints.point_scale` is the
+sibling knob — the estimates this project allows, as a list of numbers, empty
+meaning any.
 
 Membership is a **stay**: the pair of instants a task was in one sprint for,
 recorded by the engine rather than carried by whoever moved it. That is what
@@ -537,7 +548,7 @@ CHANGE rather than about state:
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much open work each holds, who leads it and which sprint is running |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags, its lead and its active sprint. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the sprint policy and setting the default assignee are the project **lead's**; archiving the project takes a person |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the sprint policy (including each seat's `capacity`) and setting the default assignee are the project **lead's or a person's own**; archiving the project takes a person specifically |
 | `list_work_goals` | the company's goals, what each is at, and the health updates written against them. A read only — setting a goal is a person's |
 | `sprint_report` | how a project's recent sprints went — committed, added, removed, done and remaining, per sprint and per person, in the project's own measure |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
@@ -673,8 +684,9 @@ or out of a sprint — because "is this person overloaded" is a question about
 their whole queue, where a sprint report is about one fortnight's commitment.
 The two numbers are deliberately different and both are worth having.
 
-A **capacity** comes from a project's `sprint_policy`, and only while that
-project has a sprint RUNNING: a capacity is a statement about a fortnight, and
+A **capacity** is declared on a project's sprint policy —
+`write_project(sprints.capacity)`, keyed by handle, in that project's own
+measure — and counts only while that project has a sprint RUNNING: a capacity is a statement about a fortnight, and
 holding somebody to a number nobody is currently working to is worse than
 holding them to none. A person working across two sprinting projects has both
 capacities and their capacity is the **sum**; the answer says how many projects

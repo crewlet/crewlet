@@ -448,3 +448,127 @@ func TestAnOperatorCarriesTheAuthorityToManageASprint(t *testing.T) {
 		})
 	}
 }
+
+// projectSpy records the edit the project tool built.
+type projectSpy struct {
+	edit tracker.ProjectEdit
+	tags tracker.TagEdit
+}
+
+func (p *projectSpy) WriteProject(_ context.Context, _, _ string,
+	edit tracker.ProjectEdit, _ tracker.ProjectAuthority) (
+	tracker.WriteResult, error) {
+
+	p.edit = edit
+	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+func (p *projectSpy) WriteTags(_ context.Context, _, _ string,
+	edit tracker.TagEdit, _ tracker.TagAuthority) (tracker.WriteResult, error) {
+
+	p.tags = edit
+	return tracker.WriteResult{Outcome: statelog.OutcomeApplied}, nil
+}
+
+func (p *projectSpy) EnsureTags(context.Context, string, string, []string) (
+	[]string, []string, error) {
+
+	return nil, nil, nil
+}
+
+// A SPRINT CAPACITY HAD NO PRODUCER, so the field the whole comparison rests
+// on could only ever be written by a test.
+//
+// `SprintPolicy.Capacity` is validated by `checkSprintPolicy`, read by the
+// sprint report's `AssigneeFigures` and read again by the workload — and
+// `sprintPolicyArg` read nine fields and not that one, nor did the schema
+// declare it. So the validation loop ran over an always-empty map, and both
+// readers answered "nobody declared a capacity" in every company that has ever
+// run this engine. `point_scale` is the same hole beside it.
+func TestASprintPolicyCanDeclareItsCapacities(t *testing.T) {
+	t.Parallel()
+	project := &projectSpy{}
+	reg := tools.NewRegistry()
+	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
+		Work: builtin.WorkDeps{
+			Reader:        newFakeTracker(),
+			Writer:        newFakeTracker().as,
+			ProjectWriter: func(builtin.Actor) builtin.ProjectWriter { return project },
+			Actor: func(context.Context, *turnctx.Turn) (builtin.Actor, error) {
+				return builtin.Actor{Handle: "ops", Kind: tracker.AuthorOperator}, nil
+			},
+		},
+	}) {
+		if err := reg.Register(tool, tools.OriginBuiltin); err != nil {
+			t.Fatalf("register %s: %v", tool.Name(), err)
+		}
+	}
+	got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG",
+		"sprints": map[string]any{
+			"length_days": 14,
+			"measure":     "points",
+			"capacity": map[string]any{
+				"ada": map[string]any{"points": 8.0},
+				"bo":  map[string]any{"estimate_min": 600.0},
+				// A MALFORMED ENTRY IS SKIPPED rather than failing the
+				// whole edit: the policy carries nine other fields and
+				// losing them over one bad capacity is the worse answer.
+				"broken": "not an object",
+			},
+			"point_scale": []any{1.0, 2.0, 3.0, 5.0, 8.0},
+		},
+	})
+	if got.Failed {
+		t.Fatalf("write_project failed: %q", got.Output)
+	}
+	policy := project.edit.Sprints
+	if policy == nil || policy.Policy == nil {
+		t.Fatal("the edit carries no sprint policy at all")
+	}
+	if len(policy.Policy.Capacity) != 2 {
+		t.Fatalf("the policy declares %+v, want the two well-formed seats — "+
+			"a field nothing can set is a feature only a test has",
+			policy.Policy.Capacity)
+	}
+	if got := policy.Policy.Capacity["ada"].Points; got != 8 {
+		t.Errorf("ada's capacity is %v points, want 8", got)
+	}
+	if got := policy.Policy.Capacity["bo"].EstimateMin; got != 600 {
+		t.Errorf("bo's capacity is %v minutes, want 600 — the other measure "+
+			"is not a second field nobody reads", got)
+	}
+	if !slices.Equal(policy.Policy.PointScale, []float64{1, 2, 3, 5, 8}) {
+		t.Errorf("the point scale is %v, want the one that was sent — the "+
+			"same hole beside the capacity", policy.Policy.PointScale)
+	}
+	// AN ABSENT CAPACITY IS NIL, never an empty map, and BOTH ways of
+	// arriving at absent are tested — the key that is not there, and the
+	// object whose every entry was malformed. They reach different guards,
+	// and the second is the one a caller actually produces: a client
+	// sending a capacity it built from a form with nothing valid in it.
+	if capacityOf(t, reg, project, map[string]any{"length_days": 14}) != nil {
+		t.Error("a policy that names no capacities carries an empty map")
+	}
+	if got := capacityOf(t, reg, project, map[string]any{
+		"length_days": 14,
+		"capacity":    map[string]any{"ada": "not an object", "bo": 7.0},
+	}); got != nil {
+		t.Errorf("a capacity with nothing well-formed in it is %v, want "+
+			"nothing — an empty map says somebody declared capacities and "+
+			"named nobody, which is a different claim", got)
+	}
+}
+
+// capacityOf runs one more write_project and hands back the capacity it built.
+func capacityOf(t *testing.T, reg *tools.Registry, project *projectSpy,
+	sprints map[string]any) map[string]tracker.Capacity {
+
+	t.Helper()
+	if got := callWork(t, reg, tracker.WriteProjectTool, map[string]any{
+		"project": "ENG", "sprints": sprints,
+	}); got.Failed {
+		t.Fatalf("write_project failed: %q", got.Output)
+	}
+	return project.edit.Sprints.Policy.Capacity
+}
