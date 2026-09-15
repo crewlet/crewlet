@@ -318,8 +318,17 @@ describe("the tree", () => {
     expect(mark("Acme")).not.toContain(large);
   });
 
-  /* A human seat keeps the small figure inside its dashed ring, which is the
-     boundary that says what it is. */
+  /*
+   * A human seat keeps the small figure inside its dashed ring, which is the
+   * boundary that says what it is.
+   *
+   * THE FIGURE'S OWN SIZE, not only the ring's class. This case read the class
+   * alone and stayed green while the figure grew to the zone's own step and
+   * measured 20px inside the 24px ring, touching it on every side: the ring
+   * stops reading as a ring, which is the one thing it is there to do. Every
+   * other mark IS the zone and answers `1em`, which is how an agent seat wears
+   * the large one.
+   */
   test("a human seat's mark stays the small step inside its ring", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
@@ -327,6 +336,9 @@ describe("the tree", () => {
     const zone = item("CEO").querySelector("[aria-hidden='true']")!;
     expect(zone.className).toContain(markStep("ring"));
     expect(zone.className).not.toContain(markStep("large"));
+    expect(zone.querySelector("svg")?.getAttribute("width")).toBe("14px");
+    // The agent seat beside it takes whatever its zone is set to.
+    expect(item("Dev").querySelector("svg")?.getAttribute("width")).toBe("1em");
   });
 
   test("the problems the last check placed are counted on the node in the critical tone", () => {

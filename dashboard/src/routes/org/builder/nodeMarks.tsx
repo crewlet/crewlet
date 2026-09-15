@@ -91,11 +91,18 @@ export function nodeGlyphKind(view: NodeView): NodeGlyphKind {
  * the zone it is in, which is how the chart gives an agent seat three quarters
  * of its icon zone and a unit half of it. Every drawing here answers `1em` by
  * default, the Crewlet figure included.
+ *
+ * A HUMAN'S FIGURE IS THE EXCEPTION, because it is the one mark drawn INSIDE
+ * something: the dashed boundary that says this seat is a person outside the
+ * system, held at the 24px target floor. At the zone's own step the figure
+ * measured 20px inside that 24px ring and touched it on every side; the small
+ * step leaves the air the boundary needs to read as a boundary. A caller that
+ * says a size still gets it.
  */
 export function NodeGlyph({ kind, size }: { kind: NodeGlyphKind; size?: GlyphSize }) {
   if (kind === "company") return <ApartmentGlyph size={size} />;
   if (kind === "unit") return <AccountTreeGlyph size={size} />;
-  if (kind === "human") return <PersonGlyph size={size} />;
+  if (kind === "human") return <PersonGlyph size={size ?? "sm"} />;
   const side = cssLength(size);
   return <CrewletIcon width={side} height={side} />;
 }
