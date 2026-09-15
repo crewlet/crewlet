@@ -79,6 +79,20 @@ an agent reads says so explicitly rather than telling it to @-mention somebody
 it cannot — a message addressed to a handle that resolves to nobody reads to
 everyone else as work handed over.
 
+**The queue is `#/inbox`**, and it is the dashboard's landing screen. Opening it
+with an API token resolves that token's id against every seat's
+`crewlet_operator_id` and shows the person it names: their notices, the one
+reason of twenty that routed each one, and what is waiting on a decision. A
+token bound to no seat is not an error — it is an operator outside the org
+chart — and the screen says so rather than showing somebody else's queue or an
+empty one, naming the line of company configuration that would give it a
+person. `#/me` is the same person's own work, and it is absent for the same
+reason when the token names nobody.
+
+Read and snooze marks are the assistant's to write, not the screen's: the
+dashboard is read-only, and every write in this engine is attributed to
+somebody. What it shows is what the engine recorded.
+
 **The binding is written on the seat, not on the token.** Tier A is the root of
 trust and may never read Tier B — it holds the keys to the secret store — so a
 `seat:` field on an `api.auth.tokens[]` entry would have the trusted tier

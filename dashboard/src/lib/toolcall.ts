@@ -140,6 +140,20 @@ export function callsFor(subject: Subject): ToolCall[] {
           label: "Mark it read",
           args: { read: [{ record_id: id, position: subject.version ?? 0 }] },
         },
+        {
+          // `until` IS WHAT MAKES IT A SNOOZE rather than a second spelling
+          // of unread: the entry comes back at that instant. RFC3339, and a
+          // placeholder rather than a date this screen invented — "tomorrow"
+          // is a decision the person makes, not one a copied call should
+          // have made for them.
+          tool: "mark_inbox",
+          label: "Put it off until a time you name",
+          args: {
+            snoozed: [
+              { record_id: id, position: subject.version ?? 0, until: "2026-01-01T09:00:00Z" },
+            ],
+          },
+        },
       ];
   }
 }

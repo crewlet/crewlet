@@ -983,6 +983,22 @@ that changes what you should do next. An empty list means *you have not said*,
 never *nothing is primary* — the other reading gives a fresh company an inbox
 whose primary half is blank.
 
+**A person reads theirs at `#/inbox`**, which is the dashboard's landing
+screen: the notices `work_inbox` returns, each labelled with the one reason of
+twenty that routed it, beside what is waiting on a decision. Which person is
+decided by the API token — it is matched against every seat's
+`contact.crewlet_operator_id`, so the queue is theirs rather than the
+alphabetically first seat's — and `#/me` is that same person's own work, their
+priorities, asks and checklists. See [Humans in the
+org](../concepts/humans-in-the-org.md) for the binding.
+
+The marks are the ASSISTANT'S. The dashboard is read-only, because every write
+here is attributed to somebody and a button in a browser would write as "the
+dashboard", which is nobody — so `mark_inbox` is what an assistant calls when
+you ask it to, and the screen shows what the engine recorded. Each notice
+offers the call that would mark it, pre-filled and copyable, rather than a
+control that pretends to send it.
+
 **And the same rows answer the other way round.** `work_inbox` reads them by
 recipient — one person, every change. `work_routing` reads them by *record* —
 one change, every person — which is the question "did my comment reach the

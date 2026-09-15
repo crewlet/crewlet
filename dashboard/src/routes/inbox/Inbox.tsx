@@ -42,6 +42,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { reasonPhrase, reasonWhy } from "~/lib/reasons.ts";
 import { useAgents, useConnection, useOrg, useOrgBudget, useSandboxes } from "~/lib/store-hooks.ts";
 import { attentionQueue, type Attention } from "~/lib/attention.ts";
+import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
@@ -243,7 +244,7 @@ export function Inbox() {
           >
             <div className="list">
               {shown.map((notice) => (
-                <NoticeRow key={notice.record_id} notice={notice} now={now} />
+                <NoticeRow key={notice.record_id} notice={notice} now={now} viewer={viewer.name} />
               ))}
             </div>
             {inbox.data?.next_cursor && (
@@ -297,7 +298,15 @@ function AttentionRow({ item, now }: { item: Attention; now: number }) {
 }
 
 /** One notice: the reason first, then what changed. */
-function NoticeRow({ notice, now }: { notice: WorkInboxNotice; now: number }) {
+function NoticeRow({
+  notice,
+  now,
+  viewer,
+}: {
+  notice: WorkInboxNotice;
+  now: number;
+  viewer?: string;
+}) {
   return (
     <div className="thread-entry" style={{ opacity: notice.read ? 0.72 : 1 }}>
       <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
@@ -326,6 +335,17 @@ function NoticeRow({ notice, now }: { notice: WorkInboxNotice; now: number }) {
           {notice.at && <span className="t-caption">{relTime(notice.at, now)}</span>}
         </span>
         <span className="t-cell truncate">{notice.excerpt || notice.kind.replace(/_/g, " ")}</span>
+        {/* THE CALL THAT WOULD MARK IT, rather than a control that pretends
+            to. This screen only reads — every write here is attributed to
+            somebody, and a button in a browser would write as "the
+            dashboard", which is nobody — so what it offers is the `mark_inbox`
+            an assistant would make, pre-filled with this entry's own record
+            and POSITION. The two travel together: a position from a
+            recreated stream compares as current. */}
+        <ToolCallBlock
+          subject={{ kind: "notice", id: notice.record_id, version: notice.log_seq }}
+          viewer={viewer}
+        />
       </span>
       {!notice.read && <i className="dot accent" title="unread" />}
     </div>
