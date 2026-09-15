@@ -34,7 +34,7 @@ import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Banner, Button, Segmented } from "~/ui/primitives.tsx";
+import { Button, Segmented } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -56,7 +56,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { DeleteGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Callout, Modal } from "@crewlethq/ui";
 
 type PlacedChoice = "keep" | "remove";
 
@@ -306,12 +306,12 @@ function OutsideTheChart({
     // available and a picker with nothing in it.
     parts.push(
       replacements.length === 0 ? (
-        <Banner key="datadog" tone="critical">
+        <Callout key="datadog" variant="danger">
           {fallbackSeat.data.name} is the Datadog fallback, and the engine refuses a Datadog
           fallback that names no agent seat. This removal would leave no agent seat to take it over,
           so add one first, or disconnect Datadog.{" "}
           <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
-        </Banner>
+        </Callout>
       ) : (
         <Field
           key="datadog"

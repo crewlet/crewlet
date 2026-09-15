@@ -30,7 +30,7 @@
 import { useState } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { Field } from "~/ui/Field.tsx";
-import { Banner, Button } from "~/ui/primitives.tsx";
+import { Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   ContactField,
@@ -51,7 +51,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { PersonGlyph, SmartToyGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Callout, Modal } from "@crewlethq/ui";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -216,12 +216,12 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
         // the dialog names the way out rather than leaving a button that never
         // becomes available and a picker with nothing in it.
         (replacements.length === 0 ? (
-          <Banner tone="critical">
+          <Callout variant="danger">
             {name} is the Datadog fallback, and an alert whose tags name no seat has to wake an
             agent seat. It is the company's only agent seat, so add another before changing this
             one, or disconnect Datadog.{" "}
             <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
-          </Banner>
+          </Callout>
         ) : (
           <Field
             label="Datadog fallback"

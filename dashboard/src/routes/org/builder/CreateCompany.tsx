@@ -24,12 +24,13 @@ import { useState } from "react";
 import { href } from "~/app/router.tsx";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Banner, Button, ButtonLink, Code, Panel, Segmented } from "~/ui/primitives.tsx";
+import { Button, ButtonLink, Code, Panel, Segmented } from "~/ui/primitives.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
+import { Callout } from "@crewlethq/ui";
 
 /** What each starting point gives the operator, in one line. */
 const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
@@ -174,7 +175,7 @@ export function CreateCompany({
           </div>
         )}
 
-        {error && <Banner tone="critical">{error}</Banner>}
+        {error && <Callout variant="danger">{error}</Callout>}
         <div className="row gap-1">
           <Button variant="primary" onClick={start} disabled={disabled}>
             Start the company

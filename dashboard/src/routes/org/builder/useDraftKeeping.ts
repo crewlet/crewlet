@@ -57,7 +57,7 @@ import type { SaveAttempt } from "./model/writes.ts";
 let keptByThisPage: number | null = null;
 
 export interface KeepNotice {
-  readonly tone: "neutral" | "caution";
+  readonly tone: "neutral" | "warning";
   readonly message: string;
 }
 
@@ -92,7 +92,7 @@ export interface DraftKeeping {
 }
 
 const REFUSED: KeepNotice = {
-  tone: "caution",
+  tone: "warning",
   message:
     "This browser refuses to keep a draft, so unsaved changes will not survive a reload or leaving the builder.",
 };
@@ -169,7 +169,7 @@ export function useDraftKeeping({
         if (decision.kind === "discard_mode_changed") {
           clearDraft(storage);
           setDecisionNotice({
-            tone: "caution",
+            tone: "warning",
             message:
               decision.kept === "create"
                 ? "A draft for creating a company was discarded, because this engine now has a company."
@@ -194,7 +194,7 @@ export function useDraftKeeping({
     restoringFrom.current = null;
     const nothingRestored = state.log.ops.length === 0 && state.log.undone.length === 0;
     if (nothingRestored && state.refusal) {
-      setDecisionNotice({ tone: "caution", message: state.refusal.message });
+      setDecisionNotice({ tone: "warning", message: state.refusal.message });
     }
     setDecided(true);
   }, [state]);
@@ -231,7 +231,7 @@ export function useDraftKeeping({
         ? REFUSED
         : result === "too_large"
           ? {
-              tone: "caution",
+              tone: "warning",
               message:
                 "This draft holds more changes than can be kept across a reload. Save it in steps, or it is lost if the tab reloads or you leave the builder.",
             }

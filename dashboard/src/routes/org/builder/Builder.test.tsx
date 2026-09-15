@@ -132,22 +132,14 @@ describe("the posture table", () => {
     const engine = new Engine(company());
     engine.script = () => new Response("404 page not found", { status: 404 });
     mountBuilder({ engine });
-    expect(
-      await screen.findByText(
-        "This process does not serve the configuration. Open the dashboard on a node running the engine.",
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText("This process does not serve the configuration")).toBeDefined();
   });
 
   test("a body that is not JSON is a process that does not serve the configuration", async () => {
     const engine = new Engine(company());
     engine.script = () => new Response("<html></html>", { status: 200 });
     mountBuilder({ engine });
-    expect(
-      await screen.findByText(
-        "This process does not serve the configuration. Open the dashboard on a node running the engine.",
-      ),
-    ).toBeDefined();
+    expect(await screen.findByText("This process does not serve the configuration")).toBeDefined();
   });
 
   test("an engine that never answers is unreachable", async () => {

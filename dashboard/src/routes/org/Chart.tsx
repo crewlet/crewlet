@@ -27,9 +27,9 @@ import { seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
-import { Avatar, Badge, Banner, ButtonLink, Empty, Panel } from "~/ui/primitives.tsx";
+import { Avatar, Badge, ButtonLink, Panel } from "~/ui/primitives.tsx";
 import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
-import { cx } from "@crewlethq/ui";
+import { Callout, EmptyState, cx } from "@crewlethq/ui";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -78,10 +78,10 @@ export function Chart({ index }: { index: OrgIndex }) {
   if (empty) {
     const unconfigured = engine.data?.configured === false;
     return (
-      <Empty
-        icon={AccountTreeGlyph}
+      <EmptyState
+        icon={<AccountTreeGlyph />}
         title="No organization is loaded"
-        hint={
+        description={
           unconfigured
             ? "No company configuration is active on this engine, so there is no organization to draw."
             : "The org tree comes from the active company configuration."
@@ -100,11 +100,11 @@ export function Chart({ index }: { index: OrgIndex }) {
   return (
     <>
       {!index.hierarchy && (
-        <Banner tone="neutral" icon={InfoGlyph}>
+        <Callout variant="neutral" icon={<InfoGlyph />}>
           This engine did not report the hierarchy it derived, so seats are drawn where the document
           places them. Inherited leads and seats moved into a unit by their{" "}
           <code className="inline">unit</code> reference are not shown.
-        </Banner>
+        </Callout>
       )}
       {index.rootSeats.length > 0 && (
         <Panel title="Org-wide" icon={CrownGlyph} subtitle="seats above every unit">

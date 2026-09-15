@@ -10,7 +10,8 @@
 import { Section } from "~/components/common.tsx";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
-import { Empty, Panel } from "~/ui/primitives.tsx";
+import { Panel } from "~/ui/primitives.tsx";
+import { EmptyState } from "@crewlethq/ui";
 import { ExploreGlyph, ShieldGlyph, TargetGlyph } from "@crewlethq/icons/glyphs";
 
 export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex }) {
@@ -37,11 +38,11 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
             ))}
           </ol>
         ) : (
-          <Empty
-            inline
-            icon={ShieldGlyph}
+          <EmptyState
+            size="compact"
+            icon={<ShieldGlyph />}
             title="No policies are set"
-            hint="Policies render into every planner's prompt in full. They are the company's standing instructions."
+            description="Policies render into every planner's prompt in full. They are the company's standing instructions."
           />
         )}
       </Panel>

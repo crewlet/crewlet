@@ -30,7 +30,6 @@ import {
   ButtonLink,
   Code,
   CopyButton,
-  Empty,
   Panel,
   Segmented,
   TabPanel,
@@ -39,7 +38,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
-import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DescriptionGlyph,
   DifferenceGlyph,
@@ -121,10 +120,10 @@ export function ConfigScreen() {
                   </div>
                 </Panel>
               ) : (
-                <Empty
-                  icon={ManufacturingGlyph}
+                <EmptyState
+                  icon={<ManufacturingGlyph />}
                   title="No company configuration is active"
-                  hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import one with crewlet config import or PUT /config."
+                  description="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import one with crewlet config import or PUT /config."
                   action={
                     <ButtonLink variant="primary" href={href(["org"], { lens: "builder" })}>
                       Create the company
@@ -223,11 +222,11 @@ export function ConfigScreen() {
                 }
               >
                 {!revision ? (
-                  <Empty
-                    inline
-                    icon={DifferenceGlyph}
+                  <EmptyState
+                    size="compact"
+                    icon={<DifferenceGlyph />}
                     title="Pick a revision above"
-                    hint="Its differences against the currently active document are shown here."
+                    description="Its differences against the currently active document are shown here."
                   />
                 ) : diff.loading ? (
                   <Skeleton label="Loading the differences" variant="text" rows={4} />

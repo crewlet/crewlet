@@ -25,7 +25,7 @@
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, ButtonLink, Empty } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button, ButtonLink } from "~/ui/primitives.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,7 +48,7 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Skeleton } from "@crewlethq/ui";
+import { EmptyState, Skeleton } from "@crewlethq/ui";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -1867,10 +1867,10 @@ export function Integrations() {
           </div>
         )}
         {data && configured.length === 0 && (
-          <Empty
-            icon={CableGlyph}
+          <EmptyState
+            icon={<CableGlyph />}
             title="No integration is connected yet"
-            hint="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
+            description="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
           />
         )}
       </QueryState>

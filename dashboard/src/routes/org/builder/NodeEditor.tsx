@@ -51,7 +51,7 @@ import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { ListField } from "~/ui/ListField.tsx";
 import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
-import { Banner, Button, Empty } from "~/ui/primitives.tsx";
+import { Button } from "~/ui/primitives.tsx";
 import {
   keepsTheLens,
   useBuilder,
@@ -114,7 +114,7 @@ import {
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Callout, EmptyState, Modal } from "@crewlethq/ui";
 
 export function NodeEditor({
   nodeKey,
@@ -132,9 +132,9 @@ export function NodeEditor({
   if (!found) {
     return (
       <Modal open variant="sheet" stackBody title="Edit" onClose={onClose}>
-        <Empty
+        <EmptyState
           title="This node is no longer in the draft"
-          hint="It was removed by an undo or an update onto a newer revision. Close this editor and choose another node."
+          description="It was removed by an undo or an update onto a newer revision. Close this editor and choose another node."
         />
       </Modal>
     );
@@ -270,9 +270,9 @@ function EditorShell({
         }
       >
         {readOnly && (
-          <Banner tone="neutral">
+          <Callout variant="neutral">
             The organization cannot be changed right now, so these fields are for reading.
-          </Banner>
+          </Callout>
         )}
         <Refusal message={refusal} />
         <NodeProblems problems={problems} />
@@ -353,7 +353,11 @@ function ScheduleToggles({
           />
         );
       })}
-      {error && <Banner tone="critical">{error}</Banner>}
+      {error && (
+        <Callout variant="danger" role="alert">
+          {error}
+        </Callout>
+      )}
     </EditorSection>
   );
 }
@@ -935,7 +939,11 @@ function SeatEditor({
               disabled={disabled}
             />
           ))}
-          {errorFor(["contact"]) && <Banner tone="critical">{errorFor(["contact"])}</Banner>}
+          {errorFor(["contact"]) && (
+            <Callout variant="danger" role="alert">
+              {errorFor(["contact"])}
+            </Callout>
+          )}
           <Field
             label="Availability"
             value={form.availability}
@@ -1250,15 +1258,15 @@ function IntegrationsSection({
               error={errorFor(GITHUB_REPOS)}
             />
             {enrolling && (
-              <Banner tone="info">
+              <Callout variant="info">
                 This enrols the seat in GitHub. Create its app from Integrations.{" "}
                 <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
-              </Banner>
+              </Callout>
             )}
             {tierChanged && (
-              <Banner tone="caution">
+              <Callout variant="warning">
                 The app's permissions were fixed when it was created. Raise them at GitHub as well.
-              </Banner>
+              </Callout>
             )}
           </>
         ) : (

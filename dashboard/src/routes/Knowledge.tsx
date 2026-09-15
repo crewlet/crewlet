@@ -17,7 +17,7 @@ import { useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, SearchInput } from "~/ui/primitives.tsx";
+import { Badge, Button, Panel, SearchInput } from "~/ui/primitives.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -32,7 +32,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Skeleton } from "@crewlethq/ui";
+import { EmptyState, Skeleton } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -85,10 +85,10 @@ export function Knowledge() {
       </form>
 
       {!q && (
-        <Empty
-          icon={Book2Glyph}
+        <EmptyState
+          icon={<Book2Glyph />}
           title="Search the company's shared knowledge"
-          hint="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
+          description="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
       )}
 

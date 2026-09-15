@@ -19,9 +19,10 @@
 
 import type { NodeKey } from "./model/keys.ts";
 import { maskedCredentialPaths } from "./model/document.ts";
-import { Banner } from "~/ui/primitives.tsx";
+
 import { useBuilder } from "./BuilderContext.tsx";
 import { ScreenLink } from "./dialogParts.tsx";
+import { Callout } from "@crewlethq/ui";
 
 export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: boolean }) {
   const { state } = useBuilder();
@@ -36,7 +37,7 @@ export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: b
         </p>
       )}
       {paths.length > 0 && (
-        <Banner tone="caution">
+        <Callout variant="warning">
           <div className="col gap-2">
             <span>
               These credentials are stored as literals. Move each one to the secret store and
@@ -51,7 +52,7 @@ export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: b
             </ul>
             <ScreenLink to={["secrets"]}>Open Secrets</ScreenLink>
           </div>
-        </Banner>
+        </Callout>
       )}
     </div>
   );

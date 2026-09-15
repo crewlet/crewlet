@@ -704,59 +704,6 @@ export function Stat({
 // States
 // ---------------------------------------------------------------------------
 
-/**
- * An empty state that says WHY it is empty and what would fill it.
- *
- * `hint` is not optional politeness. "No events" on a company that has never
- * run and "no events" on a node with no event store are the same sentence and
- * completely different problems, and the reader cannot tell them apart from
- * the list.
- */
-export function Empty({
-  icon: Glyph = InboxGlyph,
-  title,
-  hint,
-  action,
-  inline,
-}: {
-  icon?: ComponentType<GlyphProps>;
-  title: ReactNode;
-  hint?: ReactNode;
-  action?: ReactNode;
-  inline?: boolean;
-}) {
-  return (
-    <div className={cx("empty", inline && "inline")}>
-      <Glyph size={28} />
-      <div className="empty-title">{title}</div>
-      {hint && <div className="empty-sub">{hint}</div>}
-      {action}
-    </div>
-  );
-}
-
-export function Banner({
-  tone = "neutral",
-  icon,
-  children,
-  action,
-}: {
-  tone?: "neutral" | "info" | "caution" | "critical";
-  icon?: ComponentType<GlyphProps>;
-  children: ReactNode;
-  action?: ReactNode;
-}) {
-  const Glyph =
-    icon ?? (tone === "critical" ? ErrorGlyph : tone === "caution" ? WarningGlyph : InfoGlyph);
-  return (
-    <div className={cx("banner", tone)} role={tone === "critical" ? "alert" : undefined}>
-      <Glyph size="sm" />
-      <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
-      {action}
-    </div>
-  );
-}
-
 export function KeyValue({ items }: { items: [ReactNode, ReactNode][] }) {
   return (
     <dl className="kv">

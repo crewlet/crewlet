@@ -765,8 +765,8 @@ describe("problems", () => {
     expect(lead.getAttribute("aria-invalid")).toBeNull();
     expect(lead.closest(".field")?.querySelector(".field-error")).toBeNull();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    const caution = screen.getByText(/names no seat/).closest(".banner") as HTMLElement;
-    expect(caution.classList.contains("caution")).toBe(true);
+    const caution = screen.getByText(/names no seat/).closest(".crewlet-callout") as HTMLElement;
+    expect(caution.classList.contains("crewlet-callout--warning")).toBe(true);
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {

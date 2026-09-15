@@ -22,7 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Empty, PhaseTag, Select } from "~/ui/primitives.tsx";
+import { Badge, Button, Chip, PhaseTag, Select } from "~/ui/primitives.tsx";
 import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -38,7 +38,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
-import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
@@ -322,10 +322,10 @@ export function ModelActivity() {
       {error && <QueryState error={error} loading={loading} />}
 
       {!loading && !filtered.length && !error && (
-        <Empty
-          icon={NeurologyGlyph}
+        <EmptyState
+          icon={<NeurologyGlyph />}
           title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
-          hint={
+          description={
             filtering
               ? "Clear them to see every phase the engine has kept."
               : "A phase is recorded when it completes. If seats are idle and no schedule has fired, there is nothing here yet."

@@ -60,7 +60,7 @@ import {
 } from "react";
 import { plural } from "~/lib/format.ts";
 import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Avatar, Badge, Button, Empty } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
   ancestors,
@@ -114,7 +114,7 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Menu, cx, type MenuEntry } from "@crewlethq/ui";
+import { EmptyState, Menu, cx, type MenuEntry } from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.
@@ -233,19 +233,19 @@ function ReportingChart({
 
   if (!chart.known) {
     return (
-      <Empty
-        icon={AccountTreeGlyph}
+      <EmptyState
+        icon={<AccountTreeGlyph />}
         title="Reporting lines appear after the check"
-        hint="Who reports to whom is derived by the engine. It is drawn here once the engine has checked this draft."
+        description="Who reports to whom is derived by the engine. It is drawn here once the engine has checked this draft."
       />
     );
   }
   if (chart.roots.length === 0 && chart.cycles.length === 0) {
     return (
-      <Empty
-        icon={AccountTreeGlyph}
+      <EmptyState
+        icon={<AccountTreeGlyph />}
         title="No seats to report on"
-        hint="Who reports to whom is drawn here once the organization has a seat."
+        description="Who reports to whom is drawn here once the organization has a seat."
       />
     );
   }

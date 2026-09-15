@@ -54,16 +54,7 @@ import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hook
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { Kbd } from "~/ui/Kbd.tsx";
-import {
-  Badge,
-  Banner,
-  Button,
-  ButtonLink,
-  Empty,
-  Segmented,
-  TabPanel,
-  type Tone,
-} from "~/ui/primitives.tsx";
+import { Badge, Button, ButtonLink, Segmented, TabPanel, type Tone } from "~/ui/primitives.tsx";
 import {
   BuilderContext,
   keepsTheLens,
@@ -137,6 +128,8 @@ import {
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
+  Callout,
+  EmptyState,
   LayerHost,
   Menu,
   Modal,
@@ -1303,9 +1296,9 @@ function Lens({
         )}
 
         {(posture.kind === "guarded" || status === "guarded") && (
-          <Banner
-            tone="critical"
-            icon={KeyGlyph}
+          <Callout
+            variant="danger"
+            icon={<KeyGlyph />}
             action={
               <Button size="sm" onClick={askForToken}>
                 Set token
@@ -1315,19 +1308,19 @@ function Lens({
             {tokenStored
               ? "The engine refused this browser's token. Your draft is kept on this page; set a token the engine accepts to keep editing."
               : "Editing the organization needs an operator token. Your draft is kept on this page."}
-          </Banner>
+          </Callout>
         )}
         {posture.kind === "unreachable" && (
-          <Banner tone="caution" icon={CableGlyph}>
+          <Callout variant="warning" icon={<CableGlyph />}>
             The engine could not be reached to read the configuration again. Your draft is kept on
             this page.
-          </Banner>
+          </Callout>
         )}
         {(posture.kind === "failed" ||
           posture.kind === "unserved" ||
           posture.kind === "behind") && (
-          <Banner
-            tone="caution"
+          <Callout
+            variant="warning"
             action={
               <Button size="sm" onClick={() => load()}>
                 Retry
@@ -1336,20 +1329,20 @@ function Lens({
           >
             The configuration could not be read again, so this draft stands on the revision it was
             started from.
-          </Banner>
+          </Callout>
         )}
         {status === "readonly" && (
-          <Banner tone="neutral" icon={VisibilityGlyph}>
+          <Callout variant="neutral" icon={<VisibilityGlyph />}>
             This process cannot write the configuration because it has no coordination store.
-          </Banner>
+          </Callout>
         )}
         {/* KEPT TO READ, NEVER TO SAVE. Every check and save of this draft is
             refused while the lens is read-only over it, so the way on stays
             on screen after the dialog that first offered it is closed. */}
         {conflict && conflict.reason === "already_configured" && !companyExists && (
-          <Banner
-            tone="caution"
-            icon={WarningGlyph}
+          <Callout
+            variant="warning"
+            icon={<WarningGlyph />}
             action={
               <Button size="sm" variant="primary" onClick={openExistingCompany}>
                 Discard it and open the company
@@ -1358,12 +1351,12 @@ function Lens({
           >
             A company was created on this engine while this draft was being written, so this draft
             cannot be saved.
-          </Banner>
+          </Callout>
         )}
         {conflict && conflict.reason === "no_active_revision" && (
-          <Banner
-            tone="caution"
-            icon={WarningGlyph}
+          <Callout
+            variant="warning"
+            icon={<WarningGlyph />}
             action={
               <Button
                 size="sm"
@@ -1378,12 +1371,12 @@ function Lens({
           >
             The configuration this draft edits is no longer active on this engine, so the draft
             cannot be saved.
-          </Banner>
+          </Callout>
         )}
         {conflict && state.mode === "edit" && conflict.reason !== "no_active_revision" && (
-          <Banner
-            tone="caution"
-            icon={WarningGlyph}
+          <Callout
+            variant="warning"
+            icon={<WarningGlyph />}
             action={
               <span className="row gap-1 wrap">
                 {/* WHAT CHANGED SINCE THE DRAFT'S BASE is the newer revision
@@ -1416,18 +1409,18 @@ function Lens({
           >
             The configuration changed since you started editing.
             {updateNote.message && <span className="org-builder-note">{updateNote.message}</span>}
-          </Banner>
+          </Callout>
         )}
         {loaded && !isBaseKeyed(state) && status === "unreachable" && (
-          <Banner tone="caution" icon={CableGlyph}>
+          <Callout variant="warning" icon={<CableGlyph />}>
             The engine could not be reached to describe this company. Editing starts once it
             answers.
-          </Banner>
+          </Callout>
         )}
         {keeping.offer && (
-          <Banner
-            tone="info"
-            icon={SaveGlyph}
+          <Callout
+            variant="info"
+            icon={<SaveGlyph />}
             action={
               <span className="row gap-1 wrap">
                 <Button size="sm" onClick={keeping.discard}>
@@ -1442,11 +1435,11 @@ function Lens({
             This tab kept a draft with {plural(keeping.offer.ops.length, "change")}, last changed{" "}
             {fmtDateTime(new Date(keeping.offer.savedAt).toISOString())}. Keep it to go on editing,
             or discard it to start from the saved configuration.
-          </Banner>
+          </Callout>
         )}
         {keeping.notice && (
-          <Banner
-            tone={keeping.notice.tone}
+          <Callout
+            variant={keeping.notice.tone}
             action={
               <Button size="sm" variant="ghost" onClick={keeping.dismissNotice}>
                 Dismiss
@@ -1454,19 +1447,19 @@ function Lens({
             }
           >
             {keeping.notice.message}
-          </Banner>
+          </Callout>
         )}
         {noProvider && (
-          <Banner tone="caution" icon={MemoryGlyph}>
+          <Callout variant="warning" icon={<MemoryGlyph />}>
             No model provider is configured, so no agent seat takes a turn: work sent to a seat
             waits on its inbox until one is added. The dashboard does not write providers: add one
             with <code className="inline">crewlet config import</code> or{" "}
             <code className="inline">PATCH /config</code>.
-          </Banner>
+          </Callout>
         )}
         {refusal && (
-          <Banner
-            tone="caution"
+          <Callout
+            variant="warning"
             action={
               <Button size="sm" variant="ghost" onClick={() => setRefusal(null)}>
                 Dismiss
@@ -1474,15 +1467,15 @@ function Lens({
             }
           >
             {refusal}
-          </Banner>
+          </Callout>
         )}
         {documentProblems.length > 0 && <DocumentProblems problems={documentProblems} />}
 
         {savedRevision && <AfterSaveStrip saved={savedRevision} onDismiss={clearSavedRevision} />}
 
         {save.unsettled && !reviewing && (
-          <Banner
-            tone="caution"
+          <Callout
+            variant="warning"
             action={
               <span className="row gap-1 wrap">
                 <Button size="sm" onClick={() => void save.checkAgain()}>
@@ -1500,7 +1493,7 @@ function Lens({
           >
             The engine did not confirm whether the last save was stored. Editing is paused until it
             does.
-          </Banner>
+          </Callout>
         )}
 
         {created && <NextSteps onDismiss={() => setCreated(false)} />}
@@ -1822,23 +1815,23 @@ function PostureScreen({
       return <Skeleton label="Loading the company" variant="text" rows={4} />;
     case "behind":
       return (
-        <Empty
-          icon={RefreshGlyph}
+        <EmptyState
+          icon={<RefreshGlyph />}
           title="This node has not caught up with the fleet's configuration yet."
-          hint="The fleet already runs a company. Try again once this node has applied its revision, or open the dashboard on another node."
+          description="The fleet already runs a company. Try again once this node has applied its revision, or open the dashboard on another node."
           action={retry}
         />
       );
     case "guarded":
       return (
-        <Empty
-          icon={KeyGlyph}
+        <EmptyState
+          icon={<KeyGlyph />}
           title={
             posture.tokenStored
               ? "The engine refused this browser's token."
               : "Editing the organization needs an operator token."
           }
-          hint="The configuration is guarded, reads included."
+          description="The configuration is guarded, reads included."
           action={
             <Button variant="primary" onClick={onSetToken}>
               Set token
@@ -1848,26 +1841,27 @@ function PostureScreen({
       );
     case "unserved":
       return (
-        <Empty
-          icon={DnsGlyph}
-          title="This process does not serve the configuration. Open the dashboard on a node running the engine."
+        <EmptyState
+          icon={<DnsGlyph />}
+          title="This process does not serve the configuration"
+          description="The builder reads and writes the company through the node that runs it. Open the dashboard on a node running the engine."
         />
       );
     case "unreachable":
       return (
-        <Empty
-          icon={CableGlyph}
+        <EmptyState
+          icon={<CableGlyph />}
           title="The engine could not be reached"
-          hint={posture.detail || "Nothing answered the request for the configuration."}
+          description={posture.detail || "Nothing answered the request for the configuration."}
           action={retry}
         />
       );
     case "failed":
       return (
-        <Empty
-          icon={ErrorGlyph}
+        <EmptyState
+          icon={<ErrorGlyph />}
           title="The engine could not serve the configuration"
-          hint={posture.detail}
+          description={posture.detail}
           action={retry}
         />
       );

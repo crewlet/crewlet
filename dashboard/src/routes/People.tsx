@@ -17,11 +17,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Segmented, SearchInput, TabPanel } from "~/ui/primitives.tsx";
+import { Badge, Panel, Segmented, SearchInput, TabPanel } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { GroupGlyph } from "@crewlethq/icons/glyphs";
+import { EmptyState } from "@crewlethq/ui";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -140,10 +141,10 @@ export function People() {
 
       <TabPanel id={panel} value={group}>
         {!groups.length && (
-          <Empty
-            icon={GroupGlyph}
+          <EmptyState
+            icon={<GroupGlyph />}
             title={q ? `No seat matches “${q}”` : "This company has no seats"}
-            hint={
+            description={
               q
                 ? "The filter matches a seat's name, handle, goal or unit."
                 : "Roles are defined in the company configuration. Import one to spawn seats."

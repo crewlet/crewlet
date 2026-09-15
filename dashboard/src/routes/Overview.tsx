@@ -26,7 +26,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
@@ -42,7 +42,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { Meter, useNow } from "@crewlethq/ui";
+import { EmptyState, Meter, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -215,11 +215,11 @@ export function Overview() {
             )}
           </div>
         ) : (
-          <Empty
-            inline
-            icon={CheckGlyph}
+          <EmptyState
+            size="compact"
+            icon={<CheckGlyph />}
             title="Nothing is waiting on you"
-            hint="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
+            description="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
           />
         )}
       </Panel>
@@ -288,11 +288,11 @@ export function Overview() {
               ))}
             </div>
           ) : (
-            <Empty
-              inline
-              icon={ScheduleGlyph}
+            <EmptyState
+              size="compact"
+              icon={<ScheduleGlyph />}
               title="No seat is mid-turn"
-              hint={
+              description={
                 seatCount
                   ? "Every seat is attached to its mailbox and waiting. Work arrives from a webhook, a schedule, or a colleague."
                   : "No agent seats are defined. Import a company configuration to spawn some."
@@ -328,11 +328,11 @@ export function Overview() {
                 <EventRow key={ev.id} event={ev} />
               ))}
               {!events.length && (
-                <Empty
-                  inline
-                  icon={TimelineGlyph}
+                <EmptyState
+                  size="compact"
+                  icon={<TimelineGlyph />}
                   title="Nothing has happened yet"
-                  hint="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
+                  description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
                 />
               )}
             </div>

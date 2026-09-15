@@ -27,7 +27,7 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
-import { Banner, Button, ButtonLink, Code, CopyButton } from "~/ui/primitives.tsx";
+import { Button, ButtonLink, Code, CopyButton } from "~/ui/primitives.tsx";
 import { useRecheck } from "~/routes/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
@@ -38,7 +38,7 @@ import {
   ErrorGlyph,
   RefreshGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Modal, Skeleton } from "@crewlethq/ui";
+import { Callout, Modal, Skeleton } from "@crewlethq/ui";
 
 /**
  * How often the two answers are read while the apply is still moving. The
@@ -175,14 +175,16 @@ export function AfterSaveStrip({
 
   return (
     <>
-      <Banner
-        tone={state.tone === "critical" ? "critical" : "info"}
+      <Callout
+        variant={state.tone === "critical" ? "danger" : "info"}
         icon={
-          state.tone === "positive"
-            ? CheckGlyph
-            : state.tone === "critical"
-              ? ErrorGlyph
-              : RefreshGlyph
+          state.tone === "positive" ? (
+            <CheckGlyph />
+          ) : state.tone === "critical" ? (
+            <ErrorGlyph />
+          ) : (
+            <RefreshGlyph />
+          )
         }
         action={
           <span className="row gap-1 wrap">
@@ -225,7 +227,7 @@ export function AfterSaveStrip({
       >
         Saved revision <code className="inline">{shortRevision(saved.revisionId)}</code>.{" "}
         <span>{state.message}</span>
-      </Banner>
+      </Callout>
       {yaml && <YamlDialog savedRevision={saved.revisionId} onClose={() => setYaml(false)} />}
     </>
   );
@@ -256,11 +258,11 @@ export function PreviousRevisionNote() {
   if (!saved || saved.epoch === null) return null;
   if ((stream.data?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
-    <Banner tone="neutral" icon={RefreshGlyph}>
+    <Callout variant="neutral" icon={<RefreshGlyph />}>
       This node is still applying revision{" "}
       <code className="inline">{shortRevision(saved.revisionId)}</code>, so what is drawn below is
       the revision before it.
-    </Banner>
+    </Callout>
   );
 }
 
@@ -327,14 +329,14 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
       {state.kind === "loading" && (
         <Skeleton label="Loading the saved revision" variant="text" rows={4} />
       )}
-      {state.kind === "failed" && <Banner tone="critical">{state.detail}</Banner>}
+      {state.kind === "failed" && <Callout variant="danger">{state.detail}</Callout>}
       {state.kind === "text" && (
         <>
           {state.revision !== null && state.revision !== savedRevision && (
-            <Banner tone="caution">
+            <Callout variant="warning">
               This is revision <code className="inline">{shortRevision(state.revision)}</code>,
               which is active now, rather than the one you saved.
-            </Banner>
+            </Callout>
           )}
           <p className="t-caption">
             Credentials are redacted, as every configuration read is: a value the engine holds reads

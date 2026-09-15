@@ -25,7 +25,6 @@ import {
   Avatar,
   Badge,
   Button,
-  Empty,
   KeyValue,
   Panel,
   Stat,
@@ -66,7 +65,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
-import { Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   AccountTreeGlyph,
   ArrowForwardGlyph,
@@ -194,10 +193,10 @@ export function SeatScreen({ handle }: { handle: string }) {
     return (
       <>
         <ScreenHead title={handle} />
-        <Empty
-          icon={PersonGlyph}
+        <EmptyState
+          icon={<PersonGlyph />}
           title={`No seat called “${handle}”`}
-          hint="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
+          description="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
           action={
             <Button variant="primary" onClick={() => nav.to(["people"])}>
               All seats
@@ -578,11 +577,11 @@ export function SeatScreen({ handle }: { handle: string }) {
               query; the running half is pushed. */}
             {history.error && <QueryState error={history.error} loading={history.loading} />}
             {!history.loading && !history.error && !turns.length && (
-              <Empty
-                inline
-                icon={NeurologyGlyph}
+              <EmptyState
+                size="compact"
+                icon={<NeurologyGlyph />}
                 title="No phases in the record for this seat"
-                hint="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
+                description="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
               />
             )}
             {/* The same split the Model screen makes, for the same reason:
@@ -662,11 +661,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon={Book2Glyph}
+                    <EmptyState
+                      size="compact"
+                      icon={<Book2Glyph />}
                       title="Nothing written yet"
-                      hint="A seat writes here by calling reflect_and_persist during a turn."
+                      description="A seat writes here by calling reflect_and_persist during a turn."
                     />
                   )}
                 </Panel>
@@ -765,11 +764,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon={BoltGlyph}
+                    <EmptyState
+                      size="compact"
+                      icon={<BoltGlyph />}
                       title="No synthesised skills"
-                      hint="The learning loop drafts these from repeated work. A young company has none."
+                      description="The learning loop drafts these from repeated work. A young company has none."
                     />
                   )}
                 </Panel>
@@ -794,11 +793,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ))}
                     </div>
                   ) : (
-                    <Empty
-                      inline
-                      icon={GroupGlyph}
+                    <EmptyState
+                      size="compact"
+                      icon={<GroupGlyph />}
                       title="No counterparty profiles"
-                      hint="Built up from observed interactions."
+                      description="Built up from observed interactions."
                     />
                   )}
                 </Panel>
@@ -977,11 +976,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ])}
                     />
                   ) : (
-                    <Empty
-                      inline
-                      icon={LinkGlyph}
+                    <EmptyState
+                      size="compact"
+                      icon={<LinkGlyph />}
                       title="No contact identities"
-                      hint="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
+                      description="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
                     />
                   )}
                 </Panel>
@@ -1036,31 +1035,31 @@ function SettingsState({
   if (error) return <QueryState error={error} loading={loading} />;
   if (!doc) {
     return (
-      <Empty
-        inline
-        icon={ManufacturingGlyph}
+      <EmptyState
+        size="compact"
+        icon={<ManufacturingGlyph />}
         title="No company configuration is active"
-        hint="This seat's settings live in the company document, and none is active on this engine."
+        description="This seat's settings live in the company document, and none is active on this engine."
       />
     );
   }
   if (settings?.state === "missing") {
     return (
-      <Empty
-        inline
-        icon={ManufacturingGlyph}
+      <EmptyState
+        size="compact"
+        icon={<ManufacturingGlyph />}
         title={`The active configuration has no seat named ${seat.name}`}
-        hint="The org chart and the configuration can disagree for a moment while a new revision is applied."
+        description="The org chart and the configuration can disagree for a moment while a new revision is applied."
       />
     );
   }
   if (settings?.state === "ambiguous") {
     return (
-      <Empty
-        inline
-        icon={ManufacturingGlyph}
+      <EmptyState
+        size="compact"
+        icon={<ManufacturingGlyph />}
         title={`More than one seat is named ${seat.name}`}
-        hint="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
+        description="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
       />
     );
   }
@@ -1183,11 +1182,11 @@ function SeatIntegrations({ role }: { role: ConfigRole }) {
   if (i.confluence) items.push(["Owns Confluence space", text(i.confluence.space)]);
   if (!items.length) {
     return (
-      <Empty
-        inline
-        icon={CableGlyph}
+      <EmptyState
+        size="compact"
+        icon={<CableGlyph />}
         title="No per-seat integration settings"
-        hint="This seat uses the company's integrations as they are configured on the Integrations screen."
+        description="This seat uses the company's integrations as they are configured on the Integrations screen."
       />
     );
   }
@@ -1231,11 +1230,11 @@ function ToolCredentials({
   );
   if (!own.length && !inherited.length) {
     return (
-      <Empty
-        inline
-        icon={KeyGlyph}
+      <EmptyState
+        size="compact"
+        icon={<KeyGlyph />}
         title="No per-seat tool credentials"
-        hint="This seat uses whatever the shared MCP servers were configured with."
+        description="This seat uses whatever the shared MCP servers were configured with."
       />
     );
   }

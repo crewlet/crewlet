@@ -1,5 +1,6 @@
 import { ScreenHead } from "~/app/Shell.tsx";
-import { Empty, Button } from "~/ui/primitives.tsx";
+import { Button } from "~/ui/primitives.tsx";
+import { EmptyState } from "@crewlethq/ui";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 import { ExploreGlyph } from "@crewlethq/icons/glyphs";
 
@@ -9,10 +10,10 @@ export function NotFound({ what }: { what: string }) {
   return (
     <>
       <ScreenHead title="Not a screen" />
-      <Empty
-        icon={ExploreGlyph}
+      <EmptyState
+        icon={<ExploreGlyph />}
         title={`This URL names ${what}, and there is no such screen.`}
-        hint={
+        description={
           <>
             The address was <code className="inline">{route.hash}</code>. Every screen is reachable
             from the sidebar, and any event, trace or turn id can be pasted into the search box.

@@ -11,11 +11,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
-import { Badge, Chip, Empty, Panel, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Chip, Panel, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
+import { EmptyState } from "@crewlethq/ui";
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -101,10 +102,10 @@ export function Tools() {
       </div>
 
       {!tools.length ? (
-        <Empty
-          icon={BuildGlyph}
+        <EmptyState
+          icon={<BuildGlyph />}
           title="No tools are registered"
-          hint="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
+          description="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
         />
       ) : (
         <Panel padding="none">

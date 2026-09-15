@@ -9,12 +9,12 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
-import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DnsGlyph,
   ErrorGlyph,

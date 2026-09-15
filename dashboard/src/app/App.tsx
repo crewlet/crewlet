@@ -11,7 +11,7 @@
 import { Component, type ReactNode } from "react";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
-import { Button, Code, Empty } from "~/ui/primitives.tsx";
+import { Button, Code } from "~/ui/primitives.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
 import { People } from "~/routes/People.tsx";
@@ -34,6 +34,7 @@ import { EventScreen } from "~/routes/Event.tsx";
 import { TurnScreen } from "~/routes/Turn.tsx";
 import { NotFound } from "~/routes/NotFound.tsx";
 import { ErrorGlyph } from "@crewlethq/icons/glyphs";
+import { EmptyState } from "@crewlethq/ui";
 
 function Screen() {
   const route = useRoute();
@@ -126,10 +127,10 @@ export class ScreenBoundary extends Component<BoundaryProps, BoundaryState> {
     const { error } = this.state;
     if (!error) return this.props.children;
     return (
-      <Empty
-        icon={ErrorGlyph}
+      <EmptyState
+        icon={<ErrorGlyph />}
         title="This screen could not be drawn"
-        hint="Something it received did not have the shape it expects. The rest of the dashboard keeps working, and the message below is what to include in a report."
+        description="Something it received did not have the shape it expects. The rest of the dashboard keeps working, and the message below is what to include in a report."
         action={
           <div className="col gap-3" style={{ alignItems: "center" }}>
             <Code plain>{error.message || error.name}</Code>

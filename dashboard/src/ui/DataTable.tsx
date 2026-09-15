@@ -16,7 +16,7 @@
 
 import type { GlyphProps } from "@crewlethq/icons/glyphs";
 import { type ComponentType, type ReactNode, useMemo, useState } from "react";
-import { Empty } from "./primitives.tsx";
+import { EmptyState } from "@crewlethq/ui";
 
 export interface Column<T> {
   key: string;
@@ -93,7 +93,14 @@ export function DataTable<T>({
   }
 
   if (!rows.length && empty) {
-    return <Empty inline icon={empty.icon} title={empty.title} hint={empty.hint} />;
+    return (
+      <EmptyState
+        size="compact"
+        icon={empty.icon ? <empty.icon /> : undefined}
+        title={empty.title}
+        description={empty.hint}
+      />
+    );
   }
 
   return (

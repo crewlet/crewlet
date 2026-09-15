@@ -11,7 +11,7 @@ import { createContext, useContext, useId, useState, type ReactNode } from "reac
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
-import { Banner } from "~/ui/primitives.tsx";
+
 import { Problems } from "~/ui/Problems.tsx";
 import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
@@ -19,6 +19,7 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
+import { Callout } from "@crewlethq/ui";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -267,14 +268,14 @@ export function ContactField({
 export function StrandedNotes({ stranded }: { stranded: readonly StrandedSchedule[] }) {
   if (stranded.length === 0) return null;
   return (
-    <Banner tone="caution">
+    <Callout variant="warning">
       <ul className="builder-list">
         {stranded.map((s) => (
           <li key={`${s.unit}/${s.schedule}`}>{strandedSentence(s)}</li>
         ))}
       </ul>
       <ScreenLink to={["schedules"]}>Open Schedules</ScreenLink>
-    </Banner>
+    </Callout>
   );
 }
 
@@ -282,7 +283,7 @@ export function StrandedNotes({ stranded }: { stranded: readonly StrandedSchedul
 export function WorkingNotes({ names }: { names: readonly string[] }) {
   if (names.length === 0) return null;
   return (
-    <Banner tone="info">
+    <Callout variant="info">
       {names.length === 1 ? (
         workingNote(names[0]!)
       ) : (
@@ -292,7 +293,7 @@ export function WorkingNotes({ names }: { names: readonly string[] }) {
           ))}
         </ul>
       )}
-    </Banner>
+    </Callout>
   );
 }
 
@@ -347,7 +348,7 @@ export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBe
 /** Why the reducer refused an operation, kept on screen beside what caused it. */
 export function Refusal({ message }: { message: string | null }) {
   if (!message) return null;
-  return <Banner tone="critical">{message}</Banner>;
+  return <Callout variant="danger">{message}</Callout>;
 }
 
 /**
@@ -361,9 +362,9 @@ export function Refusal({ message }: { message: string | null }) {
  */
 export function ReadOnlyNote() {
   return (
-    <Banner tone="neutral">
+    <Callout variant="neutral">
       The organization cannot be changed right now, so this change cannot be applied.
-    </Banner>
+    </Callout>
   );
 }
 
@@ -451,7 +452,11 @@ export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] 
     (link): link is ProblemLink => link !== null,
   );
   return (
-    <Banner tone={critical ? "critical" : "caution"}>
+    // ANNOUNCED WHEN IT IS A REFUSAL, and only then. A Callout is silent by
+    // default, because a screen reader arriving at a page would otherwise read
+    // out every static banner on it; this one appears in ANSWER to a check the
+    // operator just ran, and a refusal is what stops the save.
+    <Callout variant={critical ? "danger" : "warning"} role={critical ? "alert" : undefined}>
       <Problems detail={problems.map((p) => p.message).join("\n")} />
       {links.length > 0 && (
         <p className="row wrap gap-3">
@@ -462,6 +467,6 @@ export function NodeProblems({ problems }: { problems: readonly PlacedProblem[] 
           ))}
         </p>
       )}
-    </Banner>
+    </Callout>
   );
 }

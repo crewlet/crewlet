@@ -23,7 +23,7 @@ import { plural } from "~/lib/format.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Banner, Button } from "~/ui/primitives.tsx";
+import { Button } from "~/ui/primitives.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
 import type { PlacedProblem } from "./model/problems.ts";
@@ -32,7 +32,7 @@ import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Callout, Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -237,28 +237,28 @@ export function ReviewSaveDialog({
         </>
       }
     >
-      {phase.kind === "refused" && <Banner tone="critical">{phase.message}</Banner>}
-      {phase.kind === "retry" && <Banner tone="caution">{phase.message}</Banner>}
+      {phase.kind === "refused" && <Callout variant="danger">{phase.message}</Callout>}
+      {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
-        <Banner tone="caution" icon={RefreshGlyph}>
+        <Callout variant="warning" icon={<RefreshGlyph />}>
           The engine's answer did not arrive. Checking whether the save was stored.
-        </Banner>
+        </Callout>
       )}
       {unknown && (
-        <Banner tone="caution">
+        <Callout variant="warning">
           Whether the save was stored could not be confirmed. {phase.detail} Check again, or save
           again: a save that already landed is recognized by its write id rather than stored a
           second time.
-        </Banner>
+        </Callout>
       )}
 
       {rules.reason && !busy && (
-        <Banner tone={status === "problems" ? "critical" : "caution"}>
+        <Callout variant={status === "problems" ? "danger" : "warning"}>
           {rules.reason}
           {status === "problems" &&
             problemCount > 0 &&
             ` The engine reported ${plural(problemCount, "problem")}.`}
-        </Banner>
+        </Callout>
       )}
       {status === "problems" && documentProblems.length > 0 && (
         <ul className="org-builder-list" aria-label="Problems with the whole configuration">
@@ -268,9 +268,9 @@ export function ReviewSaveDialog({
         </ul>
       )}
       {status === "unreachable" && (
-        <Banner tone="caution" icon={CableGlyph}>
+        <Callout variant="warning" icon={<CableGlyph />}>
           The engine could not be reached to check this draft. Saving still validates it.
-        </Banner>
+        </Callout>
       )}
 
       {needsContact.length > 0 && (
