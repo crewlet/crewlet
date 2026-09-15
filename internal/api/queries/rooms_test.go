@@ -190,6 +190,12 @@ func (emptyWork) Burndown(context.Context, tracker.BurndownQuery, time.Time) (
 	return tracker.Burndown{}, nil
 }
 
+func (emptyWork) Workload(context.Context, tracker.WorkloadQuery, time.Time) (
+	tracker.WorkloadAnswer, error) {
+
+	return tracker.WorkloadAnswer{}, nil
+}
+
 func (emptyWork) Activity(context.Context, tracker.ActivityQuery, time.Time) (
 	tracker.ActivityAnswer, error) {
 

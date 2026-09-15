@@ -2808,7 +2808,120 @@ a.work-cal-chip:hover {
   display: flex;
   align-items: center;
   font-size: var(--fs-xs);
-  color: var(--ink-muted);
+  color: var(--text-muted);
   white-space: nowrap;
   pointer-events: none;
+}
+
+/* ---- The workload -------------------------------------------------------
+   A grid rather than a table, for the same reason `.work-grid` is one: the
+   columns line up across every row, and a row is a flex line that can wrap
+   its badges without the cells losing their alignment. */
+.wl {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.wl-head,
+.wl-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.4fr) minmax(120px, 1.6fr) minmax(120px, 2fr) 5rem 6rem;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+}
+.wl-head {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wl-row + .wl-row {
+  border-top: 1px solid var(--border-subtle);
+}
+.wl-row:hover {
+  background: var(--surface-hover);
+}
+.wl-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  text-decoration: none;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.wl-handle {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.wl-counts {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.wl-open {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.wl-soft {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.wl-num {
+  text-align: right;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.wl-from {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+/* THE TRACK IS LONGER THAN CAPACITY, so over-capacity has somewhere to go.
+   A bar that filled at 100% would draw a person at capacity and a person at
+   three times it identically — which is the one comparison the screen is
+   for. */
+.wl-track {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-inset);
+  overflow: hidden;
+}
+.wl-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  min-width: 2px;
+}
+.wl-bar.is-positive {
+  background: var(--positive);
+}
+.wl-bar.is-caution {
+  background: var(--caution);
+}
+.wl-bar.is-critical {
+  background: var(--critical);
+}
+/* NEUTRAL IS A HAIRLINE, not an empty track: "nobody declared a capacity" is
+   a different picture from "this person holds nothing", and an empty track
+   would show them the same way. */
+.wl-bar.is-neutral {
+  background: var(--border-strong);
+}
+/* WHERE CAPACITY IS, drawn whether or not the bar reaches it, so a reader
+   sees the target as well as the load. */
+.wl-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--text-muted);
+  opacity: 0.55;
+  z-index: 1;
 }
