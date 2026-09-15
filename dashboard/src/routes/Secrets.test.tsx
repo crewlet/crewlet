@@ -25,6 +25,15 @@ import { Secrets } from "./Secrets.tsx";
  * exactly as the application gives it one. Rendered bare it throws before it
  * draws a row.
  */
+/*
+ * The NAME FIELD OF THE DIALOG, and not the table's Name column. Every header
+ * is named by the label it draws, so "Name" is the accessible name of a
+ * column as well as of this field, and an unscoped query matches both.
+ */
+function nameField(): HTMLElement {
+  return within(screen.getByRole("dialog")).getByLabelText("Name");
+}
+
 function screenAt(hash = "#/secrets") {
   location.hash = hash;
   return render(
@@ -174,7 +183,7 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
   screenAt();
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
-  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "NEW_TOKEN" } });
+  fireEvent.change(nameField(), { target: { value: "NEW_TOKEN" } });
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: 'glpat-"quoted"' } });
   fireEvent.click(screen.getByRole("button", { name: "Store" }));
 
@@ -218,7 +227,7 @@ test("a name the engine refuses is reported in the engine's own words", async ()
   screenAt();
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
-  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "gitlab-token" } });
+  fireEvent.change(nameField(), { target: { value: "gitlab-token" } });
   fireEvent.change(screen.getByLabelText("Value"), { target: { value: "glpat-x" } });
   fireEvent.click(screen.getByRole("button", { name: "Store" }));
 

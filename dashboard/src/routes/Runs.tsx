@@ -12,7 +12,12 @@
 
 import { useCallback, useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import {
+  MATCH_FOOTER_LABELS,
+  QueryState,
+  SeatChip,
+  useTableChoices,
+} from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
@@ -172,6 +177,9 @@ export function Runs() {
         key: "seat",
         header: "Seat",
         sortable: true,
+        // WHOSE RUN. A status, a box and a task with no seat beside them name
+        // work nobody is answerable for.
+        hideable: false,
         sortValue: (r) => r.role || r.agent_handle,
         render: (r) => <SeatChip name={r.role || r.agent_handle} handle={r.agent_handle} />,
       },
@@ -247,6 +255,15 @@ export function Runs() {
     [now],
   );
 
+  // The record pages. The run a reader opened is already a URL parameter, so
+  // the page it sits on belongs beside it rather than in this browser.
+  const choices = useTableChoices({
+    screen: "runs",
+    columns,
+    defaultSort: { key: "updated", direction: "desc" },
+    filterKey: `${seat}|${status}`,
+  });
+
   return (
     <>
       <PageHeader
@@ -300,14 +317,15 @@ export function Runs() {
 
       <DataView<SandboxRun>
         framed
+        {...choices}
         columns={columns}
         rows={shown}
         totalCount={rows.length}
+        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={(r) => r.turn_id}
         onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
         isSelected={(r) => r.turn_id === selected}
         rowTone={(r) => (r.status === "failed" ? "danger" : null)}
-        defaultSort={{ key: "updated", direction: "desc" }}
         filters={filters}
         filterValues={values}
         onFilterValuesChange={onValuesChange}

@@ -17,7 +17,7 @@
 
 import { useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, recordTable, SeatChip, StateBadge } from "~/components/common.tsx";
+import { QueryState, RecordTable, SeatChip, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -59,7 +59,6 @@ import {
   Button,
   Callout,
   Card,
-  DataTable,
   DescriptionList,
   EmptyState,
   EmptyValue,
@@ -572,13 +571,20 @@ export function SeatScreen({ handle }: { handle: string }) {
                 >
                   <Card.Title>Recurring work</Card.Title>
                 </Card.Header>
-                <DataTable
+                <RecordTable
+                  screen="seat"
+                  table="schedules"
+                  rows={configRole?.schedules ?? []}
                   getRowKey={(s) => s.name}
-                  {...recordTable(configRole?.schedules ?? [], [
+                  defaultSort={{ key: "name", direction: "asc" }}
+                  columns={[
                     {
                       key: "name",
                       header: "Name",
                       sortable: true,
+                      // WHICH SCHEDULE. A cron with no name beside it cannot
+                      // be found in the configuration that declares it.
+                      hideable: false,
                       sortValue: (s) => s.name,
                       render: (s) => s.name,
                     },
@@ -593,7 +599,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       header: "Task",
                       render: (s) => <span className="truncate">{s.task}</span>,
                     },
-                  ])}
+                  ]}
                 />
               </Card>
             )}
@@ -722,7 +728,10 @@ export function SeatScreen({ handle }: { handle: string }) {
                   >
                     <Card.Title>Past turns</Card.Title>
                   </Card.Header>
-                  <DataTable
+                  <RecordTable
+                    screen="seat"
+                    table="episodes"
+                    rows={memory.data?.episodes ?? []}
                     getRowKey={(e) => e.id ?? e.turn_id ?? e.created_at}
                     defaultSort={{ key: "at", direction: "desc" }}
                     emptyMessage={
@@ -732,13 +741,16 @@ export function SeatScreen({ handle }: { handle: string }) {
                         description="An episode is written when a turn completes."
                       />
                     }
-                    {...recordTable(memory.data?.episodes ?? [], [
+                    columns={[
                       {
                         key: "at",
                         header: "When",
                         shrink: true,
                         sortable: true,
                         firstDirection: "desc",
+                        // WHICH TURN. One seat's episodes differ by when they
+                        // happened, and the row carries no other identity.
+                        hideable: false,
                         sortValue: (e) => e.created_at,
                         render: (e) => (
                           <span className="t-caption">{fmtDateTime(e.created_at)}</span>
@@ -790,7 +802,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                             <EmptyValue label="Not reported" />
                           ),
                       },
-                    ])}
+                    ]}
                   />
                 </Card>
 
@@ -995,7 +1007,10 @@ export function SeatScreen({ handle }: { handle: string }) {
                 >
                   <Card.Title>Recent turns</Card.Title>
                 </Card.Header>
-                <DataTable
+                <RecordTable
+                  screen="seat"
+                  table="turns"
+                  rows={spend.data?.by_turn ?? []}
                   getRowKey={(t) => t.turn_id}
                   defaultSort={{ key: "started", direction: "desc" }}
                   onRowClick={(t) => nav.to(["turns", t.turn_id])}
@@ -1006,13 +1021,16 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="This seat has completed no turn in the window. Widen it, or wait for its next one."
                     />
                   }
-                  {...recordTable(spend.data?.by_turn ?? [], [
+                  columns={[
                     {
                       key: "started",
                       header: "Started",
                       shrink: true,
                       sortable: true,
                       firstDirection: "desc",
+                      // WHEN, which is what tells one turn of this seat from
+                      // the next, and the row opens that turn.
+                      hideable: false,
                       sortValue: (t) => t.started_at,
                       render: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
                     },
@@ -1039,7 +1057,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       sortValue: (t) => t.calls,
                       render: (t) => t.calls,
                     },
-                  ])}
+                  ]}
                 />
               </Card>
             </QueryState>

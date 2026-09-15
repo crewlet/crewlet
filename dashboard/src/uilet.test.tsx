@@ -40,12 +40,17 @@ import {
   tabId,
 } from "@crewlethq/ui";
 import { Announcer, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
-import { recordTable } from "./components/common.tsx";
+import { Router } from "~/app/router.tsx";
+import { RecordTable } from "./components/common.tsx";
 import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  // A table's own choices outlive a case otherwise: the URL is the document's
+  // and the storage key is the origin's, and neither is reset by unmounting.
+  localStorage.clear();
+  location.hash = "#/";
 });
 
 test("a uilet component renders, so the packages are inlined rather than externalised", () => {
@@ -542,12 +547,19 @@ test("a chip field over options refuses a value the options do not offer", () =>
 });
 
 /*
- * THE RECORD TABLE. `recordTable` is the one answer this dashboard gives about
- * a table: the caller holds the rows, so the table pages nowhere, resizes
- * nothing and stores nothing. The last of those is the one that fails
- * silently: a `storageKey` would put a reader's column layout in this
- * browser's own storage, where the next reader inherits it invisibly and no
- * link can carry it.
+ * THE RECORD TABLE. [RecordTable] is the one answer this dashboard gives about
+ * a panel table: the design system draws it, the panel says only what its rows
+ * and columns are, and the reader gets the whole frame: the settings cog, the
+ * page control and the column list, which every one of these tables was drawn
+ * WITHOUT until this change.
+ *
+ * The cases below are the split that came with it. Five choices are facts
+ * about what is on screen (page, page size, sort, which columns, in what
+ * order), so each one is in the URL and travels in a link. Two are facts about
+ * this browser (whether cells wrap, how wide a column was dragged), so those
+ * are under the storage key and only those. Both halves fail silently: a page
+ * kept in `localStorage` is one no link can carry, and a width in the URL is a
+ * pixel count that means nothing on anybody else's screen.
  */
 
 interface Row {
@@ -574,6 +586,26 @@ const ROW_COLUMNS = [
   },
 ];
 
+/**
+ * A panel table as a screen draws one, inside the router it reads its choices
+ * from. Its parameters carry the table's own name, so the two tables a screen
+ * draws never share a page: these are `rows.page`, `rows.per` and so on.
+ */
+function panel(hash = "#/spend") {
+  location.hash = hash;
+  return render(
+    <Router>
+      <RecordTable
+        screen="panel"
+        table="rows"
+        rows={ROWS}
+        columns={ROW_COLUMNS}
+        getRowKey={(row) => row.seat}
+      />
+    </Router>,
+  );
+}
+
 function seatOrder(): string[] {
   return screen
     .getAllByRole("row")
@@ -581,23 +613,98 @@ function seatOrder(): string[] {
     .map((row) => row.querySelector("td")?.textContent ?? "");
 }
 
-test("a record table offers no page control, no resize handle and no settings", () => {
-  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
-  expect(screen.queryByRole("button", { name: /next page/i })).toBeNull();
-  expect(screen.queryByRole("button", { name: /table settings/i })).toBeNull();
-  expect(screen.queryByRole("separator", { name: /resize/i })).toBeNull();
+test("a record table offers the settings frame, the page control and the handles", () => {
+  // The three controls the panel tables did not have. The cog is the way to
+  // the column list and the page size; the chevrons are the pages themselves;
+  // the separator is the column width a reader drags or nudges with a key.
+  panel();
+  expect(screen.getByRole("button", { name: /table settings/i })).toBeDefined();
+  expect(screen.getByRole("button", { name: /next page/i })).toBeDefined();
+  expect(screen.getAllByRole("separator", { name: /resize/i })).not.toHaveLength(0);
   expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
 });
 
-test("a record table reads and writes no browser storage", () => {
+test("the page a reader turns is in the link, and the size is what slices it", () => {
+  // Both halves of one claim: the size in the URL is what the table pages by,
+  // and the page it lands on is written back where a link can carry it. Kept
+  // in this browser instead, page four of a log is a place nobody can send.
+  panel("#/spend?rows.per=1");
+  expect(seatOrder()).toEqual(["planner"]);
+
+  fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+  expect(location.hash).toContain("rows.page=2");
+  expect(seatOrder()).toEqual(["reviewer"]);
+});
+
+test("a page past the end of the rows is pulled back to the last one", () => {
+  // A hand-edited link, or one sent while the list was longer. The table knows
+  // the bound and the screen holds the page, so the correction has to travel
+  // back through the URL or the reader is left looking at nothing.
+  panel("#/spend?rows.per=1&rows.page=9");
+  expect(location.hash).toContain("rows.page=3");
+  expect(seatOrder()).toEqual(["unmetered"]);
+});
+
+test("a hidden column travels in the link rather than in this browser", () => {
+  // The Columns panel is drawn because the screen holds the choice, which is
+  // also the only way back for a column a reader has hidden.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Spent/ }));
+  expect(location.hash).toContain("rows.hide=spent");
+  expect(screen.queryByRole("columnheader", { name: /Spent/ })).toBeNull();
+});
+
+test("the column a table is sorted by is in the link", () => {
+  // A sorted list is an answer somebody sends: "the seats by spend, worst
+  // first" is the whole point of the link, and a sort the URL does not carry
+  // arrives at the reader's end as the default order.
+  panel();
+  fireEvent.click(within(screen.getByRole("columnheader", { name: /Seat/ })).getByRole("button"));
+  expect(location.hash).toContain("rows.sort=seat%3Aasc");
+});
+
+test("the settings frame carries the page sizes and the column list", () => {
+  // What the owner reads on every table in the console and read on none of
+  // these: the row of sizes with All beside it, and the column list they
+  // reorder and untick. Both are gated on the table being offered a page size
+  // and a visible-column pair, which is what the screen now hands it.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  const frame = screen.getByRole("dialog");
+  expect(within(frame).getByText("Items per page")).toBeDefined();
+  expect(within(frame).getByRole("button", { name: "10" })).toBeDefined();
+  // All is a WORD, not the row count, so a table that gains a row does not
+  // quietly start paging behind a reader who chose it.
+  expect(within(frame).getByRole("button", { name: /^All/ })).toBeDefined();
+  expect(within(frame).getByText("Column Order & Visibility")).toBeDefined();
+  expect(within(frame).getByRole("button", { name: "Move Spent up" })).toBeDefined();
+  expect(within(frame).getByRole("button", { name: "Reset to Default" })).toBeDefined();
+});
+
+test("wrapping is kept in this browser and never in the link", () => {
+  // The other half of the split, and the one that has to stay out of the URL:
+  // whether a cell wraps is a reading preference at this window width, which
+  // says nothing to whoever the link is sent to. It starts on, so what a
+  // reader does here is turn it off.
+  panel();
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  fireEvent.click(screen.getByRole("checkbox", { name: /Wrap lines/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  expect(localStorage.getItem("crewlet_table_panel_rows_wrapLines")).toBe("false");
+  expect(location.hash).not.toContain("wrap");
+});
+
+test("a blocked store leaves the table drawing its rows", () => {
   // A throwing store is what a browser with site data blocked hands back, and
   // it used to arrive from inside a state initialiser, which is a blank page
-  // rather than a missing preference. Nothing here asks for one at all.
+  // rather than a missing preference. The table keeps the widths and the
+  // wrapping there, so it has to read one that refuses without losing a row.
   const refuse = () => {
     throw new Error("site data is blocked");
   };
   vi.stubGlobal("localStorage", { getItem: refuse, setItem: refuse, removeItem: refuse });
-  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  panel();
   expect(screen.getAllByRole("row")).toHaveLength(4);
 });
 
@@ -606,7 +713,7 @@ test("a column says which way its first press sorts, and an absent value sorts l
   // reader came for differs; one blanket direction for a whole table sorted
   // every name from Z. An absent value is not a small one: a seat with no
   // meter has not been measured, so it is last in BOTH directions.
-  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  panel();
   fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
   expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
   fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
@@ -617,7 +724,7 @@ test("a column is sorted from a button inside its header, and the cell says whic
   // A sortable column used to be a click handler on the header cell, which a
   // keyboard could not reach and a screen reader did not announce as a
   // control. An unsortable column stays a plain header with nothing to press.
-  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  panel();
   const header = screen.getByRole("columnheader", { name: /Seat/ });
   const button = within(header).getByRole("button", { name: /Seat/ });
   expect(header.getAttribute("aria-sort")).toBeNull();

@@ -22,7 +22,7 @@
 
 import { useId, useMemo } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT, recordTable } from "~/components/common.tsx";
+import { QueryState, RECORD_MAX_HEIGHT, RecordTable } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
@@ -32,7 +32,6 @@ import {
   Card,
   CodeBlock,
   CopyButton,
-  DataTable,
   EmptyState,
   EmptyValue,
   InlineCode,
@@ -179,7 +178,10 @@ export function ConfigScreen() {
                 >
                   <Card.Title>Revisions</Card.Title>
                 </Card.Header>
-                <DataTable
+                <RecordTable
+                  screen="config"
+                  table="revisions"
+                  rows={audit.data ?? []}
                   getRowKey={(r) => r.revision_id}
                   defaultSort={{ key: "at", direction: "desc" }}
                   onRowClick={(r) => {
@@ -189,7 +191,7 @@ export function ConfigScreen() {
                     setLens("diff");
                   }}
                   isSelected={(r) => r.revision_id === revision}
-                  {...recordTable(audit.data ?? [], [
+                  columns={[
                     {
                       key: "at",
                       header: "When",
@@ -204,6 +206,9 @@ export function ConfigScreen() {
                     {
                       key: "id",
                       header: "Revision",
+                      // WHICH REVISION. Every other cell describes one, and a
+                      // row a reader opens to diff has to name what it opens.
+                      hideable: false,
                       render: (r) => (
                         <span className="row gap-1">
                           <InlineCode>{r.revision_id.slice(0, 10)}</InlineCode>
@@ -230,7 +235,7 @@ export function ConfigScreen() {
                       sortValue: (r) => r.created_by,
                       render: (r) => r.created_by || <EmptyValue label="Not recorded" />,
                     },
-                  ])}
+                  ]}
                 />
               </Card>
             </QueryState>

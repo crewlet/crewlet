@@ -9,6 +9,7 @@
 import { useCallback, useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
+import { MATCH_FOOTER_LABELS, useTableChoices } from "~/components/common.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
@@ -104,6 +105,9 @@ export function Tools() {
         sortable: true,
         mono: true,
         copyable: true,
+        // THE TOOL'S OWN NAME. It is what a seat calls and what a reader came
+        // to look up; an origin and a description on their own name nothing.
+        hideable: false,
         sortValue: (t) => t.name,
       },
       {
@@ -132,6 +136,15 @@ export function Tools() {
     ],
     [],
   );
+
+  // The catalogue pages, and the page, its size and the columns ride in the
+  // URL beside the two filters this screen already keeps there.
+  const choices = useTableChoices({
+    screen: "tools",
+    columns,
+    defaultSort: { key: "name", direction: "asc" },
+    filterKey: `${q}|${origin}`,
+  });
 
   return (
     <>
@@ -164,11 +177,12 @@ export function Tools() {
 
       <DataView<ToolRow>
         framed
+        {...choices}
         columns={columns}
         rows={rows}
         totalCount={tools.length}
+        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={(t) => `${t.source}:${t.name}`}
-        defaultSort={{ key: "name", direction: "asc" }}
         filters={filters}
         filterValues={values}
         onFilterValuesChange={onValuesChange}

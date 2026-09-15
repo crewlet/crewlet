@@ -15,7 +15,12 @@
 
 import { useCallback, useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import { SeatChip, StateBadge } from "~/components/common.tsx";
+import {
+  MATCH_FOOTER_LABELS,
+  SeatChip,
+  StateBadge,
+  useTableChoices,
+} from "~/components/common.tsx";
 import { statusLine, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import {
@@ -96,6 +101,9 @@ export function Directory({ index }: { index: OrgIndex }) {
         key: "name",
         header: "Seat",
         sortable: true,
+        // WHO. A unit, a manager and a status belonging to nobody named is a
+        // directory of nobody.
+        hideable: false,
         sortValue: (s) => s.name,
         render: (s) => <SeatChip name={s.name} handle={s.handle} human={s.kind === "human"} />,
       },
@@ -171,14 +179,28 @@ export function Directory({ index }: { index: OrgIndex }) {
     [index.hierarchy, seatFor, sandboxes, unknown],
   );
 
+  /*
+   * The directory pages, and its choices are named after it rather than after
+   * the screen: the lens shares its URL with the chart and the builder, so a
+   * bare `page` on the org screen would read as the chart's.
+   */
+  const choices = useTableChoices({
+    screen: "org",
+    table: "directory",
+    columns,
+    defaultSort: { key: "name", direction: "asc" },
+    filterKey: `${q}|${kind}`,
+  });
+
   return (
     <DataView<Seat>
       framed
+      {...choices}
       columns={columns}
       rows={shown}
       totalCount={index.seats.length}
+      labels={{ footer: MATCH_FOOTER_LABELS }}
       getRowKey={(s) => s.key}
-      defaultSort={{ key: "name", direction: "asc" }}
       filters={filters}
       filterValues={values}
       onFilterValuesChange={onValuesChange}

@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { QueryState } from "~/components/common.tsx";
+import { MATCH_FOOTER_LABELS, QueryState, useTableChoices } from "~/components/common.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { useParam } from "~/app/router.tsx";
@@ -208,7 +208,10 @@ export function Secrets() {
 
   const columns = useMemo<DataViewColumn<SecretRow>[]>(
     () => [
-      { key: "name", header: "Name", sortable: true, mono: true, copyable: true },
+      // THE NAME IS THE CREDENTIAL. Everything else in the row describes one,
+      // and a value is never shown here at all, so the name is all a reader
+      // has to act on.
+      { key: "name", header: "Name", sortable: true, mono: true, copyable: true, hideable: false },
       {
         key: "read",
         header: "Read by",
@@ -247,6 +250,15 @@ export function Secrets() {
     // `pathsFor` reads the references answer, which is what `readers` holds.
     [readers, now],
   );
+
+  // The list pages, and the page and the columns join the two filters this
+  // screen already keeps in the URL.
+  const choices = useTableChoices({
+    screen: "secrets",
+    columns,
+    defaultSort: { key: "name", direction: "asc" },
+    filterKey: `${q}|${source}`,
+  });
 
   return (
     <>
@@ -306,11 +318,12 @@ export function Secrets() {
 
       <DataView<SecretRow>
         framed
+        {...choices}
         columns={columns}
         rows={shown}
         totalCount={list.length}
+        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={(s) => s.name}
-        defaultSort={{ key: "name", direction: "asc" }}
         filters={filters}
         filterValues={values}
         onFilterValuesChange={onValuesChange}

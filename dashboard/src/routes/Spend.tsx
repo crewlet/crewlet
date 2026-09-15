@@ -12,7 +12,7 @@
 
 import { useId, useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
+import { QueryState, RecordTable, SeatChip } from "~/components/common.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
@@ -22,7 +22,6 @@ import {
   Callout,
   Card,
   dataColor,
-  DataTable,
   EmptyState,
   EmptyValue,
   InlineCode,
@@ -264,7 +263,10 @@ export function Spend() {
           >
             <Card.Title>By seat</Card.Title>
           </Card.Header>
-          <DataTable
+          <RecordTable
+            screen="spend"
+            table="seats"
+            rows={tokens?.by_agent ?? []}
             getRowKey={(a) => a.agent_id || a.role}
             defaultSort={{ key: "total", direction: "desc" }}
             onRowClick={(a) => nav.to(["seats", a.handle || a.role], { tab: "cost" })}
@@ -275,11 +277,14 @@ export function Spend() {
                 description="Spend is recorded when a completion returns. Widen the window, or wait for a turn to run."
               />
             }
-            {...recordTable(tokens?.by_agent ?? [], [
+            columns={[
               {
                 key: "seat",
                 header: "Seat",
                 sortable: true,
+                // WHOSE SPEND. Hidden, every number in the row is money nobody
+                // is accountable for.
+                hideable: false,
                 sortValue: (a) => a.role,
                 render: (a) => <SeatChip name={a.role} handle={a.handle} />,
               },
@@ -330,7 +335,7 @@ export function Spend() {
                     <EmptyValue label="No calls in this window" />
                   ),
               },
-            ])}
+            ]}
           />
           {phaseKeys.length > 0 && (
             <Card.Footer
@@ -351,7 +356,10 @@ export function Spend() {
           >
             <Card.Title>Recent turns</Card.Title>
           </Card.Header>
-          <DataTable
+          <RecordTable
+            screen="spend"
+            table="turns"
+            rows={tokens?.by_turn ?? []}
             getRowKey={(t) => t.turn_id}
             defaultSort={{ key: "started", direction: "desc" }}
             onRowClick={(t) => nav.to(["turns", t.turn_id])}
@@ -362,13 +370,16 @@ export function Spend() {
                 description="A turn is recorded when it completes. Widen the window to reach older ones."
               />
             }
-            {...recordTable(tokens?.by_turn ?? [], [
+            columns={[
               {
                 key: "started",
                 header: "Started",
                 shrink: true,
                 sortable: true,
                 firstDirection: "desc",
+                // WHEN is what tells two turns of one seat apart, and the row
+                // opens the turn, so it stays.
+                hideable: false,
                 sortValue: (t) => tsKey(t.started_at),
                 render: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
               },
@@ -403,7 +414,7 @@ export function Spend() {
                 shrink: true,
                 render: (t) => <InlineCode>{t.turn_id.slice(0, 8)}</InlineCode>,
               },
-            ])}
+            ]}
           />
         </Card>
 
@@ -432,7 +443,10 @@ export function Spend() {
             </Callout>
           ) : (
             <QueryState error={budgets.error} loading={budgets.loading}>
-              <DataTable
+              <RecordTable
+                screen="spend"
+                table="budgets"
+                rows={budgets.data?.seats ?? []}
                 getRowKey={(s) => s.agent_id || s.role}
                 defaultSort={{ key: "used", direction: "desc" }}
                 emptyMessage={
@@ -442,11 +456,12 @@ export function Spend() {
                     description="A role takes one from the company configuration. Without its own cap it draws on the organization's."
                   />
                 }
-                {...recordTable(budgets.data?.seats ?? [], [
+                columns={[
                   {
                     key: "seat",
                     header: "Seat",
                     sortable: true,
+                    hideable: false,
                     sortValue: (s) => s.role,
                     render: (s) => <SeatChip name={s.role} handle={s.handle} />,
                   },
@@ -506,7 +521,7 @@ export function Spend() {
                         <EmptyValue label="No budget set" />
                       ),
                   },
-                ])}
+                ]}
               />
             </QueryState>
           )}

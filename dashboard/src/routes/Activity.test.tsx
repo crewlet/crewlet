@@ -96,12 +96,45 @@ test("narrowing the log writes the filter into the URL", () => {
   expect(location.hash).toContain("failed=1");
 });
 
-test("the footer says how many of how many are on screen", () => {
+test("the log pages, and the page a reader turned to is in the link", () => {
+  // The list screens draw the settings cog already; what they did not draw is
+  // a page control, because nothing paged. A page size the link carries is
+  // what the table slices by, and the page it lands on goes back into the URL
+  // beside the filters, so page two of a narrowed log is one link.
+  mount("#/activity?per=1");
+  expect(actors()).toEqual(["planner"]);
+
+  fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+  expect(location.hash).toContain("page=2");
+  expect(actors()).toEqual(["reviewer"]);
+});
+
+test("searching again from deep in the log goes back to the first page", () => {
+  // The table puts the page back for a sort or a filter of ITS own, and this
+  // screen's filters are not its own: each is a URL parameter applied to the
+  // rows before they ever reach the view. Both searches here keep three rows,
+  // so nothing about the page COUNT gives it away. Without the screen saying
+  // that a filter changed, the reader is answered with page three of a list
+  // they have not seen the start of.
+  mount("#/activity?per=1&page=3&q=r");
+  expect(actors()).toEqual(["engine"]);
+
+  fireEvent.change(screen.getByRole("searchbox", { name: "Search events" }), {
+    target: { value: "e" },
+  });
+  expect(actors()).toEqual(["planner"]);
+  expect(location.hash).not.toContain("page=3");
+});
+
+test("the footer counts what the filters kept, not what the page holds", () => {
   // Not the row count alone: a reader who has narrowed a log needs to know
-  // there is more behind the filter than the three rows in front of them.
+  // there is more behind the filter than the one row in front of them. And
+  // not "Showing 1 of 3" either, now that the table pages: the first number
+  // is what MATCHED, which is a different claim from what is drawn, and the
+  // pager beside it is what says which rows those are.
   mount("#/activity?category=task");
-  expect(screen.getByText(/Showing/).textContent).toContain("1");
-  expect(screen.getByText(/Showing/).textContent).toContain("3");
+  expect(screen.getByText(/match/).textContent).toContain("1");
+  expect(screen.getByText(/match/).textContent).toContain("3");
 });
 
 test("a failed event is marked as failed rather than only tinted", () => {

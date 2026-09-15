@@ -20,7 +20,12 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
-import { QueryState, recordTable } from "~/components/common.tsx";
+import {
+  MATCH_FOOTER_LABELS,
+  QueryState,
+  RecordTable,
+  useTableChoices,
+} from "~/components/common.tsx";
 import { PhaseTag } from "~/components/PhaseTag.tsx";
 import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -39,7 +44,6 @@ import type { EventRecord } from "~/protocol/index.ts";
 import {
   Button,
   Card,
-  DataTable,
   DataView,
   type DataViewColumn,
   EmptyState,
@@ -186,6 +190,9 @@ export function ModelActivity() {
       {
         key: "seat",
         header: "Seat",
+        // WHOSE PHASE. The rest of the row is a phase, a model and a count,
+        // and a fleet monitor whose rows name nobody cannot be acted on.
+        hideable: false,
         render: (r) => (
           <span className="row gap-2">
             {r.live && <StatusDot tone="info" pulse />}
@@ -333,6 +340,21 @@ export function ModelActivity() {
     [setRole, setPhase, setOnlyFailed],
   );
 
+  /*
+   * THE SETTLED LIST PAGES, and the running one above it does too, so both
+   * name themselves in the URL. Paging on top of the cursor is deliberate:
+   * every "Load older" press appends sixty more rows to the same client-held
+   * list, and the reader was left scrolling one column of hundreds. The pages
+   * are what has been fetched; the footer's button is what fetches more.
+   */
+  const settledChoices = useTableChoices({
+    screen: "model",
+    table: "settled",
+    columns,
+    defaultSort: { key: "when", direction: "desc" },
+    filterKey: `${role}|${phase}|${onlyFailed}`,
+  });
+
   return (
     <>
       <PageHeader
@@ -385,8 +407,11 @@ export function ModelActivity() {
           >
             <Card.Title>Running now</Card.Title>
           </Card.Header>
-          <DataTable
-            {...recordTable(running, columns)}
+          <RecordTable
+            screen="model"
+            table="running"
+            rows={running}
+            columns={columns}
             getRowKey={phaseRecordKey}
             onRowClick={openSeat}
             rowTone={(r) => (r.failed ? "danger" : null)}
@@ -402,13 +427,14 @@ export function ModelActivity() {
 
       <DataView<PhaseRecord>
         framed
+        {...settledChoices}
         columns={columns}
         rows={settled.items}
         totalCount={merged.filter((r) => !r.live).length}
+        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={phaseRecordKey}
         onRowClick={openSeat}
         rowTone={(r) => (r.failed ? "danger" : null)}
-        defaultSort={{ key: "when", direction: "desc" }}
         filters={filters}
         filterValues={values}
         onFilterValuesChange={onValuesChange}

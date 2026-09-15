@@ -7,14 +7,13 @@
  * its own poll failed rather than showing the last reading as if it were now.
  */
 
-import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
+import { QueryState, RecordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
 import {
   Callout,
   Card,
-  DataTable,
   EmptyState,
   EmptyValue,
   InlineCode,
@@ -140,15 +139,22 @@ export function Fleet() {
           >
             <Card.Title>Nodes</Card.Title>
           </Card.Header>
-          <DataTable
+          <RecordTable
+            screen="fleet"
+            table="nodes"
+            rows={nodes}
             getRowKey={(n) => n.id}
             defaultSort={{ key: "id", direction: "asc" }}
             rowTone={(n) => (n.config_status === "error" ? "danger" : null)}
-            {...recordTable(nodes, [
+            columns={[
               {
                 key: "id",
                 header: "Node",
                 sortable: true,
+                // WHICH NODE cannot be hidden: every other cell here is a fact
+                // about a node, and a row of them belonging to nobody is a row
+                // nobody can act on.
+                hideable: false,
                 sortValue: (n) => n.id,
                 render: (n) => (
                   <span className="row gap-1">
@@ -256,7 +262,7 @@ export function Fleet() {
                     <EmptyValue label="Not reported" />
                   ),
               },
-            ])}
+            ]}
           />
         </Card>
 
@@ -289,7 +295,10 @@ export function Fleet() {
             >
               <Card.Title>Seat placement</Card.Title>
             </Card.Header>
-            <DataTable
+            <RecordTable
+              screen="fleet"
+              table="seats"
+              rows={data?.seats ?? []}
               getRowKey={(s) => s.handle}
               defaultSort={{ key: "handle", direction: "asc" }}
               emptyMessage={
@@ -299,11 +308,12 @@ export function Fleet() {
                   description="A node claims a seat's lease before it runs the seat, so an engine with no company applied has none to claim."
                 />
               }
-              {...recordTable(data?.seats ?? [], [
+              columns={[
                 {
                   key: "handle",
                   header: "Seat",
                   sortable: true,
+                  hideable: false,
                   sortValue: (s) => s.handle,
                   render: (s) => <SeatChip name={s.handle} handle={s.handle} />,
                 },
@@ -333,7 +343,7 @@ export function Fleet() {
                       <EmptyValue label="Not reported" />
                     ),
                 },
-              ])}
+              ]}
             />
           </Card>
 
@@ -346,7 +356,10 @@ export function Fleet() {
             >
               <Card.Title>Company-wide duties</Card.Title>
             </Card.Header>
-            <DataTable
+            <RecordTable
+              screen="fleet"
+              table="duties"
+              rows={data?.duties ?? []}
               getRowKey={(d) => d.duty}
               defaultSort={{ key: "duty", direction: "asc" }}
               emptyMessage={
@@ -356,11 +369,12 @@ export function Fleet() {
                   description="The retention sweep and the scheduler are fleet singletons, so exactly one node runs each."
                 />
               }
-              {...recordTable(data?.duties ?? [], [
+              columns={[
                 {
                   key: "name",
                   header: "Duty",
                   sortable: true,
+                  hideable: false,
                   sortValue: (d) => d.duty,
                   render: (d) => d.duty,
                 },
@@ -386,7 +400,7 @@ export function Fleet() {
                       <EmptyValue label="Not reported" />
                     ),
                 },
-              ])}
+              ]}
             />
           </Card>
         </div>

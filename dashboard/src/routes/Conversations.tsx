@@ -17,7 +17,12 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import {
+  MATCH_FOOTER_LABELS,
+  QueryState,
+  SeatChip,
+  useTableChoices,
+} from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -128,9 +133,13 @@ export function Conversations() {
         ),
       },
       {
+        // A CHANNEL IS THE PAIR, so neither half of it hides: one ask, one
+        // answer, and a row naming only one end says nothing about who was
+        // authorised to ask whom.
         key: "from",
         header: "Asked by",
         sortable: true,
+        hideable: false,
         sortValue: (c) => seatName(c.requester),
         render: (c) => <SeatChip name={seatName(c.requester)} handle={c.requester} />,
       },
@@ -138,6 +147,7 @@ export function Conversations() {
         key: "to",
         header: "Asked",
         sortable: true,
+        hideable: false,
         sortValue: (c) => seatName(c.target),
         render: (c) => <SeatChip name={seatName(c.target)} handle={c.target} />,
       },
@@ -171,6 +181,15 @@ export function Conversations() {
     ],
     [seatName, now],
   );
+
+  // The record pages, and its page and columns join the two filters already
+  // in the URL, so a narrowed page of channels is a link.
+  const choices = useTableChoices({
+    screen: "conversations",
+    columns,
+    defaultSort: { key: "last", direction: "desc" },
+    filterKey: `${party}|${state}`,
+  });
 
   return (
     <>
@@ -213,11 +232,12 @@ export function Conversations() {
         <QueryState error={channels.error} loading={channels.loading}>
           <DataView<A2AChannel>
             framed
+            {...choices}
             columns={columns}
             rows={shown}
             totalCount={all.length}
+            labels={{ footer: MATCH_FOOTER_LABELS }}
             getRowKey={(c) => c.id}
-            defaultSort={{ key: "last", direction: "desc" }}
             filters={filters}
             filterValues={values}
             onFilterValuesChange={onValuesChange}

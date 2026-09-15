@@ -2,12 +2,11 @@
  * Recurring work: what fires, when it next fires, and how it last went.
  */
 
-import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
+import { QueryState, RecordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import {
   Card,
-  DataTable,
   EmptyState,
   EmptyValue,
   InlineCode,
@@ -94,14 +93,20 @@ export function Schedules() {
           >
             <Card.Title>Defined</Card.Title>
           </Card.Header>
-          <DataTable
+          <RecordTable
+            screen="schedules"
+            table="defined"
+            rows={schedules}
             getRowKey={(s) => `${s.scope}:${s.scope_name}:${s.name}`}
             defaultSort={{ key: "next", direction: "asc" }}
-            {...recordTable(schedules, [
+            columns={[
               {
                 key: "name",
                 header: "Name",
                 sortable: true,
+                // WHICH SCHEDULE. A cron and a next fire belonging to nothing
+                // named is a row nobody can match to the configuration.
+                hideable: false,
                 sortValue: (s) => s.name,
                 render: (s) => s.name,
               },
@@ -168,7 +173,7 @@ export function Schedules() {
                     <span className="muted">never</span>
                   ),
               },
-            ])}
+            ]}
           />
         </Card>
 
@@ -181,7 +186,10 @@ export function Schedules() {
           >
             <Card.Title>Recent runs</Card.Title>
           </Card.Header>
-          <DataTable
+          <RecordTable
+            screen="schedules"
+            table="runs"
+            rows={runs}
             getRowKey={(r) => `${r.fired_at}:${r.name}:${r.scope_name}`}
             defaultSort={{ key: "fired", direction: "desc" }}
             emptyMessage={
@@ -192,7 +200,7 @@ export function Schedules() {
               />
             }
             rowTone={(r) => (OUTCOME_TONE[r.outcome] === "danger" ? "danger" : null)}
-            {...recordTable(runs, [
+            columns={[
               {
                 key: "fired",
                 header: "Fired",
@@ -206,6 +214,9 @@ export function Schedules() {
                 key: "name",
                 header: "Schedule",
                 sortable: true,
+                // WHICH SCHEDULE FIRED. An outcome with no schedule beside it
+                // says something went wrong and not what.
+                hideable: false,
                 sortValue: (r) => r.name,
                 render: (r) => r.name,
               },
@@ -230,7 +241,7 @@ export function Schedules() {
                 header: "Detail",
                 render: (r) => <span className="truncate t-caption">{r.detail}</span>,
               },
-            ])}
+            ]}
           />
         </Card>
       </QueryState>

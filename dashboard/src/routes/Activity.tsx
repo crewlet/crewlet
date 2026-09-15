@@ -30,7 +30,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { MATCH_FOOTER_LABELS, QueryState, useTableChoices } from "~/components/common.tsx";
 import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
 import { href } from "~/app/router.tsx";
 import { eventHistoryLabel, fmtDateTime, humanize, newestFirst, plural } from "~/lib/format.ts";
@@ -231,6 +231,9 @@ export function Activity() {
         key: "summary",
         header: "What happened",
         sortable: true,
+        // WHAT THIS ROW IS. A time, an actor and a category with the event
+        // itself hidden is a log that records that something happened.
+        hideable: false,
         sortValue: (e) => e.summary || e.type,
         render: (e) => (
           <span className="row gap-1">
@@ -261,19 +264,33 @@ export function Activity() {
     [now],
   );
 
+  /*
+   * THE LOG PAGES, and every choice that shapes the page is in the URL beside
+   * the filters that narrowed it, so page four of a narrowed log is a link.
+   * Paging on top of the cursor is deliberate: "Load 100 older" appends to the
+   * same client-held list, which reached a thousand rows in one scroller.
+   */
+  const choices = useTableChoices({
+    screen: "activity",
+    columns,
+    defaultSort: { key: "timestamp", direction: "desc" },
+    filterKey: `${category}|${actor}|${q}|${onlyFailed}`,
+  });
+
   return (
     <DataView<FeedRow>
       title="Event log"
       description="Everything the engine published, live and then paged out of the store. This tab holds the last 400 in memory; older rows are fetched."
       badges={<Tag appearance="outline">{plural(rows.length, "event")} shown</Tag>}
       framed
+      {...choices}
       columns={columns}
       rows={rows}
       totalCount={all.length}
+      labels={{ footer: MATCH_FOOTER_LABELS }}
       rowKey="id"
       getRowHref={(e) => href(["events", e.id])}
       rowTone={(e) => (e.failed ? "danger" : null)}
-      defaultSort={{ key: "timestamp", direction: "desc" }}
       filters={filters}
       filterValues={values}
       onFilterValuesChange={onValuesChange}

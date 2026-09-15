@@ -8,8 +8,8 @@
  * zero callers beside another with all of them.
  */
 
-import type { ReactNode } from "react";
-import { href } from "~/app/router.tsx";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { href, useParam } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
 import {
@@ -24,23 +24,32 @@ import {
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 import {
+  ALL_ITEMS,
   Avatar,
   Button,
   Callout,
   Card,
   cx,
+  DataTable,
   EmptyState,
   EmptyValue,
   formatRelative,
   InlineCode,
   RelativeTime,
   Stack,
+  TableFooter,
   tableColumns,
   Tag,
   useNow,
   VisuallyHidden,
 } from "@crewlethq/ui";
-import type { DataViewColumn } from "@crewlethq/ui";
+import type {
+  DataTableItemsPerPage,
+  DataTableProps,
+  DataTableSortState,
+  DataViewColumn,
+  TableFooterLabels,
+} from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   ErrorGlyph,
@@ -62,31 +71,350 @@ import {
 export const RECORD_MAX_HEIGHT = 460;
 
 /**
- * What every record table in this dashboard is, as props.
+ * The page sizes every table in this dashboard offers.
  *
- * A panel table here shows a whole answer the engine already sliced, so it
- * PAGES NOWHERE: the caller holds the rows and the footer of the screen holds
- * whatever fetches more. It RESIZES NOTHING and STORES NOTHING either, because
- * every choice a reader makes on one of these screens lives in the URL, where
- * it can be shared and gone back to, rather than in this browser's own storage
- * where the next reader inherits it invisibly.
- *
- * It is a bundle of props rather than a component: the design system draws the
- * table, and what the engine has to say about one is only this. The rows come
- * in with the columns so that one call names the row type for both, which is
- * what lets a column's own accessors stay untyped at the call site.
+ * The design system's own row, said here because the two defaults below are
+ * chosen against it: a size a screen opens on has to be one of these, or the
+ * chip row in the settings frame opens with nothing marked. The All chip the
+ * frame draws beside them is the component's, and it is a WORD rather than a
+ * count, so a table that gains a row does not quietly start paging.
  */
-export function recordTable<T>(rows: readonly T[], columns: readonly DataViewColumn<T>[]) {
-  const { columns: byKey, order } = tableColumns(columns);
+export const TABLE_PAGE_SIZES = [5, 10, 20, 50, 100];
+
+/**
+ * How many rows a table opens with, and why the two numbers differ.
+ *
+ * A PANEL table sits in a card beside other cards, and ten rows is as much as
+ * one can take before it pushes its neighbours off the screen. A LIST screen
+ * owns the whole page, where ten rows is a pager a reader works rather than
+ * reads: twenty is about one screenful at the compact density, which is what
+ * somebody scanning an event log wants before they reach for the chevrons.
+ */
+export const PANEL_PAGE_SIZE = 10;
+export const LIST_PAGE_SIZE = 20;
+
+/**
+ * What a list screen's footer says once its table pages.
+ *
+ * The design system's own sentence is "Showing 12 of 80", and its first number
+ * is how many rows the VIEW holds. A list screen hands the view everything the
+ * filters kept and the table slices that into pages, so under paging the
+ * sentence would claim eighty rows were on screen when twenty are drawn. The
+ * count is still worth saying, because what it actually counts is the filter,
+ * so this says that instead and leaves which rows are in front of the reader
+ * to the pager, which announces its own page and range.
+ *
+ * Nothing is overridden for the unfiltered case: the footer already says
+ * "80 rows" when every row matched, which is a fact about the list rather than
+ * about the page and is true whether the table pages or not.
+ */
+export const MATCH_FOOTER_LABELS: Partial<TableFooterLabels> = {
+  showing: (visible, total) => (
+    <>
+      {visible} of {total} match
+    </>
+  ),
+};
+
+/**
+ * Where a table's choices live: the URL for what a reader would send someone,
+ * this browser's storage for what only this browser knows.
+ *
+ * THE SPLIT, AND WHY IT FALLS HERE. Five of a table's choices are facts about
+ * WHAT IS ON SCREEN: which page, how many rows it holds, which columns are
+ * shown, in what order, and how they are sorted. Every one of them is part of
+ * the answer a reader would send a colleague, so every one is a URL parameter
+ * and the link carries it. The other two are facts about the BROWSER somebody
+ * is reading in: whether cells wrap at this window width, and how wide each
+ * column was dragged. A link cannot carry a pixel width that means anything on
+ * another screen, so those two are kept under `storageKey` and only those two.
+ * The design system keeps the same rule from its side: a controlled choice is
+ * never read from storage and never written to it, so the two can never
+ * disagree on the way back in.
+ *
+ * THE PARAMETERS ARE PREFIXED BY THE TABLE where a screen draws more than one,
+ * because Fleet draws three and Seat draws three: `seats.page` is the seat
+ * placement table's page and `duties.page` is the duty table's. A screen with
+ * one table leaves the prefix off, so the event log's is plainly `?page=4`.
+ *
+ * THEY REPLACE RATHER THAN PUSH (`useParam`'s filter kind). A page, a size and
+ * a column list are positions within the screen a reader is already on, not
+ * screens they called for; and the table itself moves the page back to one
+ * whenever a sort or a filter changes, which as a pushed entry would make the
+ * Back button walk a maze nobody asked for. Back still leaves the screen with
+ * the reader's choices intact in the entry it returns to.
+ *
+ * THE STORAGE KEY NAMES THE SCREEN AND THE TABLE, never the component: two
+ * tables on one route would otherwise share one set of column widths, and the
+ * wider of them would keep re-teaching the narrower its own.
+ */
+export interface TableChoicesOptions<T> {
+  /** The route this table is on. It names the storage entry, never a parameter. */
+  screen: string;
+  /** Which table on that route. The screen's only table leaves it out. */
+  table?: string;
+  /** The columns as declared, which is what a hidden or reordered set is read against. */
+  columns: readonly DataViewColumn<T>[];
+  /**
+   * How many rows the table opens with, before a reader picks a size.
+   *
+   * A list screen leaves it out and takes [LIST_PAGE_SIZE]; the panel default
+   * is said once, by [RecordTable], rather than at each of its call sites.
+   */
+  defaultItemsPerPage?: number;
+  /** Which column it opens ordered by. Absent from the URL means this one. */
+  defaultSort?: DataTableSortState | null;
+  /**
+   * A value that changes whenever the SCREEN's own filters change, which puts
+   * the reader back on page one.
+   *
+   * The design system does this for the filters and the sort it owns, and the
+   * list view does not hand a screen's own filter values down to it, so the
+   * one case it cannot see is the one a screen has to say. A reader who
+   * narrows a log to six rows while on page four is otherwise shown the empty
+   * end of a list that no longer has four pages.
+   */
+  filterKey?: string;
+}
+
+/** Every choice a table holds, as the props that hold it. */
+export interface TableChoices {
+  page: number;
+  onPageChange: (next: number) => void;
+  itemsPerPage: DataTableItemsPerPage;
+  onItemsPerPageChange: (next: DataTableItemsPerPage) => void;
+  itemsPerPageOptions: number[];
+  visibleColumns: Record<string, boolean>;
+  onVisibleColumnsChange: (next: Record<string, boolean>) => void;
+  columnOrder: string[];
+  onColumnOrderChange: (next: string[]) => void;
+  sort: DataTableSortState | null;
+  onSortChange: (next: DataTableSortState | null) => void;
+  storageKey: string;
+  paginated: true;
+  resizable: true;
+  showSettings: true;
+  settingsVariant: "rich";
+}
+
+/** A sort as a URL parameter. `none` is a reader who sorted by nothing. */
+function encodeSort(sort: DataTableSortState | null | undefined): string {
+  return sort?.key && sort.direction ? `${sort.key}:${sort.direction}` : "none";
+}
+
+/**
+ * A sort read back out of a URL, which is the least trusted place there is.
+ *
+ * A key no column declares is not a sort the table could apply, so it answers
+ * the same as `none` rather than leaving the table ordered by a column that is
+ * not there.
+ */
+function decodeSort(value: string, keys: readonly string[]): DataTableSortState | null {
+  const [key, direction] = value.split(":");
+  if (!key || !keys.includes(key)) return null;
+  return { key, direction: direction === "desc" ? "desc" : "asc" };
+}
+
+/** A comma-separated list of column keys, unknown names dropped. */
+function decodeKeys(value: string, keys: readonly string[]): string[] {
+  return value
+    .split(",")
+    .map((key) => key.trim())
+    .filter((key) => keys.includes(key));
+}
+
+/** A page size read back out of a URL. Anything else is the screen's own. */
+function decodeItemsPerPage(value: string, fallback: number): DataTableItemsPerPage {
+  if (value === ALL_ITEMS) return ALL_ITEMS;
+  const count = Number.parseInt(value, 10);
+  return Number.isFinite(count) && count > 0 ? count : fallback;
+}
+
+export function useTableChoices<T>({
+  screen,
+  table = "",
+  columns,
+  defaultItemsPerPage = LIST_PAGE_SIZE,
+  defaultSort = null,
+  filterKey,
+}: TableChoicesOptions<T>): TableChoices {
+  const prefix = table ? `${table}.` : "";
+  // The declared keys, in the declared order, and only the ones the table will
+  // hold: a column with no key is one it drops, so a hidden or reordered set
+  // naming one would be naming a column nobody can see.
+  //
+  // Held as ONE STRING first. A screen whose cells render an elapsed time
+  // rebuilds its column array on every tick, so nothing below may be keyed on
+  // WHICH array arrived; what it says is the same string a second later.
+  const declaredOrder = columns
+    .map((column) => column.key)
+    .filter(Boolean)
+    .join(",");
+  const defaultHidden = columns
+    .filter((column) => column.key && column.defaultVisible === false)
+    .map((column) => column.key)
+    .join(",");
+  const declared = useMemo(
+    () => (declaredOrder === "" ? [] : declaredOrder.split(",")),
+    [declaredOrder],
+  );
+  const defaultSortParam = encodeSort(defaultSort);
+
+  const [pageParam, setPageParam] = useParam(`${prefix}page`, "1");
+  // Each parameter's fallback is the value this table opens on, so a reader
+  // who picks it back is a reader with a clean URL again.
+  const [perParam, setPerParam] = useParam(`${prefix}per`, String(defaultItemsPerPage));
+  const [sortParam, setSortParam] = useParam(`${prefix}sort`, defaultSortParam);
+  const [hiddenParam, setHiddenParam] = useParam(`${prefix}hide`, defaultHidden);
+  const [orderParam, setOrderParam] = useParam(`${prefix}cols`, declaredOrder);
+
+  const page = Math.max(1, Math.trunc(Number(pageParam)) || 1);
+  const itemsPerPage = decodeItemsPerPage(perParam, defaultItemsPerPage);
+  const sort = useMemo(() => decodeSort(sortParam, declared), [sortParam, declared]);
+  const visibleColumns = useMemo(() => {
+    const hidden = new Set(decodeKeys(hiddenParam, declared));
+    return Object.fromEntries(declared.map((key) => [key, !hidden.has(key)]));
+  }, [hiddenParam, declared]);
+  const columnOrder = useMemo(() => decodeKeys(orderParam, declared), [orderParam, declared]);
+
+  // The page is put back to one by a filter, and by nothing else. Not by the
+  // rows changing underneath it: on a live screen that is every event the
+  // reader is not looking at, and it used to throw them off page four several
+  // times a minute.
+  const filtered = useRef<string | null>(null);
+  useEffect(() => {
+    const was = filtered.current;
+    filtered.current = filterKey ?? null;
+    if (was === null || was === (filterKey ?? null)) return;
+    setPageParam("1");
+  }, [filterKey, setPageParam]);
+
   return {
-    data: [...rows],
-    columns: byKey,
-    defaultColumnOrder: order,
-    variant: "compact" as const,
-    paginated: false,
-    resizable: false,
-    showSettings: false,
+    page,
+    onPageChange: (next) => setPageParam(String(Math.max(1, Math.trunc(next)))),
+    itemsPerPage,
+    onItemsPerPageChange: (next) => setPerParam(next === ALL_ITEMS ? ALL_ITEMS : String(next)),
+    itemsPerPageOptions: TABLE_PAGE_SIZES,
+    visibleColumns,
+    onVisibleColumnsChange: (next) =>
+      setHiddenParam(declared.filter((key) => next[key] === false).join(",")),
+    columnOrder,
+    onColumnOrderChange: (next) =>
+      setOrderParam(next.filter((key) => declared.includes(key)).join(",")),
+    sort,
+    onSortChange: (next) => setSortParam(encodeSort(next)),
+    // The SCREEN and the TABLE, and nothing narrower. Two tables on one route
+    // would otherwise share one set of widths and each keep re-teaching the
+    // other its own. Deliberately not the record the screen is showing: a
+    // seat's turn table is the same columns on every seat, so the width a
+    // reader dragged on one is the width they want on the next.
+    storageKey: `crewlet_table_${screen}${table ? `_${table}` : ""}`,
+    paginated: true,
+    resizable: true,
+    showSettings: true,
+    // The rich frame, always: every table here carries its title in a card
+    // header or a screen header rather than in the table, so the compact frame
+    // the design system picks for a titled table would never be the right one,
+    // and it holds neither the column list nor the chip row.
+    settingsVariant: "rich",
   };
+}
+
+/** What a panel decides about its own table. Everything else is decided once. */
+export type RecordTableProps<T> = Pick<
+  DataTableProps<T>,
+  | "getRowKey"
+  | "rowKey"
+  | "onRowClick"
+  | "getRowHref"
+  | "isSelected"
+  | "rowTone"
+  | "rowActions"
+  | "emptyMessage"
+  | "stableOrder"
+  | "loading"
+  | "error"
+> & {
+  screen: string;
+  table: string;
+  rows: readonly T[];
+  columns: readonly DataViewColumn<T>[];
+  defaultSort?: DataTableSortState | null;
+};
+
+/**
+ * A record table: the rows a panel of this dashboard holds, and the chrome a
+ * reader reshapes them with.
+ *
+ * A COMPONENT RATHER THAN A BUNDLE OF PROPS, which is what it was. Where a
+ * table's choices live is now the URL, and a screen that draws its table
+ * inside a condition (every seat tab does) cannot call a hook at the point it
+ * spreads a bundle in. What it draws is still entirely the design system's;
+ * this adds no element of its own bar the count underneath.
+ *
+ * WHAT IT DECIDES, so that thirteen call sites do not each decide it: the
+ * compact variant, the rich settings frame, a page of ten and the count. What
+ * a call site decides is its rows, its columns, which column names the row
+ * (`hideable: false`) and what the table opens sorted by.
+ *
+ * THE COUNT IS THE PAGE'S. The screen holds every row and this holds the page,
+ * so both numbers are known exactly: ten of sixty-three, where the card header
+ * above it already says sixty-three on its own.
+ *
+ * DENSITY IS DELIBERATELY NOT PASSED, and that is a decision rather than an
+ * omission. The reader's own three-step density, the one the rail's switcher
+ * sets, reaches these rows already: it scales the spacing and size tokens the
+ * table is built out of, so Compact tightens a panel table with nothing
+ * passed. The table's own two-step `density` prop answers a different
+ * question, which the package states at the rule that implements it: the
+ * comfortable step is for a table inside a section card with 24px of inner
+ * padding, where the compact step reads cramped against the chrome around it.
+ * These panels pad their header by `--spacing-4` and their table by the
+ * table's own inset, so the compact step is the one that lines up, and the
+ * prop stays where the design system left it.
+ */
+export function RecordTable<T>({
+  screen,
+  table,
+  rows,
+  columns,
+  defaultSort = null,
+  ...rest
+}: RecordTableProps<T>) {
+  const choices = useTableChoices({
+    screen,
+    table,
+    columns,
+    defaultItemsPerPage: PANEL_PAGE_SIZE,
+    defaultSort,
+  });
+  const { columns: byKey, order } = useMemo(() => tableColumns(columns), [columns]);
+  // What the table is drawing, for the footer: the page's share of the rows,
+  // and the last page's share is whatever is left rather than a full page.
+  const onPage =
+    choices.itemsPerPage === ALL_ITEMS
+      ? rows.length
+      : Math.max(
+          0,
+          Math.min(choices.itemsPerPage, rows.length - (choices.page - 1) * choices.itemsPerPage),
+        );
+  return (
+    <>
+      <DataTable<T>
+        {...rest}
+        {...choices}
+        data={[...rows]}
+        columns={byKey}
+        defaultColumnOrder={order}
+        variant="compact"
+      />
+      <TableFooter
+        visibleCount={onPage}
+        totalCount={rows.length}
+        {...(rest.loading === undefined ? {} : { loading: rest.loading })}
+      />
+    </>
+  );
 }
 
 /**
