@@ -15,10 +15,10 @@
  * knows it opened last, so its Escape closes it alone and Tab stays inside it.
  */
 
-import { useId, useState } from "react";
+import { useState } from "react";
 import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
-import { ErrorGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Callout, FormField, InlineCode, Input, Modal, Text } from "@crewlethq/ui";
 
 export function TokenDialog({
   onClose,
@@ -29,11 +29,6 @@ export function TokenDialog({
 }) {
   const [value, setValue] = useState(() => apiToken());
   const [refused, setRefused] = useState(false);
-  // A MINTED ID, not a literal. The dialog opens over whatever screen raised
-  // it, and a label pointing at `id="token"` names the first element in the
-  // document with that id: a screen's own field would take the label, and
-  // the credential box would be announced with no name at all.
-  const fieldID = useId();
 
   // A credential you can set is one you must be able to drop, on a shared
   // machine especially, where the token outlives the person who typed it.
@@ -88,35 +83,36 @@ export function TokenDialog({
         </>
       }
     >
-      <p className="t-body secondary" style={{ margin: 0 }}>
+      <Text tone="secondary">
         The engine is guarding this surface. Paste a bearer token matching one of the{" "}
-        <code className="inline">api.auth.tokens</code> entries in your{" "}
-        <code className="inline">crewlet.yaml</code>.
-      </p>
-      <div className="field">
-        <label htmlFor={fieldID}>Token</label>
-        {/* The first control, so the layer stack opens the dialog on it. */}
-        <input
-          id={fieldID}
-          className="input"
-          type="password"
-          value={value}
-          autoComplete="off"
-          spellCheck={false}
-          onChange={(e) => setValue(e.target.value)}
-        />
-        <span className="hint">
-          Stored in this browser only, and sent on the socket handshake and every guarded query.
-        </span>
-      </div>
+        <InlineCode>api.auth.tokens</InlineCode> entries in your{" "}
+        <InlineCode>crewlet.yaml</InlineCode>.
+      </Text>
+      {/* The field mints its own id, which matters here: the dialog opens over
+          whatever screen raised it, and a label pointing at a literal id would
+          name the first element in the document carrying it. */}
+      <FormField
+        label="Token"
+        helper="Stored in this browser only, and sent on the socket handshake and every guarded query."
+      >
+        {(field) => (
+          /* The first control, so the layer stack opens the dialog on it. */
+          <Input
+            id={field.id}
+            type="password"
+            value={value}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setValue(e.target.value)}
+            aria-describedby={field.describedBy}
+          />
+        )}
+      </FormField>
       {refused && (
-        <div className="banner critical">
-          <ErrorGlyph size="sm" />
-          <span>
-            This browser refused to store the token (private mode, or blocked site data). It will
-            work until you reload.
-          </span>
-        </div>
+        <Callout variant="danger" live="assertive">
+          This browser refused to store the token (private mode, or blocked site data). It will work
+          until you reload.
+        </Callout>
       )}
     </Modal>
   );

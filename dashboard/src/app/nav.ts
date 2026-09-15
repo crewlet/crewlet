@@ -23,14 +23,14 @@ import {
  * The sidebar is grouped by WHAT THE READER IS LOOKING AT, in the order the
  * product's own story runs: the company, the work it is doing, the thinking
  * behind that work, what it costs, and the machine underneath. That ordering
- * is the argument — a founder opening this should meet their company first and
+ * is the argument: a founder opening this should meet their company first and
  * the engine last, because the company is the product and the engine is the
  * thing that runs it.
  *
  * It replaces a flat list of nine nouns grouped by the KIND OF DATA each held
  * (Dashboard, Agents, Activity, Tokens, Tools, Schedules, Fleet, Configuration),
- * where the questions an operator actually arrives with — *is anything waiting
- * on me? what is my company doing right now? what is this costing?* — each
+ * where the questions an operator actually arrives with (*is anything waiting
+ * on me? what is my company doing right now? what is this costing?*) each
  * needed three or four screens and a mental join.
  *
  * Every entry resolves to a screen backed by a real answer. Nothing here is a
@@ -194,7 +194,7 @@ export const NAV: NavGroup[] = [
         label: "Secrets",
         icon: KeyGlyph,
         path: ["secrets"],
-        hint: "The company's credentials — names and provenance, never values",
+        hint: "The company's credentials: names and provenance, never values",
         guarded: true,
       },
     ],

@@ -1,7 +1,12 @@
 /**
- * Search is a launcher reached from anywhere, so what it must get right is
- * the keyboard: the highlighted row is the one Enter opens, and it has to be
- * on screen while the reader moves it, and a screen reader has to hear it.
+ * Search is a launcher reached from anywhere, and what this file asserts is
+ * the ENGINE's half of it: what is offered, in what order, and that opening a
+ * result goes where it says.
+ *
+ * The surface is the design system's, so its own rules are its own suite's:
+ * the highlight wrapping, the highlighted row staying in the list's view, the
+ * veil, the Tab trap. The cases here that touch those are asserting the SEAM,
+ * which is what a package bump can move under this application silently.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -54,39 +59,6 @@ function mount(onClose = () => {}) {
   );
   return store;
 }
-
-/**
- * A layout for a DOM that has none: the result list is 100px tall and every
- * row 20px, stacked from the list's own scroll position.
- */
-function layOut() {
-  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-    const list = this.closest(".palette-results") as HTMLElement | null;
-    const rect = (top: number, height: number) =>
-      ({ top, bottom: top + height, left: 0, right: 0, width: 0, height }) as DOMRect;
-    if (!list) return rect(0, 0);
-    if (this === list) return rect(0, 100);
-    const rows = [...list.querySelectorAll("[role='option']")];
-    const index = rows.indexOf(this);
-    return index < 0 ? rect(0, 0) : rect(index * 20 - list.scrollTop, 20);
-  });
-}
-
-test("the highlighted result is scrolled into the list's view as the cursor moves", () => {
-  layOut();
-  mount();
-  const input = screen.getByRole("combobox", { name: "Search" });
-  const list = document.querySelector<HTMLElement>(".palette-results")!;
-  expect(list.scrollTop).toBe(0);
-
-  // Row 5 (0-based) ends at 120px, below a 100px list: it scrolls by 20.
-  for (let i = 0; i < 5; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
-  expect(list.scrollTop).toBe(20);
-
-  // Back to the top row: the list follows it up.
-  for (let i = 0; i < 5; i++) fireEvent.keyDown(input, { key: "ArrowUp" });
-  expect(list.scrollTop).toBe(0);
-});
 
 test("search is a combobox: the arrows move a highlight the input names, and Tab never walks the results", () => {
   const onClose = vi.fn();

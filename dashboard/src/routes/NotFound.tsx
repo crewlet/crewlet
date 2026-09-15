@@ -1,5 +1,4 @@
-import { ScreenHead } from "~/app/Shell.tsx";
-import { Button, EmptyState } from "@crewlethq/ui";
+import { Button, EmptyState, PageHeader } from "@crewlethq/ui";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 import { ExploreGlyph } from "@crewlethq/icons/glyphs";
 
@@ -8,7 +7,7 @@ export function NotFound({ what }: { what: string }) {
   const nav = useNavigator();
   return (
     <>
-      <ScreenHead title="Not a screen" />
+      <PageHeader title="Not a screen" />
       <EmptyState
         icon={<ExploreGlyph />}
         title={`This URL names ${what}, and there is no such screen.`}

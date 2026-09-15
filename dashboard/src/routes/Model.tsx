@@ -19,7 +19,6 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState, recordTable } from "~/components/common.tsx";
 import { PhaseTag } from "~/components/PhaseTag.tsx";
@@ -42,16 +41,17 @@ import {
   Card,
   DataTable,
   DataView,
+  type DataViewColumn,
   EmptyState,
   EmptyValue,
+  type FilterDef,
+  type FilterValues,
   NewItemsNotice,
+  PageHeader,
   RelativeTime,
   Skeleton,
   Tag,
   useNow,
-  type DataViewColumn,
-  type FilterDef,
-  type FilterValues,
 } from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
@@ -334,9 +334,9 @@ export function ModelActivity() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Model activity"
-        sub="Every phase the models ran, one row each. Open a row for the transcript on that seat — reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
+        description="Every phase the models ran, one row each. Open a row for the transcript on that seat — reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
         badges={
           <>
             {liveCount > 0 && (

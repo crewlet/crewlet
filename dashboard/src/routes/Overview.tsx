@@ -23,7 +23,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
 import {
@@ -49,6 +48,7 @@ import {
   EmptyState,
   Legend,
   Meter,
+  PageHeader,
   StatCard,
   StatGroup,
   Tag,
@@ -174,9 +174,9 @@ export function Overview() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title={org?.name || "Your company"}
-        sub={
+        description={
           org?.mission ||
           "The engine is running. This screen answers what needs a person, what the company is doing, and what it has cost."
         }

@@ -26,7 +26,6 @@
  */
 
 import { useId, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -37,7 +36,7 @@ import { PreviousRevisionNote } from "./org/builder/AfterSaveStrip.tsx";
 import { Builder } from "./org/builder/Builder.tsx";
 import { builderSurfaces } from "./org/builder/surfaces.ts";
 import { AccountTreeGlyph, EditGlyph, FlagGlyph, GroupGlyph } from "@crewlethq/icons/glyphs";
-import { SegmentedControl, TabPanel } from "@crewlethq/ui";
+import { PageHeader, SegmentedControl, TabPanel } from "@crewlethq/ui";
 
 type Lens = "chart" | "directory" | "charter" | "builder";
 
@@ -52,9 +51,9 @@ export function OrgScreen() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title={org?.name ? `${org.name} org chart` : "Org chart"}
-        sub="The hierarchy is the execution graph: knowledge, delegation and routing all follow it."
+        description="The hierarchy is the execution graph: knowledge, delegation and routing all follow it."
         actions={
           <SegmentedControl<Lens>
             label="Org view"

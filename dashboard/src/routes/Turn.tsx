@@ -47,7 +47,6 @@
  */
 
 import { useCallback, useMemo, type ReactNode } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -94,14 +93,15 @@ import {
   Card,
   CodeBlock,
   CopyButton,
+  cx,
   DescriptionList,
   Disclosure,
   EmptyValue,
+  PageHeader,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
-  cx,
 } from "@crewlethq/ui";
 import type { StatCardTone } from "@crewlethq/ui";
 
@@ -530,9 +530,9 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Turn"
-        sub={<code className="inline">{turnId}</code>}
+        description={<code className="inline">{turnId}</code>}
         badges={
           <>
             {role && <Tag appearance="outline">{role}</Tag>}

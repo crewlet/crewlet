@@ -14,7 +14,6 @@
  */
 
 import { useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -31,7 +30,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, EmptyState, Input, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Input, PageHeader, Skeleton, Tag, Toolbar } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -46,44 +45,45 @@ export function Knowledge() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Knowledge"
-        sub="The company knowledge base, searched live the way an agent searches it — there is no local copy, so what you see here is what the backend holds right now."
+        description="The company knowledge base, searched live the way an agent searches it — there is no local copy, so what you see here is what the backend holds right now."
         badges={data?.backend ? <Tag appearance="outline">{data.backend}</Tag> : undefined}
       />
 
       <form
-        className="toolbar"
         onSubmit={(e) => {
           e.preventDefault();
           setQ(draft.trim());
         }}
       >
-        <Input
-          type="search"
-          width="lg"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onClear={() => setDraft("")}
-          aria-label="Search the knowledge base"
-          placeholder="Search the knowledge base in plain text, not a query language"
-          leading={<SearchGlyph size="sm" />}
-        />
-        <Button variant="primary" type="submit" leadingIcon={<SearchGlyph />}>
-          Search
-        </Button>
-        {q && (
-          <Button
-            variant="secondary"
-            leadingIcon={<CloseGlyph />}
-            onClick={() => {
-              setDraft("");
-              setQ("");
-            }}
-          >
-            Clear
+        <Toolbar label="Knowledge search" mode="group" sticky>
+          <Input
+            type="search"
+            width="lg"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onClear={() => setDraft("")}
+            aria-label="Search the knowledge base"
+            placeholder="Search the knowledge base in plain text, not a query language"
+            leading={<SearchGlyph size="sm" />}
+          />
+          <Button variant="primary" type="submit" leadingIcon={<SearchGlyph />}>
+            Search
           </Button>
-        )}
+          {q && (
+            <Button
+              variant="secondary"
+              leadingIcon={<CloseGlyph />}
+              onClick={() => {
+                setDraft("");
+                setQ("");
+              }}
+            >
+              Clear
+            </Button>
+          )}
+        </Toolbar>
       </form>
 
       {!q && (

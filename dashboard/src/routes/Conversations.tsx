@@ -17,7 +17,6 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useParam } from "~/app/router.tsx";
@@ -27,16 +26,17 @@ import { tsKey } from "~/lib/format.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
 import {
   DataView,
+  type DataViewColumn,
   EmptyState,
+  type FilterDef,
+  type FilterValues,
+  PageHeader,
   RelativeTime,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
   useNow,
-  type DataViewColumn,
-  type FilterDef,
-  type FilterValues,
 } from "@crewlethq/ui";
 import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 
@@ -172,9 +172,9 @@ export function Conversations() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Agent-to-agent"
-        sub="The private channels seats opened with each other. One ask, one answer, then closed — the channel is the authorization record, not the transport."
+        description="The private channels seats opened with each other. One ask, one answer, then closed — the channel is the authorization record, not the transport."
       />
 
       <StatGroup columns={3}>

@@ -2,7 +2,6 @@
  * Recurring work: what fires, when it next fires, and how it last went.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
@@ -11,6 +10,7 @@ import {
   DataTable,
   EmptyState,
   EmptyValue,
+  PageHeader,
   RelativeTime,
   Skeleton,
   StatCard,
@@ -42,9 +42,9 @@ export function Schedules() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Schedules"
-        sub="Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up, and a run is capped on wall clock."
+        description="Role- and unit-scoped recurring work. Delivery is at-most-once, a missed tick is caught up, and a run is capped on wall clock."
         badges={<Tag appearance="outline">{plural(schedules.length, "schedule")} defined</Tag>}
       />
 

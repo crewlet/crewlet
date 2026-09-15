@@ -171,9 +171,11 @@ describe("routing", () => {
     ]) {
       location.hash = hash;
       const { view } = mount();
-      expect(view.container.querySelector(".screen-inner")?.children.length, hash).toBeGreaterThan(
-        0,
-      );
+      // THE SCREEN'S OWN CONTENT, found through the one scroll container the
+      // router restores a position in: a screen that rendered nothing leaves
+      // it empty, which is what a blank route looks like.
+      const content = document.getElementById("screen-scroll")!.firstElementChild;
+      expect(content?.children.length, hash).toBeGreaterThan(0);
       view.unmount();
     }
   });
@@ -338,7 +340,7 @@ describe("a turn watched to its end", () => {
     // the settled list admits everything anyway, so an assertion taken there
     // passes whether the rule holds or not.
     const { store, redraw } = seatView();
-    const scroller = document.querySelector(".screen");
+    const scroller = document.getElementById("screen-scroll");
     if (!scroller) throw new Error("no scroller to scroll: the shell's layout moved");
     Object.defineProperty(scroller, "scrollTop", { value: 400, configurable: true });
     store.applyAgents([

@@ -21,7 +21,6 @@
  */
 
 import { useId, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT, recordTable } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -35,6 +34,7 @@ import {
   DataTable,
   EmptyState,
   EmptyValue,
+  PageHeader,
   RelativeTime,
   SegmentedControl,
   Skeleton,
@@ -79,9 +79,9 @@ export function ConfigScreen() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Configuration"
-        sub="The founder-owned company document, versioned in the store and applied live. Secrets are redacted by the engine before it leaves the process."
+        description="The founder-owned company document, versioned in the store and applied live. Secrets are redacted by the engine before it leaves the process."
         actions={
           <SegmentedControl<Lens>
             label="Configuration view"

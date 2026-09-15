@@ -7,7 +7,6 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
@@ -16,13 +15,14 @@ import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
 import {
   DataView,
+  type DataViewColumn,
   EmptyState,
+  type FilterDef,
+  type FilterValues,
+  PageHeader,
   StatCard,
   StatGroup,
   Tag,
-  type DataViewColumn,
-  type FilterDef,
-  type FilterValues,
 } from "@crewlethq/ui";
 
 function originOf(source: string): { kind: string; detail: string } {
@@ -133,9 +133,9 @@ export function Tools() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Tools"
-        sub="What the models can actually call. A planner sees only the server names; the tool names below are discovered and activated during a turn."
+        description="What the models can actually call. A planner sees only the server names; the tool names below are discovered and activated during a turn."
         badges={<Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>}
       />
 

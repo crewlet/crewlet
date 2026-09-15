@@ -17,6 +17,7 @@ import { Shell } from "./Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, requestToken } from "~/protocol/index.ts";
 import { Modal } from "@crewlethq/ui";
+import { installMedia } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -371,7 +372,9 @@ test("the sections drawer closes on its veil, and a dialog raised over it closes
   expect(screen.getByRole("dialog", { name: "Sections" })).toBe(drawer);
   expect(document.activeElement).toBe(pill);
 
-  const veil = document.querySelector(".drawer-veil")!;
+  // The veil is the presentational layer the drawer sits beside, which is how
+  // a suite reaches it without naming the class the design system draws.
+  const veil = [...document.querySelectorAll('[role="presentation"]')].at(-1)!;
   fireEvent.pointerDown(veil);
   fireEvent.click(veil);
   expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
@@ -379,25 +382,24 @@ test("the sections drawer closes on its veil, and a dialog raised over it closes
 });
 
 test("the sections drawer closes when the layout it belongs to ends", () => {
-  mount(<p>screen</p>);
-  fireEvent.click(screen.getByRole("button", { name: "Sections" }));
-  expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
-
-  // Still narrow: a resize that keeps the toggle on screen changes nothing.
-  act(() => void window.dispatchEvent(new Event("resize")));
-  expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
-
-  // Past the breakpoint the stylesheet hides the toggle, and the rail is the
-  // page's column again rather than a modal over it.
-  const wide = document.createElement("style");
-  wide.textContent = ".drawer-toggle { display: none; }";
-  document.head.append(wide);
+  // A tablet turned to landscape crosses the breakpoint with the drawer open,
+  // and the rail becomes the page's own column again under a veil that traps
+  // Tab in it.
+  const media = installMedia(true);
   try {
-    act(() => void window.dispatchEvent(new Event("resize")));
+    mount(<p>screen</p>);
+    fireEvent.click(screen.getByRole("button", { name: "Sections" }));
+    expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
+
+    // Still narrow: a change that keeps the layout changes nothing.
+    media.set(true);
+    expect(screen.getByRole("dialog", { name: "Sections" })).toBeDefined();
+
+    media.set(false);
     expect(screen.queryByRole("dialog", { name: "Sections" })).toBeNull();
     expect(screen.getByRole("navigation", { name: "Sections" })).toBeDefined();
   } finally {
-    wide.remove();
+    media.restore();
   }
 });
 
@@ -420,4 +422,81 @@ test("the rail's settings are announced by what they are, not by the letter draw
       .getAllByRole("radio")
       .map((radio) => radio.getAttribute("aria-label")),
   ).toEqual(["Light", "Follow the system", "Dark"]);
+});
+
+// EB14. Signing out was reachable only through the token dialog, and the token
+// dialog opened only when the engine had REFUSED the token. So an operator on
+// a shared machine, whose token still worked, had no way to drop it: the
+// credential outlived the person who typed it. The rail's settings menu is
+// where it lives now, and it is there whatever the engine thinks of the token.
+test("the token this browser holds can be dropped while the engine still accepts it", () => {
+  localStorage.setItem("crewlet_api_token", "a-working-token");
+  const { socket } = mount(<p>a screen</p>);
+  const setToken = vi.spyOn(socket, "setToken");
+
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /API token/ }));
+  const dialog = screen.getByRole("dialog", { name: "API token" });
+
+  fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
+  expect(localStorage.getItem("crewlet_api_token")).toBeNull();
+  expect(setToken).toHaveBeenCalledWith("");
+  expect(screen.queryByRole("dialog", { name: "API token" })).toBeNull();
+});
+
+// EB15. The count of turns in flight was a digit next to "⟳", a glyph a screen
+// reader says nothing useful about, so the busiest fact in the rail was read
+// as a bare number with no unit and no subject.
+test("the turns in flight are counted in words, not by a glyph beside a digit", () => {
+  const store = new Store();
+  store.applyHealth({ status: "ok", in_flight: 3 });
+  mount(<p>a screen</p>, store);
+  expect(screen.getByText("3 turns in flight")).toBeDefined();
+});
+
+// EB17. The attention count was a bare number at the end of a row, so it was
+// announced as "Overview 3", which a reader can take for a third overview.
+test("the attention count says what it is counting", () => {
+  const store = new Store();
+  // A seat that failed its last turn is one thing waiting on somebody.
+  store.applyAgents([{ role: "CEO", handle: "ceo", state: "needs_attention" }]);
+  mount(<p>a screen</p>, store);
+  // The NAME is what a screen reader reads, and the words are hidden from
+  // the page, so the row still draws the number alone.
+  expect(screen.getByRole("link", { name: /1 thing waiting on somebody/ })).toBeDefined();
+});
+
+// EB18. The control that opens the narrow layout's drawer said nothing about
+// what it controlled or whether it was open, so a screen reader announced the
+// same button before and after the rail appeared.
+test("the sections control says what it opens and whether it is open", () => {
+  mount(<p>a screen</p>);
+  const toggle = screen.getByRole("button", { name: "Sections" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeDefined();
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+});
+
+// EB19. A bare slash opens search, and it is also the first letter of a
+// type-ahead inside a list of choices. Every dropdown in this product is the
+// design system's listbox rather than the platform's own, so the element
+// holding the keys is a div with a role: asked only about INPUT and TEXTAREA,
+// the shell swallowed the press and search opened over the list.
+test("a bare slash inside a list of choices belongs to the list", () => {
+  mount(
+    <div role="listbox" tabIndex={-1} aria-label="Seats">
+      <div role="option" aria-selected="false">
+        /shared
+      </div>
+    </div>,
+  );
+  screen.getByRole("listbox", { name: "Seats" }).focus();
+  expect(fireEvent.keyDown(document.activeElement!, { key: "/" })).toBe(true);
+  expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+
+  // And from the page itself it still opens search.
+  (document.activeElement as HTMLElement).blur();
+  fireEvent.keyDown(window, { key: "/" });
+  expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
 });

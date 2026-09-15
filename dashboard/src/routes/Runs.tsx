@@ -11,7 +11,6 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -22,19 +21,20 @@ import {
   Button,
   Card,
   DataView,
+  type DataViewColumn,
   DescriptionList,
   EmptyState,
   EmptyValue,
+  type FilterDef,
+  type FilterValues,
   IconButton,
+  PageHeader,
   RelativeTime,
   Skeleton,
   StatCard,
   StatGroup,
   Tag,
   useNow,
-  type DataViewColumn,
-  type FilterDef,
-  type FilterValues,
 } from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -247,9 +247,9 @@ export function Runs() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Coding runs"
-        sub="Each one is an Execute phase that suspended. It resumes when the sandbox reports back — after a restart, or on another node."
+        description="Each one is an Execute phase that suspended. It resumes when the sandbox reports back — after a restart, or on another node."
         badges={
           <>
             {running > 0 && (

@@ -845,7 +845,8 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
                             out of the design system
   src/routes/               one file per screen; a multi-lens screen keeps its
                             shell there and its lenses in routes/<screen>/
-  src/styles/               tokens, base, components, shell, screens
+  src/styles/               what the design system does not draw: the
+                            utilities, and each screen family's own layout
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
 ```
 

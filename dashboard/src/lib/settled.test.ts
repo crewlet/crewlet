@@ -20,13 +20,14 @@ const keyOf = (row: Row) => row.id;
 /**
  * A scroller at a given offset.
  *
- * The hook reads `.screen` off the document, because the scroller is the shell's
- * and not any one screen's. Absent, it treats the reader as being at the top,
- * which is what a test that does not care about scrolling gets.
+ * The hook asks the router for the shell's one scroll container, because the
+ * scroller is the shell's and not any one screen's. Absent, it treats the
+ * reader as being at the top, which is what a test that does not care about
+ * scrolling gets.
  */
 function scroller(top: number): void {
   const el = document.createElement("div");
-  el.className = "screen";
+  el.id = "screen-scroll";
   Object.defineProperty(el, "scrollTop", { value: top, writable: true });
   el.scrollTo = () => {};
   document.body.append(el);

@@ -24,7 +24,6 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
@@ -35,8 +34,12 @@ import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
 import {
   Button,
   DataView,
+  type DataViewColumn,
   EmptyState,
   EmptyValue,
+  type FilterDef,
+  type FilterValues,
+  PageHeader,
   RelativeTime,
   Skeleton,
   StatCard,
@@ -44,9 +47,6 @@ import {
   Tag,
   useNow,
   useToast,
-  type DataViewColumn,
-  type FilterDef,
-  type FilterValues,
 } from "@crewlethq/ui";
 import {
   AddGlyph,
@@ -248,9 +248,9 @@ export function Secrets() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Secrets"
-        sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
+        description="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
         badges={<Tag appearance="outline">{plural(list.length, "credential")} held</Tag>}
         actions={
           <Button

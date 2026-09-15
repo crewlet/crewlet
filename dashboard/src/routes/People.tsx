@@ -13,7 +13,6 @@
  */
 
 import { useId, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
@@ -21,7 +20,15 @@ import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { EmptyState, Input, SegmentedControl, TabPanel, Tag } from "@crewlethq/ui";
+import {
+  EmptyState,
+  Input,
+  PageHeader,
+  SegmentedControl,
+  TabPanel,
+  Tag,
+  Toolbar,
+} from "@crewlethq/ui";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -101,9 +108,9 @@ export function People() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="People"
-        sub="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
+        description="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
         badges={
           <>
             <Tag appearance="outline">{plural(agentSeats, "agent seat")}</Tag>
@@ -114,7 +121,7 @@ export function People() {
         }
       />
 
-      <div className="toolbar">
+      <Toolbar label="Seat filters" mode="group" sticky>
         <Input
           type="search"
           width="md"
@@ -138,7 +145,7 @@ export function People() {
             { value: "flat", label: "Flat" },
           ]}
         />
-      </div>
+      </Toolbar>
 
       <TabPanel id={panel} value={group}>
         {!groups.length && (

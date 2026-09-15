@@ -38,7 +38,6 @@ import { applyStoredPreferences } from "@crewlethq/ui";
 // it sits on rather than the other way round.
 import "./styles/base.css";
 import "./styles/components.css";
-import "./styles/shell.css";
 import "./styles/screens.css";
 
 // Before the first paint, so a reader whose machine is set to light never sees

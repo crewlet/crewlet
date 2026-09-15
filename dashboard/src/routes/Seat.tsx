@@ -16,7 +16,6 @@
  */
 
 import { useId, useMemo, useRef, type ReactNode } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, recordTable, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
@@ -63,6 +62,7 @@ import {
   EmptyState,
   EmptyValue,
   Meter,
+  PageHeader,
   RelativeTime,
   Skeleton,
   StatCard,
@@ -196,7 +196,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   if (!seat) {
     return (
       <>
-        <ScreenHead title={handle} />
+        <PageHeader title={handle} />
         <EmptyState
           icon={<PersonGlyph />}
           title={`No seat called “${handle}”`}
@@ -221,14 +221,14 @@ export function SeatScreen({ handle }: { handle: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title={
           <span className="row" style={{ gap: "var(--spacing-3)" }}>
             <Avatar name={seat.name} size="lg" variant={human ? "dashed" : "solid"} decorative />
             {seat.name}
           </span>
         }
-        sub={seat.goal || statusLine(agent, { sandbox, seat })}
+        description={seat.goal || statusLine(agent, { sandbox, seat })}
         badges={
           <>
             <Tag monospace appearance="outline">

@@ -19,25 +19,22 @@
  */
 
 import { useRef } from "react";
-import { useConnection } from "~/lib/store-hooks.ts";
-import { useQuery } from "~/lib/useQuery.ts";
+import { useConnection, useEngineHealth } from "~/lib/store-hooks.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import {
   Button,
+  Callout,
   DescriptionList,
   EmptyValue,
+  InlineCode,
+  Inline,
   Modal,
   RelativeTime,
   Tag,
+  Text,
   useNow,
 } from "@crewlethq/ui";
-import {
-  CloseGlyph,
-  InfoGlyph,
-  KeyGlyph,
-  PowerSettingsNewGlyph,
-  RefreshGlyph,
-} from "@crewlethq/icons/glyphs";
+import { KeyGlyph, PowerSettingsNewGlyph } from "@crewlethq/icons/glyphs";
 
 export function EnginePanel({
   onClose,
@@ -48,11 +45,10 @@ export function EnginePanel({
 }) {
   const { connected, authRejected, health } = useConnection();
   const now = useNow();
-  // The `stream` query is deliberately not named `health`: a query name must
-  // never collide with a push kind. It is polled at the same 5 s cadence the
-  // push ticks at, so the two halves of this panel never disagree by more than
-  // one interval.
-  const { data: engine, error } = useQuery("stream", undefined, { pollMs: 5000 });
+  // ONE read, shared with the rail: `useEngineHealth` polls at the cadence the
+  // push itself ticks at, so the two halves of this panel never disagree by
+  // more than one interval, and neither does the pill that opened it.
+  const { data: engine, error } = useEngineHealth();
 
   // WHERE FOCUS STARTS. The first control is Close, and a panel that opens
   // on Close has made leaving the first thing it offers. The one action in
@@ -68,7 +64,7 @@ export function EnginePanel({
       size="sm"
       onClose={onClose}
     >
-      <div className="row">
+      <Inline gap={2} wrap>
         <Tag variant={connected ? "success" : authRejected ? "danger" : "warning"} dot>
           {connected ? "connected" : authRejected ? "refused" : "unreachable"}
         </Tag>
@@ -77,36 +73,32 @@ export function EnginePanel({
         {engine?.posture && engine.posture !== "serve" && (
           <Tag variant="warning">posture: {engine.posture}</Tag>
         )}
-      </div>
+      </Inline>
 
       {authRejected && (
-        <div className="banner critical">
-          <KeyGlyph size="sm" />
-          <span style={{ flex: 1 }}>
-            This browser's API token was refused. Reads and writes are both blocked.
-          </span>
-          <Button variant="secondary" size="small" onClick={onSetToken}>
-            Set token
-          </Button>
-        </div>
+        <Callout
+          variant="danger"
+          icon={<KeyGlyph />}
+          action={
+            <Button variant="secondary" size="small" onClick={onSetToken}>
+              Set token
+            </Button>
+          }
+        >
+          This browser&apos;s API token was refused. Reads and writes are both blocked.
+        </Callout>
       )}
       {!connected && !authRejected && (
-        <div className="banner caution">
-          <RefreshGlyph size="sm" />
-          <span>
-            Reconnecting. The page is showing the last state it received and polling the REST
-            snapshot meanwhile.
-          </span>
-        </div>
+        <Callout variant="warning">
+          Reconnecting. The page is showing the last state it received and polling the REST snapshot
+          meanwhile.
+        </Callout>
       )}
       {error && connected && (
-        <div className="banner neutral">
-          <InfoGlyph size="sm" />
-          <span>
-            The engine is reachable but did not answer the health query ({error}). The fields below
-            may be stale.
-          </span>
-        </div>
+        <Callout variant="info">
+          The engine is reachable but did not answer the health query ({error}). The fields below
+          may be stale.
+        </Callout>
       )}
 
       <DescriptionList
@@ -114,33 +106,35 @@ export function EnginePanel({
           ["Status", engine?.status ?? health.status ?? "unknown"],
           [
             "Node",
-            <code key="n" className="inline">
-              {engine?.node || <EmptyValue label="Not reported" />}
-            </code>,
+            <InlineCode key="n">{engine?.node || <EmptyValue label="Not reported" />}</InlineCode>,
           ],
           ["Version", engine?.version || <EmptyValue label="Not reported" />],
           [
             "Company config",
             engine?.configured === false ? (
-              <span style={{ color: "var(--color-feedback-danger-ink)" }}>
+              // A TAG rather than red words: the state is what carries the
+              // colour in this design system, and a paragraph tinted with a
+              // feedback hue is colour spent on something a reader cannot
+              // press, compare or filter by.
+              <Tag key="c" variant="danger">
                 none active, so every inbound webhook is dropped
-              </span>
+              </Tag>
             ) : (
               "active"
             ),
           ],
           [
             "Applied epoch",
-            <code key="e" className="inline">
+            <InlineCode key="e">
               {engine?.applied_epoch || <EmptyValue label="Not reported" />}
-            </code>,
+            </InlineCode>,
           ],
           ["Control-plane posture", engine?.posture || <EmptyValue label="Not reported" />],
           [
             "Turns in flight",
-            <span key="f" className="t-num">
+            <Text key="f" numeric>
               {health.in_flight ?? engine?.in_flight ?? 0}
-            </span>,
+            </Text>,
           ],
           ["Seats held here", engine?.seats?.length ?? <EmptyValue label="Not reported" />],
           ["Stream", engine?.queue || <EmptyValue label="Not reported" />],

@@ -162,3 +162,48 @@ export function menuEntryLabel(item: HTMLElement): string {
   }
   return (clone.textContent ?? "").trim();
 }
+
+/**
+ * A media query list the suite drives.
+ *
+ * jsdom has no `matchMedia` and the setup file's stub answers "never
+ * matches", which is the wide layout. Crossing the shell's breakpoint is a
+ * state only a controllable one can reach, and it is the state the narrow
+ * layout's drawer lives and dies in.
+ */
+export function installMedia(initial: boolean): {
+  set: (matches: boolean) => void;
+  restore: () => void;
+} {
+  const listeners = new Set<() => void>();
+  let matches = initial;
+  const had = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+  Object.defineProperty(globalThis, "matchMedia", {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      get matches() {
+        return matches;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, listener: () => void) => void listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => void listeners.delete(listener),
+      addListener: (listener: () => void) => void listeners.add(listener),
+      removeListener: (listener: () => void) => void listeners.delete(listener),
+      dispatchEvent: () => false,
+    }),
+  });
+  return {
+    set: (next: boolean) => {
+      matches = next;
+      act(() => {
+        for (const listener of [...listeners]) listener();
+      });
+    },
+    restore: () => {
+      if (had) Object.defineProperty(globalThis, "matchMedia", had);
+      else delete (globalThis as Record<string, unknown>).matchMedia;
+    },
+  };
+}

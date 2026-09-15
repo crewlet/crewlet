@@ -11,7 +11,6 @@
  */
 
 import { useId, useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
@@ -27,6 +26,7 @@ import {
   EmptyValue,
   Legend,
   Meter,
+  PageHeader,
   RelativeTime,
   SegmentedControl,
   Skeleton,
@@ -110,9 +110,9 @@ export function Spend() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Spend & budgets"
-        sub="What the company's model calls actually cost, and how much headroom the budget gate has left."
+        description="What the company's model calls actually cost, and how much headroom the budget gate has left."
         badges={tokens ? <Tag appearance="outline">{tokens.since_days}-day window</Tag> : undefined}
         actions={
           <SegmentedControl

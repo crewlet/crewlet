@@ -23,7 +23,6 @@
  */
 
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
@@ -47,7 +46,7 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Avatar, Button, ButtonLink, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Avatar, Button, ButtonLink, EmptyState, PageHeader, Skeleton, Tag } from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 
 /**
@@ -1689,9 +1688,9 @@ export function Integrations() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Integrations"
-        sub="The tools the company works in. Each agent acts as itself on these, with its own credentials."
+        description="The tools the company works in. Each agent acts as itself on these, with its own credentials."
         badges={
           <Tag appearance="outline">
             {configured.length} of {CATALOG.length} configured

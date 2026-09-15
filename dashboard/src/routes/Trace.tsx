@@ -9,7 +9,6 @@
  */
 
 import { useMemo } from "react";
-import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -23,7 +22,16 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyValue,
+  PageHeader,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -85,9 +93,9 @@ export function TraceScreen({ traceId }: { traceId: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Trace"
-        sub={<code className="inline">{traceId}</code>}
+        description={<code className="inline">{traceId}</code>}
         badges={
           <>
             <Tag appearance="outline">{events.length} events</Tag>

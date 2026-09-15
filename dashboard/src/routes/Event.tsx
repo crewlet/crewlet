@@ -5,7 +5,6 @@
  * event id pasted out of a log is a destination.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
@@ -20,6 +19,7 @@ import {
   CopyButton,
   DescriptionList,
   EmptyValue,
+  PageHeader,
   RelativeTime,
   Skeleton,
   Tag,
@@ -47,9 +47,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title={data ? data.summary || data.type : "Event"}
-        sub={data ? <code className="inline">{data.type}</code> : eventId}
+        description={data ? <code className="inline">{data.type}</code> : eventId}
         badges={
           data ? (
             <>

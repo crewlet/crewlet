@@ -269,8 +269,22 @@ function adoptEntry(): void {
 // Navigation
 // ---------------------------------------------------------------------------
 
-function scrollTarget(): HTMLElement | null {
+/**
+ * The ONE scroll container: the shell's main region, named by its id.
+ *
+ * Exported because two other things read it, and a second spelling of it is a
+ * second thing that stops matching when the shell moves: the settled list asks
+ * whether the reader is at the top before it splices rows in, and the palette
+ * has the same reason the router does for scrolling this element directly
+ * rather than calling `scrollIntoView`, which scrolls every scrollable
+ * ancestor it can find.
+ */
+export function screenScroller(): HTMLElement | null {
   return document.getElementById("screen-scroll");
+}
+
+function scrollTarget(): HTMLElement | null {
+  return screenScroller();
 }
 
 function go(hash: string, replace: boolean, agreed = false): void {

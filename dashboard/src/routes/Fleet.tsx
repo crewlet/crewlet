@@ -7,7 +7,6 @@
  * its own poll failed rather than showing the last reading as if it were now.
  */
 
-import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
@@ -17,6 +16,7 @@ import {
   DataTable,
   EmptyState,
   EmptyValue,
+  PageHeader,
   RelativeTime,
   Skeleton,
   StatCard,
@@ -61,9 +61,9 @@ export function Fleet() {
 
   return (
     <>
-      <ScreenHead
+      <PageHeader
         title="Fleet"
-        sub="Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that cannot reach the configuration it should be running releases its seats rather than serving stale work."
+        description="Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that cannot reach the configuration it should be running releases its seats rather than serving stale work."
         badges={
           <>
             <Tag appearance="outline">{plural(nodes.length, "node")}</Tag>
