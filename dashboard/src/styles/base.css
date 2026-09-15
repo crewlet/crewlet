@@ -81,7 +81,17 @@
    an event's category and type. Each of them is a fact, so each takes
    `.muted`, and `designSystem.test.ts` is what stops the step collecting
    words again. */
+/* AN INLINE BOX IGNORES `overflow`, so this clipped inside a flex row, which
+   blockifies its items, and nowhere else: in a table cell the text ran past
+   its column and the org directory pushed its own scroller 6px over at every
+   window width, so a table that fitted scrolled anyway. The three lines that
+   fix it are the recipe `@crewlethq/ui`'s own `Text truncate` uses.
+   `min-width: 0` stays for the flex case, where an item that cannot shrink
+   below its content never truncates at all. */
 .truncate {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

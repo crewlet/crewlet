@@ -489,7 +489,11 @@
   transform: rotate(90deg);
 }
 
+/* `flex: 0 1 auto` is what a flex item already is, said out loud: `overflow`
+   does nothing on an inline box, so a rule that clips has to name the layout
+   it is relying on rather than inherit it from a parent three rules away. */
 .int-manifest-summary > span:first-of-type {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

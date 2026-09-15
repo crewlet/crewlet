@@ -582,6 +582,50 @@ test("no screen restates the inset a card head already carries", () => {
 });
 
 /**
+ * A rule that clips text is drawn on a box that can clip.
+ *
+ * `overflow` does NOTHING on an inline box, so `.truncate` clipped inside a
+ * flex row, which blockifies its items, and nowhere else. Spelled on a span in
+ * a table cell it clipped nothing: the org directory's Doing cell ran past its
+ * column and pushed the table 6px, 32px, 54px and 43px past its own scroller
+ * at 1440, 1280, 1100 and 900, so a table whose columns fitted exactly scrolled
+ * sideways anyway. It is invisible in review, because the same class in the
+ * same file does the right thing three lines away.
+ *
+ * So every ellipsis rule here has to say how its box is laid out: a `display`
+ * of its own, or a `flex` shorthand, which says it is an item of a row that
+ * will blockify it. Reading the DECLARATIONS rather than the rendering is the
+ * only shape this can take in a suite: jsdom computes no layout, and the one
+ * measurement that catches it needs a real browser.
+ */
+function clippingRules(source: string): string[] {
+  const out: string[] = [];
+  for (const match of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const body = match[2] ?? "";
+    if (!/text-overflow:\s*ellipsis/.test(body)) continue;
+    if (/(^|;|\s)display:/.test(body) || /(^|;|\s)flex:/.test(body)) continue;
+    out.push((match[1] ?? "").trim().replace(/\s+/g, " ").slice(-60));
+  }
+  return out;
+}
+
+test("the clipping scan recognises what it polices", () => {
+  expect(clippingRules(".a { overflow: hidden; text-overflow: ellipsis; }")).toEqual([".a"]);
+  // Blockified by its own display, or by the row it is an item of.
+  expect(clippingRules(".a { display: inline-block; text-overflow: ellipsis; }")).toEqual([]);
+  expect(clippingRules(".a { flex: 1 1 auto; text-overflow: ellipsis; }")).toEqual([]);
+  // A rule that clips nothing is not one of these.
+  expect(clippingRules(".a { overflow: hidden; }")).toEqual([]);
+});
+
+test("no stylesheet clips text on a box that cannot clip", () => {
+  const offenders = files(/\.css$/).flatMap(({ name, text }) =>
+    clippingRules(text).map((selector) => `${name}: ${selector}`),
+  );
+  expect(offenders).toEqual([]);
+});
+
+/**
  * Colour comes from a token, never from a literal.
  *
  * A literal is measured by nothing: the palette suite reads the tokens, and a
