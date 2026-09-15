@@ -107,4 +107,12 @@ slack-apps.json
 # `go install …@latest` must work on a clean checkout with no node on the
 # machine and an embed directive cannot run a bundler. CI rebuilds it and diffs
 # the tree, so a stale commit is a red build rather than a silent one.
-dashboard/node_modules/
+#
+# Unanchored, so it matches at EVERY depth rather than only under dashboard/.
+# A node tool run from the repository root writes its cache to the root's own
+# `node_modules/.vite` (vitest's default cacheDir), and the anchored pattern
+# left that directory tracked: one `results.json`, holding the pass and fail
+# of every suite on one machine, reached this branch through a `git add`.
+# Nothing here builds from the root, so no build goes red and no diff review
+# is drawn to a path everybody's eye skips.
+node_modules/
