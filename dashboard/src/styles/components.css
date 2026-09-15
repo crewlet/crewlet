@@ -1496,3 +1496,10 @@ kbd {
   pointer-events: none;
   border-top: 1px dashed var(--text-secondary);
 }
+
+/* The palette's scope hints, with the one in use marked: a sigil nobody is
+   told about is a feature that does not exist. */
+.palette-foot .is-on {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
