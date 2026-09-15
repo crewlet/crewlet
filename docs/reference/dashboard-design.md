@@ -422,6 +422,35 @@ look like one rewritten in the middle. "This save did not change the body" is
 its own answer, because a title, a label and a move are saved beside a body
 and a pane of unmarked lines reads as one that failed to load.
 
+## A cron expression is read, not printed
+
+The schedules screen printed `0 9 * * 1-5` and nothing else. A reader who
+knows cron reads it; a founder reads five numbers and a dash on the one screen
+that says when the company wakes itself up.
+
+`lib/cron.ts` reads the five fields twice over: a **sentence** beside each
+expression in the list ("at 09:00 on weekdays"), and the **next five instants**
+on the schedule a reader has opened. The instants matter because the engine
+sends one next fire and "every 4 hours" and "at 4am" have the same next fire
+for most of the day — it is the fires after the next that say whether an
+expression means what its author thought.
+
+Two rules keep it honest:
+
+- **The engine is the authority.** `next_run` on a row is the engine's own
+  computation and is what the screen shows as *Next*; this is a reading aid
+  beside it, never a second source for the same fact. A schedule that names a
+  timezone says so under the list, because the engine evaluates it in that
+  zone and this reads it in UTC.
+- **An unreadable expression says so.** The engine runs the schedule; a
+  reading aid that invented a sentence would put words on screen the engine
+  does not act on. The expression renders as itself with nothing claimed.
+
+Cron ORs the day-of-month and day-of-week fields when **both** are restricted
+— `0 0 1 * 1` fires on the first of the month *and* on every Monday — and both
+the sentence and the instants say so, because that is the rule readers get
+wrong.
+
 ---
 
 ## The transcript is stable, and reads in order

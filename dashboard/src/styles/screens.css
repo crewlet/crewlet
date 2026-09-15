@@ -2537,3 +2537,15 @@ a.work-cal-chip:hover {
 .diff-del-ink {
   color: var(--critical-ink);
 }
+
+/* The fires a cron expression works out to — a plain ordered list without the
+   numbers, because the order is the point and the ordinal is not: a reader
+   counts down from "next", not up from one. */
+.fires {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}

@@ -20,10 +20,12 @@
  * which is the catchup cap doing its job or a node that was down too long.
  */
 
+import { useMemo } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
+import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import { fmtDateTime, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
@@ -195,14 +197,25 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                 header: "Cron",
                 shrink: true,
                 sortValue: (s) => s.cron,
-                cell: (s) => (
-                  <code
-                    className="inline"
-                    title={s.timezone ? `timezone: ${s.timezone}` : undefined}
-                  >
-                    {s.cron}
-                  </code>
-                ),
+                cell: (s) => {
+                  // THE EXPRESSION AND WHAT IT MEANS. A reader who knows cron
+                  // reads `0 9 * * 1-5`; a founder reads five numbers and a
+                  // dash on the one screen that says when the company wakes
+                  // itself up. An expression this build cannot read shows as
+                  // itself with nothing claimed about it.
+                  const said = describeCron(s.cron);
+                  return (
+                    <span className="col" style={{ gap: 1 }}>
+                      <code
+                        className="inline nowrap"
+                        title={s.timezone ? `timezone: ${s.timezone}` : undefined}
+                      >
+                        {s.cron}
+                      </code>
+                      {said && <span className="t-caption faint">{said}</span>}
+                    </span>
+                  );
+                },
               },
               {
                 key: "task",
@@ -386,6 +399,14 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
  * header degrades to the identity rather than refusing — "there is no such
  * schedule" would be wrong about the rows underneath it.
  */
+/**
+ * How many fires ahead the detail works out.
+ *
+ * Five: enough that a weekly schedule shows a month and a daily one shows a
+ * working week, and few enough that the panel is read rather than scrolled.
+ */
+const UPCOMING_FIRES = 5;
+
 function OneSchedule({
   scopeType,
   scopeId,
@@ -408,6 +429,14 @@ function OneSchedule({
   now: number;
 }) {
   usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
+  // ANCHORED TO THE MINUTE, not to the ticking clock: the list changes when a
+  // fire passes, and recomputing it every second would rebuild the panel
+  // sixty times for an answer that moves once.
+  const minute = Math.floor(now / 60_000);
+  const upcoming = useMemo(
+    () => (row?.cron ? nextFires(row.cron, new Date(minute * 60_000), UPCOMING_FIRES) : []),
+    [row?.cron, minute],
+  );
   return (
     <>
       <PageActions>
@@ -434,7 +463,12 @@ function OneSchedule({
       {row && (
         <Panel padding="none">
           <StatRow cols={3}>
-            <Stat icon="clock" label="Cron" value={row.cron} sub={row.timezone || "UTC"} />
+            <Stat
+              icon="clock"
+              label="Cron"
+              value={row.cron}
+              sub={describeCron(row.cron) ?? `${row.timezone || "UTC"} — this build cannot read it`}
+            />
             <Stat
               icon="calendar"
               label="Next"
@@ -448,6 +482,40 @@ function OneSchedule({
               sub={row.runners?.length ? row.runners.join(", ") : "nobody"}
             />
           </StatRow>
+        </Panel>
+      )}
+
+      {row && upcoming.length > 1 && (
+        <Panel
+          title="And after that"
+          icon="calendar"
+          subtitle={`the next ${upcoming.length} fires this expression works out to, in ${row.timezone || "UTC"}`}
+        >
+          {/* THE ENGINE IS THE AUTHORITY on the next fire and says so above.
+              What it does NOT say is the one after — and the fires after the
+              next are what tell a reader whether an expression means what its
+              author thought: "every 4 hours" and "at 4am" have the same next
+              fire for most of the day. */}
+          <ol className="fires">
+            {upcoming.map((at) => (
+              <li key={at.toISOString()} className="row gap-2">
+                <span className="mono t-caption">{fmtDateTime(at.toISOString())}</span>
+                <span className="spacer" />
+                <span className="t-caption faint">{inTime(at.toISOString(), now)}</span>
+              </li>
+            ))}
+          </ol>
+          {row.timezone && row.timezone.toUpperCase() !== "UTC" && (
+            // A SCHEDULE IN ITS OWN ZONE IS NOT WORKED OUT HERE. The engine
+            // evaluates the expression in the row's timezone and this reads
+            // it in UTC, so the two agree only where the zones do — saying
+            // so beats a list that is quietly an hour out twice a year.
+            <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
+              This schedule runs in <code className="inline">{row.timezone}</code>; the instants
+              above are worked out in UTC, so they drift from the engine&rsquo;s own across a
+              daylight-saving change. The <strong>Next</strong> figure above is the engine&rsquo;s.
+            </p>
+          )}
         </Panel>
       )}
 
