@@ -218,14 +218,15 @@ because every single-modifier combination worth having is already the browser's.
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `band=decisions\|notices` · `state=unread\|all\|snoozed` · `reason=` |
 | `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
 | `#/work` | **All work** | `view=list\|board\|calendar` + the filter grammar |
+| `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
 | `#/work/{KEY}/sprints` · `#/work/{KEY}/sprints/{n}` | **Sprints** — figures, velocity, burndown | |
-| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | |
+| `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/goals` · `#/goals/{id}` | **Goals** | |
 | `#/company` | **Company** — the charter and the chart | `lens=chart\|charter` |
 | `#/company/people` | **People** — the one directory | `group=state\|unit\|flat` · `q=` |
-| `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · model · memory · cost · access; human: overview · access |
+| `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · model · conversations · memory · cost · access; human: overview · access. `conversation=` opens one thread |
 | `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
 | `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
@@ -251,6 +252,18 @@ strictly worse than the dead link it exists to avoid, because a dead link is
 visible. It happened once, when `#/work` still meant a coding run. No `v*` tag
 has ever shipped a route from this tree, so there is nobody holding an old link;
 `NotFound` names the screen and offers the palette.
+
+**Three of those surfaces are the engine answering a question it has always
+been able to answer.** Search is the ranking a seat gets from `search_work` —
+BM25 over the engine's own index — which the operator reading the same company
+had no access to at all; the board's `q=` is an escaped substring over an
+excerpt and answers something else. The item's **Woke** tab is who one change
+actually reached and under which of twenty reasons, which is the fact no
+commercial tracker records: all of them can say you were notified and none can
+say why. And a seat's **Conversations** tab is its own thread ledger — the only
+account of what a seat said on a surface this engine does not own. Every one of
+those readers was written, tested and swept on a retention horizon before any
+of them reached a screen.
 
 ### The four frame-level keys
 

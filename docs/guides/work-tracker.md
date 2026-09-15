@@ -890,6 +890,31 @@ that changes what you should do next. An empty list means *you have not said*,
 never *nothing is primary* — the other reading gives a fresh company an inbox
 whose primary half is blank.
 
+**And the same rows answer the other way round.** `work_inbox` reads them by
+recipient — one person, every change. `work_routing` reads them by *record* —
+one change, every person — which is the question "did my comment reach the
+person I meant", and it has never been answerable anywhere else. The table's
+primary key is `(record_id, recipient)`, so both directions are index reads and
+neither costs the other anything.
+
+Read it at `GET /work/routing/{record_id}`, or open an item's **Woke** tab in
+the dashboard. Every recipient names the one reason of twenty that found them,
+whether the notice *asks* something of them, and whether they were reached only
+because nobody better was found — a lead who hears about a report's task
+because the report has left, with the rank saying which substitute they were.
+
+**An empty recipient list is three different facts**, and the answer's
+`delivery` field says which. `nobody` means the routing genuinely resolved to
+no one: every candidate was the person making the change, or has left the
+company. `swept` means the change is older than the retention horizon below, so
+the rows may have existed and been cleared — their absence is not evidence.
+`unknown` means the caller stated no horizon, so nothing can date the absence.
+And `quiet` means the commit carried no notification at all, which is most
+field edits and every bulk one. The history row's own `notified` flag cannot
+tell these apart: it says the commit *carried* a notification, never that
+anybody was woken — the applier deliberately holds no roster, because two nodes
+briefly on different epochs would then write different rows for one record.
+
 **Inbox rows age out; the history does not.** `tracker.native.inbox_retention_days`
 (default 365, 30..3650) is how long an entry lives. A sweep on every node
 deletes what is past the horizon — per node rather than once across the fleet,
