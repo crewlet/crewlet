@@ -499,6 +499,11 @@ another sixty cards further down a single scroller.
 
 What replaced it:
 
+- **The row of controls is the list screen's own toolbar**, and every axis on
+  it is one the screen declares: a search box that is always there, a Filter
+  menu offering the rest, a chip per axis a reader added, and a Sort menu over
+  every column. A screen that hid its search behind "add a filter" is a screen
+  where nobody finds the search.
 - **The counts moved into the header badges**, and the failure count became
   the control that filters to failures. It used to be an inert tile reading
   "4 failed" beside an unrelated chip that did the filtering, so a reader who
@@ -516,6 +521,16 @@ What replaced it:
   design system's listbox, and it searches once the roster passes eight,
   which no native dropdown can do at all. It also scales past the ten seats
   at which the chip row silently disappeared.
+
+  **EVERY choice on this dashboard is that listbox.** No dropdown here is the
+  platform's own, on any screen or in any dialog: the list takes the theme, the
+  density, the tokens and the layer stack, rather than the operating system's
+  palette in the middle of a dark dialog. What a reader used to get free from
+  the platform it earns back for itself, and those rules are shared with every
+  other list in the package: type-ahead, Home and End, disabled answers stepped
+  over, the highlight announced through `aria-activedescendant`, Tab closing
+  the list and carrying on to the next control, Escape stopping at the list,
+  and a stored value the options no longer offer kept rather than swapped.
 - **The spend panel is a link.** It was Spend's panel on Spend's data at
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
@@ -536,7 +551,12 @@ than they looked:
   replaces the history entry.
 - **A sortable column is a button in its header.** The click used to be on the
   `th` itself, which a keyboard cannot reach and a screen reader does not
-  announce as a control. `aria-sort` stays on the header cell.
+  announce as a control. `aria-sort` stays on the header cell, and each column
+  says which way its FIRST press sorts: a number and a timestamp read from the
+  big end and the newest row, everything else from A, where one blanket
+  direction for a whole table ordered every name from Z. An absent value sorts
+  last in BOTH directions, because a seat with no meter has not spent nothing,
+  it has not been measured.
 
 Three more controls that looked like something they were not:
 
@@ -711,20 +731,19 @@ way on a narrow card: the message truncates, the source stays whole.
 
 ### The document does not scroll
 
-`.screen` scrolls, and it is the only thing that may. The sidebar is a fixed
-rail beside a scrolling pane, so a page that can *also* scroll as a whole
-carries that rail off the top of the window and leaves the reader looking at
-background below the app — with two scrollbars, neither obviously the one they
-want.
+`#screen-scroll`, the shell's own main region, scrolls, and it is the only
+thing that may. The rail is fixed beside a scrolling pane, so a page that can
+*also* scroll as a whole carries that rail off the top of the window and leaves
+the reader looking at background below the application, with two scrollbars and
+neither obviously the one they want. The shell is the design system's, and it
+is what holds that: the document is not allowed to grow, so the invariant is
+unreachable rather than merely unused.
 
-`body { min-height: 100dvh }` only asked the body to be at least a viewport
-tall. It still permitted it to grow, so the invariant held because nothing
-happened to exceed it rather than because anything enforced it. `height:
-100dvh` with `overflow: hidden` makes it unreachable instead of merely unused,
-and costs nothing: `.app` is already exactly that height. Verified by driving
-the built bundle in a browser — with 6000px of injected content and an
-explicit `window.scrollTo(0, 5000)`, `window.scrollY` stays 0 and the rail
-stays at the top, at every viewport from 600×900 to 1854×890.
+One id rather than a class, and everything that needs the scroller asks the
+router for it (`screenScroller`): the router restoring a position per history
+entry, the settled list asking whether the reader is at the top before it
+splices rows in, and search scrolling its results directly rather than calling
+`scrollIntoView`, which scrolls every scrollable ancestor it can find.
 
 ### A card has one left edge
 
@@ -949,6 +968,22 @@ rendered idle from the first phase to the last.
   engine's own domain (a seat, a phase, a turn, a configuration field), and
   `designSystem.test.ts` fails the build on a recipe the package already
   draws being written by hand beside it.
+- **The shell is the design system's too.** The rail, the top bar, the banner
+  strip, the drawer the narrow layout opens, the brand lockup, the sections
+  nav, the search trigger, the theme and density switchers and the command
+  palette are all the package's. What this application says for itself is its
+  own half: which sections exist, what the rail's foot reports about the
+  engine, and which surfaces the chrome can raise. A screen's own head is
+  `PageHeader`, and a list screen does not draw one at all: `DataView` is the
+  head, the toolbar, the chips, the table and the footer together.
+- **A LIST SCREEN IS ONE SHAPE, everywhere.** The event log, model activity,
+  tools, coding runs, agent-to-agent, secrets and the org directory are the
+  same thing: a head, a toolbar carrying the search box and the Filter and Sort
+  menus, a removable chip for each axis a reader narrowed, the rows, and a
+  footer saying how many of how many are on screen. The NARROWING is the
+  screen's: every axis is a URL parameter, so a narrowed list is a link
+  somebody can send, and the view is handed values and hands back callbacks.
+  It applies nothing of its own.
 - **One stack decides which surface a key belongs to.** Dialogs, sheets,
   menus and listbox popups register on the design system's layer stack
   (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the shell's own token dialog, search, engine
