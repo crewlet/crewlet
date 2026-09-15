@@ -664,6 +664,29 @@
   color: inherit;
   text-decoration: none;
   cursor: pointer;
+  /* The containing block for `.row-link` below. */
+  position: relative;
+}
+
+/* THE ROW'S OWN LINK, STRETCHED OVER IT.
+   The row used to be the anchor, which made every linking cell — a seat, a
+   key — an anchor inside an anchor: invalid, and the parser CLOSES the outer
+   one at the inner, so the row stopped being clickable from that cell
+   onwards. Out of flow, so it takes no grid track. */
+.row-link {
+  position: absolute;
+  inset: 0;
+}
+
+/* AND THE CELLS' OWN LINKS SIT ABOVE IT. Positioned and later in the document
+   than the overlay, so they win the hit test in the same stacking context —
+   without this the overlay swallows every click and a seat chip inside a row
+   would open the row. No `z-index`: introducing one here would put the rows
+   into stacking contexts the sticky header and the peek rail then have to be
+   reasoned about against. */
+.grid-row a:not(.row-link),
+.grid-row button {
+  position: relative;
 }
 
 .grid-row:last-child {

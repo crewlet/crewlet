@@ -24,7 +24,7 @@
  * how many that is, so an export never claims more than the page it has.
  */
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParam } from "../router.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { Button, Empty, cx } from "~/ui/primitives.tsx";
@@ -132,6 +132,11 @@ export function DataGrid<T>({
   const sort = parseSort(sortRaw);
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(-1);
+  // UNIQUE PER MOUNTED GRID, not per `name`. A page and the peek rail over it
+  // both render grids at once, and `name` distinguishes the grids on ONE
+  // screen — two screens' "recent" grids would mint the same row ids and an
+  // `aria-labelledby` would resolve to whichever came first in the document.
+  const gridId = useId();
 
   const shownColumns = useMemo(() => {
     const asked = colsRaw
@@ -240,27 +245,44 @@ export function DataGrid<T>({
       cursor === at && "cursor",
     );
     const style = { gridTemplateColumns: template } as React.CSSProperties;
-    return rowHref ? (
-      <a
-        key={key}
-        className={className}
-        style={style}
-        href={rowHref(row)}
-        data-row-index={at}
-        onClick={(e) => onRowActivate?.(row, e)}
-      >
-        {inner}
-      </a>
-    ) : (
+    // THE ROW'S OWN LINK IS AN OVERLAY, NOT THE ROW.
+    //
+    // The row used to BE an `<a>` when `rowHref` was given, and a cell that
+    // links — `SeatCell`, `SeatChip`, `KeyCell` — then put an anchor inside an
+    // anchor. That is not merely invalid: the HTML parser CLOSES the outer one
+    // at the inner one, so the row link covered only the cells before the
+    // first seat chip and the rest of the row silently stopped being
+    // clickable. Both halves looked identical and one of them did nothing.
+    //
+    // Stretched over the row instead, the link keeps everything it had — a
+    // real href, so ⌘-click, middle-click and "copy link address" all work —
+    // and the cells' own links sit above it (`.grid-row a { position:
+    // relative }`), so a click on a seat reaches the seat and a click on the
+    // row reaches the row.
+    //
+    // It takes its accessible name FROM THE ROW, which is what the anchor row
+    // announced before: the name computation walks the element `aria-labelledby`
+    // points at, so a screen reader still reads the cells rather than "link".
+    const rowId = `${gridId}-row-${at}`;
+    return (
       <div
         key={key}
+        id={rowHref ? rowId : undefined}
         className={className}
         style={style}
         data-row-index={at}
-        role={onRowActivate ? "button" : undefined}
-        tabIndex={onRowActivate ? 0 : undefined}
-        onClick={(e) => onRowActivate?.(row, e)}
+        role={!rowHref && onRowActivate ? "button" : undefined}
+        tabIndex={!rowHref && onRowActivate ? 0 : undefined}
+        onClick={!rowHref && onRowActivate ? (e) => onRowActivate(row, e) : undefined}
       >
+        {rowHref && (
+          <a
+            className="row-link"
+            href={rowHref(row)}
+            aria-labelledby={rowId}
+            onClick={(e) => onRowActivate?.(row, e)}
+          />
+        )}
         {inner}
       </div>
     );
