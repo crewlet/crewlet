@@ -1,9 +1,11 @@
 package jetstream
 
 import (
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -154,5 +156,109 @@ func TestTheVendoredClientBoundsAFetchByBytesAndNotByBoth(t *testing.T) {
 			"bound did not bind, so a replay of a log whose largest record is "+
 			"over a megabyte would pull the whole backlog into one transaction",
 			got, bytes)
+	}
+}
+
+// SHUTTING A SERVER DOWN CLEARS ITS ROUTE ADDRESS.
+//
+// Which is why [notReadyError]'s routed argument is read at the call site,
+// before the Shutdown beside it, rather than inside the helper. Asked
+// afterwards, ClusterAddr answers nil on a member whose route listener bound
+// perfectly — so a readiness failure caused by unreachable peers would be
+// reported as a port collision, and the operator would go looking for a
+// process that is not there.
+//
+// If a server bump stops clearing it, this goes red and the reason recorded at
+// that call site is stale — not the other way round: reading it first stays
+// correct either way.
+func TestShuttingDownClearsTheRouteAddress(t *testing.T) {
+	t.Parallel()
+
+	opts := &server.Options{
+		Host:     "127.0.0.1",
+		Port:     -1,
+		NoLog:    true,
+		NoSigs:   true,
+		StoreDir: t.TempDir(),
+		Cluster: server.ClusterOpts{
+			Name: "crewlet-route-address",
+			Host: "127.0.0.1",
+			Port: -1,
+		},
+	}
+	ns, err := server.NewServer(opts)
+	if err != nil {
+		t.Fatalf("configure a clustered member: %v", err)
+	}
+	go ns.Start()
+	if !ns.ReadyForConnections(30 * time.Second) {
+		ns.Shutdown()
+		t.Fatal("a clustered member with no peers never became ready")
+	}
+	if ns.ClusterAddr() == nil {
+		ns.Shutdown()
+		t.Fatal("a running member whose route listener bound reports no route " +
+			"address, so the failure message cannot tell a lost listener from " +
+			"unreachable peers at all")
+	}
+	ns.Shutdown()
+	ns.WaitForShutdown()
+	if ns.ClusterAddr() != nil {
+		t.Error("a shut-down member still reports its route address — the read " +
+			"at the call site no longer has to come first, and the comment " +
+			"saying it does is now wrong")
+	}
+}
+
+// CREATING A DURABLE CONSUMER THAT ALREADY EXISTS WITH A DIFFERENT START
+// SEQUENCE IS AN ERROR, NOT A NO-OP.
+//
+// This is what makes a clustered restart able to fail on the state-log
+// consumer, and therefore what [Queue.DomainConsumer]'s ErrConsumerExists
+// branch exists for. That consumer's name carries the node id, so no PEER can
+// race it — but the node itself made it on an earlier boot, and inside the
+// metadata propagation window the lookup that precedes the create answers
+// not-found. The create then meets the consumer that is really there.
+//
+// If it merely returned the existing consumer, the branch would be dead code
+// and a restart would need no tolerance at all. It does not, because the
+// configs differ: OptStartSeq moves with this node's checkpoint between every
+// boot, and the broker treats a durable's start sequence as immutable.
+//
+// Both halves are asserted, because the branch turns on the difference: an
+// IDENTICAL config comes back as the existing consumer with no error.
+func TestCreatingAnExistingConsumerErrsOnlyWhenTheConfigDiffers(t *testing.T) {
+	t.Parallel()
+	spec := probeDomain()
+	q := domainQueue(t, spec)
+	ctx := t.Context()
+
+	base := jetstream.ConsumerConfig{
+		Durable:       "statelog__probe__node_a",
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:   1,
+	}
+	if _, err := q.js.CreateConsumer(ctx, spec.Name, base); err != nil {
+		t.Fatalf("create the consumer: %v", err)
+	}
+
+	// THE SAME CONFIG is not an error — which is why the branch cannot
+	// simply treat every re-create as a recovery.
+	if _, err := q.js.CreateConsumer(ctx, spec.Name, base); err != nil {
+		t.Errorf("re-creating an identical consumer failed with %v, so a "+
+			"restart whose checkpoint had not moved would fail too", err)
+	}
+
+	// A MOVED START SEQUENCE is, and this is the shape every real restart
+	// takes: the node has applied records since, so its checkpoint is
+	// higher than when the consumer was made.
+	moved := base
+	moved.OptStartSeq = 4
+	_, err := q.js.CreateConsumer(ctx, spec.Name, moved)
+	if !errors.Is(err, jetstream.ErrConsumerExists) {
+		t.Fatalf("re-creating with a moved start sequence gave %v, want "+
+			"ErrConsumerExists — DomainConsumer's recovery branch keys on "+
+			"that error and would be unreachable", err)
 	}
 }

@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -79,6 +80,107 @@ func TestClusterBlockIsNotZeroForItsAddressFields(t *testing.T) {
 					"stored config the operator wrote it into", c)
 			}
 		})
+	}
+}
+
+// AN EXTERNAL CLUSTER IS FORMED BY ITS OWN OPERATOR, so the block that
+// configures the EMBEDDED server's membership is refused against one.
+//
+// The same rule `url`, `store_dir`, `debug` and `sync` already keep. Not one
+// field here is read when the stream is external: the embedded options are
+// built on a branch that stream never reaches, and the engine answers
+// "clustered" from the URL alone. Accepted, it records a membership, a route
+// port and an advertise address that never reach the thing forming the
+// cluster — and an operator who wrote them has no way to find that out.
+//
+// EVERY FIELD, because a rule written as a list of the ones somebody thought
+// of is how this block's siblings went unvalidated the first time.
+func TestAnExternalStreamRefusesTheEmbeddedClusterBlock(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]config.StreamCluster{
+		"a name":         {Name: "crewlet"},
+		"a route port":   {Port: 6222},
+		"a peer list":    {Peers: []string{"nats://node-b.internal:6222"}},
+		"a bind host":    {Host: "10.0.0.11"},
+		"an advertise":   {Advertise: "node-a.internal:6222"},
+		"the whole file": {Name: "crewlet", Port: 6222, Host: "10.0.0.11", Peers: []string{"nats://node-b.internal:6222"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			b := config.DefaultBootstrap()
+			// An external stream is a fleet, so its coordination has to be
+			// the fleet's. Left at the default it is refused for THAT,
+			// which is an ErrConflict this case would otherwise pass on
+			// without the block ever having been looked at.
+			b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+			b.Stream = config.Stream{
+				Type: config.StreamNATS,
+				URL:  "nats://broker.example.com:4222",
+				// Replicas, because an external cluster's own membership
+				// is not in this file: the count is the operator's to
+				// state and is not what is under test here.
+				Replicas: 3,
+				Cluster:  c,
+			}
+
+			err := b.Validate()
+			if err == nil {
+				t.Fatalf("accepted %+v against an external stream, where nothing reads it", c)
+			}
+			// THE FAULT ITSELF, not the rendered text: `stream.cluster.name`
+			// contains `stream.cluster`, so a substring match is satisfied
+			// by the rule that tells an operator to NAME the block — the
+			// opposite advice from the one under test.
+			faults := config.Faults(err)
+			if len(faults) != 1 {
+				t.Fatalf("faults = %v, want exactly the one about the block", faults)
+			}
+			if got := faults[0].Path; got != "stream.cluster" {
+				t.Errorf("path = %q, want %q", got, "stream.cluster")
+			}
+			if !errors.Is(faults[0].Kind, config.ErrConflict) {
+				t.Errorf("kind = %v, want ErrConflict", faults[0].Kind)
+			}
+		})
+	}
+}
+
+// AND IT IS NOT JUDGED BY A PEER COUNT NOBODY READS.
+//
+// validateTopology counts stream.cluster.peers to refuse a two-node fleet,
+// which has no quorum. Against an external stream those peers are inert, so
+// naming one used to be refused as a fleet of two on the strength of a block
+// the engine never looks at — a refusal an operator cannot act on, since
+// removing the peer is what they are being told to do for the wrong reason.
+func TestAnExternalStreamIsNotJudgedByTheClusterBlocksPeerCount(t *testing.T) {
+	t.Parallel()
+	b := config.DefaultBootstrap()
+	b.Coordination = config.Coordination{Type: config.CoordinationEmbeddedKV}
+	b.Stream = config.Stream{
+		Type:    config.StreamNATS,
+		URL:     "nats://broker.example.com:4222",
+		Cluster: config.StreamCluster{Name: "crewlet", Peers: []string{"nats://node-b.internal:6222"}},
+	}
+
+	err := b.Validate()
+	if err == nil {
+		t.Fatal("accepted a cluster block on an external stream")
+	}
+	if strings.Contains(err.Error(), "no coordination quorum") {
+		t.Errorf("refusal = %q, want it to name the inert block rather than a "+
+			"two-node quorum derived from peers nothing reads", err)
+	}
+}
+
+// AND THE EMBEDDED STREAM THE BLOCK IS FOR STILL TAKES IT.
+//
+// The guard against the rule above being written so broadly that it refuses
+// the topology the whole block exists to describe.
+func TestAnEmbeddedStreamStillTakesTheClusterBlock(t *testing.T) {
+	t.Parallel()
+	b := fleetBootstrap(t)
+	if err := b.Validate(); err != nil {
+		t.Fatalf("refused a three-member embedded fleet: %v", err)
 	}
 }
 

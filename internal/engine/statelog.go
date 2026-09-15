@@ -19,6 +19,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/pages"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -70,6 +71,10 @@ import (
 // none of those is in the EventQueue contract because nothing else needs them.
 type domainHost interface {
 	EnsureDomainStream(ctx context.Context, spec jetstream.DomainStream) error
+
+	// Clustered is whether the broker underneath has PEERS, which is what
+	// the provisioning budgets branch on — see [jsprovision.Clustered].
+	Clustered() jsprovision.Clustered
 
 	// StreamBudget is what the broker will actually let this account
 	// store. A ceiling is a RESERVATION the broker refuses if it cannot
@@ -312,9 +317,25 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// and a stream created a moment ago reports a first sequence of 1,
 	// which reads as "nothing was trimmed" for a log the fleet has been
 	// writing to for months.
+	// ONE CEILING OVER THE WHOLE STATE-LOG BRING-UP, for
+	// [jsprovision.SequenceBudget]'s reason: this is three replicated stream
+	// creates AND three durable consumer creates, each of which would
+	// otherwise discover a wedged cluster on its own per-create budget. The
+	// queue's own sequence ceiling covers the engine's streams and not
+	// these, so without it the state log added six more full budgets after
+	// that ceiling had already been spent — and the package's claim to bound
+	// a whole bring-up was not true of all of it.
+	//
+	// The consumer each start creates is a replicated object on the same
+	// metadata group, and gets a ceiling of its own below — after the join,
+	// which is a snapshot transfer rather than a create and must not spend
+	// the creates' budget.
+	provisionCtx, cancelProvision := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
+	defer cancelProvision()
+
 	logs := map[string]*jetstream.DomainLog{}
 	for _, domain := range registeredDomains() {
-		appendTo, err := s.provision(ctx, host, domain)
+		appendTo, err := s.provision(provisionCtx, host, domain)
 		if err != nil {
 			s.Stop()
 			return nil, err
@@ -332,8 +353,16 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		return nil, err
 	}
 
+	// A SECOND CEILING, over the consumer creates, and deliberately not the
+	// same one: it is opened AFTER the join above, which transfers a
+	// snapshot rather than creating metadata and can honestly take minutes.
+	// Spanning both would let a large adoption eat the budget the creates
+	// need.
+	consumerCtx, cancelConsumers := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
+	defer cancelConsumers()
+
 	for _, domain := range registeredDomains() {
-		running, err := s.start(ctx, host, domain, logs[domain.Name()], epoch)
+		running, err := s.start(ctx, consumerCtx, host, domain, logs[domain.Name()], epoch)
 		if err != nil {
 			// EVERY DOMAIN OR NONE. A node running half its register
 			// serves rows derived from one log while another's records
@@ -469,7 +498,7 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 }
 
 // start brings up one domain on the log [stateLog.provision] opened.
-func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.Domain,
+func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, domain statelog.Domain,
 	appendTo *jetstream.DomainLog, epoch map[string]any) (*runningDomain, error) {
 
 	spec := domain.Stream()
@@ -504,7 +533,11 @@ func (s *stateLog) start(ctx context.Context, host domainHost, domain statelog.D
 	if err != nil {
 		return nil, err
 	}
-	consumer, err := host.DomainConsumer(ctx, spec.Name, s.nodeID, at.Seq)
+	// THE SEQUENCE'S CONTEXT, not the caller's: this is a replicated create
+	// like the stream above it, and the three domains share one ceiling so
+	// a wedged metadata group cannot spend a full per-create budget three
+	// times over. Everything else here takes the ordinary boot context.
+	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
 	}

@@ -407,7 +407,17 @@ stream:
                                     #   nothing to replicate to
   # cluster:                        # an EMBEDDED server joining its peers, which
   #   name: crewlet                 #   is the fleet topology: every node embeds
-  #   port: 6222                    #   one member of one cluster. `node.id` is
+                                    #   one member of one cluster. REQUIRED once
+                                    #   anything else here is set — the server
+                                    #   reads none of these fields from an
+                                    #   unnamed cluster, so a block without it
+                                    #   starts a solo node that forms no cluster
+                                    #   at all, and Tier A refuses that. EMBEDDED
+                                    #   ONLY: an external cluster is formed by
+                                    #   its own operator's config, so this whole
+                                    #   block is REFUSED against `type: nats`
+                                    #   rather than accepted and read by nobody
+  #   port: 6222                    #   `node.id` is
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
   #     - "nats://node-2:6222"      #   this member's replicas every time
@@ -596,7 +606,22 @@ coordination:
                                     #   intervals, so two consecutive missed
                                     #   renewals still leave a full interval to
                                     #   recover in. Shorter speeds failover and
-                                    #   sheds healthy seats on ordinary jitter
+                                    #   sheds healthy seats on ordinary jitter.
+                                    #   IT IS THE BUCKET'S TTL, set by whichever
+                                    #   node created the lease bucket first and
+                                    #   ADOPTED by every node after it — a peer
+                                    #   booting with a different value does not
+                                    #   rewrite it, and logs
+                                    #   `coord_kv_lease_ttl_differs` naming the
+                                    #   one in force — AND RUNS AT IT, because
+                                    #   the bucket's age is what expires a
+                                    #   lease and a node claiming longer than
+                                    #   it would have every acquire refused.
+                                    #   Its heartbeat and release budget are
+                                    #   fractions of the live value too. So
+                                    #   make it agree across the fleet:
+                                    #   changing it requires deleting the
+                                    #   bucket while the fleet is down
 
 api:
   host: "0.0.0.0"

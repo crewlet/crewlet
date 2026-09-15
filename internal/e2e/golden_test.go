@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -674,16 +675,33 @@ func TestATightBudgetRefusesTheTurnRatherThanSpendingPastIt(t *testing.T) {
 		t.Errorf("the company spent %d against a cap of 200", used)
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
+	//
+	// WAITED FOR rather than read once, because the two counters are two
+	// KEYS AND NO TRANSACTION — [coord/kv.FleetStore.Charge] says so and
+	// builds the all-or-nothing property out of ordering instead: the org
+	// is charged first and compensated if the seat then refuses. So there
+	// is a real window in which the org has moved and the seat has not,
+	// and the wait above lands inside it whenever the org's bump is what
+	// satisfied it.
+	//
+	// Read synchronously, this asserted an ATOMICITY the design does not
+	// claim, and CI caught it: `seat spent 0 and the org 150`. The
+	// invariant is that the two agree once the charge is through, which is
+	// what this now says.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
-	seatUsed, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
-	if err != nil {
-		t.Fatalf("seat used: %v", err)
-	}
-	if seatUsed != used {
-		t.Errorf("seat spent %d and the org %d; one charge must move both",
-			seatUsed, used)
-	}
+	var seatUsed int
+	waitFor(t, "the seat's counter to catch the org's", func() bool {
+		got, err := budgets.Used(t.Context(), coord.AgentScope(id.String()))
+		if err != nil {
+			return false
+		}
+		seatUsed = got
+		return got == used
+	}, func() string {
+		return fmt.Sprintf("seat spent %d and the org %d; one charge must "+
+			"move both", seatUsed, used)
+	})
 }
 
 // The trace a wake starts must reach the events the turn it caused writes —

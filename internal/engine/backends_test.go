@@ -2,8 +2,10 @@ package engine_test
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -812,5 +814,61 @@ roles:
 	}
 	if _, _, err := e.Apply(t.Context(), parsedCompany(t, narrow)); err == nil {
 		t.Error("removing and re-adding the provider changed the width")
+	}
+}
+
+// A NODE WHOSE ROUTE PORT IS ALREADY TAKEN REFUSES TO START, naming the port.
+//
+// # Why this needs a guard of its own
+//
+// Because nats-server does not fail on it. A member whose configured route
+// port is held by something else logs the listener error and carries on
+// serving clients: the node comes up, answers its health check, and simply
+// never forms a route to a peer. What an operator sees a minute later is the
+// readiness wait expiring and naming the CLUSTER — "JetStream has not
+// established contact with a meta leader" — which sends them to debug peers, a
+// firewall and a network path that are all fine.
+//
+// There is no other symptom. The port is the only thing that knows.
+func TestANodeRefusesToStartWhenItsRoutePortIsTaken(t *testing.T) {
+	t.Parallel()
+
+	// SOMETHING ELSE HOLDS IT, which is the whole input. Held for the
+	// length of the case, so the engine's listener cannot have it.
+	var lc net.ListenConfig
+	held, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("hold a port: %v", err)
+	}
+	defer held.Close()
+	//nolint:errcheck // Listen on a TCP address always yields *TCPAddr.
+	taken := held.Addr().(*net.TCPAddr).Port
+
+	b := bootstrap(t, func(b *config.Bootstrap) {
+		b.Stream.StoreDir = filepath.Join(t.TempDir(), "stream")
+		b.Node.ID = "node-route-taken"
+		b.Stream.Cluster.Name = "crewlet-route-taken"
+		b.Stream.Cluster.Host = "127.0.0.1"
+		b.Stream.Cluster.Port = taken
+		// A PEER THAT DOES NOT EXIST, deliberately: this case is about
+		// failing before the readiness wait, so the peer must never be
+		// the thing that answers.
+		b.Stream.Cluster.Peers = []string{"nats://127.0.0.1:1"}
+	})
+
+	backends, err := openBackends(t, b)
+	if err == nil {
+		backends.Close(context.Background())
+		t.Fatal("a node whose route port was taken started anyway — it serves " +
+			"clients, answers health checks and never forms a route, which " +
+			"from outside is indistinguishable from a slow cluster")
+	}
+	// THE PORT IS IN THE MESSAGE, because that is the one fact an operator
+	// cannot derive from anywhere else.
+	if !strings.Contains(err.Error(), strconv.Itoa(taken)) {
+		t.Errorf("the failure does not name the port that was taken: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stream.cluster.port") {
+		t.Errorf("the failure does not name the field to change: %v", err)
 	}
 }

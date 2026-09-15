@@ -15,11 +15,14 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
 // A BUCKET IS A STREAM, and provisioning a replicated one has the two hazards
 // [internal/queue/jetstream] documents for the stream side. This is the same
-// fix, because it is the same call underneath.
+// fix, because it is the same call underneath — and both sides now take the
+// budgets, the retry cadence and the "still forming" predicate from
+// [internal/jsprovision], so neither can drift away from the other.
 //
 // # The deadline
 //
@@ -40,24 +43,9 @@ import (
 // (a bad TTL, a conflicting replica count, an auth failure) clears by nobody
 // waiting, so retrying it would turn a config mistake into a two-minute hang
 // with the same message at the end.
-const (
-	// positionsSuffix is the per-node state-log position bucket.
-	positionsSuffix = "_statelog_positions"
-	// bucketProvisionTimeout bounds one bucket create. The same size as
-	// the stream side's, and for the same reason: a replicated create is
-	// a raft round trip plus file-store setup, fast on a quiet cluster and
-	// seconds under load, so thirty is well past any healthy case and
-	// still fails a genuinely wedged one rather than hanging a boot.
-	bucketProvisionTimeout = 30 * time.Second
 
-	// bucketPlacementRetry is how often a forming cluster is re-asked.
-	bucketPlacementRetry = 250 * time.Millisecond
-
-	// jsErrCodeNoPeers is JetStream's "no suitable peers for placement".
-	// A NUMBER rather than a string match, so it survives the server
-	// rewording the message.
-	jsErrCodeNoPeers jetstream.ErrorCode = 10005
-)
+// positionsSuffix is the per-node state-log position bucket.
+const positionsSuffix = "_statelog_positions"
 
 // openBucket creates one bucket when it is absent and OBSERVES it when it is
 // present, waiting out a cluster that is still forming.
@@ -79,47 +67,66 @@ const (
 // won. A booting peer then READS what the winner made instead of writing over
 // it — which is also the honest ownership rule, since a bucket's TTL is a
 // deployment-wide fact and not something each node should re-assert.
+//
+// ctx IS THE BOOT'S, and the per-create deadline is derived below rather than
+// taken from the caller, because the read-back at the end runs precisely when
+// that deadline has expired — see [jsprovision.Settle].
 func openBucket(ctx context.Context, js jetstream.JetStream,
-	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+	clustered bool, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
 
 	// WithTimeout only ever shortens against the parent, so a caller that
-	// already set a tighter deadline keeps it.
-	ctx, cancel := context.WithTimeout(ctx, bucketProvisionTimeout)
+	// already set a tighter deadline keeps it — which is also what makes
+	// the sequence ceiling [OpenFleet] applies effective: each create here
+	// takes the lesser of its own budget and what is left of that one.
+	createCtx, cancel := context.WithTimeout(ctx,
+		jsprovision.Clustered(clustered).Budget())
 	defer cancel()
 
-	for {
-		bucket, err := createOrObserveBucket(ctx, js, cfg)
-		if err == nil || !unplaceableBucket(err) {
-			return bucket, err
-		}
-		select {
-		case <-ctx.Done():
-			// THE ORIGINAL ERROR, not the context's: "no suitable
-			// peers" says what is wrong and "deadline exceeded"
-			// does not.
-			return nil, err
-		case <-time.After(bucketPlacementRetry):
-		}
-	}
-}
+	// A BREADCRUMB, because without one this is the silent step. A boot
+	// opens fifteen of these in a row and logs nothing between them, so a
+	// node that hung here emitted nothing at all until its budget expired —
+	// and the log could not say which bucket it was on.
+	//
+	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
+	// the create ends rather than where this function does.
+	//
+	// Both halves were wrong in the same way, at opposite ends. Armed
+	// before the lookup while saying "created", it reported a create that
+	// had not been attempted for a bucket that already existed; left armed
+	// across the replica observation after it, it reported one that had
+	// already finished. Either way it names a step the member is not on,
+	// which is the single thing this line exists to get right.
+	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
+		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
+			"replicas", cfg.Replicas, "waited", after,
+			"detail", "this bucket is still being provisioned — looked up, "+
+				"and created if it was absent; on a fleet that is a metadata "+
+				"group that has not settled, and the next line from this node "+
+				"says whether it got past it")
+	})
 
-// createOrObserveBucket is one attempt at that.
-func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
-	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
-
-	switch bucket, err := js.KeyValue(ctx, cfg.Bucket); {
+	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
 	case err == nil:
-		return bucket, nil
+		stop()
+		// ON ctx, NOT createCtx: a slow lookup can leave the per-create
+		// deadline spent, and the observation would then fail on a
+		// bucket it had just found. observeReplicas owns its own term.
+		return bucket, observeReplicas(ctx, bucket, cfg)
 	case !errors.Is(err, jetstream.ErrBucketNotFound):
+		stop()
 		return nil, err
 	}
-	bucket, createErr := js.CreateKeyValue(ctx, cfg)
+	bucket, createErr := createKeyValue(createCtx, js, cfg)
+	stop()
 	if createErr == nil {
+		// THIS NODE MADE IT, at the count it asked for. Nothing to
+		// observe, and no round trip spent observing it.
 		return bucket, nil
 	}
-	if unplaceableBucket(createErr) {
-		// STILL FORMING, which is the caller's loop to wait out rather
-		// than a race to read back.
+	if jsprovision.Unplaceable(createErr) {
+		// STILL FORMING and it stayed that way for the whole budget,
+		// which createKeyValue has already waited out. Nothing was
+		// placed, so there is nothing to read back.
 		return nil, createErr
 	}
 	// A PEER MAY HAVE WON THE RACE between the read above and this
@@ -133,30 +140,121 @@ func createOrObserveBucket(ctx context.Context, js jetstream.JetStream,
 	// the loser never heard so, and reporting that as a failure is a node
 	// refusing to boot because a peer beat it.
 	//
-	// So the question is re-asked rather than assumed. The read gets its
-	// OWN context, because the one above may be the deadline that just
-	// expired.
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bucketReadBack)
-	defer cancel()
-	bucket, err := js.KeyValue(readCtx, cfg.Bucket)
+	// So the question is re-asked rather than assumed, and RE-ASKED while
+	// it answers not-found, because a peer's create is visible to this
+	// member only on its next metadata update — see [jsprovision.Settle].
+	// One lookup answers at an arbitrary instant inside that window and
+	// fails a boot over a bucket that exists. ON ctx AND NOT createCtx,
+	// because createCtx is the deadline that just expired.
+	err := jsprovision.Settle(ctx, func(ctx context.Context) error {
+		var e error
+		bucket, e = js.KeyValue(ctx, cfg.Bucket)
+		return e
+	})
 	if err != nil {
 		// THE CREATE'S ERROR IS WHAT IS REPORTED, with the read-back's
 		// beside it: the first says what went wrong and the second only
 		// confirms the create really did fail.
 		return nil, fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 	}
-	return bucket, nil
+	// THE PEER MADE IT, so it is the peer's replica count that is in force
+	// and this node has to agree with it — the same question the adopt
+	// path above asks, for the same reason.
+	return bucket, observeReplicas(ctx, bucket, cfg)
 }
 
-// bucketReadBack bounds the one read that asks whether a peer won the race.
-// Short for [streamReadBack]'s reason: an ordinary metadata read against a
-// group that has just proven it works.
-const bucketReadBack = 5 * time.Second
+// observeReplicas refuses a bucket replicated below what this node is
+// configured for.
+//
+// # Why a booting node refuses rather than resizing
+//
+// Because the durability this store promises is not something whichever node
+// booted last gets to decide, and because a bucket is a stream: this is the
+// rule [internal/queue/jetstream]'s observeStream already applies to one, in
+// the same words — "an acknowledged publish would be proving fewer copies than
+// stream.replicas promises". Nothing here is ever APPLIED to a bucket that
+// exists (see openBucket's doc for what CreateOrUpdate cost), so a mismatch is
+// an operator gesture, not a write.
+//
+// # Why it is the one bucket field worth refusing over
+//
+// The rest are reported instead — the lease TTL in force is warned about in
+// [Open], for the reason recorded there. Replication is different in kind:
+// every other difference changes how this store BEHAVES and is visible in
+// what it does, while this one changes only what survives losing a node, and
+// is visible in nothing at all until that happens. A fleet raised from one
+// replica to three, whose buckets were all made at one, goes on holding every
+// lease, every fencing epoch and the company's SECRETS on a single disk while
+// each node reports itself correctly configured.
+//
+// Equal or higher passes, so a single-replica development node against a
+// three-replica fleet's buckets still starts.
+//
+// ctx IS THE BOOT'S and the term is derived here, for the reason
+// [jsprovision.Settle] gives: the per-create deadline may be spent by the time
+// this runs — a slow lookup is enough — and an observation handed it fails
+// instantly on a bucket that was just found. [jsprovision.ReadBack] rather
+// than a create's budget, because this is an ordinary metadata read against a
+// group that has already answered.
+func observeReplicas(ctx context.Context, bucket jetstream.KeyValue,
+	cfg jetstream.KeyValueConfig) error {
 
-// unplaceableBucket reports the transient "the cluster is still forming" error.
-func unplaceableBucket(err error) bool {
-	var apiErr *jetstream.APIError
-	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeNoPeers
+	want := max(cfg.Replicas, 1)
+	if want <= 1 {
+		// Nothing to be short of, and no round trip spent asking.
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, jsprovision.ReadBack)
+	defer cancel()
+	status, err := bucket.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read %s status: %w", cfg.Bucket, err)
+	}
+	got, ok := status.(*jetstream.KeyValueBucketStatus)
+	if !ok || got.StreamInfo() == nil {
+		return fmt.Errorf("coord/kv: %s reported no backing stream", cfg.Bucket)
+	}
+	if live := got.StreamInfo().Config.Replicas; live < want {
+		return fmt.Errorf(
+			"coord/kv: the running bucket %q is replicated %dx and this node is "+
+				"configured for %dx: it holds leases, fencing epochs and this "+
+				"company's secrets on fewer copies than stream.replicas promises, "+
+				"and losing one node loses them. Nothing is applied to a bucket "+
+				"that already exists, so this is an operator gesture: align "+
+				"stream.replicas across the fleet, or resize this bucket's stream "+
+				"deliberately (a bucket IS a stream: nats stream update --replicas)",
+			cfg.Bucket, live, want)
+	}
+	return nil
+}
+
+// createKeyValue makes the bucket, waiting out a cluster that has not yet seen
+// enough members to place it.
+//
+// THE LOOP IS AROUND THE CREATE ALONE, which is the shape
+// [internal/queue/jetstream]'s createStream already has and the reason
+// [jsprovision] exists: an unplaceable create means nothing was placed, so
+// re-running the lookup that preceded it would re-ask a question whose answer
+// cannot have changed. Written the other way round, the retry re-issued that
+// lookup every 250ms for the whole provisioning budget.
+func createKeyValue(ctx context.Context, js jetstream.JetStream,
+	cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
+
+	var bucket jetstream.KeyValue
+	err := jsprovision.Place(ctx, func(ctx context.Context) error {
+		var e error
+		bucket, e = js.CreateKeyValue(ctx, cfg)
+		return e
+	}, func() {
+		log.InfoContext(ctx, "coord_kv_bucket_awaiting_peers",
+			"bucket", cfg.Bucket, "replicas", cfg.Replicas,
+			"detail", "the cluster has not yet seen enough members to place "+
+				"this bucket; retrying until the provisioning deadline")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return bucket, nil
 }
 
 // The fleet-shared state on JetStream KV.
@@ -277,6 +375,13 @@ type FleetConfig struct {
 
 	// Replicas is the JetStream replica count for every bucket.
 	Replicas int
+
+	// Clustered is whether this node's broker has PEERS, which is what the
+	// provisioning budgets branch on. Stated by the caller rather than
+	// inferred from Replicas: a member naming peers at one replica is a
+	// real deployment, and every create on it still waits on the same
+	// metadata group. See [jsprovision.Clustered].
+	Clustered bool
 }
 
 // rateBucketFactor is how many windows the rate bucket keeps.
@@ -367,9 +472,26 @@ var _ coord.Fleet = (*FleetStore)(nil)
 
 // OpenFleet creates or adopts every bucket and returns the backend.
 //
-// Idempotent and safe to call from every node at once, like [Open]: creating
-// a bucket that already exists with the same shape is a no-op, and a changed
-// retention is applied as a stream update.
+// Idempotent and safe to call from every node at once, like [Open]: a bucket
+// that already exists is ADOPTED rather than rewritten, which is what keeps N
+// booting nodes from issuing N writes against a metadata group that is still
+// electing. See [openBucket] for why that is create-else-observe rather than
+// CreateOrUpdate, and what a divergent retention therefore means.
+//
+// # One ceiling over the whole sequence
+//
+// The buckets below are opened one after another and each takes its own
+// provisioning budget, so without a ceiling the real bound on this call is the
+// PRODUCT rather than the term: a wedged cluster is rediscovered once per
+// bucket, thirteen buckets in a row, and a boot that nobody meant to allow ten
+// minutes gets it. Nothing declared that number, which is the shape of a limit
+// that is not a decision. [jsprovision.SequenceBudget] is the decision,
+// applied once here.
+//
+// THE COUNT IS SPELLED so the estate gate catches it: this paragraph is the
+// sizing argument, and a sizing argument over the wrong number of buckets is
+// worse than none — see TestEveryBucketHasALifetimeClass, which holds every
+// "N buckets" in this file against the open table below.
 func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore, error) {
 	if nc == nil {
 		return nil, errors.New("coord/kv: a NATS connection is required")
@@ -382,9 +504,13 @@ func OpenFleet(ctx context.Context, nc *nats.Conn, cfg FleetConfig) (*FleetStore
 		return nil, fmt.Errorf("coord/kv: jetstream context: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(ctx,
+		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
+	defer cancel()
+
 	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, error) {
 		name := cfg.BucketPrefix + suffix
-		bucket, err := openBucket(ctx, js, jetstream.KeyValueConfig{
+		bucket, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
 		})
 		if err != nil {

@@ -11,7 +11,7 @@
 // A package here stands up N engines, each embedding its OWN NATS server, in
 // ONE process. `go test ./...` runs package binaries in parallel at
 // -p=GOMAXPROCS, and a two-core runner under -race cannot form a multi-member
-// JetStream quorum inside [jetstream] `streamProvisionTimeout` while doing
+// JetStream quorum inside the per-create budget [internal/jsprovision] gives
 // that. Measured on one commit: the dedicated job passed in 5m24s, while the
 // same cases inside `go test ./...` failed on all three of their cluster-start
 // attempts with `context deadline exceeded` creating streams and KV buckets.

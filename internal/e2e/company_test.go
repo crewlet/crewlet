@@ -172,6 +172,10 @@ func startWith(t *testing.T, amend func(doc string) string) *node {
 type scriptedModel struct {
 	url string
 
+	// close shuts this model's HTTP server down. See newScriptedModel for
+	// why it is a field as well as a t.Cleanup.
+	close func()
+
 	mu      sync.Mutex
 	calls   []string
 	offered []string
@@ -251,6 +255,12 @@ func newScriptedModel(t *testing.T) *scriptedModel {
 	srv := httptest.NewServer(http.HandlerFunc(m.serve))
 	t.Cleanup(srv.Close)
 	m.url = srv.URL
+	// EXPOSED as well as registered, for the one caller whose lifetime is
+	// shorter than the test's: a cluster attempt that fails stops what it
+	// started before the next one starts, and this is one of the things it
+	// started. httptest.Server.Close is idempotent, so the cleanup above
+	// stays correct for every other caller.
+	m.close = srv.Close
 	return m
 }
 

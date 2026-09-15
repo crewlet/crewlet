@@ -57,7 +57,9 @@ node the same `stream.cluster.name`, a `stream.cluster.port` to route on,
 and the other members' route URLs in `stream.cluster.peers` — or point them
 all at an external cluster with `stream.type: nats` and `stream.url`. It is
 the same client code either way; embedded versus external is a connection
-choice, not a second backend.
+choice, not a second backend — and it really is either/or: `stream.cluster`
+configures the embedded server's own membership, so writing one against
+`stream.type: nats` is refused rather than accepted and read by nobody.
 
 **`stream.replicas: 3` on a clustered fleet.** Replication is what makes a
 publish a quorum commit before it returns, so "published" means "survives
@@ -75,9 +77,11 @@ it provisions anything — measured at about eight seconds on a quiet
 three-member cluster, and given up to sixty — because creating a replicated
 stream against a leaderless group blocks rather than failing. If the other
 members have not arrived yet the stream cannot be placed, and the node says
-so (`jetstream_stream_awaiting_peers`) while it retries inside a
-thirty-second provisioning deadline, rather than hanging with nothing to
-read.
+so (`jetstream_stream_awaiting_peers`) while it retries inside the per-create
+provisioning deadline — **two minutes** on a member with peers, against thirty
+seconds on a solo node, because the two creates are not the same call
+underneath — rather than hanging with nothing to read. See
+[Deployment](deployment.md#a-clustered-node-is-given-longer-to-create-them).
 
 **Credentials go through a node that is running.** The
 [secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on

@@ -13,8 +13,10 @@ package jetstreamtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"testing"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -48,7 +50,7 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
 	}
 
-	return withFreshPorts(t, func() (*Cluster, error) {
+	return withFreshPorts(t, "cluster", func() (*Cluster, error) {
 		// Ports are reserved up front because every member's routes
 		// must name every other member, including ones not started
 		// yet, and the alternative — starting members one at a time
@@ -62,7 +64,16 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		c := &Cluster{}
 		for i := range n {
 			if err := c.start(t, memberConfig(base, i, n, ports[i], routes), i); err != nil {
-				return nil, err
+				// THE PARTIAL CLUSTER GOES BACK WITH THE ERROR, so
+				// [withFreshPorts] can take it down before retrying.
+				// Discarded, the members that DID start keep their
+				// route listeners — their shutdown is registered with
+				// t.Cleanup and so runs at the end of the test, not at
+				// the end of this attempt — and the next attempt then
+				// draws ports from a machine still holding the old
+				// ones. That is the contention the retry exists to
+				// escape, left in place by the retry itself.
+				return c, err
 			}
 		}
 
@@ -93,8 +104,57 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 // again with different numbers.
 const clusterStartAttempts = 4
 
-// withFreshPorts runs start until it stops losing a port race.
-func withFreshPorts(t *testing.T, start func() (*Cluster, error)) *Cluster {
+// errNotRetryable marks a start failure that a fresh set of ports cannot
+// change: the same input answering the same way every time.
+//
+// DELIBERATELY SHORT, and everything not on it is retried — see
+// [withFreshPorts] for why the burden sits on proving a failure repeats.
+var errNotRetryable = errors.New("not fixable by another attempt")
+
+// listenErr classifies a route listener's bind failure for [withFreshPorts].
+//
+// THE ONE CLASSIFIER BOTH RELAY PATHS USE, so the retry gets the same answer
+// wherever a forwarder failed to bind. [net.ListenConfig.Listen] hands back
+// EADDRINUSE for the race this harness genuinely loses — it reserves
+// n(n-1)+2n ports and then binds them one at a time — and a permission
+// failure, an address this host does not have, or a cancelled context for the
+// things a different number answers identically.
+//
+// It exists because the classification was written at neither relay path:
+// both returned the raw error, so [withFreshPorts]'s "retry unless it is
+// proven to repeat" read every one of them as transient and spent four
+// attempts on an unbindable address before reporting it as a lost race. The
+// mechanism was already here — [Cluster.start] classifies its own probe
+// failure exactly this way — and the relay half simply did not feed it.
+func listenErr(err error) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("%w: %w", js.ErrRoutePortTaken, err)
+	}
+	return fmt.Errorf("%w: %w", errNotRetryable, err)
+}
+
+// withFreshPorts runs start until it comes up, with fresh ports each time.
+//
+// # What it retries, and what it must not
+//
+// RETRY IS THE DEFAULT and the log says what actually failed. Standing up n
+// brokers fails for TIMING far more often than for ports — a member whose
+// readiness wait ran out, a metadata group still electing — and absorbing
+// exactly that is what the attempts are for. Measured by getting it backwards
+// in this same pull request: gating [internal/e2e]'s equivalent retry on a
+// lost port alone ended three cluster cases on their first attempt, each on a
+// `context deadline exceeded` that a second attempt had always taken in its
+// stride.
+//
+// So only a failure KNOWN to repeat ends the run early, and the burden is on
+// proving that rather than on proving it might not: guessing "deterministic"
+// wrongly ends a case that would have passed, while guessing "transient"
+// wrongly costs some seconds and a line.
+//
+// What the log must not do is call every one of them a port race. That was the
+// other half of the same defect — the one diagnostic a reader gets, naming a
+// cause the run had no evidence for.
+func withFreshPorts(t *testing.T, what string, start func() (*Cluster, error)) *Cluster {
 	t.Helper()
 	var last error
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
@@ -109,13 +169,16 @@ func withFreshPorts(t *testing.T, start func() (*Cluster, error)) *Cluster {
 		if c != nil {
 			c.shutdown()
 		}
-		t.Logf("cluster attempt %d/%d lost a port race: %v",
-			attempt, clusterStartAttempts, err)
+		if errors.Is(err, errNotRetryable) {
+			t.Fatalf("%s attempt %d/%d failed for a reason retrying "+
+				"cannot fix: %v", what, attempt, clusterStartAttempts, err)
+		}
+		t.Logf("%s attempt %d/%d failed, retrying with fresh ports: %v",
+			what, attempt, clusterStartAttempts, err)
 	}
-	t.Fatalf("no cluster came up in %d attempts: %v — every one lost a port to "+
-		"another process between reserving it and binding it, which is what a "+
+	t.Fatalf("no %s came up in %d attempts: %v — which is what a "+
 		"machine running many brokers at once produces",
-		clusterStartAttempts, last)
+		what, clusterStartAttempts, last)
 	return nil
 }
 
@@ -164,7 +227,7 @@ func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 			"two members, or there is no pair to cut", n)
 	}
 
-	return withFreshPorts(t, func() (*Cluster, error) {
+	return withFreshPorts(t, "partitionable cluster", func() (*Cluster, error) {
 		return startPartitionable(t, n, base)
 	})
 }
@@ -196,7 +259,11 @@ func startPartitionable(t *testing.T, n int, base js.Config) (*Cluster, error) {
 	// already handles.
 	for _, f := range c.forwarders {
 		if err := f.start(t.Context()); err != nil {
-			return c, fmt.Errorf("start forwarder %d->%d: %w", f.from, f.to, err)
+			// THROUGH [listenErr], because the retry above cannot tell a
+			// lost port from an unbindable address on its own — and the
+			// raw error told it everything was transient.
+			return c, fmt.Errorf("start forwarder %d->%d: %w",
+				f.from, f.to, listenErr(err))
 		}
 	}
 	t.Cleanup(c.shutdown)
@@ -241,6 +308,14 @@ func memberConfig(base js.Config, i, n, clusterPort int, routes []string) js.Con
 	cfg.ClusterName = "crewlet-test"
 	cfg.ClusterPort = clusterPort
 	cfg.ClusterURLs = routes
+	// LOOPBACK, because that is what the routes name: hostPort builds
+	// 127.0.0.1, so a member listening on every interface is reachable
+	// from outside the harness on a port nothing here controls — and the
+	// pre-bind probe, which asks about one address, cannot answer for a
+	// wildcard bind at all. The relay path has always set this; the direct
+	// one did not, so its probe could pass on 127.0.0.1 while the bind
+	// lost :port to something holding another local interface.
+	cfg.ClusterHost = "127.0.0.1"
 	if cfg.Replicas == 0 {
 		cfg.Replicas = n
 	}
@@ -265,9 +340,18 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	// can, short of never letting the port go — but it shortens the window
 	// from seconds to microseconds, and it turns the loss from a
 	// two-minute readiness timeout into an immediate retry.
-	if !portFree(t.Context(), cfg.ClusterPort) {
-		return fmt.Errorf("cluster member %d: route port %d was taken between "+
-			"this harness reserving it and the member starting", i, cfg.ClusterPort)
+	switch free, err := PortFree(t.Context(), cfg.ClusterHost, cfg.ClusterPort); {
+	case err != nil:
+		// NOT A RACE, so the retry above must not treat it as one: an
+		// address this host does not have, or a probe that never ran.
+		// Both answer identically however many ports it is offered.
+		return fmt.Errorf("cluster member %d: %w: route port %d on %q cannot "+
+			"be probed: %w", i, errNotRetryable, cfg.ClusterPort,
+			cfg.ClusterHost, err)
+	case !free:
+		return fmt.Errorf("cluster member %d: %w — route port %d went between "+
+			"this harness reserving it and the member starting",
+			i, js.ErrRoutePortTaken, cfg.ClusterPort)
 	}
 	srv, err := js.StartServer(t.Context(), cfg)
 	if err != nil {
@@ -291,22 +375,36 @@ func routeURL(port int) string { return "nats://" + hostPort(port) }
 // hostPort is a loopback address for a port on this host.
 func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 
-// portFree reports whether a port can still be bound right now.
+// PortFree reports whether a port can still be bound right now.
 //
 // It is a probe rather than a reservation: what it buys is finding a lost race
 // in microseconds instead of two minutes. A clustered member whose route
 // listener cannot bind does not fail fast — it starts, serves clients, never
 // forms a route, and is only reported when its readiness budget expires.
-func portFree(ctx context.Context, port int) bool {
-	// The same ListenConfig form freePorts uses, and for the same reason:
-	// a probe that outlived the test asking it would be holding a port the
-	// next case is about to reserve.
-	var lc net.ListenConfig
-	l, err := lc.Listen(ctx, "tcp", hostPort(port))
-	if err != nil {
-		return false
-	}
-	return l.Close() == nil
+//
+// EXPORTED because the members are not always this package's to start. A fleet
+// of ENGINES embeds its own servers and builds them from Tier A (see [Relays]),
+// so the harness that stands one up cannot call [Cluster.start] and would
+// otherwise have no way to make the same check — which is exactly the gap it
+// had.
+// THE HOST IS AN ARGUMENT, because a probe that assumes one is a probe that
+// can answer about an address the server never binds — which is exactly what a
+// hardcoded 127.0.0.1 did for a member left to listen on every interface.
+//
+// AND A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, which is why the error
+// comes back rather than being folded into the bool. [js.PortAvailable] draws
+// that line deliberately — an occupied port is (false, nil) and an address
+// this host does not have, a privileged port or a cancelled probe is
+// (false, err) — and collapsing it here put every one of those back under "the
+// port was taken", so a caller retried a configuration mistake three times and
+// then reported a race. That is the exact sentence [js.PortAvailable]'s own
+// doc says it exists to prevent.
+func PortFree(ctx context.Context, host string, port int) (bool, error) {
+	// THE ENGINE'S OWN PROBE, not a second one: [js.PortAvailable] is what
+	// a clustered member runs against its configured route port before it
+	// starts, and a harness asking the same question a different way is how
+	// one answer stops matching the other.
+	return js.PortAvailable(ctx, host, port)
 }
 
 // freePorts reserves n ports the OS is not using.

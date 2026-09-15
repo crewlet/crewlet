@@ -37,12 +37,26 @@ func caught() (chan Stall, func(Stall)) {
 
 func TestTheThresholdIsTheSeatLeaseTTL(t *testing.T) {
 	t.Parallel()
-	// Not a config knob and not a number of its own. Past it the node is
-	// provably not the owner, and letting the two drift is how a process
-	// gets to be simultaneously "not the owner" and "still holding the
-	// mail". The public constructor takes no threshold at all, which is the
-	// strongest form that rule can take.
-	if got := NewWatchdog().Threshold(); got != SeatLeaseTTL {
+	// Not a config knob of its own. Past it the node is provably not the
+	// owner, and letting the two drift is how a process gets to be
+	// simultaneously "not the owner" and "still holding the mail".
+	//
+	// SO IT FOLLOWS THE LEASE THIS DEPLOYMENT IS RUNNING. Built from the
+	// shipped constant it WAS the drift the rule forbids, on every
+	// deployment that set coordination.lease_ttl_seconds or adopted a
+	// peer's: a node leasing its seats for twenty seconds went on holding
+	// their mail for forty-five, and one leasing them for two minutes was
+	// killed while it still provably owned them.
+	for _, ttl := range []time.Duration{20 * time.Second, 2 * time.Minute} {
+		if got := NewWatchdog(ttl).Threshold(); got != ttl {
+			t.Errorf("a host leasing its seats for %s watches to %s, so it is "+
+				"either holding mail it does not own or being killed while it "+
+				"does", ttl, got)
+		}
+	}
+	// AND A CALLER WITH NO HOST TO ASK gets the shipped lease, which is
+	// what such a host would have resolved to itself.
+	if got := NewWatchdog(0).Threshold(); got != SeatLeaseTTL {
 		t.Fatalf("threshold = %s, want the seat lease TTL (%s)", got, SeatLeaseTTL)
 	}
 }

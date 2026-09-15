@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -63,7 +64,7 @@ func startCluster(t *testing.T, n int) *cluster {
 	if n < 2 {
 		t.Fatalf("startCluster(%d): use start(t) for one node", n)
 	}
-	return startMesh(t, jetstreamtest.StartDirectMesh(t, n), n)
+	return startMesh(t, jetstreamtest.StartDirectMesh, n)
 }
 
 // startPartitionableCluster is [startCluster] on a mesh whose every route runs
@@ -72,21 +73,77 @@ func startCluster(t *testing.T, n int) *cluster {
 // [jetstreamtest.StartDirectMesh] for what it costs.
 func startPartitionableCluster(t *testing.T, n int) *cluster {
 	t.Helper()
-	return startMesh(t, jetstreamtest.StartRelays(t, n), n)
+	return startMesh(t, jetstreamtest.StartRelays, n)
 }
 
-func startMesh(t *testing.T, relays *jetstreamtest.Relays, n int) *cluster {
+// startMesh retries the whole fleet, WITH A FRESH MESH EACH TIME.
+//
+// A FACTORY rather than a built mesh, and that is the fix rather than a
+// refactor. This took the mesh ready-made and reused its port numbers for
+// every attempt, while claiming in its own comment to be applying
+// [jetstreamtest.clusterStartAttempts]'s reasoning — which says the opposite
+// in as many words: "A wider reservation window would not help, because the
+// window is not the problem: the collision is with a process this one does not
+// coordinate with. What DOES fix it is noticing and trying again with
+// DIFFERENT NUMBERS." Retrying with the same numbers is retrying the question
+// somebody else already answered, so a genuinely lost port failed all three
+// attempts identically and with nothing to say which of the two causes it was.
+func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n int) *cluster {
 	t.Helper()
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
-		if c := startMeshOnce(t, relays, n, attempt); c != nil {
+		relays := mesh(t, n)
+		c, err := startMeshOnce(t, relays, n)
+		if err == nil {
 			return c
 		}
+		// THE FAILED ATTEMPT'S MESH GOES DOWN NOW, beside the members
+		// [startMeshOnce] already stopped: its relay listeners hold the
+		// ports, and the next attempt is about to ask for a fresh set.
+		relays.Stop()
+
+		// RETRY BY DEFAULT, AND NAME WHAT ACTUALLY FAILED.
+		//
+		// The default is the safe direction for this harness. Standing
+		// up n brokers on a shared machine fails for timing far more
+		// often than for anything else — a member that could not form
+		// its cluster inside the budget, a lost port, a metadata group
+		// that was still electing — and every one of those is what the
+		// attempts exist to absorb. Only a failure that is KNOWN to
+		// repeat identically is worth ending the test on, because for
+		// anything else the cost of guessing wrong is a case that would
+		// have passed.
+		//
+		// Measured by getting it backwards: gating the retry on a lost
+		// port alone ended three cluster cases on their first attempt,
+		// each on an `ensure stream ...: context deadline exceeded` that
+		// a second attempt had always absorbed.
+		//
+		// What the log must not do is call all of them a port race. That
+		// was the other half of the same defect: every attempt reported
+		// "lost a race" whatever had happened, so the one diagnostic a
+		// reader gets named a cause the run had no evidence for.
+		if errors.Is(err, errNotRetryable) {
+			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
+				"cannot fix: %v (relays: %s)",
+				attempt, clusterStartAttempts, err, relays.Describe())
+		}
+		t.Logf("cluster attempt %d/%d failed, retrying with a fresh mesh: %v "+
+			"(relays: %s)", attempt, clusterStartAttempts, err, relays.Describe())
 	}
-	// Unreachable: the last attempt fails the test rather than returning.
+	t.Fatalf("no cluster came up in %d attempts", clusterStartAttempts)
 	return nil
 }
 
-func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *cluster {
+// errNotRetryable marks a member failure that a fresh mesh cannot change: the
+// same input producing the same answer every time.
+//
+// DELIBERATELY SHORT, and everything not on it is retried. A harness that
+// guesses "deterministic" wrongly ends a case that would have passed, while
+// guessing "transient" wrongly costs some seconds and a log line — so the
+// burden is on proving a failure repeats, not on proving it might not.
+var errNotRetryable = errors.New("not fixable by another attempt")
+
+func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
@@ -123,33 +180,29 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *
 		// THE SUCCESSFUL ATTEMPT'S TEARDOWN IS THE TEST'S, so members
 		// live for the case that asked for them.
 		t.Cleanup(func() { stopAll(stops) })
-		return c
+		return c, nil
 	}
 
 	// EVERY MEMBER THIS ATTEMPT STARTED IS STOPPED BEFORE THE NEXT ONE,
 	// and it is the difference between a retry and a pile-up.
 	//
-	// A member holds its cluster route PORT, which the relay mesh assigns
-	// per member and reuses across attempts. Left running, it makes the
-	// next attempt's member unable to bind — and any member that does come
-	// up forms a cluster with the ghost, whose engine is still applying,
-	// still heartbeating and still competing for the same four cores. The
-	// observed shape was attempt 1 timing out on one member, attempt 2
-	// failing to become ready at all, and attempt 3 failing worse: not
-	// slowness, but each attempt racing everything the last one left.
+	// A member left running is one whose engine is still applying, still
+	// heartbeating and still competing for the same cores as the attempt
+	// that replaces it — and whose broker is still gossiping under the
+	// cluster name the next attempt's members will use, so any member that
+	// does come up forms a cluster with the ghost. The observed shape was
+	// attempt 1 timing out on one member, attempt 2 failing to become ready
+	// at all, and attempt 3 failing worse: not slowness, but each attempt
+	// racing everything the last one left.
 	//
 	// t.Cleanup cannot do this. It runs when the TEST ends, which is after
 	// every attempt — so registering teardown there is registering it for
 	// the wrong moment.
 	stopAll(stops)
-	if attempt < clusterStartAttempts {
-		t.Logf("cluster attempt %d/%d lost a race at member %d: %v "+
-			"(relays: %s)", attempt, clusterStartAttempts, failed, errs[failed],
-			relays.Describe())
-		return nil
-	}
-	t.Fatalf("member %d: %v (relays: %s)", failed, errs[failed], relays.Describe())
-	return nil
+	// THE ERROR GOES BACK rather than being judged here: whether it is
+	// worth another attempt is the caller's question, and it is the only
+	// frame that knows how many are left.
+	return nil, fmt.Errorf("member %d: %w", failed, errs[failed])
 }
 
 // stopAll runs every member's teardown, in reverse order within each member.
@@ -168,7 +221,9 @@ func stopAll(stops [][]func()) {
 // clusterStartAttempts is how many times a fleet is stood up before the case
 // gives up, and it is [jetstreamtest.clusterStartAttempts]'s reasoning applied
 // one layer up: the collision is with work this process does not coordinate
-// with, so a wider window does not help and noticing does.
+// with, so a wider window does not help and noticing does — and each attempt
+// reserves its own mesh, which is the half that makes "trying again" mean
+// something. See [startMesh].
 const clusterStartAttempts = 3
 
 // startMember brings up one member of the fleet.
@@ -177,6 +232,13 @@ const clusterStartAttempts = 3
 // what a fleet is: n machines, each with its own disk. Sharing either would
 // make this one node wearing three hats, and every fleet mechanism under it
 // would pass for the wrong reason.
+// clusterHost is the interface every member of a test mesh binds its route
+// listener on. LOOPBACK, because the mesh's own route URLs are loopback and a
+// member listening wider would be reachable from outside the harness — and
+// because the pre-bind probe asks about one address, which cannot answer for a
+// wildcard bind.
+const clusterHost = "127.0.0.1"
+
 func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	*node, []func(), error) {
 
@@ -189,12 +251,44 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	fail := func(err error) (*node, []func(), error) { return nil, stops, err }
 
 	model := newScriptedModel(t)
+	// THE MODEL SERVER IS THIS ATTEMPT'S, not the test's. Its own
+	// constructor registers a t.Cleanup as well, which is right for the
+	// single-node cases — but a cluster case that retries three times would
+	// otherwise leave one live server per member per failed attempt running
+	// until the case ends. Close is idempotent, so both fire safely.
+	stops = append(stops, model.close)
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
 	if err != nil {
-		return fail(fmt.Errorf("company config: %w", err))
+		// THE SAME FILE PARSES THE SAME WAY on every attempt.
+		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
 	}
 
 	port, peers, advertise := relays.Member(i)
+	// PROBED IMMEDIATELY BEFORE THE ENGINE BINDS IT, which is the guard
+	// [jetstreamtest.Cluster.start] has and this path did not.
+	//
+	// It cannot close the race — nothing can, short of never letting the
+	// port go — but it shortens the window from however long engine.New
+	// takes to get there down to microseconds, and it names the CAUSE. Its
+	// partner is the engine's own post-bind check, which is what catches a
+	// port lost inside that window: together they turn a member that comes
+	// up, serves clients and silently never routes into an immediate,
+	// named retry.
+	//
+	// THE SAME HOST THE MEMBER BINDS, set below — a probe against a
+	// different address answers about a port the server never asks for.
+	switch free, err := jetstreamtest.PortFree(t.Context(), clusterHost, port); {
+	case err != nil:
+		// NOT A RACE: an address this host does not have, or a probe
+		// that never ran. Retrying it would spend every attempt on a
+		// mistake that answers the same way each time.
+		return fail(fmt.Errorf("%w: route port %d on %q cannot be probed for "+
+			"member %d: %w", errNotRetryable, port, clusterHost, i, err))
+	case !free:
+		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
+			"reserving it and member %d starting",
+			jetstream.ErrRoutePortTaken, port, i))
+	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
@@ -205,7 +299,7 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	// LOOPBACK, because the relays dial 127.0.0.1: a member listening on
 	// every interface would be reachable on a port a partition does not
 	// cut, and the partition would cut nothing.
-	boot.Stream.Cluster.Host = "127.0.0.1"
+	boot.Stream.Cluster.Host = clusterHost
 	if advertise != "" {
 		boot.Stream.Cluster.Advertise = advertise
 	}

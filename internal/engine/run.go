@@ -684,7 +684,7 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// refused an unknown one at load, and it is what the fleet view reads
 	// a peer's presence row back through.
 	e.profile = opts.Bootstrap.Node.Profile(nodeID)
-	e.leaseTTL = leaseTTL(opts.Bootstrap)
+	e.leaseTTL = effectiveLeaseTTL(opts.Bootstrap, backends.Coord)
 	n, err := node.New(node.Config{
 		Queue: backends.Queue,
 		Coord: backends.Coord,
@@ -769,7 +769,12 @@ func New(ctx context.Context, opts Options) (*Engine, error) {
 	// the first time no watched duty is live, and the host is not live
 	// until node.Start runs it — so building it here and starting it there
 	// is the only ordering that watches anything at all.
-	e.watchdog = seat.NewWatchdog()
+	//
+	// AT THE HOST'S OWN TTL, which is the lease the seats it guards are
+	// actually held under — see [seat.Watchdog], whose whole argument is
+	// that the two are one number. Asked of the host rather than passed
+	// e.leaseTTL, because the host is what resolved it.
+	e.watchdog = seat.NewWatchdog(n.Host().TTL())
 	e.watchdog.Watch("seat-host", n.Host())
 	e.node = n
 	e.dispatch = e.buildDispatcher(opts, backends)

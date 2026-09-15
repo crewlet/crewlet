@@ -372,8 +372,17 @@ func DefaultBootstrap() Bootstrap {
 }
 
 // Validate reports every Tier A rule this config breaks, joined.
+//
+// IT NORMALIZES FIRST, and therefore takes a pointer and writes through it:
+// [Bootstrap.normalize] trims the whitespace around every string, so that
+// what these rules check is what the engine will run. It is the one entry
+// point into Tier A's rules — every validator below is unexported and
+// reached only from here — which is what makes a single pass sufficient,
+// and what lets those rules read a field directly instead of trimming their
+// own copy of it and leaving the runtime to read the other one.
 func (b *Bootstrap) Validate() error {
 	var p problems
+	p.wrap(b.normalize())
 	p.wrap(b.Node.validate("node"))
 	p.wrap(b.Store.validate("store"))
 	p.wrap(b.Stream.validate("stream"))
@@ -395,7 +404,19 @@ func (b *Bootstrap) Validate() error {
 func (b *Bootstrap) validateTopology() error {
 	var p problems
 
-	peers := len(b.Stream.Cluster.Peers)
+	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
+	// this file names. An external cluster's membership is not here and
+	// cannot be — `stream.url` is an address, and how many servers answer
+	// behind it is the operator's business — so a peer list written against
+	// one is refused outright by [Stream.validate] rather than counted into
+	// a quorum the engine never sees. Counted anyway, it refused a
+	// one-peer external config as a two-node fleet: an error naming a
+	// quorum that is not this file's, whose only remedy was to delete a
+	// line that was already doing nothing.
+	peers := 0
+	if b.Stream.Type != StreamNATS {
+		peers = len(b.Stream.Cluster.Peers)
+	}
 	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded
 
 	if b.Coordination.Type == CoordinationLocal && clustered {
@@ -557,7 +578,7 @@ func (n *Node) validate(path string) error {
 	}
 
 	for key := range n.Labels {
-		if strings.TrimSpace(key) == "" {
+		if key == "" {
 			p.add(at(path, "labels"), ErrMissing, "label keys must not be empty")
 		}
 	}
@@ -705,7 +726,7 @@ type Store struct {
 
 func (s *Store) validate(path string) error {
 	var p problems
-	if strings.TrimSpace(s.Path) == "" {
+	if s.Path == "" {
 		p.add(at(path, "path"), ErrMissing,
 			"the store is a local file this node owns; name one (e.g. %q)",
 			DefaultStorePath)
@@ -714,7 +735,7 @@ func (s *Store) validate(path string) error {
 	// process would take and then deadlock nothing — it would simply
 	// migrate one estate's schema into the other's database and run both
 	// appliers against the audit log's file.
-	if rp := strings.TrimSpace(s.ReplicatedPath); rp != "" && rp == strings.TrimSpace(s.Path) {
+	if s.ReplicatedPath != "" && s.ReplicatedPath == s.Path {
 		p.add(at(path, "replicated_path"), ErrConflict,
 			"is the same file as store.path; the two estates are two databases, "+
 				"and one file holding both is neither")
@@ -1045,7 +1066,7 @@ func (s *Stream) validate(path string) error {
 	}
 	external := s.Type == StreamNATS
 	switch {
-	case external && strings.TrimSpace(s.URL) == "":
+	case external && s.URL == "":
 		p.add(at(path, "url"), ErrMissing, "an external %q stream needs a URL to dial", s.Type)
 	case !external && s.URL != "":
 		p.add(at(path, "url"), ErrConflict,
@@ -1081,17 +1102,73 @@ func (s *Stream) validate(path string) error {
 	if s.Cluster.Port < 0 || s.Cluster.Port > 65535 {
 		p.add(at(path, "cluster.port"), ErrOutOfRange, "must be 0..65535, got %d", s.Cluster.Port)
 	}
-	// Refused here rather than at the broker. nats-server validates an
-	// advertise address while STARTING, logs it and shuts the server down
-	// — which surfaces as a node that boots, fails and leaves the operator
-	// reading broker logs for a typo in their own config file.
+	// A CLUSTER BLOCK WITHOUT A NAME DOES NOTHING, and doing nothing
+	// SILENTLY is what this refuses.
+	//
+	// The embedded server's options are built only when the cluster is
+	// NAMED: without it the route port, the bind interface, the advertise
+	// address and the peer list are all dropped on the floor, so a node
+	// configured with them still starts solo, binds no route listener and
+	// forms no cluster — while every other reading of the same file (the
+	// provisioning budgets, the topology validation below) calls it
+	// clustered. An operator who wrote that block did not ask for a solo
+	// node, and the only honest answers are to cluster or to say why not.
+	//
+	// ASKED AS "is anything else set", THROUGH IsZero, rather than as a
+	// list of the fields that matter. Written as a list it named two of
+	// the four and the other two — cluster.host, which is the answer to
+	// this block's own warning about publishing unauthenticated cluster
+	// access, and cluster.advertise, which a NAT'd member cannot cluster
+	// without — went silently unvalidated. IsZero is the one place that
+	// enumerates this struct, so a field added later is covered by having
+	// been added there.
+	//
+	// AND THE SAME RULE `url`, `store_dir`, `debug` and `sync` keep, for
+	// the same reason, once the stream is EXTERNAL: the whole block
+	// configures the server this process starts. Against `stream.type:
+	// nats` not one field of it is read — the embedded options are built
+	// on a branch an external stream never reaches, and the engine already
+	// answers "clustered" from the URL alone (see engine.clusteredStream)
+	// — so accepting it records a membership, a route port and an
+	// advertise address that never reach the thing forming the cluster.
+	// Until this refused it, `stream.cluster.peers` on an external stream
+	// was worse than inert: validateTopology COUNTED those peers, so two
+	// of them were refused as a fleet with no quorum on the strength of a
+	// block nobody reads.
+	//
+	// ONE problem rather than both, because the two answers contradict
+	// each other: an external cluster is told to remove the block, and
+	// there is nothing to be gained by also telling it to name it.
+	switch {
+	case external && !s.Cluster.IsZero():
+		p.add(at(path, "cluster"), ErrConflict,
+			"stream.cluster configures the EMBEDDED server's own membership, "+
+				"and an external %q cluster is formed by its own operator's "+
+				"config: every field here would be read by nobody. Remove it, "+
+				"or set type to %q", StreamNATS, StreamEmbedded)
+	case s.Cluster.Name == "" && !s.Cluster.IsZero():
+		p.add(at(path, "cluster.name"), ErrMissing,
+			"is required once anything else under cluster is set (port, peers, "+
+				"host or advertise): the embedded server takes all of them only "+
+				"from a NAMED cluster, so this node would start solo and form no "+
+				"cluster at all")
+	}
 	bytesInRange(&p, path, "tracker_log_max_bytes", s.TrackerLogMaxBytes,
 		TrackerLogMaxBytesFloor, TrackerLogMaxBytesCeiling)
 	bytesInRange(&p, path, "tracker_vectors_max_bytes", s.TrackerVectorsMaxBytes,
 		TrackerVectorsMaxBytesFloor, TrackerVectorsMaxBytesCeiling)
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
-	if adv := strings.TrimSpace(s.Cluster.Advertise); adv != "" {
-		if err := validateAdvertise(adv); err != nil {
+	// Refused here rather than at the broker. nats-server validates an
+	// advertise address while STARTING, logs it and shuts the server down
+	// — which surfaces as a node that boots, fails and leaves the operator
+	// reading broker logs for a typo in their own config file.
+	//
+	// Read RAW, not trimmed: [Bootstrap.Validate] normalized it, so this is
+	// the string server.ClusterOpts will be given. Trimming a second copy
+	// here is what let `advertise: " "` through — it validated as unset and
+	// ran as " ".
+	if s.Cluster.Advertise != "" {
+		if err := validateAdvertise(s.Cluster.Advertise); err != nil {
 			p.add(at(path, "cluster.advertise"), ErrShape, "%v", err)
 		}
 	}
@@ -1180,17 +1257,18 @@ type Coordination struct {
 // its coordination traffic to whoever answers on that address. A private CA
 // is one file and is the actual answer.
 type NATSTLS struct {
-	// CA is a PEM bundle to verify the server's certificate against.
-	// Empty uses the host's root pool, which is right for a public CA and
-	// wrong for the self-signed certificate most internal NATS estates
-	// use.
-	CA string `yaml:"ca,omitempty" json:"ca,omitempty" desc:"PEM CA bundle for the server certificate; empty uses the host roots."`
+	// CA is the PATH to a PEM bundle to verify the server's certificate
+	// against — the file itself, never its contents. Empty uses the host's
+	// root pool, which is right for a public CA and wrong for the
+	// self-signed certificate most internal NATS estates use.
+	CA string `yaml:"ca,omitempty" json:"ca,omitempty" desc:"Path to a PEM CA bundle for the server certificate; empty uses the host roots."`
 
-	// Cert and Key are the CLIENT certificate, for a server that requires
-	// mutual TLS. Both or neither: half a keypair is a config that dials
-	// and is refused by the broker with an error naming neither file.
-	Cert string `yaml:"cert,omitempty" json:"cert,omitempty" desc:"Client certificate PEM, for a server requiring mutual TLS. Needs key."`
-	Key  string `yaml:"key,omitempty" json:"key,omitempty" desc:"Client private key PEM. Needs cert."`
+	// Cert and Key are the PATHS to the CLIENT certificate and its private
+	// key, for a server that requires mutual TLS — the files, never their
+	// contents. Both or neither: half a keypair is a config that dials and
+	// is refused by the broker with an error naming neither file.
+	Cert string `yaml:"cert,omitempty" json:"cert,omitempty" desc:"Path to the client certificate PEM, for a server requiring mutual TLS. Needs key."`
+	Key  string `yaml:"key,omitempty" json:"key,omitempty" desc:"Path to the client private key PEM. Needs cert."`
 }
 
 // IsZero lets an unset TLS block drop out of a JSON round trip.
@@ -1310,11 +1388,11 @@ func (a *APIAuth) validate(path string) error {
 	seen := make(map[string]struct{}, len(a.Tokens))
 	for i, t := range a.Tokens {
 		tp := idx(at(path, "tokens"), i)
-		if strings.TrimSpace(t.ID) == "" {
+		if t.ID == "" {
 			p.add(at(tp, "id"), ErrMissing,
 				"every token needs a label: it is what a revision's audit row records")
 		}
-		if strings.TrimSpace(t.Token) == "" {
+		if t.Token == "" {
 			p.add(at(tp, "token"), ErrMissing, "token must not be empty")
 		}
 		if _, dup := seen[t.ID]; dup && t.ID != "" {
@@ -1378,30 +1456,29 @@ func (a *APIAuth) validate(path string) error {
 // this API means LLM transcripts, diary entries and the whole event stream.
 func checkOrigin(path, origin string) error {
 	var p problems
-	trimmed := strings.TrimSpace(origin)
 	switch {
-	case trimmed == "":
+	case origin == "":
 		p.add(path, ErrMissing, "an empty origin matches nothing: remove the "+
 			"entry, or name a site as scheme://host[:port]")
-	case trimmed == "*":
+	case origin == "*":
 		p.add(path, ErrShape, "%q is not an origin and is refused rather "+
 			"than honoured: it would let any site a logged-in operator "+
 			"visits read this API — which carries LLM transcripts, diary "+
 			"entries and the whole event stream. Name each site, as "+
-			"https://ops.example.com", trimmed)
-	case !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://"):
+			"https://ops.example.com", origin)
+	case !strings.HasPrefix(origin, "http://") && !strings.HasPrefix(origin, "https://"):
 		p.add(path, ErrShape, "%q has no scheme: a browser's Origin header "+
 			"is always scheme://host[:port], so this matches nothing. Write "+
-			"https://%s", trimmed, trimmed)
-	case strings.HasSuffix(trimmed, "/"):
+			"https://%s", origin, origin)
+	case strings.HasSuffix(origin, "/"):
 		p.add(path, ErrShape, "%q ends in a slash: a browser's Origin "+
 			"header carries no path, so this matches nothing. Write %q",
-			trimmed, strings.TrimRight(trimmed, "/"))
+			origin, strings.TrimRight(origin, "/"))
 	default:
-		if rest := strings.TrimPrefix(strings.TrimPrefix(trimmed, "https://"), "http://"); strings.Contains(rest, "/") {
+		if rest := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://"); strings.Contains(rest, "/") {
 			p.add(path, ErrShape, "%q carries a path: a browser's Origin "+
 				"header is the scheme, host and port alone, so this matches "+
-				"nothing", trimmed)
+				"nothing", origin)
 		}
 	}
 	return p.err()
@@ -1457,14 +1534,14 @@ func (s *Secrets) validate(path string) error {
 	ids := make(map[string]struct{}, len(s.Keys))
 	for i, k := range s.Keys {
 		kp := idx(at(path, "keys"), i)
-		if strings.TrimSpace(k.ID) == "" {
+		if k.ID == "" {
 			p.add(at(kp, "id"), ErrMissing, "every key needs an id")
 		} else if !secretKeyIDPattern.MatchString(k.ID) {
 			p.add(at(kp, "id"), ErrUnknownValue,
 				"%q must contain only letters, digits, '.', '_' or '-': it is "+
 					"stamped into every envelope this key seals", k.ID)
 		}
-		if strings.TrimSpace(k.Material) == "" {
+		if k.Material == "" {
 			p.add(at(kp, "material"), ErrMissing,
 				"key material must not be empty (generate one with `crewlet secrets keygen`)")
 		}
@@ -1532,7 +1609,7 @@ func (s *Secrets) Cipher() (secrets.Cipher, error) {
 // wrote.
 func (s *Stream) validateSync(path string, external bool) error {
 	var p problems
-	raw := strings.TrimSpace(s.Sync)
+	raw := s.Sync
 	if raw == "" || raw == StreamSyncAlways {
 		// THE WARNING, not a refusal: an unset value takes `always`, and
 		// on a replicated fleet that is a deliberate cost rather than an

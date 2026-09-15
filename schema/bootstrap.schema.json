@@ -161,15 +161,15 @@
       "additionalProperties": false,
       "properties": {
         "ca": {
-          "description": "PEM CA bundle for the server certificate; empty uses the host roots.",
+          "description": "Path to a PEM CA bundle for the server certificate; empty uses the host roots.",
           "type": "string"
         },
         "cert": {
-          "description": "Client certificate PEM, for a server requiring mutual TLS. Needs key.",
+          "description": "Path to the client certificate PEM, for a server requiring mutual TLS. Needs key.",
           "type": "string"
         },
         "key": {
-          "description": "Client private key PEM. Needs cert.",
+          "description": "Path to the client private key PEM. Needs cert.",
           "type": "string"
         }
       },

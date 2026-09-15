@@ -12,6 +12,8 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/jsprovision"
+
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -133,11 +135,96 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// created. The applier resumes from its own checkpoint regardless, and
 	// drops anything below it, so a consumer sitting lower costs
 	// redeliveries rather than correctness.
-	cons, err := q.js.Consumer(ctx, stream, name)
+	// THE PROVISIONING BUDGET AND ITS BREADCRUMB, because this is a
+	// replicated create on the boot path like every other one — and it does
+	// not come through [Queue.ensureDurableConsumer], whose create-or-
+	// read-back shape is wrong here (see the comment above: an existing
+	// consumer is taken as it is). Without them the caller's context
+	// reached nats.go with no deadline and the client's five-second default
+	// decided a clustered boot, silently.
+	//
+	// NOT SHADOWING ctx, for [jsprovision.Settle]'s reason: the read-back
+	// below must not inherit a deadline this create may have spent.
+	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
+	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
+	// the create ends rather than where this function does.
+	//
+	// Both halves were wrong in the same way, at opposite ends: armed
+	// before the lookup while saying "created", and left armed across the
+	// read-back and the alignment after it. Either way the line names a
+	// step this member is not on, which is the one thing it exists to get
+	// right.
+	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
+			"consumer", name, "waited", after,
+			"detail", "this state-log consumer is still being provisioned — "+
+				"looked up, and created if it was absent; on a fleet that is "+
+				"a metadata group that has not settled")
+	})
+
+	cons, err := q.js.Consumer(createCtx, stream, name)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
-		cons, err = q.js.CreateConsumer(ctx, stream, config)
+		// WAITED OUT, for the reason [Queue.ensureDurableConsumer]
+		// gives: this consumer is placed by the same metadata group as
+		// the stream it reads, so "no suitable peers" is transient here
+		// too and the budget above is worth nothing without the retry.
+		err = jsprovision.Place(createCtx, func(ctx context.Context) error {
+			var e error
+			cons, e = q.js.CreateConsumer(ctx, stream, config)
+			return e
+		}, func() {
+			q.log.Info("jetstream_consumer_awaiting_peers", "stream", stream,
+				"consumer", name,
+				"detail", "the cluster has not yet seen enough members to "+
+					"place this state-log consumer; retrying until the "+
+					"provisioning deadline")
+		})
+		stop()
+		if err != nil && !jsprovision.Unplaceable(err) {
+			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
+			// the consumer this create met is one THIS NODE made on an
+			// earlier boot and has not been told about yet — the name
+			// carries the node id, so no peer can have made it.
+			//
+			// EVERY ERROR BUT AN UNPLACEABLE ONE, not just
+			// ErrConsumerExists, because the create announces this in
+			// two shapes and the tidy one is the rarer. nats.go returns
+			// the existing consumer when the configs MATCH and
+			// ErrConsumerExists when they differ — but a create the
+			// server HELD while the metadata group settled outlives the
+			// deadline and comes back a timeout, with the consumer
+			// there all the same. That is the shape a clustered boot
+			// actually produces, and it is the one
+			// [Queue.ensureDurableConsumer] has always read back.
+			// Unplaceable is excluded for its own reason: nothing was
+			// placed, so there is nothing to become visible.
+			//
+			// Read it back and take it as it is, which is the same
+			// rule the err == nil branch below applies and the one
+			// the comment above states: an existing consumer's start
+			// sequence is immutable and the applier resumes from its
+			// own checkpoint regardless.
+			createErr := err
+			err = jsprovision.Settle(ctx, func(ctx context.Context) error {
+				var e error
+				cons, e = q.js.Consumer(ctx, stream, name)
+				return e
+			})
+			switch {
+			case err == nil:
+				cons, err = q.alignDomainConsumer(ctx, stream, cons)
+			default:
+				// THE CREATE'S ERROR IS WHAT IS REPORTED, with the
+				// read-back's beside it: the first says what went
+				// wrong and the second only confirms the consumer
+				// really is absent.
+				err = fmt.Errorf("%w (and it is not there: %w)", createErr, err)
+			}
+		}
 	case err == nil:
+		stop()
 		// THE IN-FLIGHT CEILING IS BROUGHT UP TO DATE on a consumer
 		// that already exists, because it is the count bound on every
 		// pull and a consumer created by an earlier build carries the
@@ -147,6 +234,8 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// from this build's defaults would reset the start policy the
 		// broker refuses to move.
 		cons, err = q.alignDomainConsumer(ctx, stream, cons)
+	default:
+		stop()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
@@ -205,8 +294,6 @@ func (c *DomainConsumer) Reset(ctx context.Context, after uint64) error {
 	}
 	// THE DELETE HAS LANDED, so from here the broker has no consumer and
 	// the handle must not go on naming one.
-	// THE DELETE HAS LANDED, so from here the broker has no consumer and
-	// the handle must not go on naming one.
 	c.cons = nil
 	cons, err := c.q.js.CreateConsumer(ctx, c.stream, config)
 	if err != nil {
@@ -250,6 +337,22 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 // build's, leaving its position alone.
 func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
 	cons jetstream.Consumer) (jetstream.Consumer, error) {
+
+	// ITS OWN BUDGET, derived here rather than taken from the caller,
+	// because NEITHER context the caller holds is right for it. The
+	// per-create one may be the deadline that just expired — that is what
+	// puts the recovery path here at all, and handed it this call fails
+	// instantly on a consumer that was just found. The boot's has no
+	// deadline of its own, so it would reach nats.go under the client's
+	// five-second default, which is what every other replicated call on
+	// this path was fixed for: an UpdateConsumer is a write against the
+	// same metadata group as the create.
+	//
+	// So the caller passes the context that bounds the BOOT and this owns
+	// the term, which is [jsprovision.Settle]'s arrangement for the same
+	// reason.
+	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
 
 	info, err := cons.Info(ctx)
 	if err != nil {
@@ -469,7 +572,7 @@ func (l *DomainLog) Group(ctx context.Context, name string) (*DomainGroup, error
 	// THROUGH THE PACKAGE'S ONE DURABLE-CONSUMER PATH, so a group every
 	// node of a fleet ensures at boot survives a peer winning the race —
 	// see [Queue.ensureDurableConsumer].
-	cons, err := l.q.ensureDurableConsumer(ctx, l.name, jetstream.ConsumerConfig{
+	cons, _, err := l.q.ensureDurableConsumer(ctx, l.name, jetstream.ConsumerConfig{
 		Durable:       safe,
 		AckPolicy:     jetstream.AckExplicitPolicy,
 		AckWait:       domainConsumerAckWait,

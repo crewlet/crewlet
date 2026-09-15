@@ -613,3 +613,112 @@ func TestAClassReadMovesOnlyItsOwnClass(t *testing.T) {
 		t.Fatalf("PreferredResources(seat) = %v, %v; want the three seat hints", hints, err)
 	}
 }
+
+// A SECOND NODE ADOPTS THE LEASE BUCKET RATHER THAN REWRITING IT, and is
+// honest about the TTL that is actually in force.
+//
+// Open used to call CreateOrUpdateKeyValue, which makes every booting node's
+// call a WRITE: the losers of the create race rewrote a configuration they
+// already agreed with against a metadata group that was still electing, which
+// is the shape this package removed from every other bucket. The consequence
+// when the two disagree is worse than the write: whichever node booted LAST
+// silently redefined how long every other node's leases lived.
+//
+// So the bucket is adopted, and the store carries the live TTL. Believing the
+// configured one instead would let validateTTL accept claims the bucket will
+// not honour — a deadline handed back that is a lie about when the lease ends.
+func TestASecondOpenAdoptsTheLeaseTTLInForce(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+
+	const inForce = 90 * time.Second
+	first, err := Open(context.Background(), nc, Config{TTL: inForce, BucketPrefix: prefix})
+	if err != nil {
+		t.Fatalf("the first Open: %v", err)
+	}
+	if first.TTL() != inForce {
+		t.Fatalf("the node that created the bucket reports %v, want %v",
+			first.TTL(), inForce)
+	}
+
+	// THE SECOND NODE ASKS FOR SOMETHING ELSE, which is what N nodes
+	// holding possibly-different Tier A files actually do.
+	second, err := Open(context.Background(), nc, Config{TTL: 30 * time.Second, BucketPrefix: prefix})
+	if err != nil {
+		t.Fatalf("a second Open against an existing bucket: %v", err)
+	}
+	if second.TTL() != inForce {
+		t.Errorf("the second node reports a lease TTL of %v; the bucket's is "+
+			"%v, and a store that believes its own config here hands back "+
+			"deadlines the bucket will not honour", second.TTL(), inForce)
+	}
+
+	// AND THE BUCKET ITSELF IS UNCHANGED — the second node wrote nothing.
+	status, err := second.leases.Status(context.Background())
+	if err != nil {
+		t.Fatalf("read the lease bucket's status: %v", err)
+	}
+	if status.TTL() != inForce {
+		t.Errorf("the lease bucket's TTL is now %v: the second node rewrote a "+
+			"configuration it does not own", status.TTL())
+	}
+}
+
+// A BUCKET REPLICATED BELOW WHAT THIS NODE IS CONFIGURED FOR IS REFUSED.
+//
+// # Why this one difference is fatal where the lease TTL is only warned about
+//
+// Because it is the difference with no symptom. Every other way a running
+// bucket can disagree with this node's Tier A changes how the store BEHAVES,
+// and behaviour is observable: a shorter lease TTL hands seats around sooner,
+// and the case above is about reporting the one in force rather than the one
+// configured. Replication changes nothing until a node is lost — and then it
+// changes everything, because the leases, the fencing epochs and the company's
+// secrets were on one disk the whole time while every node reported itself
+// correctly configured for three.
+//
+// An operator who raises stream.replicas on an existing fleet gets a
+// rolling restart in which each node finds its buckets already there, adopts
+// them, and goes on running single-replica coordination. Nothing writes to a
+// bucket that exists — that is the rule openBucket is built on — so the only
+// honest move left is to say so.
+func TestABucketReplicatedBelowThisNodesConfigIsRefused(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("t%d", bucketSeq.Add(1))
+
+	// THE FLEET STARTED AT ONE REPLICA, which is what a single-node
+	// deployment or an early cluster actually has.
+	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+		t.Fatalf("the first Open: %v", err)
+	}
+
+	// AND THE OPERATOR RAISED IT. The buckets are still the ones made at
+	// one replica, and no node rewrites them.
+	_, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 3})
+	if err == nil {
+		t.Fatal("a node configured for 3 replicas adopted single-replica " +
+			"coordination and reported itself healthy — the leases, the " +
+			"fencing epochs and the company's secrets are on one disk and " +
+			"nothing says so")
+	}
+	// THE COUNTS ARE IN THE MESSAGE, because "replication mismatch" leaves
+	// an operator unable to tell which side is the one to change.
+	// THE FIELD IS stream.replicas, which is the one an operator can grep
+	// their Tier A for: the coordination buckets take their replica count
+	// from it because they live on the same broker, and there is no
+	// coordination.replicas to go and look for.
+	for _, want := range []string{"1x", "3x", "stream.replicas"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+
+	// AND EQUAL OR HIGHER STILL STARTS, so a single-replica development
+	// node against a replicated fleet's buckets is not locked out.
+	if _, err := Open(context.Background(), nc, Config{TTL: 45 * time.Second, BucketPrefix: prefix, Replicas: 1}); err != nil {
+		t.Errorf("a node configured for fewer replicas than the bucket has "+
+			"was refused: %v", err)
+	}
+}

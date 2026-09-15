@@ -460,6 +460,24 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 	}
 }
 
+// TTL is the lease TTL THIS host is running — the EFFECTIVE one, which is
+// whatever [New] resolved: a value adopted from a lease bucket a peer created,
+// the deployment's own configuration, or [SeatLeaseTTL] when it set none.
+//
+// THE ADOPTED CASE IS THE ONE THIS EXISTS FOR, so it is the one the sentence
+// has to cover. Described as "the configured value", a caller would reasonably
+// assume the timing it derives follows the local file — which is exactly false
+// on the fleet mismatch this method was added to serve, and the assumption
+// that put three budgets on the shipped constant in the first place.
+//
+// Exported because every budget that races a lease has to be derived from the
+// lease it is racing, and the callers that derive one live in other packages:
+// the drain's give-back budget in [internal/node] and the watchdog threshold
+// in [internal/engine]. Written against the constant instead, each of them
+// claimed in its own comment to follow the deployment's TTL while following
+// the shipped number — which is the drift [HeartbeatRatio] exists to name.
+func (h *Host) TTL() time.Duration { return h.ttl }
+
 // Held is the seats whose leases this node holds, sorted.
 //
 // It EXCLUDES the undead by design — nothing new starts on a seat whose
@@ -648,8 +666,13 @@ func (h *Host) Stop(ctx context.Context) {
 	// a give-back that inherits it releases nothing — every seat then sits
 	// dark for a full TTL instead of being taken over at once, and this
 	// node's presence lingers so peers keep reserving capacity for it.
+	//
+	// FROM THIS HOST'S TTL and not from [SeatLeaseTTL], for the reason
+	// [HeartbeatRatio] gives: a deployment that shortened its lease to ten
+	// seconds would otherwise spend fifteen giving the seats back, which
+	// is a budget strictly outside the lease it is racing.
 	releaseCtx, cancel2 := context.WithTimeout(
-		context.WithoutCancel(ctx), SeatLeaseTTL/HeartbeatRatio)
+		context.WithoutCancel(ctx), h.ttl/HeartbeatRatio)
 	defer cancel2()
 	h.ReleaseAll(releaseCtx, ReasonDrain)
 	h.releaseNodePresence(releaseCtx)

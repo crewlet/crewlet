@@ -116,6 +116,28 @@ company's whole event history. Set it to the private address, or keep the port
 off the public interface with a firewall; the engine cannot tell which of a
 host's addresses is the private one, so it does not guess.
 
+**A cluster block without a name is refused, because it would do nothing.**
+The embedded server takes its route port, its bind interface, its advertise
+address and its peer list only from a *named* cluster, so anything under
+`cluster:` with no `cluster.name` starts a solo node that binds no route
+listener and forms no cluster — while every other reading of the same file
+(the provisioning budgets, the topology validation) calls it clustered. Tier A
+names the missing field instead.
+
+**A route port something else already holds is refused at startup, by name.**
+This is the one clustering failure with no other symptom: NATS does not fail
+when its route listener cannot bind — it logs the error and carries on serving
+clients, so the node comes up, answers `/health`, and simply never forms a
+route to a peer. Left to report itself, that surfaced two minutes later as a
+readiness timeout blaming peer reachability, which is a network path that is
+fine. The engine now probes the port before it starts the server and refuses:
+
+```
+stream.cluster.port 6222 is already in use on 10.0.0.11, so this member's
+route listener cannot bind and it could never form a route to a peer — free
+that port or give this node a different one
+```
+
 **`cluster.advertise` is for when what a member binds is not what its peers can
 dial.** Members learn about each other from the members they already have: when
 node 1 accepts a route from node 2 it tells node 3 where to find node 2, and
@@ -171,7 +193,10 @@ reasons:
 | **JetStream current** | 60s | The metadata group elects a leader and this member catches up with it |
 
 Then placement retries for as long as the cluster answers "no suitable
-peers", inside a 30-second provisioning deadline per stream.
+peers", inside the per-create provisioning budget — **30 seconds** on a solo
+node and **2 minutes** on a member with peers, because the two creates are not
+the same call underneath. See *A clustered node is given longer to create
+them* below.
 
 The clustered accept budget is four times the solo one because a member
 starting alongside its peers is competing with them for the same disk and the
@@ -285,13 +310,15 @@ hand this node's seats to a peer, and that is the intended behaviour rather
 than something a reconnect policy should paper over.
 
 **The account needs more than publish and subscribe.** A node creates what it
-uses, on every start and idempotently: the five engine streams
+uses, on every start and idempotently: the six engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_DLQ`), a stream per extra subject namespace a
-company publishes under, one durable consumer per seat mailbox — an ordinary
-API call, measured at 1.7 ms — and the fourteen `crewlet_*` KV buckets:
-two in the lease store, holding the leases and the fencing epochs, and twelve
-in the fleet store holding the shared records. A credential
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`), the three state-log
+domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
+`CREWLET_PAGES_LOG`), a stream per extra subject namespace a company
+publishes under, one durable consumer per seat mailbox — an ordinary API
+call, measured at 1.7 ms — and the fifteen `crewlet_*` KV buckets:
+two in the lease store, holding the leases and the fencing epochs, and
+thirteen in the fleet store holding the shared records. A credential
 scoped to publishing and consuming fails at boot, on the first stream it
 tries to create.
 
@@ -308,6 +335,27 @@ alongside the rest of `$JS.API`. If the broker's own debug logging is on, that
 consumer churn is what produces a steady stream of `JetStream connection
 closed: Client Closed` lines — see `stream.debug`, which is off by default for
 exactly this reason.
+
+**A clustered node is given longer to create them than a solo one.** Every
+one of those creates is a local file-store setup on a solo node and a raft
+round trip on a member of a cluster, against a metadata group whose peers are
+themselves still booting — so the budget branches: **30 seconds** per create
+solo, **2 minutes** clustered, with the whole coordination bring-up bounded at
+**2 minutes** and **5 minutes** respectively. The flat 30 seconds these replaced was
+measured failing: a fleet booting together would lose one create, and because
+each object discovers a slow cluster independently the failure landed on a
+different stream or bucket every time. A node that exhausts the budget fails
+to start rather than running against a group it cannot reach, and the error
+names the object it was creating.
+
+**A create that is taking a while says so while it is happening.** Provisioning
+was otherwise silent — a node opens fifteen buckets and several streams in a
+row and logged nothing between them, so one that hung emitted nothing at all
+until its budget expired and the log could not say which object it was on. Any
+create still running after 10 seconds now writes one `WARN` naming it
+(`coord_kv_bucket_slow`, `jetstream_stream_slow`, `jetstream_consumer_slow`).
+One line per object, deliberately: whether more lines follow is what tells a
+slow bring-up from a wedged one.
 
 **Replication is asked for, not assumed.** `stream.replicas` is the replica
 count the engine requests for each of those streams and buckets, and it
@@ -440,6 +488,19 @@ draining, and rolling upgrades. The two things that bite hardest:
 > fleet's leases with it. Against an external NATS cluster the quorum is that
 > cluster's to provide rather than the engine's to count; see
 > [An external NATS server](#an-external-nats-server).
+>
+> **Raising it on a fleet that already ran needs the existing objects resized.**
+> Nothing the engine provisions is ever rewritten by a booting node — a
+> shared stream's configuration has one writer and it is not whichever node
+> started last — so a rolling restart after raising `stream.replicas` finds
+> every stream and bucket already there at the old count and adopts it. A node
+> that is short refuses to start and says so, naming both counts: a stream
+> because an acknowledged publish would be proving fewer copies than
+> `stream.replicas` promises, and a coordination bucket because the leases,
+> the fencing epochs and the company's secrets would be on fewer disks than
+> the config claims. Resize the objects deliberately (`nats stream update
+> --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
+> stand the fleet up fresh.
 
 ### What an acknowledged publish has reached
 

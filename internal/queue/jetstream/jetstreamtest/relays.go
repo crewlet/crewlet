@@ -47,10 +47,39 @@ func StartRelays(t *testing.T, n int) *Relays {
 		t.Fatalf("StartRelays(%d): a partition needs at least two members, or "+
 			"there is no pair to cut", n)
 	}
+	// THROUGH [withFreshPorts], the harness's ONE retry loop, rather than a
+	// second one beside it. This reserves three port sets at once, so it is
+	// the likelier half to lose one — but a second loop was a second set of
+	// answers to "which failures are worth another attempt", and it got
+	// them wrong in the direction the shared one is written against: it
+	// retried everything and logged every failure as a lost port race, so
+	// an unbindable address or a cancelled context cost four attempts and
+	// was reported as a race the run had no evidence for.
+	//
+	// The classification it needs lives at the bind itself now, in
+	// [listenErr], which is the only place that can tell those apart.
+	var mesh *Relays
+	withFreshPorts(t, "relay mesh", func() (*Cluster, error) {
+		r, err := startRelaysOnce(t, n)
+		mesh = r
+		return r.c, err
+	})
+	return mesh
+}
+
+// startRelaysOnce is one attempt, which is the unit the retry above works in.
+//
+// The PARTIAL MESH goes back with the error, never nil, for the reason
+// [StartCluster]'s factory gives: the relays that DID bind hold their
+// listeners until the test ends, and [withFreshPorts] is what takes them down
+// between attempts. Only the embedded cluster is meaningful on an error.
+func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
+	t.Helper()
 	ports := freePorts(t, n+n*(n-1)+n)
 	routePorts, relayPorts, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
 	c := &Cluster{}
+	mesh := &Relays{c: c, ports: routePorts, dead: dead}
 	for i := range n {
 		for j := range n {
 			if i == j {
@@ -69,12 +98,25 @@ func StartRelays(t *testing.T, n int) *Relays {
 	// already handles.
 	for _, f := range c.forwarders {
 		if err := f.start(t.Context()); err != nil {
-			c.shutdown()
-			t.Fatalf("start forwarder %d->%d: %v", f.from, f.to, err)
+			// RETURNED, NOT FATAL. A relay listener loses its port to
+			// the same race a member's does — this reserves n(n-1)+2n
+			// of them, so it loses MORE often — and the retry above
+			// tries again with a fresh set. t.Fatalf ends the test
+			// binary's goroutine instead, so the retry that exists for
+			// exactly this never runs.
+			//
+			// AND CLASSIFIED, through [listenErr]: a port somebody else
+			// holds is worth another set of numbers, and a permission
+			// failure, an address this host does not have or a
+			// cancelled context answer identically however many it is
+			// offered. This one call is what keeps the sentinel meaning
+			// what its doc in [internal/queue/jetstream] says.
+			return mesh, fmt.Errorf("start forwarder %d->%d: %w",
+				f.from, f.to, listenErr(err))
 		}
 	}
 	t.Cleanup(c.shutdown)
-	return &Relays{c: c, ports: routePorts, dead: dead}
+	return mesh, nil
 }
 
 // StartDirectMesh reserves an n-member mesh with NO relays: members are given
@@ -98,6 +140,28 @@ func StartDirectMesh(t *testing.T, n int) *Relays {
 		t.Fatalf("StartDirectMesh(%d): use one member's own config for a solo node", n)
 	}
 	return &Relays{ports: freePorts(t, n), direct: true}
+}
+
+// Stop releases everything this mesh holds — the relay listeners, and with
+// them the right to the ports it reserved.
+//
+// # Why a caller needs this rather than the test's own cleanup
+//
+// A harness that RETRIES a cluster start has to reserve fresh ports for each
+// attempt, because the whole reason an attempt lost is that somebody else took
+// a number this one was given, and asking for the same number again is asking
+// for the same answer (see [clusterStartAttempts], whose remedy is explicitly
+// "trying again with different numbers"). A mesh per attempt means the failed
+// attempt's relays have to go down when that attempt does — `t.Cleanup` runs
+// when the TEST ends, which is after every attempt, so it is the wrong moment
+// by exactly the interval that matters.
+//
+// Safe to call twice and safe on a direct mesh, which holds no listeners at
+// all: the cleanup registered at construction calls it again.
+func (r *Relays) Stop() {
+	if r.c != nil {
+		r.c.shutdown()
+	}
 }
 
 // RelayClusterName is the cluster name every member shares.
