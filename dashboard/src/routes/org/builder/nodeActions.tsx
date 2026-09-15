@@ -24,6 +24,7 @@ import { seatPath } from "~/lib/seats.ts";
 import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import type { Reorder } from "./reorder.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   AccountTreeGlyph,
@@ -180,6 +181,26 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     { kind: "separator", key: "sep-delete" },
     remove,
   ];
+}
+
+/**
+ * Alt with an arrow: the key that moves a node among the siblings it is drawn
+ * beside. Answers true when it took the key.
+ *
+ * ONE READING FOR BOTH SURFACES. The outline binds it on a row and the chart
+ * on a card, and the chart is where a reader reaches for it first: a chart
+ * draws siblings left to right in exactly the order this changes, and passing
+ * one can change which seat manages this one (`reorder.ts`). Written twice it
+ * would be two answers to what Alt with an arrow does to one organization.
+ */
+export function moveKey(
+  reorder: Reorder,
+  key: NodeKey,
+  event: Pick<KeyboardEvent, "altKey" | "key">,
+): boolean {
+  if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return false;
+  reorder.move(key, event.key === "ArrowUp" ? -1 : 1);
+  return true;
 }
 
 /**

@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView } from "./CanvasView.tsx";
-import { Tag } from "@crewlethq/ui";
+import { OrgNodeLabel, Tag } from "@crewlethq/ui";
 import { isDrawnAs } from "~/testing.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
@@ -117,6 +117,30 @@ const pointerPress = (name: string) => {
 const focused = () => document.activeElement?.getAttribute("data-tree-id");
 /** A menu item's label, without the shortcut hint beside it. */
 const label = menuEntryLabel;
+/**
+ * What the design system calls the large icon step, and the dashed ring,
+ * without this suite spelling either.
+ *
+ * ASKED BY DRAWING ONE EACH WAY AND TAKING THE DIFFERENCE, which is how the
+ * chart harness finds the mark a card wears for somebody outside the system. A
+ * class the package draws changes on a bump and is invisible to a reader;
+ * spelt here, this suite would match nothing and report it as a defect in the
+ * screen rather than in itself.
+ */
+const markStep = (which: "large" | "ring"): string => {
+  const zone = (props: { iconSize?: "md" | "lg"; iconRing?: "none" | "dashed" }) => {
+    const { container, unmount } = render(<OrgNodeLabel name="x" icon={<i />} {...props} />);
+    const classes = [...container.firstElementChild!.classList];
+    unmount();
+    return classes;
+  };
+  const plain = zone({});
+  const marked = which === "large" ? zone({ iconSize: "lg" }) : zone({ iconRing: "dashed" });
+  const extra = marked.filter((name) => !plain.includes(name))[0];
+  if (!extra) throw new Error(`the node label draws no ${which} step this suite can find`);
+  return extra;
+};
+
 /** A treeitem's node name. */
 const nameOf = (el: HTMLElement) => nodeName(el);
 /**
@@ -260,6 +284,51 @@ describe("the tree", () => {
     expect(markSentences(item("SRE"))).toEqual(["Alerts that name no seat wake this seat"]);
   });
 
+  /*
+   * A SEAT SAYS ITS KIND ONCE. The caption under the name is where a chart
+   * says what a node is, and the sentence read after it carried the kind
+   * again: measured on the running build, one card announced itself as "SRE
+   * Lead, Agent seat, idle, Agent seat, @sre-lead". What the drawing does not
+   * say is the HANDLE, so that is what the hidden sentence carries; the whole
+   * sentence is still the tooltip, which is not read after the caption.
+   */
+  test("a seat's kind is drawn once and said once", () => {
+    mount();
+    const card = item("Dev");
+    expect(card.textContent).toBe("DevAgent seatoffline@dev");
+    expect(card.getAttribute("title")).toBe("Agent seat, @dev");
+  });
+
+  /*
+   * AN AGENT SEAT WEARS THE LARGE MARK, because the chart this is drawn from
+   * sizes a mark by what it stands for: a container at half its icon zone and
+   * the thing the chart is ABOUT at three quarters of it. Drawn at one step
+   * for all three, an agent seat was told from a unit by its hue and its
+   * caption alone.
+   */
+  test("an agent seat's mark is the large step and a container's is not", () => {
+    mount();
+    // What the package calls the large step is asked OF the package, by
+    // drawing one node each way and taking the difference: a class the design
+    // system draws is not the engine's to spell.
+    const large = markStep("large");
+    const mark = (name: string) => item(name).querySelector("[aria-hidden='true']")!.className;
+    expect(mark("Dev")).toContain(large);
+    expect(mark("Engineering")).not.toContain(large);
+    expect(mark("Acme")).not.toContain(large);
+  });
+
+  /* A human seat keeps the small figure inside its dashed ring, which is the
+     boundary that says what it is. */
+  test("a human seat's mark stays the small step inside its ring", () => {
+    const doc = fixtureCompany();
+    doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
+    mount(checkedEdit(doc));
+    const zone = item("CEO").querySelector("[aria-hidden='true']")!;
+    expect(zone.className).toContain(markStep("ring"));
+    expect(zone.className).not.toContain(markStep("large"));
+  });
+
   test("the problems the last check placed are counted on the node in the critical tone", () => {
     const doc = fixtureCompany();
     const state = answered(checkedEdit(doc), {
@@ -283,19 +352,27 @@ describe("the tree", () => {
       hint: "",
     });
     const { probe } = mount(state);
-    const badge = within(item("Account Executive")).getByText("1 problem");
+    /*
+     * THE COUNT, NOT THE SENTENCE. A node is one rank tall and as wide as its
+     * own name, and the slot a push arrives in is a fixed width: "1 problem"
+     * written out was clipped inside it. What is drawn is the number, and the
+     * sentence is the badge's own name and its tooltip, so both readers are
+     * told the same thing.
+     */
+    const badge = within(item("Account Executive")).getByLabelText("1 problem");
+    expect(badge.textContent).toBe("1");
     // The claim is the VARIANT the builder passes, so the element is compared
     // against the one uilet draws for it rather than against a class name.
     expect(
       isDrawnAs(
         badge.closest(".bnode-count")!.firstElementChild!,
         Tag,
-        { variant: "danger", children: "1 problem" },
-        { children: "1 problem" },
+        { variant: "danger", children: 1 },
+        { children: 1 },
       ),
     ).toBe(true);
-    expect(within(item("Sales")).getByText("1 problem")).toBeDefined();
-    expect(within(item("Engineering")).queryByText(/problem/)).toBeNull();
+    expect(within(item("Sales")).getByLabelText("1 problem")).toBeDefined();
+    expect(within(item("Engineering")).queryByLabelText(/problem/)).toBeNull();
     // IN THE NODE'S TRAILING SLOT, which stays when a check is out and the
     // count with it: the node is the same size either way, so it keeps its
     // place and so does every node beside it.
@@ -311,7 +388,7 @@ describe("the tree", () => {
         },
       }),
     );
-    expect(within(item("Account Executive")).queryByText(/problem/)).toBeNull();
+    expect(within(item("Account Executive")).queryByLabelText(/problem/)).toBeNull();
     expect(nodeTrailing(item("Account Executive"))!.querySelector(".bnode-count")).not.toBeNull();
   });
 
@@ -504,6 +581,45 @@ describe("keys", () => {
  * node's own menu, which the ContextMenu key opens and the toolbar mirrors,
  * and this is the suite that says a control moved rather than went away.
  */
+/*
+ * ALT WITH AN ARROW MOVES A NODE among the siblings it is drawn beside, which
+ * the outline already bound and the chart did not. This is the view where a
+ * reader reaches for it first: a chart draws siblings left to right in exactly
+ * the order the move changes, and passing one can change which seat manages
+ * this one.
+ */
+describe("moving a node among its siblings", () => {
+  const order = (probe: HarnessProbe) =>
+    probe.state.draft.units[0]!.roles.map((seat) => seat.data.name);
+
+  test("Alt and an arrow move the node the keyboard is on", () => {
+    const { probe } = mount();
+    expect(order(probe)).toEqual(["VP Engineering", "Dev"]);
+    item("Dev").focus();
+    press("ArrowUp", { altKey: true });
+    expect(order(probe)).toEqual(["Dev", "VP Engineering"]);
+    press("ArrowDown", { altKey: true });
+    expect(order(probe)).toEqual(["VP Engineering", "Dev"]);
+  });
+
+  /* The arrows without Alt are the tree's own, and still walk the chart. */
+  test("an arrow alone still moves the reader rather than the node", () => {
+    const { probe } = mount();
+    item("Dev").focus();
+    press("ArrowUp");
+    expect(order(probe)).toEqual(["VP Engineering", "Dev"]);
+    expect(focused()).not.toBe(seatKey("dev"));
+  });
+
+  /* A draft nobody may write is drawn and records nothing. */
+  test("a read-only draft is moved by nothing", () => {
+    const { probe } = mount(checkedEdit(fixtureCompany()), { readOnly: true });
+    item("Dev").focus();
+    press("ArrowUp", { altKey: true });
+    expect(order(probe)).toEqual(["VP Engineering", "Dev"]);
+  });
+});
+
 describe("what a node offers a pointer", () => {
   /**
    * Every control the chart draws for a node, by its accessible name: the
@@ -523,8 +639,10 @@ describe("what a node offers a pointer", () => {
       "Delete Engineering",
       "Actions for Engineering",
       // The lead along the bottom edge, which stays drawn: it is a fact about
-      // the organization rather than a tool for changing it.
+      // the organization rather than a tool for changing it. The X inside it
+      // is the tool, and it is quiet with the rest of them.
       "VP Engineering",
+      "Clear the lead of Engineering",
       "Collapse Engineering",
       "Add to Engineering",
     ]);
@@ -743,6 +861,48 @@ describe("menus", () => {
     expect(
       screen.getByRole("button", { name: "Lead after the check", hidden: true }),
     ).toBeDefined();
+  });
+
+  /*
+   * ONE PRESS TAKES A LEAD AWAY. Through the menu it is a press, a list and a
+   * choice, for the answer a reader is most likely to want after setting the
+   * wrong one; the chart this is drawn from puts a small X inside the pill for
+   * exactly that.
+   */
+  test("the X inside the pill clears a declared lead in one press", () => {
+    const { spies } = mount();
+    const engineering = within(chartCard(item("Engineering")));
+    fireEvent.click(
+      engineering.getByRole("button", { name: "Clear the lead of Engineering", hidden: true }),
+    );
+    expect(spies.dispatched).toEqual([
+      {
+        type: "record",
+        intent: { type: "setLead", target: unitKey("Engineering"), lead: undefined },
+      },
+    ]);
+  });
+
+  /*
+   * AND ONLY WHERE A PRESS WOULD CHANGE THE DRAFT. A lead the engine derived
+   * from an ancestor is not written on this unit, so there is nothing here to
+   * take away; a unit with none has nothing either. Drawn everywhere it would
+   * be a control that refuses on two thirds of the units in a chart.
+   */
+  test("a unit with no declared lead of its own is offered no X", () => {
+    mount();
+    // Sales declares none, and inherits nothing the chart can name yet.
+    expect(
+      within(chartCard(item("Sales"))).queryByRole("button", {
+        name: /^Clear the lead/,
+        hidden: true,
+      }),
+    ).toBeNull();
+  });
+
+  test("a read-only draft has no X at all", () => {
+    mount(checkedEdit(fixtureCompany()), { readOnly: true });
+    expect(screen.queryByRole("button", { name: /^Clear the lead/, hidden: true })).toBeNull();
   });
 
   test("a lead declared outside the unit is still the checked answer, and another seat is chosen in the editor", () => {
@@ -1099,5 +1259,149 @@ describe("live state", () => {
     expect(within(item("Dev")).queryByText("offline")).toBeNull();
     expect(within(item("CEO")).queryByText("offline")).toBeNull();
     expect(within(item("SRE")).getByText("offline")).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The chart's own chrome
+// ---------------------------------------------------------------------------
+
+/*
+ * WHAT ACTS ON THE CANVAS IS DRAWN BESIDE IT. The chart this is drawn from
+ * keeps its zoom bar, its key hint and its chart switch in one column in the
+ * canvas's own corner; measured on this build, the switch and the fullscreen
+ * toggle had ended up in the page's toolbar 800px from the bar they belong to.
+ * The page still OWNS them, because one acts on the builder's whole container
+ * and the other writes the lens's own section param; this view says where they
+ * are drawn.
+ */
+describe("the chart's chrome", () => {
+  /*
+   * FOUND BY WHAT A READER MEETS rather than by what the package calls it: the
+   * bar is whatever holds the canvas's own zoom controls, and the group is the
+   * column that bar sits in.
+   */
+  const bar = () => screen.getByRole("button", { name: "Zoom out" }).parentElement!;
+  const group = () => bar().parentElement!;
+
+  test("what the page hands in is drawn in the canvas's own control group", () => {
+    const spies = builderSpies();
+    const probe = harnessProbe();
+    render(
+      <BuilderHarness initial={checkedEdit(fixtureCompany())} spies={spies} probe={probe}>
+        <CanvasView
+          chart="structure"
+          chrome={{
+            controls: <button type="button">Fullscreen</button>,
+            switcher: <div data-testid="chart-switch">Structure</div>,
+          }}
+        />
+      </BuilderHarness>,
+    );
+    LayoutObserver.settle();
+    // In the BAR, after the four controls the canvas draws itself.
+    expect([...bar().querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Zoom out",
+      "Zoom is 100 percent. Set a zoom level",
+      "Zoom in",
+      "Fit to view",
+      null,
+    ]);
+    expect(bar().textContent).toContain("Fullscreen");
+    // And the switch is its own bar under it, in the same group.
+    expect(group().querySelector("[data-testid='chart-switch']")).not.toBeNull();
+  });
+
+  test("a chart the page hands nothing draws the bar and an empty region", () => {
+    mount();
+    // The bar, and the region the way out of fullscreen is said in, which is
+    // empty until there is something to say and drawn as nothing while it is.
+    expect([...group().children]).toEqual([bar(), screen.getByRole("status")]);
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  /*
+   * A READER WHO CANNOT LEAVE A SCREEN IS STUCK ON IT. Fullscreen takes the
+   * browser's own chrome with it, so the only way back is a key, and the
+   * builder said nothing about which: searched on the running build, no
+   * element anywhere matched "press esc".
+   */
+  test("the way out of fullscreen is drawn and announced while the page is in it", () => {
+    const { container } = mount();
+    // The region is there and says nothing, which is what makes what it says
+    // next an announcement rather than a surface appearing.
+    expect(screen.getByRole("status").textContent).toBe("");
+
+    const element = container.querySelector("div")!;
+    Object.defineProperty(document, "fullscreenElement", {
+      configurable: true,
+      value: element,
+    });
+    act(() => {
+      document.dispatchEvent(new Event("fullscreenchange"));
+    });
+    const note = screen.getByRole("status");
+    // The key twice, which is `Kbd`: the glyph a reader sees and the word a
+    // screen reader is given for it.
+    expect(note.textContent).toBe("PressEscEscto leave fullscreen");
+    expect(group().contains(note)).toBe(true);
+
+    Object.defineProperty(document, "fullscreenElement", { configurable: true, value: null });
+    act(() => {
+      document.dispatchEvent(new Event("fullscreenchange"));
+    });
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+});
+
+/*
+ * THE CHART SAYS WHERE. A dialog that asks for the name of a child says
+ * nothing about where the child will go, and the chart is the only thing that
+ * can say it: it goes to the node the surface is about, pushes itself back
+ * behind it, and gives the reader their own view back when it closes. It is
+ * the gesture the chart this is drawn from makes with the viewBox it saves.
+ */
+describe("a surface opened about one node", () => {
+  const mountAbout = (about: string | null) => {
+    const spies = builderSpies();
+    const probe = harnessProbe();
+    const tree = (node: string | null) => (
+      <BuilderHarness initial={checkedEdit(fixtureCompany())} spies={spies} probe={probe}>
+        <CanvasView chart="structure" about={node} />
+      </BuilderHarness>
+    );
+    const utils = render(tree(about));
+    LayoutObserver.settle();
+    return {
+      container: utils.container,
+      show: (node: string | null) => {
+        utils.rerender(tree(node));
+        LayoutObserver.settle();
+      },
+    };
+  };
+  /* The canvas is the box its own viewport is drawn in, found by what it IS:
+     a focusable group announced as a canvas. */
+  const canvas = () =>
+    screen.getByRole("group", { name: "Structure chart" }).closest("[data-dimmed]")!;
+
+  test("the chart is pushed back while it is open and drawn plainly when it is not", () => {
+    const { show } = mountAbout(null);
+    expect(canvas().getAttribute("data-dimmed")).toBe("false");
+    show(unitKey("Engineering"));
+    expect(canvas().getAttribute("data-dimmed")).toBe("true");
+    show(null);
+    expect(canvas().getAttribute("data-dimmed")).toBe("false");
+  });
+
+  test("the view goes to the node it is about, and comes back when it closes", () => {
+    const { container, show } = mountAbout(null);
+    const view = () => canvasWorld(container).style.transform;
+    const before = view();
+    show(unitKey("Engineering"));
+    const onIt = view();
+    expect(onIt).not.toBe(before);
+    show(null);
+    expect(view()).toBe(before);
   });
 });

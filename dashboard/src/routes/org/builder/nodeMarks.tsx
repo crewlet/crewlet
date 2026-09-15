@@ -28,17 +28,12 @@
 import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
+import { runState, stateLabel, toneOf } from "~/lib/seats.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
-import {
-  CycleGlyph,
-  ErrorGlyph,
-  LinkGlyph,
-  NotificationsGlyph,
-  WarningGlyph,
-} from "@crewlethq/icons/glyphs";
-import { Tag } from "@crewlethq/ui";
+import { CycleGlyph, LinkGlyph, NotificationsGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { StatusDot, Tag, VisuallyHidden } from "@crewlethq/ui";
 
 /** "Agent seat" or "Human seat". */
 export function seatKindLabel(view: Pick<SeatView, "kind">): string {
@@ -57,8 +52,8 @@ export function managerLabel(manager: string | null | undefined): string {
 }
 
 /**
- * The problem count badge, in a slot of its own: empty when the last check
- * of the current draft placed nothing on the node.
+ * The problem count, in a slot of its own: empty when the last check of the
+ * current draft placed nothing on the node.
  *
  * A CHECK NEVER MOVES A CARD. The count is the last check of the CURRENT
  * draft's, so it is absent while a check is out, which is after every edit.
@@ -66,14 +61,26 @@ export function managerLabel(manager: string | null | undefined): string {
  * card's measured height twice per edit and moving every card beside it. The
  * slot (`.bnode-count`) sits on the card's first line beside the name, which
  * truncates instead, and that line is as tall with the badge as without it.
+ *
+ * THE COUNT RATHER THAN THE SENTENCE, because a chart node is one rank tall
+ * and as wide as its own name, and the slot a push arrives in is one control
+ * step wide however many marks it holds: "3 problems" written out was clipped
+ * inside it. It is the rule this module already keeps for a wiring mark, for
+ * the same reason, and the sentence is still said, as the badge's own name and
+ * as the tooltip a pointer gets. The table beside this chart has a line to
+ * spare and writes it out.
  */
 export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeKey }) {
   const count = api.problemsFor(nodeKey).length;
   return (
     <span className="bnode-count">
       {count > 0 && (
-        <Tag variant="danger" leadingIcon={<ErrorGlyph />}>
-          {plural(count, "problem")}
+        <Tag
+          variant="danger"
+          title={plural(count, "problem")}
+          aria-label={plural(count, "problem")}
+        >
+          {count}
         </Tag>
       )}
     </span>
@@ -85,12 +92,39 @@ export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeK
  * SAVED company gives it, because that is what the running seat is called
  * until this draft is saved and applied.
  */
-export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
+export function LiveState({
+  api,
+  view,
+  compact = false,
+}: {
+  api: BuilderApi;
+  view: SeatView;
+  /**
+   * The chart's drawing: the state as its tone and nothing written out.
+   *
+   * A NODE HAS NO ROOM FOR THE WORD. The slot a push arrives in is one control
+   * step wide whatever it holds, which is what stops a badge appearing from
+   * relaying the chart; the word "awaiting sandbox" in it would be clipped
+   * rather than read. The state is still said, as the mark's own name and as
+   * the tooltip a pointer gets, and the table beside the chart writes it out.
+   */
+  compact?: boolean;
+}) {
   if (!view.running || !view.saved) return null;
   const { handle, name } = view.saved;
   const agent =
     (handle ? api.agents.find((a) => a.handle === handle) : undefined) ??
     api.agents.find((a) => a.role === name);
+  if (compact) {
+    const state = runState(agent, api.sandboxes);
+    const said = stateLabel(state);
+    return (
+      <span className="bnode-state" title={said}>
+        <StatusDot tone={toneOf(state)} />
+        <VisuallyHidden>{said}</VisuallyHidden>
+      </span>
+    );
+  }
   return (
     <span className="bnode-state">
       <StateBadge agent={agent} sandboxes={api.sandboxes} />

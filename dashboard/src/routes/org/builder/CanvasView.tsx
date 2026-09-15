@@ -51,7 +51,15 @@
  * `nodeActions.tsx`, and which hue a seat takes is `nodeTone.ts`.
  */
 
-import { useCallback, useMemo, useRef, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi, type ChartKind } from "./BuilderContext.tsx";
 import {
@@ -62,13 +70,14 @@ import {
   type Structure,
   type UnitView,
 } from "./chartModel.ts";
-import { COMPANY_KEY } from "./model/keys.ts";
+import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import {
   addSections,
   isDeletable,
   leadLabel,
   leadMenu,
   leadSentence,
+  moveKey,
   nodeMenu,
   reportingMenu,
   type OpenScreen,
@@ -83,12 +92,14 @@ import {
   seatKindLabel,
 } from "./nodeMarks.tsx";
 import { nodeTone, seatTone } from "./nodeTone.ts";
+import { useReorder, type Reorder } from "./reorder.ts";
 import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   AccountTreeGlyph,
   ApartmentGlyph,
   ChevronRightGlyph,
+  CloseGlyph,
   CycleGlyph,
   DeleteGlyph,
   EditGlyph,
@@ -99,18 +110,19 @@ import {
   AddPill,
   EmptyState,
   IconButton,
+  Kbd,
   Menu,
   type MenuEntry,
   OrgNodeLabel,
   OrgNodeLead,
   TreeCanvas,
+  type TreeCanvasHandle,
   type TreeCardContext,
   type TreeCardInput,
   type TreeCardTone,
   type TreeInput,
   type TreeItemAction,
   type TreeModel,
-  type TreeViewHandle,
   VisuallyHidden,
 } from "@crewlethq/ui";
 
@@ -121,14 +133,58 @@ import {
  * toolbar is where the chart is chosen) and hands the answer in, so this view
  * never reads the URL a second time, where the two readings could disagree.
  */
-export function CanvasView({ chart }: { chart: ChartKind }) {
+export function CanvasView({
+  chart,
+  chrome = {},
+  about = null,
+}: {
+  chart: ChartKind;
+  chrome?: Chrome;
+  /**
+   * The node a surface opened OVER the chart is about: the parent an add will
+   * hang from, the node an editor is editing. Null while nothing is open.
+   *
+   * WHAT IT IS FOR. A dialog that asks for the name of a child says nothing
+   * about WHERE that child will go, and the chart is the only thing that can
+   * say it. Named here, the chart pushes itself back behind the surface and
+   * eases onto the node it is about, and the reader is put back exactly where
+   * they were when it closes. It is the chart this is drawn from's own gesture
+   * (it saves its viewBox, eases onto the ghost of the node being added, and
+   * restores it on close), and it is drawn by the design system's canvas, so a
+   * reader who asked for less motion is moved without an animation.
+   */
+  about?: string | null;
+}) {
   const api = useBuilder();
   const open = useOpenScreen();
   const structure = useStructure(api.state);
   if (chart === "reporting") {
-    return <ReportingChart api={api} structure={structure} open={open} />;
+    return (
+      <ReportingChart api={api} structure={structure} open={open} chrome={chrome} about={about} />
+    );
   }
-  return <StructureChart api={api} structure={structure} open={open} />;
+  return (
+    <StructureChart api={api} structure={structure} open={open} chrome={chrome} about={about} />
+  );
+}
+
+/**
+ * What the PAGE hangs in the canvas's own control group.
+ *
+ * WHY THE PAGE STILL OWNS THEM. Both of these act on the canvas, so both
+ * belong beside it: the chart this is drawn from keeps its zoom bar, its key
+ * hint and its chart switch in one column in the canvas's top right corner,
+ * and measured on this build the switch and the fullscreen toggle had ended up
+ * in the page's toolbar 800px from the bar they belong to. But the fullscreen
+ * toggle acts on the builder's whole container and the switch writes the
+ * lens's own section param, and neither of those is this view's to hold: the
+ * Builder hands them in, and this view says WHERE they are drawn.
+ */
+export interface Chrome {
+  /** Drawn at the end of the zoom bar: the fullscreen toggle. */
+  controls?: ReactNode;
+  /** Its own bar under the zoom bar: the switch between the two charts. */
+  switcher?: ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,11 +195,16 @@ function StructureChart({
   api,
   structure,
   open,
+  chrome,
+  about,
 }: {
   api: BuilderApi;
   structure: Structure;
   open: OpenScreen;
+  chrome: Chrome;
+  about: string | null;
 }) {
+  const reorder = useReorder(api, structure);
   const cards = useCallback(
     (model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
       const card = (id: string): TreeCardInput => {
@@ -173,10 +234,20 @@ function StructureChart({
   return (
     <Chart
       label="Structure chart"
+      chrome={chrome}
+      about={about}
       nodes={structure.tree}
       cards={cards}
       cardOf={(id) => id}
       onNodeKey={onNodeKey}
+      /*
+       * ALT WITH AN ARROW MOVES A NODE among the siblings it is drawn beside,
+       * which is the key the outline already binds. This is the view where a
+       * reader reaches for it first: a chart draws siblings left to right in
+       * exactly the order the move changes, and passing one can change which
+       * seat manages this one (`reorder.ts`).
+       */
+      onNodeKeyDown={(id, event) => !api.readOnly && moveKey(reorder, id as NodeKey, event)}
       isNode={(id) => structure.nodes.has(id)}
       hasNodeMenu={(id) => structure.nodes.has(id)}
       // A HUMAN SEAT WEARS THE DASHED EDGE every human seat on this dashboard
@@ -188,7 +259,14 @@ function StructureChart({
       // AN AGENT SEAT CARRIES A HUE, derived from its key: see `nodeTone.ts`.
       cardTone={(id) => nodeTone(structure.nodes.get(id))}
       renderCard={(id, card) => (
-        <StructureCard api={api} structure={structure} id={id} card={card} open={open} />
+        <StructureCard
+          api={api}
+          structure={structure}
+          id={id}
+          card={card}
+          open={open}
+          reorder={reorder}
+        />
       )}
       // THE ADD IS ON THE BRANCH, under the node whose children it makes. It
       // used to be a third button crowding the node's own name, where "add a
@@ -212,10 +290,14 @@ function ReportingChart({
   api,
   structure,
   open,
+  chrome,
+  about,
 }: {
   api: BuilderApi;
   structure: Structure;
   open: OpenScreen;
+  chrome: Chrome;
+  about: string | null;
 }) {
   const chart = useReporting(api.state);
   const cards = useCallback((model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
@@ -262,6 +344,8 @@ function ReportingChart({
   return (
     <Chart
       label="Reporting chart"
+      chrome={chrome}
+      about={about}
       overlay={
         // Over the canvas rather than above it: a note that came and went
         // with every check would resize the viewport under the operator.
@@ -319,6 +403,8 @@ function ReportingChart({
  */
 function Chart({
   label,
+  chrome,
+  about,
   nodes,
   cards,
   cardOf,
@@ -327,11 +413,14 @@ function Chart({
   cardOutline,
   cardTone,
   onNodeKey,
+  onNodeKeyDown,
   hasNodeMenu,
   isNode,
   overlay,
 }: {
   label: string;
+  chrome: Chrome;
+  about: string | null;
   nodes: readonly TreeInput[];
   cards: (model: TreeModel, expanded: ReadonlySet<string>) => TreeCardInput[];
   cardOf: (id: string) => string;
@@ -340,13 +429,14 @@ function Chart({
   cardOutline?: (id: string) => boolean;
   cardTone?: (id: string) => TreeCardTone | undefined;
   onNodeKey: (id: string, action: Exclude<TreeItemAction, "menu">) => boolean;
+  onNodeKeyDown?: (id: string, event: KeyboardEvent<HTMLElement>) => boolean;
   hasNodeMenu: (id: string) => boolean;
   /** Whether an id names a node of the draft, which is what a selection can hold. */
   isNode: (id: string) => boolean;
   overlay?: ReactNode;
 }) {
   const api = useBuilder();
-  const view = useRef<TreeViewHandle>(null);
+  const view = useRef<TreeCanvasHandle>(null);
 
   // ONE IDENTITY FOR THE LENS'S LIFETIME, read through a ref: the Builder
   // registers a view in an effect, and a handle that changed identity would
@@ -360,6 +450,19 @@ function Chart({
     [],
   );
   useBuilderView(handle);
+
+  /*
+   * THE CHART GOES TO THE NODE A SURFACE IS ABOUT, and comes back when it
+   * closes. Nothing else moves the view: an add that changes the draft is a
+   * relayout, which the chart tweens and anchors on its own.
+   */
+  useEffect(() => {
+    if (about === null) {
+      view.current?.restoreView();
+      return;
+    }
+    view.current?.focusRegion(about);
+  }, [about]);
 
   return (
     <div className="bchart">
@@ -377,7 +480,19 @@ function Chart({
         cardOutline={cardOutline}
         cardTone={cardTone}
         onNodeKey={onNodeKey}
+        onNodeKeyDown={onNodeKeyDown}
         hasNodeMenu={hasNodeMenu}
+        // PUSHED BACK BEHIND A SURFACE ABOUT ONE OF ITS NODES, so what is
+        // being decided has the part of the chart it is about behind it rather
+        // than a veil over a picture nobody can see any more.
+        dimmed={about !== null}
+        // THE CHART'S OWN CHROME, in the chart's own corner: the design system
+        // puts the zoom bar at the top right in this appearance and stacks
+        // what the page hands in under it, which is the arrangement the chart
+        // this is drawn from keeps.
+        controlsExtra={chrome.controls}
+        controlsBelow={chrome.switcher}
+        hint={<FullscreenHint />}
         // SELECTION FOLLOWS FOCUS, for nodes of the draft: the selection is
         // what the toolbar acts on and what the URL names, and a group heading
         // is neither.
@@ -403,12 +518,14 @@ function StructureCard({
   id,
   card,
   open,
+  reorder,
 }: {
   api: BuilderApi;
   structure: Structure;
   id: string;
   card: TreeCardContext;
   open: OpenScreen;
+  reorder: Reorder;
 }) {
   const view = structure.nodes.get(id);
   if (!view) return null;
@@ -419,19 +536,34 @@ function StructureCard({
           <OrgNodeLabel
             icon={view.kind === "human" ? <PersonGlyph size="sm" /> : <CrewletIcon />}
             iconRing={view.kind === "human" ? "dashed" : "none"}
+            // AN AGENT SEAT WEARS THE LARGE MARK. The chart this is drawn from
+            // sizes a mark by what it stands for: a container at half its icon
+            // zone and the thing the chart is ABOUT at three quarters of it,
+            // which is what tells an agent seat from a unit at the far end of
+            // a chart. A human seat keeps the small figure inside its dashed
+            // ring, which is the boundary that says what it is.
+            iconSize={view.kind === "human" ? "md" : "lg"}
             name={view.name}
             caption={seatKindLabel(view)}
             captionMarks={<SeatMarks view={view} />}
             trailing={
               <>
-                <LiveState api={api} view={view} />
+                <LiveState api={api} view={view} compact />
                 <ProblemCount api={api} nodeKey={view.key} />
               </>
             }
           />
-          <VisuallyHidden>{seatTitle(view)}</VisuallyHidden>
+          <VisuallyHidden>{handleLabel(view.handle)}</VisuallyHidden>
         </div>
-        <NodeActions api={api} card={card} id={id} label={view.name} view={view} open={open} />
+        <NodeActions
+          api={api}
+          card={card}
+          id={id}
+          label={view.name}
+          view={view}
+          open={open}
+          reorder={reorder}
+        />
       </>
     );
   }
@@ -455,6 +587,7 @@ function StructureCard({
           label={view.name || "the company"}
           view={view}
           open={open}
+          reorder={reorder}
         />
       </>
     );
@@ -473,7 +606,15 @@ function StructureCard({
         <VisuallyHidden>{counts}</VisuallyHidden>
         <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
       </div>
-      <NodeActions api={api} card={card} id={id} label={view.name} view={view} open={open} />
+      <NodeActions
+        api={api}
+        card={card}
+        id={id}
+        label={view.name}
+        view={view}
+        open={open}
+        reorder={reorder}
+      />
       <LeadChip api={api} structure={structure} unit={view} card={card} />
     </>
   );
@@ -493,10 +634,16 @@ function unitCaption(view: UnitView): string {
  * the node is and nothing else. A node is one rank tall and as wide as its
  * name: a caption carrying the kind and the handle would be truncated on the
  * node of every seat whose name is longer than its handle. It is the node's
- * tooltip and the sentence read after its name, and it is a column of the
- * table beside this chart.
+ * tooltip, and it is a column of the table beside this chart.
+ *
+ * AND IT IS A TOOLTIP RATHER THAN A SENTENCE READ AFTER THE NAME. The caption
+ * above it already says what kind of seat this is, so the hidden sentence
+ * carries the HANDLE alone: measured, a card announced itself as "SRE Lead,
+ * Agent seat, idle, Agent seat, @sre-lead", and a screen reader heard the kind
+ * twice on every seat of both charts. A `title` is not read after the caption,
+ * so the whole sentence still stands where a pointer asks for it.
  */
-function seatTitle(view: SeatView): string {
+function seatTitle(view: Pick<SeatView, "kind" | "handle">): string {
   return `${seatKindLabel(view)}, ${handleLabel(view.handle)}`;
 }
 
@@ -513,7 +660,7 @@ function ReportingCard({
   card: TreeCardContext;
   open: OpenScreen;
 }) {
-  const title = `${seatKindLabel(item)}, ${handleLabel(item.handle)}`;
+  const title = seatTitle(item);
   const standing = item.root
     ? "No manager."
     : item.cycleSize !== undefined
@@ -525,17 +672,18 @@ function ReportingCard({
         <OrgNodeLabel
           icon={item.kind === "human" ? <PersonGlyph size="sm" /> : <CrewletIcon />}
           iconRing={item.kind === "human" ? "dashed" : "none"}
+          iconSize={item.kind === "human" ? "md" : "lg"}
           name={item.name}
           caption={seatKindLabel(item)}
           captionMarks={<ReportingMarks item={item} />}
           trailing={
             <>
-              {seat && <LiveState api={api} view={seat} />}
+              {seat && <LiveState api={api} view={seat} compact />}
               {seat && <ProblemCount api={api} nodeKey={seat.key} />}
             </>
           }
         />
-        <VisuallyHidden>{title}</VisuallyHidden>
+        <VisuallyHidden>{handleLabel(item.handle)}</VisuallyHidden>
         {standing !== "" && <VisuallyHidden>{standing}</VisuallyHidden>}
       </div>
       <div {...card.actions(item.id)}>
@@ -604,6 +752,7 @@ function NodeActions({
   label,
   view,
   open,
+  reorder,
 }: {
   api: BuilderApi;
   card: TreeCardContext;
@@ -611,6 +760,7 @@ function NodeActions({
   label: string;
   view: NodeView;
   open: OpenScreen;
+  reorder: Reorder;
 }) {
   const deletable = isDeletable(view) && !api.readOnly;
   return (
@@ -639,8 +789,53 @@ function NodeActions({
           }}
         />
       )}
+      {/*
+        THE MENU IS `nodeMenu` ITSELF, entry for entry, because the toolbar
+        mirrors a selected node's card menu and that is how a keyboard reader
+        reaches it at all: a tree item holds no tab stop of its own. Move up
+        and Move down are NOT here for that reason, while the toolbar cannot
+        carry them; the key that moves a node is bound on the chart instead,
+        and the outline's row menu still offers the pair in words.
+      */}
       <KeyboardMenu card={card} id={id} label={label} items={nodeMenu(api, view, open)} />
     </div>
+  );
+}
+
+/**
+ * The way out of fullscreen, drawn under the canvas's controls while the
+ * builder is in it.
+ *
+ * A READER WHO CANNOT LEAVE A SCREEN IS STUCK ON IT. Fullscreen takes the
+ * browser's own chrome away with it, so the only way back is a key, and the
+ * builder said nothing about which: searched on the running build, no element
+ * anywhere on the page matched "press esc". The chart this is drawn from draws
+ * this hint under its toolbar for exactly that reason.
+ *
+ * READ FROM THE DOCUMENT rather than handed in, because the state is the
+ * DOCUMENT's: whichever control took the builder fullscreen, and whatever
+ * takes it out again (Escape, the browser's own gesture, a second press), this
+ * is the one fact that says whether a reader needs the way out. The canvas
+ * draws it as a `status` region, so entering fullscreen announces it too.
+ */
+function FullscreenHint() {
+  const [active, setActive] = useState(false);
+  useEffect(() => {
+    // TRUTHINESS, not a comparison with null: a browser with no element in
+    // fullscreen answers null and one with no support for it at all answers
+    // undefined, and the hint must be absent for both.
+    const onChange = () => setActive(Boolean(document.fullscreenElement));
+    onChange();
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  if (!active) return null;
+  return (
+    <>
+      <span>Press</span>
+      <Kbd keys={["Esc"]} />
+      <span>to leave fullscreen</span>
+    </>
   );
 }
 
@@ -737,6 +932,12 @@ function KeyboardMenu({
  * chart that hid it until the pointer arrived would be a chart you could not
  * read the leads off. What it opens is still a menu, and the press on it lands
  * on the unit's own node.
+ *
+ * AND ONE PRESS TAKES IT AWAY. Clearing a lead through the menu is a press, a
+ * list and a choice, for the one answer a reader is most likely to want after
+ * setting the wrong one; the chart this is drawn from puts a small X inside
+ * the pill for exactly that. It is quiet until the node is reached, like every
+ * other control on a node, and it is named after the unit it belongs to.
  */
 function LeadChip({
   api,
@@ -757,9 +958,38 @@ function LeadChip({
   // a pill reading "Lead" for both would hide a check that has not answered
   // behind a unit that declares nothing.
   const none = unit.lead === null || unit.lead === undefined;
+  // WHAT THE X CLEARS IS A DECLARED LEAD. A lead the engine derived from an
+  // ancestor is not written on this unit, so there is nothing here to take
+  // away: the control is drawn where a press would change the draft and
+  // nowhere else, rather than drawn everywhere and refusing on two thirds of
+  // the units in the chart.
+  const declared = unit.lead !== null && unit.lead !== undefined && !unit.lead.inherited;
   return (
     <div aria-hidden="true" {...card.press(unit.key)}>
-      <OrgNodeLead empty={none}>
+      <OrgNodeLead
+        empty={none}
+        {...(declared && !api.readOnly
+          ? {
+              clear: (
+                <IconButton
+                  label={`Clear the lead of ${unit.name}`}
+                  icon={<CloseGlyph />}
+                  size="sm"
+                  variant="ghost"
+                  tabIndex={-1}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    card.activate(unit.key);
+                    api.dispatch({
+                      type: "record",
+                      intent: { type: "setLead", target: unit.key, lead: undefined },
+                    });
+                  }}
+                />
+              ),
+            }
+          : {})}
+      >
         {api.readOnly ? (
           <span className="truncate">{leadLabel(unit)}</span>
         ) : (
