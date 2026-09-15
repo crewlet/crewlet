@@ -237,7 +237,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/schedules` | **Schedules** | |
 | `#/activity/a2a` | **Agent-to-agent** | |
 | `#/activity/events` · `#/activity/events/{id}` | **Event log** | `category=` · `actor=` · `q=` |
-| `#/cost` | **Spend** — by phase, model, seat and turn | |
+| `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1\|7\|30` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` | **Infrastructure** — nodes, leases, duties, replication *(operator)* | |
 | `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** *(operator)* | |

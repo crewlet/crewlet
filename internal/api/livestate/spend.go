@@ -46,6 +46,7 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 		InputTokens:  num(payload, "input_tokens"),
 		OutputTokens: num(payload, "output_tokens"),
 		TotalTokens:  num(payload, "total_tokens"),
+		CostUSD:      fraction(payload, "cost_usd"),
 	}})
 	s.pruneSpend(env.Timestamp)
 	return true

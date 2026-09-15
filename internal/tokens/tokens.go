@@ -57,6 +57,17 @@ type Record struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
+
+	// CostUSD is what the phase's own provider billed, in dollars, and it
+	// is set on a MINORITY of records: only a subscription coding CLI
+	// reports a price, so every native-provider phase carries zero.
+	//
+	// Which is why [Bucket] counts PricedCalls beside the sum. A total of
+	// zero over zero priced calls means nobody said what this cost; a total
+	// of zero over three means three runs were billed nothing. Collapsing
+	// those two into one number is how a dashboard comes to render "$0.00"
+	// under a company that has never had a price reported at all.
+	CostUSD float64 `json:"cost_usd"`
 }
 
 // Bucket is an accumulated total. Embedded rather than nested, because the
@@ -67,6 +78,16 @@ type Bucket struct {
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
 	Calls        int `json:"calls"`
+
+	// CostUSD sums what the calls in this bucket were billed, and
+	// PricedCalls counts how many of them said anything at all.
+	//
+	// TWO FIELDS, because a price is reported by one backend and not by the
+	// rest (see [Record.CostUSD]) — so a currency total is meaningless
+	// without the count of records behind it, and a reader that shows a
+	// dollar figure over PricedCalls == 0 is stating a price nobody quoted.
+	CostUSD     float64 `json:"cost_usd"`
+	PricedCalls int     `json:"priced_calls"`
 }
 
 func (b *Bucket) add(r Record) {
@@ -74,6 +95,13 @@ func (b *Bucket) add(r Record) {
 	b.OutputTokens += r.OutputTokens
 	b.TotalTokens += r.TotalTokens
 	b.Calls++
+	// A NEGATIVE price is not a rebate, it is a bad payload, and summing it
+	// would silently reduce a company's reported spend. Only a positive one
+	// counts, and only a positive one is priced.
+	if r.CostUSD > 0 {
+		b.CostUSD += r.CostUSD
+		b.PricedCalls++
+	}
 }
 
 // PhaseRow is the per-phase breakdown of a rollup.

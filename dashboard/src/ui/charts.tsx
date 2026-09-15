@@ -414,3 +414,84 @@ export function ActivityStrip({
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+
+/**
+ * A quantity over time, SPLIT INTO BANDS — one column per bucket.
+ *
+ * COLUMNS RATHER THAN STACKED AREAS, and this kit already says why one level
+ * up: three translucent areas over one chart blend into a fourth colour nobody
+ * chose, and the reader cannot tell which is on top. A column is opaque, its
+ * segments abut, and the boundary between two bands is a line rather than a
+ * mixture.
+ *
+ * The x domain is the WINDOW, and here that is simply the bucket list: the
+ * engine returns every bucket in the range including the empty ones, so a
+ * quiet hour is a gap of full height rather than a column the chart squeezed
+ * out. Drawing from the data alone is what made a quiet company look busy.
+ *
+ * A GHOST is the same window one period earlier, drawn as a dashed mark AT ITS
+ * OWN HEIGHT — never as a second set of bands, which would double the colours
+ * for a comparison that only needs a height. Over the column rather than
+ * behind it, so "the previous period was smaller" and "there is no previous
+ * period" do not render identically.
+ */
+export function StackedTimeSeries({
+  buckets,
+  bands,
+  ghost,
+  height = 160,
+  format = (n) => n.toLocaleString(),
+  label,
+}: {
+  buckets: { at: string; total: number; parts: { key: string; value: number }[] }[];
+  bands: { key: string; label: string; color: string }[];
+  ghost?: number[];
+  height?: number;
+  format?: (n: number) => string;
+  label?: (at: string) => string;
+}) {
+  const colors = new Map(bands.map((b) => [b.key, b.color]));
+  // The peak spans the ghost too, so the two periods are drawn against ONE
+  // scale. Scaled separately, a week that cost half as much would draw the
+  // same height as the week it is being compared with.
+  const peak = Math.max(1, ...buckets.map((b) => b.total), ...(ghost ?? []));
+  return (
+    <div className="stackseries" style={{ height }}>
+      {buckets.map((b, i) => {
+        const prior = ghost?.[i] ?? 0;
+        return (
+          <div className="stackseries-col" key={b.at}>
+            {prior > 0 && (
+              <div
+                className="stackseries-ghost"
+                style={{ height: `${(prior / peak) * 100}%` }}
+                title={`previous period: ${format(prior)}`}
+              />
+            )}
+            <div
+              className="stackseries-stack"
+              style={{ height: `${(b.total / peak) * 100}%` }}
+              title={`${label?.(b.at) ?? b.at} — ${format(b.total)}`}
+            >
+              {b.parts.map((p) => (
+                <span
+                  key={p.key}
+                  style={{
+                    // Of the COLUMN, not of the peak: the column's own
+                    // height already carries the magnitude, and scaling
+                    // the segments again would leave a stack whose parts
+                    // do not fill it.
+                    height: `${(p.value / Math.max(1, b.total)) * 100}%`,
+                    background: colors.get(p.key) ?? VIZ_OTHER,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}

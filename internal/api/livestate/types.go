@@ -256,6 +256,21 @@ func num(payload map[string]any, key string) int {
 	return 0
 }
 
+// fraction reads a fractional value, for the one payload field that is money.
+//
+// SEPARATE FROM num rather than a widening of it: num TRUNCATES, which is
+// correct for a token count and silently wrong for a price — every phase that
+// cost less than a dollar would report zero, which is most of them.
+func fraction(payload map[string]any, key string) float64 {
+	switch v := payload[key].(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	}
+	return 0
+}
+
 func flag(payload map[string]any, key string) bool {
 	b, _ := payload[key].(bool)
 	return b

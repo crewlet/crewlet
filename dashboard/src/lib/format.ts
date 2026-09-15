@@ -214,6 +214,24 @@ export function fmtCount(n: number | null | undefined): string {
   return `${(n / 1_000_000_000).toFixed(2)}B`;
 }
 
+/**
+ * A price, or an honest blank where nobody quoted one.
+ *
+ * TWO INPUTS, because zero dollars is two different facts. Only a subscription
+ * coding CLI reports a price, so most phases carry none at all — and rendering
+ * that as "$0.00" states a price nobody quoted, under a company that may well
+ * be spending thousands. `priced` is the count of calls that said anything;
+ * at zero the answer is that nothing was quoted.
+ *
+ * Four decimals below a cent because that is the scale these come back at: a
+ * phase costs $0.0374, and two decimals round every one of them to nothing.
+ */
+export function fmtSpend(usd: number | null | undefined, priced: number): string {
+  if (!priced || usd == null || !Number.isFinite(usd)) return "—";
+  if (usd > 0 && usd < 0.01) return `$${usd.toFixed(4)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
 /** Always the exact figure, grouped. For a cell a reader is comparing. */
 export function fmtExact(n: number | null | undefined): string {
   return n == null || !Number.isFinite(n) ? "—" : n.toLocaleString();

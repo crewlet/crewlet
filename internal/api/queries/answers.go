@@ -302,6 +302,13 @@ func Register(r *Registry, s Sources) {
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.
 		r.Register("phases", s.phases)
+		// AND THE TIME AXIS. `tokens` is a breakdown whose every row is a
+		// sum over the whole window, so it cannot say WHEN — which is the
+		// question a cost explorer is for. Gated on the event store rather
+		// than on the projection: the projection holds a day, and an axis
+		// that changed source when a reader widened the range is a seam
+		// across the one comparison the screen exists to make.
+		r.Register("token_series", s.tokenSeries)
 	}
 	if s.Health != nil {
 		r.Register("stream", s.stream)
