@@ -46,6 +46,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
 import { relTime } from "~/lib/format.ts";
 import type { WorkInboxNotice } from "~/protocol/index.ts";
+import { FacetRail } from "~/ui/FacetRail.tsx";
 
 /** Which band a notice belongs to, from the split the ENGINE applied. */
 function isPrimary(notice: WorkInboxNotice, primary: string[]): boolean {
@@ -194,19 +195,23 @@ export function Inbox() {
             )}
           </div>
 
-          {/* THE REASONS ON THIS PAGE, as a facet row. Counts are over the
-              LOADED page and say so: the engine counts no totals here, and a
-              facet claiming one would be inventing it. */}
-          {reasons.length > 1 && !reason && (
-            <div className="facet-row">
-              {reasons.map(([name, count]) => (
-                <button key={name} className="facet" onClick={() => setReason(name)}>
-                  <span className="truncate">{reasonPhrase(name)}</span>
-                  <span className="t-num">{count}</span>
-                </button>
-              ))}
-              <span className="t-caption">counts over the page loaded</span>
-            </div>
+          {/* THE REASONS ON THIS PAGE, as a facet rail — the same component
+              the event log's categories use, so the two read and behave
+              alike. DERIVED rather than closed, so a reason with nothing
+              under it is simply absent: unlike a category, a wake reason is
+              not a dimension a reader is browsing. */}
+          {reasons.length > 1 && (
+            <FacetRail
+              name="Reason"
+              value={reason}
+              onChange={setReason}
+              over="loaded"
+              facets={reasons.map(([name, count]) => ({
+                value: name,
+                label: reasonPhrase(name),
+                count,
+              }))}
+            />
           )}
 
           {inbox.loading && !inbox.data && <Skeleton rows={5} />}

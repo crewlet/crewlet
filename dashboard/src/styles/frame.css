@@ -940,6 +940,57 @@
   color: var(--text);
 }
 
+/* ---- The log's time axis --------------------------------------------------
+   Where in this window things happened, which a page of rows cannot say. The
+   bars are the ENGINE's — see ui/Histogram.tsx — and each one is a control:
+   clicking it narrows the window to the bucket it covers.
+
+   An empty bucket still paints, at a floor its own component sets. A
+   zero-height element is invisible, so an empty stretch would read as a gap in
+   the chart rather than as a quiet stretch in the company. */
+
+.histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  width: 100%;
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.histogram-bar {
+  all: unset;
+  flex: 1;
+  min-width: 2px;
+  background: var(--accent);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  /* A bar is only a control where the caller gave it something to do, and
+     ui/Histogram.tsx renders a div rather than a button where it did not —
+     so the pointer follows the element rather than a class. */
+  cursor: inherit;
+}
+
+button.histogram-bar {
+  cursor: pointer;
+}
+
+button.histogram-bar:hover {
+  background: var(--accent-hover);
+}
+
+.histogram-bar[data-empty] {
+  background: var(--surface-inset);
+}
+
+button.histogram-bar[data-empty]:hover {
+  background: var(--border-strong);
+}
+
+.histogram-bar:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 /* ---- Facets --------------------------------------------------------------
    The values actually present on a loaded page, as a row of narrowing chips.
    COUNTS ARE OVER WHAT IS LOADED and the row says so beside them: the engine

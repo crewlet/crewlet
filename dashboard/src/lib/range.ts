@@ -88,6 +88,8 @@ export interface Offer {
   custom: boolean;
   /** The window when the URL names none, or names one this screen refuses. */
   fallback: Range;
+  /** Which bucket widths this screen's own question accepts. See [bucketFor]. */
+  buckets?: readonly Bucket[];
 }
 
 /**
@@ -158,35 +160,71 @@ export function spanWords(since: string, until: string): string {
     [3_600_000, "hour"],
     [60_000, "minute"],
   ];
+  // THE COARSEST UNIT THE SPAN DIVIDES INTO EXACTLY, so a window an engine
+  // widened to whole buckets reads as what it is. A histogram over "24 hours"
+  // snaps its edges out to the hour and comes back covering twenty-five of
+  // them: "1+ days" is true and tells a reader nothing, while "25 hours" says
+  // exactly what the bars add up to.
+  for (const [size, name] of units) {
+    if (ms < size || ms % size) continue;
+    const n = ms / size;
+    return `${n} ${name}${n === 1 ? "" : "s"}`;
+  }
+  // Nothing divides it — a window somebody typed to the minute over several
+  // days. The coarsest unit with a whole number in it, marked as more.
   for (const [size, name] of units) {
     if (ms < size) continue;
-    const n = Math.floor(ms / size);
-    return `${n}${ms % size ? "+" : ""} ${name}${n === 1 && ms % size === 0 ? "" : "s"}`;
+    return `${Math.floor(ms / size)}+ ${name}s`;
   }
   return "under a minute";
 }
 
-/** The bucket widths the engine's series has, and nothing else. */
-export type Bucket = "hour" | "day";
+/** The bucket widths an engine series can be drawn in, FINEST FIRST. */
+export const BUCKETS = ["minute", "hour", "day"] as const;
+export type Bucket = (typeof BUCKETS)[number];
+
+/** How many milliseconds a bucket covers. */
+export const BUCKET_MS: Record<Bucket, number> = {
+  minute: 60_000,
+  hour: 60 * 60_000,
+  day: 24 * 60 * 60_000,
+};
 
 /**
- * A day of hours, or a longer range of days.
+ * An hour of minutes, a day of hours, or a longer range of days.
  *
- * TIED TO THE WINDOW rather than offered as a third control: 30 days of hourly
+ * TIED TO THE WINDOW rather than offered as a second control: 30 days of hourly
  * bars is 720 columns on a chart eight hundred pixels wide, and one day of
  * daily bars is a single column. The reader picks a range; the bucket follows.
  *
- * THE ENGINE'S OWN CLOSED SET, matching `tokens.Intervals` — a minute bucket
- * over a week is ten thousand points nobody can read, and the engine refuses a
- * third value rather than guessing which branch its switch should end on.
+ * AND THE SET IS THE QUESTION'S, the same rule an [Offer]'s ranges follow. A
+ * bucket is a closed set at the engine too — an axis with an arbitrary bucket
+ * width is one nobody can label — and the two questions drawn this way accept
+ * different sets: the spend series has `hour` and `day`, because a minute
+ * bucket over a week is ten thousand points nobody can read, and the event log
+ * has `minute` as well, because "what just happened" is the commonest question
+ * asked of a log and an hour is the whole of that answer's window. A screen
+ * declares what its question takes and this COARSENS to it, never past it.
  */
-export function bucketFor(w: Window): Bucket {
-  return spanOf(w) <= RANGE_MS["1d"] ? "hour" : "day";
+export function bucketFor(w: Window, offer: readonly Bucket[] = BUCKETS): Bucket {
+  const span = spanOf(w);
+  const want: Bucket = span <= RANGE_MS["1h"] ? "minute" : span <= RANGE_MS["1d"] ? "hour" : "day";
+  const from = BUCKETS.indexOf(want);
+  // The first offered bucket at or after the one the window wants, and the
+  // coarsest offered otherwise — never finer than the question accepts,
+  // because the engine refuses a value outside its own set rather than
+  // guessing which branch its switch should end on.
+  return BUCKETS.slice(from).find((b) => offer.includes(b)) ?? coarsest(offer);
+}
+
+/** The widest bucket a caller offers, for a window wider than any of them. */
+function coarsest(offer: readonly Bucket[]): Bucket {
+  return [...BUCKETS].reverse().find((b) => offer.includes(b)) ?? "day";
 }
 
 /** How many milliseconds a bucket covers. */
 export function stepOf(bucket: Bucket): number {
-  return bucket === "day" ? 24 * 60 * 60_000 : 60 * 60_000;
+  return BUCKET_MS[bucket];
 }
 
 /** How a window is cut into columns: how wide each is, and how many there are. */
@@ -289,13 +327,16 @@ export function windowEdges(
  */
 export function useTimeRange(now: number, offer: Offer, align = true): TimeRange {
   const [raw, setRaw] = useParam("window", offer.fallback, "section");
-  const { ranges, custom, fallback } = offer;
+  const { ranges, custom, fallback, buckets } = offer;
   // Rebuilt from the fields rather than held by identity: every caller writes
   // its offer inline, so a new object arrives on every render and an offer in
   // the dependency list would rebuild the window on every one of them.
-  const settled = useMemo(() => ({ ranges, custom, fallback }), [ranges, custom, fallback]);
+  const settled = useMemo(
+    () => ({ ranges, custom, fallback, buckets }),
+    [ranges, custom, fallback, buckets],
+  );
   const window = parseWindow(raw, settled);
-  const bucket = bucketFor(window);
+  const bucket = bucketFor(window, buckets);
   const step = align ? stepOf(bucket) : 0;
   // THE WINDOW AS A STRING is what the memo holds, because `parseWindow`
   // returns a fresh object for an interval and a dependency compared by

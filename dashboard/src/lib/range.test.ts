@@ -3,6 +3,8 @@ import {
   RANGES,
   RANGE_LABEL,
   RANGE_MS,
+  BUCKETS,
+  BUCKET_MS,
   bucketFor,
   cutInto,
   isRange,
@@ -167,11 +169,14 @@ describe("the two windows a range names", () => {
 describe("the bucket and the alignment", () => {
   const NOW2 = new Date("2026-06-15T12:34:56Z").getTime();
 
-  it("buckets a day and under by hour, longer by day", () => {
+  it("buckets an hour and under by minute, a day by hour, longer by day", () => {
     // 30 days of hourly bars is 720 columns on a chart eight hundred pixels
     // wide, and one day of daily bars is a single column. The reader picks a
     // range; the bucket follows.
-    for (const window of ["15m", "1h", "6h", "1d"] as const) {
+    for (const window of ["15m", "1h"] as const) {
+      expect(bucketFor(window), window).toBe("minute");
+    }
+    for (const window of ["6h", "1d"] as const) {
       expect(bucketFor(window), window).toBe("hour");
     }
     for (const window of ["7d", "30d", "90d"] as const) {
@@ -179,9 +184,27 @@ describe("the bucket and the alignment", () => {
     }
   });
 
+  it("coarsens to the set the caller's own question accepts, never past it", () => {
+    // The spend series has two buckets and the event log has three, because a
+    // minute bucket over a week is ten thousand points nobody can read and an
+    // hour is the whole window of "what just happened". A screen declares what
+    // its question takes; a value outside the engine's set is refused, not
+    // guessed.
+    const spend = ["hour", "day"] as const;
+    expect(bucketFor("15m", spend)).toBe("hour");
+    expect(bucketFor("1h", spend)).toBe("hour");
+    expect(bucketFor("1d", spend)).toBe("hour");
+    expect(bucketFor("30d", spend)).toBe("day");
+    // And never FINER than asked for, whichever way the window leans.
+    expect(bucketFor("15m", ["day"])).toBe("day");
+    expect(bucketFor("90d", ["minute"])).toBe("minute");
+  });
+
   it("buckets an interval by how long it is, not by how it was written", () => {
     const short = parseWindow("2026-06-15T00:00:00Z/2026-06-15T06:00:00Z", ANY);
     const long = parseWindow("2026-06-01T00:00:00Z/2026-06-15T00:00:00Z", ANY);
+    const tiny = parseWindow("2026-06-15T00:00:00Z/2026-06-15T00:20:00Z", ANY);
+    expect(bucketFor(tiny)).toBe("minute");
     expect(bucketFor(short)).toBe("hour");
     expect(bucketFor(long)).toBe("day");
   });
@@ -210,9 +233,14 @@ describe("the bucket and the alignment", () => {
     expect(aligned.previous.until).toBe(aligned.since);
   });
 
-  it("has a step for both buckets and they differ", () => {
+  it("has a step for every bucket, and they differ", () => {
+    expect(stepOf("minute")).toBe(60_000);
     expect(stepOf("hour")).toBe(3_600_000);
     expect(stepOf("day")).toBe(86_400_000);
+    expect(Object.keys(BUCKET_MS).sort()).toEqual([...BUCKETS].sort());
+    // FINEST FIRST is what [bucketFor]'s coarsening walks, so the order is
+    // load-bearing rather than cosmetic.
+    expect([...BUCKETS]).toEqual([...BUCKETS].sort((a, b) => BUCKET_MS[a] - BUCKET_MS[b]));
   });
 });
 
@@ -231,6 +259,16 @@ describe("what an answer's own window is called", () => {
     expect(label("2026-06-01T00:00:00Z", "2026-06-04T00:00:01Z")).toBe("3+ days");
     expect(label("2026-06-01T00:00:00Z", "2026-06-01T02:00:00Z")).toBe("2 hours");
     expect(label("2026-06-01T00:00:00Z", "2026-06-02T00:00:00Z")).toBe(RANGE_LABEL["1d"]);
+  });
+
+  it("drops to the unit the span divides into rather than saying 'and a bit'", () => {
+    // An engine that snaps a histogram's edges out to whole buckets answers a
+    // "24 hours" window covering twenty-five of them. "1+ days" is true and
+    // tells a reader nothing; "25 hours" says what the bars add up to.
+    expect(label("2026-06-01T13:00:00Z", "2026-06-02T14:00:00Z")).toBe("25 hours");
+    expect(label("2026-06-01T13:00:00Z", "2026-06-01T14:30:00Z")).toBe("90 minutes");
+    // And a span nothing divides is still marked rather than rounded away.
+    expect(label("2026-06-01T00:00:00Z", "2026-06-04T01:00:30Z")).toBe("3+ days");
   });
 
   it("says so rather than inventing a window it cannot read", () => {

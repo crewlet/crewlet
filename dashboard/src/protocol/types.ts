@@ -386,6 +386,39 @@ export interface TokenSeries {
   grouped: Bucket;
 }
 
+/** One bucket of the event log's time axis. */
+export interface EventBar {
+  /** The bucket's START, RFC3339 — never its middle and never its end. */
+  at: string;
+  count: number;
+}
+
+/**
+ * The event log's own time axis.
+ *
+ * WHAT A PAGE OF ROWS CANNOT SAY: a listing answers what happened and has no
+ * dimension for when the company was busy. Counted by the ENGINE through the
+ * same predicate the listing filters with, so a bar can never claim rows the
+ * list beside it would not show.
+ */
+export interface EventSeries {
+  bucket: "minute" | "hour" | "day";
+  /** The window COVERED, snapped outward to whole buckets. */
+  since: string;
+  until: string;
+  /** Every bucket in the window, INCLUDING the empty ones. */
+  bars: EventBar[];
+  /** The window's whole count, stated rather than left as a sum of the bars. */
+  total: number;
+  /**
+   * How many rows each category would give, over the window, with the CATEGORY
+   * filter lifted and every other one applied — which is the only meaning a
+   * facet count can have. A category with no rows is absent, so a screen
+   * rendering the closed set reads a missing key as the zero it is.
+   */
+  by_category: Record<string, number>;
+}
+
 /** The org-wide live meter, plus the identity of the engine run reporting it. */
 export interface OrgBudget {
   meter_id?: string;
@@ -3000,6 +3033,7 @@ export interface QueryMap {
   agent: AgentAnswer;
   agent_memory: AgentMemoryAnswer;
   events: EventsPage;
+  event_series: EventSeries;
   event: EventRecord;
   trace: TraceAnswer;
   turn: TurnAnswer;
