@@ -368,7 +368,7 @@ handed a riddle.
 
 ## Views
 
-A **view** is a saved query with a shape. Three shapes:
+A **view** is a saved query with a shape. Four shapes:
 
 - **`list`** — rows, sorted and grouped, which is what you want when the
   question is "what is there".
@@ -380,6 +380,39 @@ A **view** is a saved query with a shape. Three shapes:
   query — including its totals.
 - **`calendar`** — by date, which is what you want when the question is "what
   is due".
+- **`timeline`** — bars down a date axis, which is what you want when the
+  question is "how does this lay out". It is the one shape that can show a
+  task **spanning** time rather than sitting on a day, and the only one that
+  draws the dependencies between two tasks as a line from one to the other.
+
+### The timeline
+
+A task's `start` and `due` are its bar. A task carrying only one of them gets
+a one-day marker with a dashed edge, because "due on the 20th" and "a day's
+work on the 20th" are different facts and drawing them the same way would
+claim knowledge nobody entered. A task carrying neither sits in an
+**Unscheduled** band under the axis with a count — never placed on today,
+which would invent a deadline nobody set.
+
+Its window is derived from the rows it is drawing, padded to a fortnight so a
+single task has something to be read against and capped at a year and a
+fortnight so one task due in 2031 cannot compress a sprint into four pixels.
+Grouping applies (`group_by=`), and **each band gets its own axis**: a team
+planning six months out does not squeeze every other team into the corner of
+its window.
+
+Dependencies are drawn as arrows from the blocker to the task that waits.
+An arrow is dashed when the edge is **one-sided** — the blocker does not list
+the waiting task back, which the repair duty is still working on. An edge
+whose blocker is not on the axis, because a filter excluded it or because it
+carries no dates, is **counted beneath the chart** rather than dropped
+silently: a reader who cannot see the omission reads the arrows as every
+dependency there is.
+
+It is **read-only**. There is no dragging and no resizing: what a drag would
+mean for a task in a sprint, with a dependency, owned by somebody else is a
+question with no good answer, and the tracker's own edit surfaces already say
+those things properly. A bar is a link.
 
 Views belong to a **container** — the workspace, a project, a unit, a person —
 and a personal view is private to its owner. One per container can be the
@@ -388,8 +421,8 @@ two views can never both claim it. A protected view cannot be edited by anyone
 but its owner, which is what stops a shared board being rearranged under
 everybody.
 
-**Three of them exist without anybody saving one.** Every container has a list,
-a board and a calendar, and none of the three is an object: a fresh project
+**Four of them exist without anybody saving one.** Every container has a list,
+a board, a calendar and a timeline, and none of the four is an object: a fresh project
 needs no setup gesture, a container can never be left without a way to look at
 it, and nothing has to guard against somebody deleting the last view. A project
 running sprints has two more — a sprint board and a backlog — because those are
@@ -634,7 +667,7 @@ that had somehow grown past the cap as one nobody could leave.
 
 ## What a person can do
 
-**The dashboard** renders the board, the list and the calendar over the same
+**The dashboard** renders the board, the list, the calendar and the timeline over the same
 queries a seat's tools use, against this node's own copy. Every answer says how
 far behind that copy is.
 

@@ -1404,14 +1404,20 @@ export interface WorkItemsAnswer {
 
 /** One entry in a container's view strip.
  *
- *  A BUILTIN ROW HAS NO ID. Every container has a list, a board and a calendar
- *  without anybody saving one — they are not objects, so there is nothing to
- *  rename, protect, rank or pin — and a screen renders them from `key`. */
+ *  A BUILTIN ROW HAS NO ID. Every container has a list, a board, a calendar and
+ *  a timeline without anybody saving one — they are not objects, so there is
+ *  nothing to rename, protect, rank or pin — and a screen renders them from
+ *  `key`. */
 export interface WorkView {
   id?: string;
   key: string;
   name: string;
-  type: "list" | "board" | "calendar";
+  /** The four renderings, and there are no others. `timeline` draws the rows
+   *  against a DATE AXIS, which is the one arrangement the others cannot
+   *  express: a list orders by a column, a board groups by one, and a calendar
+   *  puts a task on the day it is due — none of them can show that a task
+   *  spans three weeks, or that it cannot start until another finishes. */
+  type: "list" | "board" | "calendar" | "timeline";
   container: { kind: string; id: string };
   builtin: boolean;
   /** Empty is a SHARED view; a handle makes it personal to that person. */

@@ -1263,16 +1263,24 @@ type TagSet struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// ViewType is the three renderings, and there are no others.
+// ViewType is the four renderings, and there are no others.
 type ViewType string
 
-// The three, and each constant IS the wire value a saved view stores: the type
+// The four, and each constant IS the wire value a saved view stores: the type
 // is what a client picks a renderer by, so these spellings are read by the
 // dashboard as well as by this package.
+//
+// [ViewTimeline] draws the same rows against a DATE AXIS, which is the one
+// arrangement the other three cannot express: a list orders by a column, a
+// board groups by one, and a calendar puts a task on the day it is due — none
+// of them can show that a task spans three weeks, or that it cannot start
+// until another finishes. It is what [TaskRow.Start], [TaskRow.Due] and
+// [TaskRow.WaitingOn] are on the row for.
 const (
 	ViewList     ViewType = "list"
 	ViewBoard    ViewType = "board"
 	ViewCalendar ViewType = "calendar"
+	ViewTimeline ViewType = "timeline"
 )
 
 // Container names where an object lives.

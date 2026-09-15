@@ -48,6 +48,7 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
+import { TimelineView } from "~/components/timeline.tsx";
 import { ItemPeek } from "./WorkItem.tsx";
 import {
   Badge,
@@ -118,6 +119,7 @@ const VIEW_ICON = {
   list: "menu",
   board: "columns",
   calendar: "calendar",
+  timeline: "activity",
 } as const;
 
 export function Work({ project = "" }: { project?: string }) {
@@ -546,6 +548,17 @@ export function Work({ project = "" }: { project?: string }) {
                     setGroupBy(axis);
                     setGroup(key);
                   }}
+                />
+              )}
+              {shape === "timeline" && (
+                <TimelineView
+                  rows={rows}
+                  groups={groups}
+                  chrome={chrome}
+                  selected={peek?.kind === "item" ? peek.id : ""}
+                  now={now}
+                  hrefOf={itemHref}
+                  onOpen={(row) => openPeek({ kind: "item", id: row.key })}
                 />
               )}
               {shape === "calendar" && (
