@@ -28,12 +28,14 @@ import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
 import {
   ButtonLink,
+  Callout,
   Card,
   CodeBlock,
   CopyButton,
   DataTable,
   EmptyState,
   EmptyValue,
+  InlineCode,
   PageHeader,
   RelativeTime,
   SegmentedControl,
@@ -204,7 +206,7 @@ export function ConfigScreen() {
                       header: "Revision",
                       render: (r) => (
                         <span className="row gap-1">
-                          <code className="inline">{r.revision_id.slice(0, 10)}</code>
+                          <InlineCode>{r.revision_id.slice(0, 10)}</InlineCode>
                           {r.is_active && <Tag variant="success">active</Tag>}
                         </span>
                       ),
@@ -296,25 +298,23 @@ export function ConfigScreen() {
         )}
       </TabPanel>
 
-      <div className="banner neutral">
-        <InfoGlyph size="sm" />
+      <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
         <span className="col" style={{ gap: 4 }}>
           <span>
             This screen reads. The organization is created and edited from the{" "}
             <a className="t-link" href={href(["org"], { lens: "builder" })}>
               org chart
             </a>
-            ; any other revision is <code className="inline">PUT /config</code>,{" "}
-            <code className="inline">PATCH /config</code> or{" "}
-            <code className="inline">crewlet config import</code>, each validated against the
-            generated schema before anything is stored.
+            ; any other revision is <InlineCode>PUT /config</InlineCode>,{" "}
+            <InlineCode>PATCH /config</InlineCode> or <InlineCode>crewlet config import</InlineCode>
+            , each validated against the generated schema before anything is stored.
           </span>
           <span className="t-caption">
             An activation is a compare-and-set on a shared pointer, so two operators cannot
             overwrite each other; each node then reconciles onto the new epoch on its own tick.
           </span>
         </span>
-      </div>
+      </Callout>
     </>
   );
 }

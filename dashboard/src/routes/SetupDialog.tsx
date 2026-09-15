@@ -54,7 +54,7 @@ import {
   LinkGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Modal, Tag, useToast } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, Modal, Tag, useToast, VisuallyHidden } from "@crewlethq/ui";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -920,26 +920,24 @@ export function SetupDialog({
           </p>
         ))}
         {manualSeats && (
-          <div className="banner neutral">
-            <InfoGlyph size="sm" />
+          <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
             {/* ONE LINE. What follows it is the roster of agents to
                 configure, which says the rest by being there. */}
             <span>{title} does not support automatic agent provisioning at the moment.</span>
-          </div>
+          </Callout>
         )}
         {manual.map((section) => (
-          <div key={sectionKey(section)} className="banner neutral">
-            <LinkGlyph size="sm" />
+          <Callout variant="neutral" key={sectionKey(section)} icon={<LinkGlyph size="sm" />}>
             <span className="col" style={{ gap: 4 }}>
               <span>
-                Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
+                Deliveries arrive at <InlineCode>{section.tool.public_url}</InlineCode>
               </span>
               <span className="t-caption">
                 This engine registers no webhook for {section.name}, so paste that address into{" "}
                 {section.name}&apos;s own settings yourself.
               </span>
             </span>
-          </div>
+          </Callout>
         ))}
 
         {plainGroups.map(({ section, heading, connect }) => (
@@ -1001,13 +999,12 @@ export function SetupDialog({
                     there, and both causes (no public address, a role name
                     past Slack's cap) are one edit away from fixed. */}
                 {!seat?.manifest && seat?.manifest_note && (
-                  <div className="banner caution">
-                    <WarningGlyph size="sm" />
+                  <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
                     <span className="col" style={{ gap: 4 }}>
                       <span>No app manifest for {heading} yet.</span>
                       <span className="t-caption">{marked(seat.manifest_note)}</span>
                     </span>
-                  </div>
+                  </Callout>
                 )}
                 {seat?.manifest && (
                   <details className="int-manifest">
@@ -1092,7 +1089,7 @@ export function SetupDialog({
                 absent. The same words reach a screen reader as text. */}
             <span className="int-form-why" title={WHY_SECRETS}>
               <InfoGlyph size="sm" />
-              <span className="sr-only">{WHY_SECRETS}</span>
+              <VisuallyHidden>{WHY_SECRETS}</VisuallyHidden>
             </span>
             <span>
               Tip: keep credentials in <a href={href(["secrets"])}>Secrets</a> and reference them
@@ -1103,14 +1100,13 @@ export function SetupDialog({
       </div>
 
       {error && (
-        <div className="banner critical">
-          <ErrorGlyph size="sm" />
+        <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
           {/* THE PROBLEMS, not the paragraph. A validation refusal is several
               of them joined with newlines, which HTML collapses into one run
               where the second problem's config path lands inside the first
               one's sentence. See [Problems]. */}
           <Problems detail={error} />
-        </div>
+        </Callout>
       )}
     </Modal>
   );

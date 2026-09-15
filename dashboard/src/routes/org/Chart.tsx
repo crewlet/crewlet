@@ -28,7 +28,7 @@ import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
 import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
-import { Avatar, ButtonLink, Callout, Card, EmptyState, Tag, cx } from "@crewlethq/ui";
+import { Avatar, ButtonLink, Callout, Card, cx, EmptyState, InlineCode, Tag } from "@crewlethq/ui";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -102,7 +102,7 @@ export function Chart({ index }: { index: OrgIndex }) {
         <Callout variant="neutral" icon={<InfoGlyph />}>
           This engine did not report the hierarchy it derived, so seats are drawn where the document
           places them. Inherited leads and seats moved into a unit by their{" "}
-          <code className="inline">unit</code> reference are not shown.
+          <InlineCode>unit</InlineCode> reference are not shown.
         </Callout>
       )}
       {index.rootSeats.length > 0 && (

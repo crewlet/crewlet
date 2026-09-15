@@ -50,6 +50,7 @@ import {
   PageHeader,
   RelativeTime,
   Skeleton,
+  StatusDot,
   Tag,
   useNow,
 } from "@crewlethq/ui";
@@ -187,7 +188,7 @@ export function ModelActivity() {
         header: "Seat",
         render: (r) => (
           <span className="row gap-2">
-            {r.live && <span className="dot info" />}
+            {r.live && <StatusDot tone="info" pulse />}
             <span className="truncate">{r.role || <EmptyValue label="No seat recorded" />}</span>
           </span>
         ),

@@ -25,6 +25,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { tsKey } from "~/lib/format.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
 import {
+  Callout,
   DataView,
   type DataViewColumn,
   EmptyState,
@@ -200,14 +201,13 @@ export function Conversations() {
 
       {channels.loading && <Skeleton label="Loading the conversations" variant="text" rows={4} />}
       {channels.data?.available === false ? (
-        <div className="banner neutral">
-          <LinkGlyph size="sm" />
+        <Callout variant="neutral" icon={<LinkGlyph size="sm" />}>
           <span>
             No agent-to-agent channel record is reachable from this node. Channels live in the
             fleet's coordination store; a node that cannot read it says so rather than drawing an
             empty list.
           </span>
-        </div>
+        </Callout>
       ) : (
         <QueryState error={channels.error} loading={channels.loading}>
           <DataView<A2AChannel>
@@ -239,8 +239,7 @@ export function Conversations() {
       )}
 
       <Section title="What this surface is, and is not">
-        <div className="banner neutral">
-          <InfoGlyph size="sm" />
+        <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>
               A2A is deliberately narrow: one ask, one answer, then the channel closes. Both halves
@@ -253,7 +252,7 @@ export function Conversations() {
               and why every one of them links out to where it actually lives.
             </span>
           </span>
-        </div>
+        </Callout>
       </Section>
     </>
   );

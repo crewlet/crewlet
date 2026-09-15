@@ -19,6 +19,7 @@ import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
 import {
   Button,
+  Callout,
   Card,
   DataView,
   type DataViewColumn,
@@ -28,6 +29,7 @@ import {
   type FilterDef,
   type FilterValues,
   IconButton,
+  InlineCode,
   PageHeader,
   RelativeTime,
   Skeleton,
@@ -358,8 +360,11 @@ export function Runs() {
             <Card.Title>{`Run ${detail.turn_id.slice(0, 8)}`}</Card.Title>
           </Card.Header>
           {detail.status === "awaiting_input" && (
-            <div className="banner caution" style={{ marginBottom: "var(--spacing-3)" }}>
-              <HelpGlyph size="sm" />
+            <Callout
+              variant="warning"
+              style={{ marginBottom: "var(--spacing-3)" }}
+              icon={<HelpGlyph size="sm" />}
+            >
               <span className="col" style={{ gap: 2 }}>
                 <strong>{detail.question || "The run asked a question."}</strong>
                 <span className="t-caption">
@@ -371,7 +376,7 @@ export function Runs() {
                     : ""}
                 </span>
               </span>
-            </div>
+            </Callout>
           )}
           <DescriptionList
             items={[
@@ -386,26 +391,12 @@ export function Runs() {
               ],
               ["Coding agent", detail.coding_agent || "—"],
               ["Runs in", detail.placement || "—"],
-              [
-                "Branch",
-                detail.branch ? (
-                  <code key="b" className="inline">
-                    {detail.branch}
-                  </code>
-                ) : (
-                  "—"
-                ),
-              ],
+              ["Branch", detail.branch ? <InlineCode key={"b"}>{detail.branch}</InlineCode> : "—"],
               ["Owner node", detail.owner || "—"],
               ["Started", fmtDateTime(detail.started_at)],
               ["Updated", fmtDateTime(detail.updated_at)],
               ["Ran for", fmtDuration(tsKey(detail.updated_at) - tsKey(detail.started_at))],
-              [
-                "Turn",
-                <code key="t" className="inline">
-                  {detail.turn_id}
-                </code>,
-              ],
+              ["Turn", <InlineCode key={"t"}>{detail.turn_id}</InlineCode>],
             ]}
           />
         </Card>

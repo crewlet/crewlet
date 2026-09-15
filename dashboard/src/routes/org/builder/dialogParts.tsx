@@ -19,7 +19,7 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
-import { Callout } from "@crewlethq/ui";
+import { Callout, InlineCode } from "@crewlethq/ui";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -333,7 +333,7 @@ export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBe
                 {references.map((ref, i) => (
                   <span key={ref}>
                     {i > 0 && ", "}
-                    <code className="inline">{ref}</code>
+                    <InlineCode>{ref}</InlineCode>
                   </span>
                 ))}
               </>

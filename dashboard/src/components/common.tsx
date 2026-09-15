@@ -26,11 +26,14 @@ import type { Attention } from "~/lib/attention.ts";
 import {
   Avatar,
   Button,
-  RelativeTime,
-  Tag,
+  Callout,
   cx,
+  EmptyState,
   formatRelative,
+  InlineCode,
+  RelativeTime,
   tableColumns,
+  Tag,
   useNow,
 } from "@crewlethq/ui";
 import type { DataViewColumn } from "@crewlethq/ui";
@@ -205,11 +208,7 @@ export function AttentionRow({ item }: { item: Attention }) {
     );
   }
   return (
-    <a
-      className="attention-row clickable"
-      data-severity={item.severity}
-      href={href(item.path, item.query)}
-    >
+    <a className="attention-row" data-severity={item.severity} href={href(item.path, item.query)}>
       {inner}
     </a>
   );
@@ -316,11 +315,10 @@ export function QueryState({
 }) {
   if (error === "unauthorized") {
     return (
-      <div className="banner caution">
-        <KeyGlyph size="sm" />
+      <Callout variant="warning" icon={<KeyGlyph size="sm" />}>
         <span>
           This answer is auth-gated. It needs an API token matching one of your{" "}
-          <code className="inline">api.auth.tokens</code> entries.
+          <InlineCode>api.auth.tokens</InlineCode> entries.
         </span>
         <span className="spacer" />
         {/* The banner used to say "set a token" and offer nothing that could.
@@ -330,56 +328,56 @@ export function QueryState({
         <Button variant="secondary" size="small" leadingIcon={<KeyGlyph />} onClick={requestToken}>
           Set token
         </Button>
-      </div>
+      </Callout>
     );
   }
   if (error === "no_event_store") {
     return (
-      <div className="banner neutral">
-        <DatabaseGlyph size="sm" />
+      <Callout variant="neutral" icon={<DatabaseGlyph size="sm" />}>
         <span>
           This node keeps no event log, so there is no history to read. Set{" "}
-          <code className="inline">store.path</code> in <code className="inline">crewlet.yaml</code>{" "}
-          to make it durable.
+          <InlineCode>store.path</InlineCode> in <InlineCode>crewlet.yaml</InlineCode> to make it
+          durable.
         </span>
-      </div>
+      </Callout>
     );
   }
   if (error === "unknown_query") {
     return (
-      <div className="banner neutral">
-        <InfoGlyph size="sm" />
+      <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
         <span>
           The engine does not serve this answer — the subsystem behind it is not running on this
           node.
         </span>
-      </div>
+      </Callout>
     );
   }
   if (error === "timeout") {
     return (
-      <div className="banner caution">
-        <ScheduleGlyph size="sm" />
+      <Callout variant="warning" icon={<ScheduleGlyph size="sm" />}>
         <span>The engine did not answer within 10 seconds. It may be under load.</span>
-      </div>
+      </Callout>
     );
   }
   if (error) {
     return (
-      <div className="banner critical">
-        <ErrorGlyph size="sm" />
+      <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
         <span>The engine refused this query ({error}).</span>
-      </div>
+      </Callout>
     );
   }
   if (loading) return null;
   if (empty) {
     return (
-      <div className="empty inline">
-        <InboxGlyph size="xl" />
-        <div className="empty-title">{empty.title}</div>
-        {empty.hint && <div className="empty-sub">{empty.hint}</div>}
-      </div>
+      <EmptyState
+        size="compact"
+        icon={<InboxGlyph />}
+        title={empty.title}
+        // WHY it is empty, and what would fill it. A caller that says nothing
+        // gets the honest sentence rather than a blank line: the query
+        // answered, and this is what it answered with.
+        description={empty.hint ?? "The engine answered this query with nothing."}
+      />
     );
   }
   return <>{children}</>;

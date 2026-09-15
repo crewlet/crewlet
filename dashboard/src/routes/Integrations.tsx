@@ -46,7 +46,17 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Avatar, Button, ButtonLink, EmptyState, PageHeader, Skeleton, Tag } from "@crewlethq/ui";
+import {
+  Avatar,
+  Button,
+  ButtonLink,
+  Callout,
+  EmptyState,
+  InlineCode,
+  PageHeader,
+  Skeleton,
+  Tag,
+} from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 
 /**
@@ -854,10 +864,9 @@ function SurfaceRow({
         <div className="int-row-note">
           <span className="int-row-note-text">
             <span>
-              The event subscription was registered with{" "}
-              <code className="inline">{row.endpoint}</code>, but this engine now listens on{" "}
-              <code className="inline">{base ?? "no public address"}</code>. Update the address in{" "}
-              {surface.name} to keep receiving events.
+              The event subscription was registered with <InlineCode>{row.endpoint}</InlineCode>,
+              but this engine now listens on <InlineCode>{base ?? "no public address"}</InlineCode>.
+              Update the address in {surface.name} to keep receiving events.
             </span>
           </span>
         </div>
@@ -1436,7 +1445,7 @@ export function EntryRow({
                     {seat.detail ? (
                       seat.detail
                     ) : seat.inbound_path ? (
-                      <code className="inline">{seat.inbound_path}</code>
+                      <InlineCode>{seat.inbound_path}</InlineCode>
                     ) : (
                       "nothing set up for this agent"
                     )}
@@ -1702,29 +1711,26 @@ export function Integrations() {
           is one setting, and a screen that asked for it per integration would
           ask the operator to keep seven copies consistent. */}
       {setup.base && !setup.base.present && (
-        <div className="banner caution">
-          <WarningGlyph size="sm" />
+        <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>No public address is set, so no third-party app can deliver to this engine.</span>
             <span className="t-caption">
-              Set <code className="inline">{setup.base.config_path}</code> to the HTTPS address
-              third-party apps reach this deployment on. Chat over an outbound socket, Mattermost,
-              is unaffected.
+              Set <InlineCode>{setup.base.config_path}</InlineCode> to the HTTPS address third-party
+              apps reach this deployment on. Chat over an outbound socket, Mattermost, is
+              unaffected.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
       {setup.base?.present && (
-        <div className="banner neutral">
-          <LinkGlyph size="sm" />
+        <Callout variant="neutral" icon={<LinkGlyph size="sm" />}>
           <span>
-            Third-party apps reach this engine at <code className="inline">{setup.base.value}</code>
+            Third-party apps reach this engine at <InlineCode>{setup.base.value}</InlineCode>
           </span>
-        </div>
+        </Callout>
       )}
       {setup.guarded && (
-        <div className="banner neutral">
-          <KeyGlyph size="sm" />
+        <Callout variant="neutral" icon={<KeyGlyph size="sm" />}>
           <span>
             Setting an integration up needs an operator token. This screen is showing what it can
             read without one.
@@ -1742,7 +1748,7 @@ export function Integrations() {
           >
             Set token
           </Button>
-        </div>
+        </Callout>
       )}
 
       {dropping && (

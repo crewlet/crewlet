@@ -130,21 +130,22 @@ import {
   Button,
   ButtonLink,
   Callout,
+  cx,
   EmptyState,
   IconButton,
+  InlineCode,
+  isComposing,
+  isModalLayerOpen,
   Kbd,
   LayerHost,
   Menu,
+  type MenuEntry,
   Modal,
   SegmentedControl,
   Skeleton,
   TabPanel,
   Tag,
   ToastProvider,
-  cx,
-  isComposing,
-  isModalLayerOpen,
-  type MenuEntry,
   useToast,
 } from "@crewlethq/ui";
 
@@ -426,7 +427,7 @@ function useLiveRegion(): { text: string; announce: (message: string) => void } 
 // ---------------------------------------------------------------------------
 
 /**
- * Below this width the drawer takes the whole window (`components.css`), and
+ * Below this width the drawer takes the whole window and
  * a canvas has no room beside it, so a lens opened with no `view` starts on
  * the outline.
  */
@@ -1460,8 +1461,8 @@ function Lens({
           <Callout variant="warning" icon={<MemoryGlyph />}>
             No model provider is configured, so no agent seat takes a turn: work sent to a seat
             waits on its inbox until one is added. The dashboard does not write providers: add one
-            with <code className="inline">crewlet config import</code> or{" "}
-            <code className="inline">PATCH /config</code>.
+            with <InlineCode>crewlet config import</InlineCode> or{" "}
+            <InlineCode>PATCH /config</InlineCode>.
           </Callout>
         )}
         {refusal && (
@@ -1778,12 +1779,13 @@ function DialogHost({
 
 function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) {
   return (
-    <div
-      className="banner critical org-builder-problems"
+    <Callout
+      variant="danger"
+      className="org-builder-problems"
       role="group"
       aria-label="Problems with the whole configuration"
+      icon={<ErrorGlyph size="sm" />}
     >
-      <ErrorGlyph size="sm" />
       <ul className="col gap-1">
         {problems.map((p, i) => (
           <li key={i}>
@@ -1807,7 +1809,7 @@ function DocumentProblems({ problems }: { problems: readonly PlacedProblem[] }) 
           </li>
         ))}
       </ul>
-    </div>
+    </Callout>
   );
 }
 

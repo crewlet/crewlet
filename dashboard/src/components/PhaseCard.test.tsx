@@ -115,9 +115,11 @@ describe("a round is one block", () => {
     // tech with it — leaving the one thing that ties the blocks below
     // together unannounced, so the thinking and its call were read out as two
     // unrelated collapsed rows.
-    const { container } = render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
-    const spoken = [...container.querySelectorAll(".round .sr-only")].map((n) => n.textContent);
-    expect(spoken).toEqual(["Round 1", "Round 2"]);
+    render(<PhaseCard record={TWO_ROUNDS} defaultOpen />);
+    // Read, not drawn: the numeral a reader sees is the rail's own node, and
+    // the sentence beside it is what a screen reader is given instead.
+    expect(screen.getByText("Round 1")).toBeDefined();
+    expect(screen.getByText("Round 2")).toBeDefined();
   });
 
   test("a round that called a tool and said nothing is still that round's block", () => {

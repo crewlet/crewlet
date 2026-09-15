@@ -44,6 +44,7 @@ import {
   CodeBlock,
   CopyButton,
   IconButton,
+  InlineCode,
   Modal,
   Skeleton,
 } from "@crewlethq/ui";
@@ -228,7 +229,7 @@ export function AfterSaveStrip({
           </span>
         }
       >
-        Saved revision <code className="inline">{shortRevision(saved.revisionId)}</code>.{" "}
+        Saved revision <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>.{" "}
         <span>{state.message}</span>
       </Callout>
       {yaml && <YamlDialog savedRevision={saved.revisionId} onClose={() => setYaml(false)} />}
@@ -263,8 +264,8 @@ export function PreviousRevisionNote() {
   return (
     <Callout variant="neutral" icon={<RefreshGlyph />}>
       This node is still applying revision{" "}
-      <code className="inline">{shortRevision(saved.revisionId)}</code>, so what is drawn below is
-      the revision before it.
+      <InlineCode>{shortRevision(saved.revisionId)}</InlineCode>, so what is drawn below is the
+      revision before it.
     </Callout>
   );
 }
@@ -351,14 +352,15 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
         <>
           {state.revision !== null && state.revision !== savedRevision && (
             <Callout variant="warning">
-              This is revision <code className="inline">{shortRevision(state.revision)}</code>,
-              which is active now, rather than the one you saved.
+              This is revision{" "}
+              <InlineCode tone="inherit">{shortRevision(state.revision)}</InlineCode>, which is
+              active now, rather than the one you saved.
             </Callout>
           )}
           <p className="t-caption">
             Credentials are redacted, as every configuration read is: a value the engine holds reads
-            as <code className="inline">__redacted__</code>, and a reference keeps its{" "}
-            <code className="inline">${"{NAME}"}</code> form.
+            as <InlineCode>__redacted__</InlineCode>, and a reference keeps its{" "}
+            <InlineCode>${"{NAME}"}</InlineCode> form.
           </p>
           <CodeBlock
             plain

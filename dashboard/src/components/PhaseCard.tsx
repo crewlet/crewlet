@@ -53,7 +53,16 @@ import {
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-import { CodeBlock, Disclosure, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
+import {
+  Callout,
+  CodeBlock,
+  cx,
+  Disclosure,
+  RelativeTime,
+  Tag,
+  useNow,
+  VisuallyHidden,
+} from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import {
   ChevronRightGlyph,
@@ -174,7 +183,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
             and a reader who cannot see the rail was getting "1", then two
             unrelated-sounding disclosures. Announced here, hidden from the
             node so it is not read twice. */}
-        <span className="sr-only">Round {round.round}</span>
+        <VisuallyHidden>Round {round.round}</VisuallyHidden>
         <span className="round-node t-num" aria-hidden="true">
           {round.round}
         </span>
@@ -368,16 +377,14 @@ export function PhaseCard({
       {open && (
         <div className="phase-body">
           {record.failed && record.error && (
-            <div className="banner critical">
-              <ErrorGlyph size="sm" />
+            <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
               <span>{record.error}</span>
-            </div>
+            </Callout>
           )}
           {record.notes && (
-            <div className="banner neutral">
-              <InfoGlyph size="sm" />
+            <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
               <span>{record.notes}</span>
-            </div>
+            </Callout>
           )}
 
           {/* The transcript. One block per round — thought, speech, calls —

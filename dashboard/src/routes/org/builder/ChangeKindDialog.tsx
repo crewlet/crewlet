@@ -50,7 +50,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { PersonGlyph, SmartToyGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Modal } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -185,7 +185,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
           <ul className="builder-list">
             {stripped.map((field) => (
               <li key={field.name}>
-                <code className="inline">{field.name}</code>
+                <InlineCode>{field.name}</InlineCode>
                 {field.credential && " holds credentials, which are gone for good"}
               </li>
             ))}

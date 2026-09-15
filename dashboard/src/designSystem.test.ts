@@ -552,3 +552,32 @@ test("no query names a class no stylesheet draws", () => {
     .sort();
   expect(offenders).toEqual([]);
 });
+
+/**
+ * Every stylesheet the dashboard ships, and how long it is allowed to be.
+ *
+ * A BUDGET RATHER THAN A SNAPSHOT. The point of this adoption is that the
+ * engine stops redrawing what the package draws, and the only honest measure
+ * of that is how much CSS is left: a file that grows back has taken something
+ * from the package again, one line at a time, and no per-rule scan notices
+ * that. The numbers are what the tree holds today, so a change that needs more
+ * room has to say so here, in the same commit, where a reader can ask why.
+ *
+ * `components.css` is not on the list, deliberately: it held the button, the
+ * badge, the table, the field, the banner, the chip, the meter, the list and
+ * the empty state, and every one of those is the package's now.
+ */
+const SHEET_BUDGET: Record<string, number> = {
+  "styles/base.css": 210,
+  "styles/screens.css": 1900,
+};
+
+test("no stylesheet is longer than its budget, and none has appeared", () => {
+  const sheets = Object.fromEntries(
+    files(/\.css$/).map(({ name, text }) => [name, text.split("\n").length]),
+  );
+  expect(Object.keys(sheets).sort()).toEqual(Object.keys(SHEET_BUDGET).sort());
+  for (const [name, budget] of Object.entries(SHEET_BUDGET)) {
+    expect([name, sheets[name]! <= budget]).toEqual([name, true]);
+  }
+});

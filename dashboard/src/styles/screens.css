@@ -1867,3 +1867,20 @@ details > summary.int-summary::-webkit-details-marker {
   flex: 1 1 0;
   min-width: 0;
 }
+
+/* ---- The outline's own layer host ---------------------------------------
+   A surface anchored to a row inside a box that scrolls sideways is a surface
+   that box clips, so the outline gives its own host this class and the rows'
+   menus open into it. The canvas needs the same thing and has it built in:
+   its viewport, its panned world, its overlay and its controls are all the
+   design system's now, and so are the rules that used to live here. */
+
+.popup-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.popup-layer > * {
+  pointer-events: auto;
+}

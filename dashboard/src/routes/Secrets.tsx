@@ -33,12 +33,14 @@ import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
 import {
   Button,
+  Callout,
   DataView,
   type DataViewColumn,
   EmptyState,
   EmptyValue,
   type FilterDef,
   type FilterValues,
+  InlineCode,
   PageHeader,
   RelativeTime,
   Skeleton,
@@ -263,21 +265,20 @@ export function Secrets() {
         }
       />
 
-      <div className="banner neutral">
-        <ShieldGlyph size="sm" />
+      <Callout variant="neutral" icon={<ShieldGlyph size="sm" />}>
         <span className="col" style={{ gap: 4 }}>
           <span>
             These live in the fleet's coordination store, sealed with the Tier A keyring, and every
-            node reads them. A <code className="inline">${"{VAR}"}</code> in the company config
-            resolves here first and falls back to the process environment.
+            node reads them. A <InlineCode>${"{VAR}"}</InlineCode> in the company config resolves
+            here first and falls back to the process environment.
           </span>
           <span className="t-caption">
             Values are never sent to this page. Reading one is{" "}
-            <code className="inline">crewlet secrets get</code>, which logs the access. A new value
-            reaches a running seat at the next configuration activation or restart.
+            <InlineCode>crewlet secrets get</InlineCode>, which logs the access. A new value reaches
+            a running seat at the next configuration activation or restart.
           </span>
         </span>
-      </div>
+      </Callout>
 
       <StatGroup columns={3}>
         <StatCard

@@ -31,7 +31,7 @@ import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
 import { RefreshGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
+import { Button, Modal, SegmentedControl, Table } from "@crewlethq/ui";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
 export type NameOf = (key: NodeKey) => string | null;
@@ -222,31 +222,15 @@ export function UpdateDraftDialog({
             return (
               <div key={entry.index} className="org-builder-conflict col gap-2">
                 <span>{label}</span>
-                <div className="table-wrap">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th scope="col">What</th>
-                        <th scope="col">When you started</th>
-                        <th scope="col">Saved now</th>
-                        <th scope="col">Yours</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {entry.conflicts.map((c, i) => {
-                        const cells = conflictCells(c, nameOf);
-                        return (
-                          <tr key={i}>
-                            <td>{c.subject}</td>
-                            <td>{cells.base}</td>
-                            <td>{cells.theirs}</td>
-                            <td>{cells.mine}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                <Table
+                  caption={`What changed under this edit: ${label}`}
+                  captionHidden
+                  headers={["What", "When you started", "Saved now", "Yours"]}
+                  data={entry.conflicts.map((c) => {
+                    const cells = conflictCells(c, nameOf);
+                    return [c.subject, cells.base, cells.theirs, cells.mine];
+                  })}
+                />
                 <SegmentedControl<Choice | "">
                   label={`Resolve: ${label}`}
                   semantics="radio"

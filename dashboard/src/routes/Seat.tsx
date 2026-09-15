@@ -56,15 +56,18 @@ import {
   Avatar,
   BarList,
   Button,
+  Callout,
   Card,
   DataTable,
   DescriptionList,
   EmptyState,
   EmptyValue,
+  InlineCode,
   Meter,
   PageHeader,
   RelativeTime,
   Skeleton,
+  Stack,
   StatCard,
   StatGroup,
   TabPanel,
@@ -270,8 +273,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       />
 
       {agent?.last_error && (
-        <div className="banner critical">
-          <ErrorGlyph size="sm" />
+        <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
           <span>
             <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
             {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
@@ -287,17 +289,15 @@ export function SeatScreen({ handle }: { handle: string }) {
               event →
             </a>
           )}
-        </div>
+        </Callout>
       )}
       {state === "afk" && (
-        <div className="banner caution">
-          <PauseGlyph size="sm" />
+        <Callout variant="warning" icon={<PauseGlyph size="sm" />}>
           <span>This seat is AFK: {afkReason(agent?.afk_reason)}.</span>
-        </div>
+        </Callout>
       )}
       {sandbox?.status === "awaiting_input" && (
-        <div className="banner caution">
-          <HelpGlyph size="sm" />
+        <Callout variant="warning" icon={<HelpGlyph size="sm" />}>
           <span>
             A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
           </span>
@@ -308,7 +308,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           >
             The run
           </Button>
-        </div>
+        </Callout>
       )}
 
       <Tabs
@@ -378,9 +378,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     [
                       "Handle",
                       seat.handle ? (
-                        <code key="h" className="inline">
-                          @{seat.handle}
-                        </code>
+                        <InlineCode key={"h"}>@{seat.handle}</InlineCode>
                       ) : (
                         <span className="muted">not reported by this engine</span>
                       ),
@@ -403,7 +401,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           </span>
                           {seat.placedByRef && (
                             <span className="t-caption">
-                              Placed by its <code className="inline">unit</code> reference
+                              Placed by its <InlineCode>unit</InlineCode> reference
                             </span>
                           )}
                         </span>
@@ -578,7 +576,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       key: "cron",
                       header: "Cron",
                       shrink: true,
-                      render: (s) => <code className="inline">{s.cron}</code>,
+                      render: (s) => <InlineCode>{s.cron}</InlineCode>,
                     },
                     {
                       key: "task",
@@ -686,7 +684,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     <Card.Title>Private diary</Card.Title>
                   </Card.Header>
                   {memory.data?.diary?.length ? (
-                    <div className="list">
+                    <Stack gap={0}>
                       {memory.data.diary.map((d, i) => (
                         <div key={d.id ?? i} className="thread-entry">
                           <div className="row gap-1">
@@ -697,7 +695,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           <p className="t-body">{d.content}</p>
                         </div>
                       ))}
-                    </div>
+                    </Stack>
                   ) : (
                     <EmptyState
                       size="compact"
@@ -801,7 +799,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     <Card.Title>Skills it taught itself</Card.Title>
                   </Card.Header>
                   {memory.data?.skills?.length ? (
-                    <div className="list">
+                    <Stack gap={0}>
                       {memory.data.skills.map((s, i) => (
                         <div key={s.id ?? s.key ?? i} className="thread-entry">
                           <div className="row gap-1">
@@ -815,7 +813,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           {s.summary && <p className="t-caption">{s.summary}</p>}
                         </div>
                       ))}
-                    </div>
+                    </Stack>
                   ) : (
                     <EmptyState
                       size="compact"
@@ -836,7 +834,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     <Card.Title>Who it has worked with</Card.Title>
                   </Card.Header>
                   {memory.data?.counterparties?.length ? (
-                    <div className="list">
+                    <Stack gap={0}>
                       {memory.data.counterparties.map((c, i) => (
                         <div key={`${c.subject}-${i}`} className="thread-entry">
                           <div className="row gap-1">
@@ -847,7 +845,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           <p className="t-caption">{c.summary}</p>
                         </div>
                       ))}
-                    </div>
+                    </Stack>
                   ) : (
                     <EmptyState
                       size="compact"
@@ -934,8 +932,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 )}
               </Card>
             ) : (
-              <div className="banner neutral">
-                <InfoGlyph size="sm" />
+              <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
                 <span>
                   {!configRole
                     ? "No engine is reporting a budget meter for this seat, so there is nothing measured to draw."
@@ -943,7 +940,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       ? "This role has a token_budget in the config, but no engine is currently reporting a meter for it, so there is nothing measured to draw."
                       : "No per-seat budget meter. This role has no token_budget, so its spend is bounded only by the company-wide one."}
                 </span>
-              </div>
+              </Callout>
             )}
 
             {spend.loading && (
@@ -1016,7 +1013,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {
                       key: "id",
                       header: "Turn",
-                      render: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
+                      render: (t) => <InlineCode>{t.turn_id.slice(0, 8)}</InlineCode>,
                     },
                     {
                       key: "tokens",
@@ -1175,9 +1172,9 @@ function ConfigValue({ value, secret = false }: { value: string | undefined; sec
     case "hidden":
       return <span className="t-caption">A literal value is set (hidden)</span>;
     case "reference":
-      return <code className="inline is-reference">{value}</code>;
+      return <InlineCode variant="reference">{value}</InlineCode>;
     case "literal":
-      return <code className="inline">{value}</code>;
+      return <InlineCode>{value}</InlineCode>;
     default:
       return <span className="muted">not set</span>;
   }
@@ -1188,13 +1185,12 @@ function Model({ llm }: { llm: unknown }) {
   const rows = formatPhaseLLM(llm);
   if (!rows.length) return <span className="muted">the company default provider</span>;
   const only = rows[0];
-  if (rows.length === 1 && only && only.phase === "")
-    return <code className="inline">{only.chain}</code>;
+  if (rows.length === 1 && only && only.phase === "") return <InlineCode>{only.chain}</InlineCode>;
   return (
     <span className="col" style={{ gap: 2 }}>
       {rows.map((row) => (
         <span key={row.phase}>
-          {humanize(row.phase)}: <code className="inline">{row.chain}</code>
+          {humanize(row.phase)}: <InlineCode>{row.chain}</InlineCode>
         </span>
       ))}
     </span>
@@ -1219,12 +1215,8 @@ function phaseOverrides(role: ConfigRole): [ReactNode, ReactNode][] {
     if (!rows.length) return [];
     return [
       [
-        <code key={field} className="inline">
-          {field}
-        </code>,
-        <code key={`${field}-v`} className="inline">
-          {rows.map((r) => r.chain).join("; ")}
-        </code>,
+        <InlineCode key={field}>{field}</InlineCode>,
+        <InlineCode key={`${field}-v`}>{rows.map((r) => r.chain).join("; ")}</InlineCode>,
       ],
     ];
   });
@@ -1234,7 +1226,7 @@ function phaseOverrides(role: ConfigRole): [ReactNode, ReactNode][] {
 function SeatIntegrations({ role }: { role: ConfigRole }) {
   const i = role.integrations ?? {};
   const text = (value: string | undefined) =>
-    value ? <code className="inline">{value}</code> : <span className="muted">not set</span>;
+    value ? <InlineCode>{value}</InlineCode> : <span className="muted">not set</span>;
   const items: [ReactNode, ReactNode][] = [];
   if (i.github) {
     items.push(
@@ -1244,9 +1236,7 @@ function SeatIntegrations({ role }: { role: ConfigRole }) {
         i.github.repos?.length ? (
           <span className="col" style={{ gap: 2 }}>
             {i.github.repos.map((repo) => (
-              <code key={repo} className="inline">
-                {repo}
-              </code>
+              <InlineCode key={repo}>{repo}</InlineCode>
             ))}
           </span>
         ) : (
@@ -1312,9 +1302,7 @@ function ToolCredentials({
           <div className="t-label">{server}</div>
           <DescriptionList
             items={Object.entries(vars).map(([name, value]) => [
-              <code key={name} className="inline">
-                {name}
-              </code>,
+              <InlineCode key={name}>{name}</InlineCode>,
               <ConfigValue key={`${name}-v`} secret value={value} />,
             ])}
           />

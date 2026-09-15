@@ -10,6 +10,7 @@ import {
   DataTable,
   EmptyState,
   EmptyValue,
+  InlineCode,
   PageHeader,
   RelativeTime,
   Skeleton,
@@ -124,12 +125,9 @@ export function Schedules() {
                 sortable: true,
                 sortValue: (s) => s.cron,
                 render: (s) => (
-                  <code
-                    className="inline"
-                    title={s.timezone ? `timezone: ${s.timezone}` : undefined}
-                  >
+                  <InlineCode title={s.timezone ? `timezone: ${s.timezone}` : undefined}>
                     {s.cron}
-                  </code>
+                  </InlineCode>
                 ),
               },
               {

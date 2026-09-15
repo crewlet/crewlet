@@ -22,7 +22,7 @@ import { maskedCredentialPaths } from "./model/document.ts";
 
 import { useBuilder } from "./BuilderContext.tsx";
 import { ScreenLink } from "./dialogParts.tsx";
-import { Callout } from "@crewlethq/ui";
+import { Callout, InlineCode } from "@crewlethq/ui";
 
 export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: boolean }) {
   const { state } = useBuilder();
@@ -46,7 +46,7 @@ export function RenameUnitPreflight({ unit, stored }: { unit: NodeKey; stored: b
             <ul className="builder-list">
               {paths.map((path) => (
                 <li key={path}>
-                  <code className="inline">{path}</code>
+                  <InlineCode tone="inherit">{path}</InlineCode>
                 </li>
               ))}
             </ul>

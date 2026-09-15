@@ -34,10 +34,11 @@ import { ClientContext } from "./lib/store-hooks.ts";
 import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
 import { applyStoredPreferences } from "@crewlethq/ui";
 
-// The engine's own sheets last, so a screen rule outranks the component rule
-// it sits on rather than the other way round.
+// The engine's own sheets last, so a screen's own layout outranks anything it
+// inherits. There is no component sheet: every primitive this dashboard draws
+// is the design system's, and the two files here are the utilities each screen
+// leans on and the layout each screen family needs on top of them.
 import "./styles/base.css";
-import "./styles/components.css";
 import "./styles/screens.css";
 
 // Before the first paint, so a reader whose machine is set to light never sees

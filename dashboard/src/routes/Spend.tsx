@@ -19,11 +19,13 @@ import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts"
 import { phaseColor } from "~/lib/phases.ts";
 import {
   BarList,
+  Callout,
   Card,
   dataColor,
   DataTable,
   EmptyState,
   EmptyValue,
+  InlineCode,
   Legend,
   Meter,
   PageHeader,
@@ -394,7 +396,7 @@ export function Spend() {
                 key: "turn",
                 header: "Turn",
                 shrink: true,
-                render: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
+                render: (t) => <InlineCode>{t.turn_id.slice(0, 8)}</InlineCode>,
               },
             ])}
           />
@@ -413,13 +415,16 @@ export function Spend() {
             <Skeleton label="Loading the durable budget counters" variant="text" rows={3} />
           )}
           {budgets.data && budgets.data.durable === false ? (
-            <div className="banner neutral" style={{ margin: "var(--spacing-3)" }}>
-              <DatabaseGlyph size="sm" />
+            <Callout
+              variant="neutral"
+              style={{ margin: "var(--spacing-3)" }}
+              icon={<DatabaseGlyph size="sm" />}
+            >
               <span>
                 The durable counter could not be READ — which is not the same as it being zero. It
                 lives in the fleet's coordination store; this node could not reach it.
               </span>
-            </div>
+            </Callout>
           ) : (
             <QueryState error={budgets.error} loading={budgets.loading}>
               <DataTable

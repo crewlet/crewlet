@@ -1,4 +1,4 @@
-import { Button, EmptyState, PageHeader } from "@crewlethq/ui";
+import { Button, EmptyState, InlineCode, PageHeader } from "@crewlethq/ui";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 import { ExploreGlyph } from "@crewlethq/icons/glyphs";
 
@@ -13,8 +13,8 @@ export function NotFound({ what }: { what: string }) {
         title={`This URL names ${what}, and there is no such screen.`}
         description={
           <>
-            The address was <code className="inline">{route.hash}</code>. Every screen is reachable
-            from the sidebar, and any event, trace or turn id can be pasted into the search box.
+            The address was <InlineCode>{route.hash}</InlineCode>. Every screen is reachable from
+            the sidebar, and any event, trace or turn id can be pasted into the search box.
           </>
         }
         action={

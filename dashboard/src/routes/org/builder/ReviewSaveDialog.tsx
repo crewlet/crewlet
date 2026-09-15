@@ -30,7 +30,7 @@ import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -364,8 +364,8 @@ export function ReviewSaveDialog({
         help={
           <>
             Recorded with the revision as{" "}
-            <code className="inline">{signedSummary(summary, writeId).trim()}</code>. The write id
-            lets the builder recognize this save if its answer is lost.
+            <InlineCode>{signedSummary(summary, writeId).trim()}</InlineCode>. The write id lets the
+            builder recognize this save if its answer is lost.
           </>
         }
       />

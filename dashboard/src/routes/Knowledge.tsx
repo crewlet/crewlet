@@ -30,7 +30,19 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, EmptyState, Input, PageHeader, Skeleton, Tag, Toolbar } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Card,
+  EmptyState,
+  InlineCode,
+  Input,
+  PageHeader,
+  Skeleton,
+  Stack,
+  Tag,
+  Toolbar,
+} from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -103,41 +115,39 @@ export function Knowledge() {
           for "no backend" and "no company" alike, and telling somebody with
           no company configured to go and wire Confluence is the wrong fix. */}
       {q && data?.available === false && (
-        <div className="banner neutral">
-          <Book2Glyph size="sm" />
+        <Callout variant="neutral" icon={<Book2Glyph size="sm" />}>
           <span>
             This search could not run: {data.note || "the engine gave no reason"}.
             {data.reason === "no_backend" && (
               <>
                 {" "}
-                Wire <code className="inline">integrations.confluence</code> and list the spaces to
-                read in <code className="inline">knowledge.confluence_spaces</code> to give agents a
-                shared place to read from.
+                Wire <InlineCode>integrations.confluence</InlineCode> and list the spaces to read in{" "}
+                <InlineCode>knowledge.confluence_spaces</InlineCode> to give agents a shared place
+                to read from.
               </>
             )}
             {data.reason === "no_scope" && (
               <>
                 {" "}
                 The integration itself is fine — add the spaces to search to{" "}
-                <code className="inline">knowledge.confluence_spaces</code>.
+                <InlineCode>knowledge.confluence_spaces</InlineCode>.
               </>
             )}
           </span>
-        </div>
+        </Callout>
       )}
 
       {/* The search DID run and came back degraded — a different banner,
           because an empty result that ran is not the same fact as one that
           never started. */}
       {q && data?.available !== false && data?.note && (
-        <div className="banner caution">
-          <WarningGlyph size="sm" />
+        <Callout variant="warning" icon={<WarningGlyph size="sm" />}>
           <span>
             The search did not complete: {data.note}. Knowledge search is best effort by design — a
             turn never dies because a wiki was slow — so an empty result here is not proof that
             nothing matches.
           </span>
-        </div>
+        </Callout>
       )}
 
       {q && (
@@ -164,7 +174,7 @@ export function Knowledge() {
             >
               <Card.Title>Results</Card.Title>
             </Card.Header>
-            <div className="list">
+            <Stack gap={0}>
               {(data?.hits ?? []).map((hit) => (
                 <div key={hit.id} className="hit">
                   <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
@@ -179,7 +189,7 @@ export function Knowledge() {
                   {hit.snippet && <p className="hit-snippet">{hit.snippet}</p>}
                 </div>
               ))}
-            </div>
+            </Stack>
             <Card.Footer
               variant="meta"
               style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}

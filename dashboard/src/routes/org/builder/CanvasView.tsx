@@ -103,29 +103,30 @@ import {
 import {
   Avatar,
   Canvas,
-  EmptyState,
-  IconButton,
-  Menu,
-  Tag,
+  type CanvasHandle,
+  type CanvasPoint,
+  type CanvasRect,
   cx,
+  EmptyState,
+  type ForestLayout,
+  IconButton,
   layoutForest,
+  type LayoutNode,
+  Menu,
+  type MenuEntry,
+  Tag,
   treeAncestors,
   treeExpandable,
+  type TreeInput,
   treeLevel,
+  type TreeModel,
   treePosInSet,
   treeSetSize,
   treeStep,
   useLayoutAnchor,
   useMeasuredSizes,
   useTreeState,
-  type CanvasHandle,
-  type CanvasPoint,
-  type CanvasRect,
-  type ForestLayout,
-  type LayoutNode,
-  type MenuEntry,
-  type TreeInput,
-  type TreeModel,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 
 /**
@@ -372,7 +373,7 @@ function StructureCard({
           </span>
           <ProblemCount api={api} nodeKey={id} />
         </span>
-        <span className="sr-only">{leadSentence(view)}</span>
+        <VisuallyHidden>{leadSentence(view)}</VisuallyHidden>
         <span className="bchart-marks">
           <UnitMarks view={view} />
         </span>

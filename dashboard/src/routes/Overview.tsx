@@ -49,6 +49,7 @@ import {
   Legend,
   Meter,
   PageHeader,
+  Stack,
   StatCard,
   StatGroup,
   Tag,
@@ -222,7 +223,7 @@ export function Overview() {
           <Card.Title>Needs a person</Card.Title>
         </Card.Header>
         {attention.length ? (
-          <div className="list">
+          <Stack gap={0}>
             {attention.slice(0, 8).map((item) => (
               <AttentionRow key={item.id} item={item} />
             ))}
@@ -237,7 +238,7 @@ export function Overview() {
                 </span>
               </div>
             )}
-          </div>
+          </Stack>
         ) : (
           <EmptyState
             size="compact"
@@ -349,7 +350,7 @@ export function Overview() {
                 retention — the earliest minutes here are cut off rather than quiet.
               </span>
             )}
-            <div className="list">
+            <Stack gap={0}>
               {events.slice(0, 7).map((ev) => (
                 <EventRow key={ev.id} event={ev} />
               ))}
@@ -361,7 +362,7 @@ export function Overview() {
                   description="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
                 />
               )}
-            </div>
+            </Stack>
           </div>
         </Card>
       </div>

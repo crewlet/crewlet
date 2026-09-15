@@ -116,6 +116,7 @@ import {
   Checkbox,
   EmptyState,
   FormField,
+  InlineCode,
   ListInput,
   Modal,
   TagsInput,
@@ -382,7 +383,7 @@ function ToolCredentialFact({ data }: { data: ConfigRole | ConfigUnit }) {
       <ul className="builder-list">
         {names.map(({ server, variables }) => (
           <li key={server}>
-            <code className="inline">{server}</code>
+            <InlineCode>{server}</InlineCode>
             {variables.length > 0 && ` (${variables.join(", ")})`}
           </li>
         ))}
@@ -867,7 +868,7 @@ function SeatEditor({
           label="Handle"
           reason="An existing seat keeps its handle: it is the identity its memory and mailbox attach to."
         >
-          <code className="inline">{handle ?? ""}</code>
+          <InlineCode>{handle ?? ""}</InlineCode>
         </ReadOnlyFact>
       )}
       <KindFact seatKey={key} human={human} dirty={dirty} onClose={onClose} />
@@ -1270,7 +1271,7 @@ function IntegrationsSection({
                 label="App"
                 reason="Created from Integrations; its credentials are never shown."
               >
-                <code className="inline">{appSlug}</code>
+                <InlineCode>{appSlug}</InlineCode>
               </ReadOnlyFact>
             )}
             <ConfigField
@@ -1351,7 +1352,7 @@ function IntegrationsSection({
                 label="Bot username"
                 reason="The engine provisions this bot, because its token names a secret store entry. Changing the username would make the provisioner find or create a second bot."
               >
-                <code className="inline">{form.mattermostUsername || defaultUsername}</code>
+                <InlineCode>{form.mattermostUsername || defaultUsername}</InlineCode>
               </ReadOnlyFact>
             ) : (
               <ConfigField

@@ -19,6 +19,7 @@ import {
   CopyButton,
   DescriptionList,
   EmptyValue,
+  InlineCode,
   PageHeader,
   RelativeTime,
   Skeleton,
@@ -49,7 +50,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
     <>
       <PageHeader
         title={data ? data.summary || data.type : "Event"}
-        description={data ? <code className="inline">{data.type}</code> : eventId}
+        description={data ? <InlineCode>{data.type}</InlineCode> : eventId}
         badges={
           data ? (
             <>
@@ -115,18 +116,8 @@ export function EventScreen({ eventId }: { eventId: string }) {
               </Card.Header>
               <DescriptionList
                 items={[
-                  [
-                    "Id",
-                    <code key="i" className="inline">
-                      {data.id}
-                    </code>,
-                  ],
-                  [
-                    "Type",
-                    <code key="t" className="inline">
-                      {data.type}
-                    </code>,
-                  ],
+                  ["Id", <InlineCode key={"i"}>{data.id}</InlineCode>],
+                  ["Type", <InlineCode key={"t"}>{data.type}</InlineCode>],
                   [
                     "When",
                     <span key="when">
@@ -140,9 +131,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   [
                     "Topic",
                     data.topic ? (
-                      <code key="tp" className="inline">
-                        {data.topic}
-                      </code>
+                      <InlineCode key={"tp"}>{data.topic}</InlineCode>
                     ) : (
                       <EmptyValue label="Not reported" />
                     ),
@@ -150,9 +139,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   [
                     "Trace",
                     data.trace_id ? (
-                      <code key="tr" className="inline">
-                        {data.trace_id}
-                      </code>
+                      <InlineCode key={"tr"}>{data.trace_id}</InlineCode>
                     ) : (
                       <span className="muted">not traced</span>
                     ),
@@ -231,9 +218,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 <DescriptionList
                   items={Object.entries(data.tags).map(([k, v]) => [
                     k,
-                    <code key={k} className="inline">
-                      {v}
-                    </code>,
+                    <InlineCode key={k}>{v}</InlineCode>,
                   ])}
                 />
               </Card>

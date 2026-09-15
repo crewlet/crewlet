@@ -20,7 +20,7 @@ import { useState } from "react";
 import { marked } from "~/components/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
-import { Avatar, Button, Checkbox, Modal } from "@crewlethq/ui";
+import { Avatar, Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -241,7 +241,7 @@ export function DisconnectDialog({
           <ul className="col gap-1" style={{ margin: 0, paddingLeft: "1.1rem" }}>
             {orphans.map((name) => (
               <li key={name}>
-                <code className="inline">{name}</code>
+                <InlineCode>{name}</InlineCode>
               </li>
             ))}
           </ul>
@@ -257,12 +257,12 @@ export function DisconnectDialog({
               <strong>Wait until the card stops reporting Disconnecting.</strong> The engine is
               still removing what {name} holds at the app, and it signs in with these credentials to
               do it. Once it has finished, revoke each one at the app and remove it with{" "}
-              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+              <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
             </p>
           ) : (
             <p className="t-body secondary" style={{ margin: 0 }}>
               Revoke each one at the app, then remove it with{" "}
-              <code className="inline">crewlet secrets unset &lt;name&gt;</code>.
+              <InlineCode>crewlet secrets unset &lt;name&gt;</InlineCode>.
             </p>
           )}
         </div>
@@ -350,18 +350,16 @@ export function DisconnectDialog({
             dialog used to stop dead at that refusal, which on a card
             covering three surfaces left the tool half disconnected. */}
         {waitingOn && !error && (
-          <div className="banner">
-            <ScheduleGlyph size="sm" />
+          <Callout variant="neutral" icon={<ScheduleGlyph size="sm" />}>
             <span>
               {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
               trying.
             </span>
-          </div>
+          </Callout>
         )}
 
         {error && (
-          <div className="banner critical">
-            <ErrorGlyph size="sm" />
+          <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
             <span className="col" style={{ gap: 4 }}>
               {stuck && (
                 <span>
@@ -388,7 +386,7 @@ export function DisconnectDialog({
                 </Button>
               </span>
             </span>
-          </div>
+          </Callout>
         )}
       </div>
     </Modal>

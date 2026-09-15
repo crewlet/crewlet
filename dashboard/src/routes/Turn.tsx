@@ -90,6 +90,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import {
   Button,
+  Callout,
   Card,
   CodeBlock,
   CopyButton,
@@ -97,8 +98,10 @@ import {
   DescriptionList,
   Disclosure,
   EmptyValue,
+  InlineCode,
   PageHeader,
   Skeleton,
+  Stack,
   StatCard,
   StatGroup,
   Tag,
@@ -286,14 +289,13 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
             </span>
           )}
           {gated.length > 0 && (
-            <div className="banner neutral">
-              <InfoGlyph size="sm" />
+            <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
               <span>
                 Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
                 these filters were skipped. The executor searches later with{" "}
-                <code className="inline">search_knowledge</code>, once it knows what the task needs.
+                <InlineCode>search_knowledge</InlineCode>, once it knows what the task needs.
               </span>
-            </div>
+            </Callout>
           )}
           {empty.length > 0 && (
             <span className="t-caption">
@@ -373,11 +375,11 @@ export function withoutActor(summary: string, actor: string): string {
 
 function EventList({ events, actor }: { events: EventRecord[]; actor: string }) {
   return (
-    <div className="list">
+    <Stack gap={0}>
       {events.map((e) => (
         <TurnEventRow key={e.id} event={e} actor={actor} />
       ))}
-    </div>
+    </Stack>
   );
 }
 
@@ -532,7 +534,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
     <>
       <PageHeader
         title="Turn"
-        description={<code className="inline">{turnId}</code>}
+        description={<InlineCode>{turnId}</InlineCode>}
         badges={
           <>
             {role && <Tag appearance="outline">{role}</Tag>}
@@ -774,11 +776,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             >
               <Card.Title>Also published</Card.Title>
             </Card.Header>
-            <div className="list">
+            <Stack gap={0}>
               {story.rest.map((e) => (
                 <EventRow key={e.id} event={e as unknown as FeedRow} showDate />
               ))}
-            </div>
+            </Stack>
           </Card>
         )}
 
@@ -802,7 +804,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                         // answering, and it used to be an unexplained
                         // truncated string under the seat's name.
                         <span className="row gap-2" style={{ alignItems: "baseline" }}>
-                          <code className="inline">{conversation}</code>
+                          <InlineCode>{conversation}</InlineCode>
                           <span className="t-caption">the external thread this turn served</span>
                         </span>,
                       ],

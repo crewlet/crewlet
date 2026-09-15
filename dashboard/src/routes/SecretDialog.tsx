@@ -26,7 +26,7 @@ import { useState } from "react";
 import { ConfigField } from "~/components/ConfigField.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { ErrorGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { Button, Callout, InlineCode, Modal } from "@crewlethq/ui";
 
 export function SecretDialog({
   /** The name being edited, or "" to store a new one. */
@@ -96,8 +96,8 @@ export function SecretDialog({
     >
       {editing ? (
         <p className="t-body secondary" style={{ margin: 0 }}>
-          The value replaces what the fleet holds under <code className="inline">{editing}</code>.
-          Every node reads the same row, so nothing has to be copied anywhere.
+          The value replaces what the fleet holds under <InlineCode>{editing}</InlineCode>. Every
+          node reads the same row, so nothing has to be copied anywhere.
         </p>
       ) : (
         <ConfigField
@@ -120,8 +120,7 @@ export function SecretDialog({
       />
 
       {editing && readers.length > 0 && (
-        <div className="banner neutral">
-          <InfoGlyph size="sm" />
+        <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
           <span className="col" style={{ gap: 4 }}>
             <span>
               {readers.length === 1
@@ -137,14 +136,13 @@ export function SecretDialog({
               re-activated or the node restarts.
             </span>
           </span>
-        </div>
+        </Callout>
       )}
 
       {error && (
-        <div className="banner critical" role="alert">
-          <ErrorGlyph size="sm" />
+        <Callout variant="danger" role="alert" icon={<ErrorGlyph size="sm" />}>
           <span>{error}</span>
-        </div>
+        </Callout>
       )}
     </Modal>
   );

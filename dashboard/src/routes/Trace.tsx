@@ -26,8 +26,10 @@ import {
   Button,
   Card,
   EmptyValue,
+  InlineCode,
   PageHeader,
   Skeleton,
+  Stack,
   StatCard,
   StatGroup,
   Tag,
@@ -95,7 +97,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
     <>
       <PageHeader
         title="Trace"
-        description={<code className="inline">{traceId}</code>}
+        description={<InlineCode>{traceId}</InlineCode>}
         badges={
           <>
             <Tag appearance="outline">{events.length} events</Tag>
@@ -160,7 +162,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           >
             <Card.Title>Spans</Card.Title>
           </Card.Header>
-          <div className="list">
+          <Stack gap={0}>
             {rows.map(({ event, depth }) => {
               // The bar's offset and width place the span inside the trace's
               // own window, so a long gap between two spans reads as a gap.
@@ -199,7 +201,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                 </a>
               );
             })}
-          </div>
+          </Stack>
           <Card.Footer
             variant="meta"
             style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}

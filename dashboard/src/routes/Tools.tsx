@@ -14,11 +14,13 @@ import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
 import {
+  Callout,
   DataView,
   type DataViewColumn,
   EmptyState,
   type FilterDef,
   type FilterValues,
+  InlineCode,
   PageHeader,
   StatCard,
   StatGroup,
@@ -185,20 +187,21 @@ export function Tools() {
       />
 
       <Section title="How a model reaches these">
-        <div className="banner neutral">
+        <Callout variant="neutral">
           <span className="col" style={{ gap: 4 }}>
             <span>
               An executor prompt lists <strong>server names</strong>, not tool names — a role with
               50–150 MCP tools would push 15–25 KB of catalogue into every call.
             </span>
             <span className="t-caption">
-              The model calls <code className="inline">list_mcp_server_tools(server)</code> to see
-              what a server offers, then <code className="inline">activate_tool(name)</code> to
-              promote one into the schemas it can actually invoke. It activates what it needs the
-              moment it needs it — there is no separate planning pass to name a tool in advance.
+              The model calls <InlineCode tone="inherit">list_mcp_server_tools(server)</InlineCode>{" "}
+              to see what a server offers, then{" "}
+              <InlineCode tone="inherit">activate_tool(name)</InlineCode> to promote one into the
+              schemas it can actually invoke. It activates what it needs the moment it needs it —
+              there is no separate planning pass to name a tool in advance.
             </span>
           </span>
-        </div>
+        </Callout>
       </Section>
     </>
   );

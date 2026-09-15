@@ -12,10 +12,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
 import {
+  Callout,
   Card,
   DataTable,
   EmptyState,
   EmptyValue,
+  InlineCode,
   PageHeader,
   RelativeTime,
   Skeleton,
@@ -73,13 +75,12 @@ export function Fleet() {
       />
 
       {error && (
-        <div className="banner critical">
-          <ErrorGlyph size="sm" />
+        <Callout variant="danger" icon={<ErrorGlyph size="sm" />}>
           <span>
             This poll failed ({error}). What is below is the last reading that succeeded — on this
             screen above all, do not read it as now.
           </span>
-        </div>
+        </Callout>
       )}
 
       <StatGroup columns={4}>
@@ -151,7 +152,7 @@ export function Fleet() {
                 sortValue: (n) => n.id,
                 render: (n) => (
                   <span className="row gap-1">
-                    <code className="inline">{n.id}</code>
+                    <InlineCode>{n.id}</InlineCode>
                     {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
                     {n.draining && <Tag variant="warning">draining</Tag>}
                   </span>
@@ -268,12 +269,11 @@ export function Fleet() {
               {nodes
                 .filter((n) => n.config_error)
                 .map((n) => (
-                  <div key={n.id} className="banner critical">
-                    <ErrorGlyph size="sm" />
+                  <Callout variant="danger" key={n.id} icon={<ErrorGlyph size="sm" />}>
                     <span>
-                      <code className="inline">{n.id}</code> — {n.config_error}
+                      <InlineCode>{n.id}</InlineCode> — {n.config_error}
                     </span>
-                  </div>
+                  </Callout>
                 ))}
             </div>
           </Card>
@@ -316,7 +316,7 @@ export function Fleet() {
                   // token (a node id plus a per-process suffix), and showing
                   // it here would make one node look like several across a
                   // restart.
-                  render: (s) => <code className="inline">{s.node}</code>,
+                  render: (s) => <InlineCode>{s.node}</InlineCode>,
                 },
                 {
                   key: "ttl",
@@ -369,7 +369,7 @@ export function Fleet() {
                   header: "Held by",
                   sortable: true,
                   sortValue: (d) => d.node,
-                  render: (d) => <code className="inline">{d.node}</code>,
+                  render: (d) => <InlineCode>{d.node}</InlineCode>,
                 },
                 {
                   key: "ttl",
@@ -398,24 +398,22 @@ export function Fleet() {
             </Card.Header>
             <div className="col gap-2">
               {data?.unmanned_roles?.map((r) => (
-                <div key={r} className="banner caution">
-                  <PersonGlyph size="sm" />
+                <Callout variant="warning" key={r} icon={<PersonGlyph size="sm" />}>
                   <span>
                     <strong>{r}</strong> has no seat running on any node. Work published to its
                     mailbox waits there — a durable subscription retains it — but nothing is
                     consuming it.
                   </span>
-                </div>
+                </Callout>
               ))}
               {data?.unplaceable?.map((u) => (
-                <div key={u.handle} className="banner caution">
-                  <TargetGlyph size="sm" />
+                <Callout variant="warning" key={u.handle} icon={<TargetGlyph size="sm" />}>
                   <span>
                     <strong>{u.handle}</strong> cannot be placed
                     {u.placement ? ` — it is pinned to ${u.placement}` : ""}
                     {u.reason ? `: ${u.reason}` : ", and no live node satisfies its constraint."}
                   </span>
-                </div>
+                </Callout>
               ))}
             </div>
           </Card>

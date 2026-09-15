@@ -35,6 +35,7 @@ import {
   Card,
   Checkbox,
   CodeBlock,
+  InlineCode,
   SegmentedControl,
 } from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
@@ -242,10 +243,9 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
           <strong>Add a model provider</strong>
           <span className="t-caption">
             Until one is configured no agent seat takes a turn, and work sent to a seat waits on its
-            inbox until it is. No dashboard screen writes{" "}
-            <code className="inline">providers.llm</code>. Seal the key first with{" "}
-            <code className="inline">crewlet secrets set ANTHROPIC_API_KEY</code>, then either
-            import a company file or patch the configuration:
+            inbox until it is. No dashboard screen writes <InlineCode>providers.llm</InlineCode>.
+            Seal the key first with <InlineCode>crewlet secrets set ANTHROPIC_API_KEY</InlineCode>,
+            then either import a company file or patch the configuration:
           </span>
           <CodeBlock plain wrap code={PROVIDER_SNIPPET} maxHeight={RECORD_MAX_HEIGHT} />
         </div>

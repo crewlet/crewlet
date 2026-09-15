@@ -89,6 +89,7 @@ import {
   LayerHost,
   Menu,
   treeExpandable,
+  type TreeInput,
   treeLevel,
   treeNext,
   treePosInSet,
@@ -96,7 +97,7 @@ import {
   treeSetSize,
   treeStep,
   useTreeState,
-  type TreeInput,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import { LayerNode } from "~/lib/layerNode.tsx";
 
@@ -477,7 +478,7 @@ export function OutlineView() {
               <div role="row" className="boutline-row">
                 {COLUMNS.map((title, i) => (
                   <div role="columnheader" aria-colindex={i + 1} key={title}>
-                    {i === COLUMNS.length - 1 ? <span className="sr-only">{title}</span> : title}
+                    {i === COLUMNS.length - 1 ? <VisuallyHidden>{title}</VisuallyHidden> : title}
                   </div>
                 ))}
               </div>
