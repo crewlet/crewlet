@@ -37,7 +37,7 @@
 
 import { useState } from "react";
 import { Badge, Banner, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
@@ -134,10 +134,10 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
       )}
 
       <Panel title="Replication" icon="server" count={nodes.length} padding="none">
-        <DataTable<RetentionNode>
+        <DataGrid<RetentionNode>
           rows={nodes}
           rowKey={(n) => n.node_id}
-          defaultSort={{ key: "node", dir: "asc" }}
+          defaultSort="node"
           columns={[
             {
               key: "node",
@@ -238,10 +238,11 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         subtitle={`${donorsCounted(data?.snapshots ?? [])} of ${SNAPSHOT_DONORS_REQUIRED} donors — the trim's sixth term`}
         padding="none"
       >
-        <DataTable<RetentionSnapshot>
+        <DataGrid<RetentionSnapshot>
+          name="snapshots"
           rows={data?.snapshots ?? []}
           rowKey={(s) => s.node_id}
-          defaultSort={{ key: "node", dir: "asc" }}
+          defaultSort="node"
           columns={[
             {
               key: "node",
@@ -519,7 +520,7 @@ export function Terms({
           </span>
         </div>
       )}
-      <table className="table sub">
+      <table className="table">
         <tbody>
           {terms.map((t) => (
             <tr key={t.name}>

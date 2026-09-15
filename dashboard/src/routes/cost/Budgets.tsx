@@ -20,7 +20,7 @@
 
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { Badge, Meter, Panel, Skeleton } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -54,10 +54,10 @@ export function Budgets() {
           </div>
         ) : (
           <QueryState error={budgets.error} loading={budgets.loading}>
-            <DataTable
+            <DataGrid
               rows={budgets.data?.seats ?? []}
               rowKey={(s) => s.agent_id || s.role}
-              defaultSort={{ key: "used", dir: "desc" }}
+              defaultSort="-used"
               empty={{ title: "No per-seat budgets are configured" }}
               columns={[
                 {

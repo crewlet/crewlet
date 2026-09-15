@@ -34,7 +34,7 @@ import { useParam } from "~/app/router.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Button, Segmented, Skeleton } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { fmtCount, fmtDateTime, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
@@ -152,11 +152,11 @@ function TurnList({ view, onChange }: { view: string; onChange: (v: string) => v
               }
         }
       >
-        <DataTable<TurnRow>
+        <DataGrid<TurnRow>
           rows={turns}
           rowKey={(t) => t.turn_id}
-          onRowClick={(t) => nav.to(["activity", "turns", t.turn_id])}
-          defaultSort={{ key: "started", dir: "desc" }}
+          onRowActivate={(t) => nav.to(["activity", "turns", t.turn_id])}
+          defaultSort="-started"
           columns={[
             {
               key: "started",

@@ -15,9 +15,23 @@
  * as "nothing points at it".
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Secrets } from "./Secrets.tsx";
+import type { ReactElement } from "react";
+import { Router } from "~/app/router.tsx";
+
+/**
+ * A screen renders inside the Router.
+ *
+ * The grid every list is drawn with keeps its sort and its visible columns in
+ * the URL — see `app/frame/DataGrid.tsx` — so it reads the route, and a bare
+ * `render()` throws "useRoute outside a Router". Wrapping here rather than in
+ * every case keeps each assertion about the screen.
+ */
+function render(ui: ReactElement) {
+  return rtlRender(<Router>{ui}</Router>);
+}
 
 // The shape internal/api/secretsapi writes: names, provenance, key id. There
 // is deliberately no `value` field on this route at all.

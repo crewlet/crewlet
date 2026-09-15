@@ -298,6 +298,26 @@ and the query changes once per column rather than once per second; a list's are
 not. An interval never moves at all — it is the one window that is stable to
 link to.
 
+### Every list is one grid
+
+`DataGrid` draws all of them. There is no `<table>` left in the product except
+the retention screen's per-domain terms — a block that already titled itself,
+with no header row and nothing to sort, which is a table in the sense the
+element means rather than a list of objects.
+
+**The sort is in the URL**, which is the rule the component exists for: a
+sorted ops table that cannot be sent to anybody, does not survive a reload and
+comes back unsorted from Back is sorted for one person for one minute.
+
+**A screen's primary grid takes `sort=` and every other one takes
+`sort.<name>=`.** Several screens carry two or three — the spend by seat and
+the recent turns, a node's leases and its duties — and unnamed they would all
+read the one key: sorting the lower one would silently re-sort the upper, and a
+link to a sorted screen would mean something different depending on which table
+the reader had touched. A name rather than an index, because an index is a fact
+about the source order and inserting a grid above would move every link's
+meaning by one.
+
 ### An object's own facts
 
 `PropertiesRail` is the rail beside an object — its state, its people, its
@@ -367,6 +387,7 @@ selected one reads zero and the rail is a dead end.
 | `tab=` | section | the object page's tab |
 | `view=` | section | a list container's view |
 | `sort=` `cols=` | filter | the grid's order and its visible columns |
+| `sort.<name>=` `cols.<name>=` | filter | the same, for a second grid on the page |
 
 **`peek` is one key, one component, one rule.** A plain click peeks; ⌘-click,
 middle-click and the rail's `Open ↗` go to the page. Inside a peek `[` and `]`
@@ -393,6 +414,9 @@ none of it:
 | `ObjectHeader` + `TabStrip` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek; the strip takes the tabs the object HAS |
 | `DetailRail` | the peek, resizable, a drawer under 1180 px |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells |
+| `PropertiesRail` | an object's own facts, in sections, with who set each |
+| `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |
+| `TimeRangePicker` | the one control for `window=` |
 | `PageActions` + `PageNote` | a screen's own controls, portalled into the bar; its one sentence of explanation |
 
 **A screen publishes what the chrome needs and renders none of it.** The labels

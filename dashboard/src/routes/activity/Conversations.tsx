@@ -19,7 +19,7 @@
 import { useCallback, useMemo } from "react";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -100,10 +100,10 @@ export function Conversations({ channelId }: { channelId?: string }) {
           }
         >
           <Panel padding="none">
-            <DataTable
+            <DataGrid
               rows={channels.data?.channels ?? []}
               rowKey={(c) => c.id}
-              defaultSort={{ key: "last", dir: "desc" }}
+              defaultSort="-last"
               columns={[
                 {
                   key: "state",

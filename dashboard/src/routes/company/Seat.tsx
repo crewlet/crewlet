@@ -23,7 +23,7 @@ import {
   Tabs,
 } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -562,7 +562,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 count={seat.schedules.length}
                 padding="none"
               >
-                <DataTable
+                <DataGrid
                   rows={seat.schedules}
                   rowKey={(s) => s.name}
                   columns={[
@@ -774,10 +774,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                   subtitle="one row per completed turn, searched by similarity at turn start"
                   padding="none"
                 >
-                  <DataTable
+                  <DataGrid
+                    name="episodes"
                     rows={memory.data?.episodes ?? []}
                     rowKey={(e) => e.id ?? e.turn_id ?? e.created_at}
-                    defaultSort={{ key: "at", dir: "desc" }}
+                    defaultSort="-at"
                     empty={{
                       title: "No episodes recorded",
                       hint: "An episode is written when a turn completes.",
@@ -1006,11 +1007,12 @@ export function SeatScreen({ handle }: { handle: string }) {
               </div>
 
               <Panel title="Recent turns" icon="layers" padding="none">
-                <DataTable
+                <DataGrid
+                  name="turns"
                   rows={spend.data?.by_turn ?? []}
                   rowKey={(t) => t.turn_id}
-                  defaultSort={{ key: "started", dir: "desc" }}
-                  onRowClick={(t) => nav.to(["turns", t.turn_id])}
+                  defaultSort="-started"
+                  onRowActivate={(t) => nav.to(["turns", t.turn_id])}
                   empty={{ title: "No turns in the window" }}
                   columns={[
                     {

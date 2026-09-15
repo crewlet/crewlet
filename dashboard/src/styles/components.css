@@ -439,92 +439,29 @@ a.brand:hover {
 }
 
 /* ---- Table --------------------------------------------------------------
-   One table, everywhere. Sticky head, hairline rows, right-aligned numerics,
-   and a sortable column that says which way it is sorted. */
+   ONE table is left in the product, and it is not a list.
 
-.table-wrap {
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
+   Every list is a `DataGrid` now (see app/frame/DataGrid.tsx), which is a CSS
+   grid rather than a `<table>` because its columns, its sort and its bands are
+   all things the URL carries. What remains here is the retention screen's
+   per-domain terms: a block that already titled itself, with no header row and
+   nothing to sort — a table in the sense the element means, rather than a list
+   of objects. So this is the quiet nested treatment and nothing else; the
+   sortable-header chrome, the row hover and the selected and failed marks went
+   with the component that drew them. */
+
 .table {
   width: 100%;
-  font-size: var(--fs-xs);
-}
-.table th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--surface-1);
-  text-align: left;
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-muted);
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
-}
-.table th.sortable {
-  cursor: pointer;
-  user-select: none;
-}
-.table th.sortable:hover {
-  color: var(--text);
-}
-.table th .sort-mark {
-  display: inline-block;
-  width: 10px;
-  margin-left: var(--space-1);
-  color: var(--accent-ink);
-}
-.table td {
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
-  vertical-align: middle;
-  height: var(--row-h);
-}
-.table tbody tr:last-child td {
-  border-bottom: none;
-}
-.table tbody tr.clickable {
-  cursor: pointer;
-}
-.table tbody tr.clickable:hover td {
-  background: var(--surface-hover);
-}
-.table tbody tr.selected td {
-  background: var(--accent-soft);
-}
-/* A TABLE NESTED INSIDE a block that already titled it — the retention
-   screen's per-domain terms. It carries no header row, so `.table`'s full
-   treatment (header rule, generous cell padding) frames rows nobody is
-   comparing against a heading. Quieter and tighter; still a table. */
-.table.sub {
   font-size: var(--fs-2xs);
 }
-.table.sub td {
+.table td {
   padding: var(--space-1) var(--space-2);
   border-bottom: 0;
+  vertical-align: middle;
 }
-.table.sub td:first-child {
+.table td:first-child {
   padding-left: 0;
   white-space: nowrap;
-}
-
-.table .num {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.table .shrink {
-  width: 1%;
-  white-space: nowrap;
-}
-/* A failed row is marked on its leading edge, so it is findable by scanning a
-   single column rather than by reading every line. */
-.table tbody tr.failed td:first-child {
-  box-shadow: inset 2px 0 0 var(--critical);
 }
 
 /* ---- List row -----------------------------------------------------------

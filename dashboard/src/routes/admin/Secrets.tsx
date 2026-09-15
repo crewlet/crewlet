@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
@@ -206,10 +206,10 @@ export function Secrets({ name }: { name?: string }) {
         }
       >
         <Panel padding="none">
-          <DataTable<SecretRow>
+          <DataGrid<SecretRow>
             rows={list}
             rowKey={(s) => s.name}
-            defaultSort={{ key: "name", dir: "asc" }}
+            defaultSort="name"
             columns={[
               {
                 key: "name",

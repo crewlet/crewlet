@@ -15,7 +15,7 @@ import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
@@ -160,13 +160,13 @@ export function Runs({ runId }: { runId?: string }) {
         }
       >
         <Panel padding="none">
-          <DataTable<SandboxRun>
+          <DataGrid<SandboxRun>
             rows={rows}
             rowKey={(r) => r.turn_id}
-            onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
+            onRowActivate={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
             isSelected={(r) => r.turn_id === selected}
             isFailed={(r) => r.status === "failed"}
-            defaultSort={{ key: "updated", dir: "desc" }}
+            defaultSort="-updated"
             columns={[
               {
                 key: "status",

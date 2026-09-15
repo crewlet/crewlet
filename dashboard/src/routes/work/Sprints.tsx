@@ -37,7 +37,7 @@ import { Coverage } from "~/components/work.tsx";
 import { Badge, Banner, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { Select } from "~/ui/primitives.tsx";
 import { BarList, Legend, TimeSeries } from "~/ui/charts.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -430,7 +430,7 @@ export function SprintPanel({
         </Banner>
       )}
       {sprint.by_assignee && sprint.by_assignee.length > 0 && (
-        <DataTable
+        <DataGrid
           rows={sprint.by_assignee}
           rowKey={(a) => a.handle}
           columns={[

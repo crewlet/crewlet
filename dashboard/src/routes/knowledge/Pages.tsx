@@ -36,7 +36,7 @@ import {
   Skeleton,
   cx,
 } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -172,10 +172,10 @@ export function Pages({ container: fromPath }: { container?: string }) {
         }
       >
         <Panel>
-          <DataTable
+          <DataGrid
             rows={rows}
             rowKey={(r) => r.id}
-            defaultSort={{ key: "updated", dir: "desc" }}
+            defaultSort="-updated"
             columns={[
               {
                 key: "title",

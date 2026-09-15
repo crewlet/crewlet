@@ -25,7 +25,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Avatar, Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
@@ -1703,11 +1703,11 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
         }
       >
         {rows.length > 0 && (
-          <DataTable<EventRecord>
+          <DataGrid<EventRecord>
             rows={rows}
             rowKey={(e) => e.id}
-            defaultSort={{ key: "at", dir: "desc" }}
-            onRowClick={(e) => nav.to(["activity", "events", e.id])}
+            defaultSort="-at"
+            onRowActivate={(e) => nav.to(["activity", "events", e.id])}
             empty={{ title: "No delivery matches" }}
             columns={[
               {

@@ -94,6 +94,7 @@ export function DataGrid<T>({
   footer,
   onLoadMore,
   loadedNote,
+  name,
 }: {
   rows?: T[];
   bands?: GridBand<T>[];
@@ -111,9 +112,23 @@ export function DataGrid<T>({
   onLoadMore?: () => void;
   /** "40 of 312 loaded" — what an export would actually contain. */
   loadedNote?: string;
+  /**
+   * Which grid on this screen, for the URL keys.
+   *
+   * THE PRIMARY GRID ON A SCREEN TAKES `sort=` AND `cols=` and every other
+   * one takes `sort.<name>=`. Several screens carry two or three grids — the
+   * spend by seat and the recent turns, a node's leases and its duties — and
+   * unnamed they would all read the ONE `sort` key: sorting the lower table
+   * would silently re-sort the upper one, and a link to a sorted screen would
+   * mean something different depending on which table the reader had touched.
+   *
+   * A name rather than an index, because an index is a fact about the source
+   * order: inserting a grid above would move every link's meaning by one.
+   */
+  name?: string;
 }) {
-  const [sortRaw, setSort] = useParam("sort", defaultSort);
-  const [colsRaw, setCols] = useParam("cols", "");
+  const [sortRaw, setSort] = useParam(name ? `sort.${name}` : "sort", defaultSort);
+  const [colsRaw, setCols] = useParam(name ? `cols.${name}` : "cols", "");
   const sort = parseSort(sortRaw);
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(-1);
