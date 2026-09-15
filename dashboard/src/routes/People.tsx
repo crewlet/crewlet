@@ -114,12 +114,18 @@ function LoadRow({ load }: { load: Load }) {
         {load.unscheduled > 0 && <span className="wl-soft">{load.unscheduled} undated</span>}
       </span>
       <span className="wl-track">
-        {/* THE MARK IS WHERE CAPACITY IS, drawn whether or not the bar
-            reaches it, so a reader can see the target as well as the load. */}
+        {/* NOTHING AT ALL WHEN THERE IS NOTHING TO COMPARE. The track is a
+            capacity comparison, and with no capacity there is no comparison
+            to draw — the em dashes beside it say why, and a bar of some
+            arbitrary length would be a proportion of a number nobody set.
+            The mark is drawn whether or not the bar reaches it, so a reader
+            sees the target as well as the load. */}
         {load.fraction !== null && (
-          <span className="wl-mark" style={{ left: `${AT_CAPACITY_PCT}%` }} />
+          <>
+            <span className="wl-mark" style={{ left: `${AT_CAPACITY_PCT}%` }} />
+            <span className={cx("wl-bar", `is-${tone}`)} style={{ width: `${width}%` }} />
+          </>
         )}
-        <span className={cx("wl-bar", `is-${tone}`)} style={{ width: `${width}%` }} />
       </span>
       <span className="wl-num">{load.state === "unknown" ? "—" : load.held}</span>
       <span className={cx("wl-num", load.state === "unknown" && "wl-soft")}>

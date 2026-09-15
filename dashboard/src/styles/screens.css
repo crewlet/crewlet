@@ -2897,6 +2897,10 @@ a.work-cal-chip:hover {
   position: absolute;
   inset: 0 auto 0 0;
   border-radius: 999px;
+  /* A LOAD OF ZERO AGAINST A REAL CAPACITY IS STILL A ROW WITH A BAR, and it
+     is two pixels rather than nothing: somebody declared to take eight points
+     and holding none is a fact worth seeing beside the person holding twelve,
+     and an empty track there would read as the no-capacity case. */
   min-width: 2px;
 }
 .wl-bar.is-positive {
@@ -2908,12 +2912,12 @@ a.work-cal-chip:hover {
 .wl-bar.is-critical {
   background: var(--critical);
 }
-/* NEUTRAL IS A HAIRLINE, not an empty track: "nobody declared a capacity" is
-   a different picture from "this person holds nothing", and an empty track
-   would show them the same way. */
-.wl-bar.is-neutral {
-  background: var(--border-strong);
-}
+/* THERE IS NO NEUTRAL BAR. A row with no declared capacity draws an empty
+   track, because the track IS the comparison and there is nothing to compare
+   against — the em dashes in the two columns beside it are what say so. A
+   hairline here claimed to distinguish "nobody declared a capacity" from
+   "this person holds nothing" and could not: both have no fraction, so both
+   drew the same two pixels. */
 /* WHERE CAPACITY IS, drawn whether or not the bar reaches it, so a reader
    sees the target as well as the load. */
 .wl-mark {
