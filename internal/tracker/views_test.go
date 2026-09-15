@@ -233,16 +233,22 @@ func TestAProtectedViewRefusesEveryoneButItsOwner(t *testing.T) {
 	}
 }
 
-// EVERY CONTAINER HAS THREE VIEWS WITHOUT ANYBODY SAVING ONE, and a sprinting
-// project has five.
+// EVERY CONTAINER HAS ITS VIEWS WITHOUT ANYBODY SAVING ONE, and a sprinting
+// project has two more.
 //
 // That is what makes "required views" moot: a fresh project needs no setup
 // gesture and nothing has to guard against somebody deleting the last view.
+//
+// THE SET IN ORDER, never its size — see [TestEveryImplicitViewsQueryParses],
+// which was a count and reported adding a view as "has 6, want 5".
 func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	three := []string{tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar}
+	want := []string{
+		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
+		tracker.ViewKeyTimeline,
+	}
 	for _, container := range []tracker.Container{
 		{Kind: tracker.ContainerWorkspace},
 		{Kind: tracker.ContainerProject, ID: "ENG"},
@@ -250,13 +256,8 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 		{Kind: tracker.ContainerPerson, ID: "ana"},
 	} {
 		got := stripKeys(r.strip(container, ""))
-		if len(got) != len(three) {
-			t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, three)
-		}
-		for i, key := range three {
-			if got[i] != key {
-				t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, three)
-			}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s %s has %v, want %v", container.Kind, container.ID, got, want)
 		}
 		// AND EVERY IMPLICIT ROW SAYS SO, because a caller renders it
 		// from its key rather than editing, protecting or ranking it.
@@ -286,10 +287,12 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 			t.Fatalf("a sprinting project's strip is %v, want %s in it", got, key)
 		}
 	}
-	// AND THE WORKSPACE STILL HAS THREE: a project's policy is not the
-	// company's.
+	// AND THE WORKSPACE IS UNCHANGED: a project's policy is not the
+	// company's. The SET rather than its size, for the reason above — a
+	// count here would report the timeline's arrival as a workspace that
+	// grew a sprint tab.
 	if got := stripKeys(r.strip(tracker.Container{
-		Kind: tracker.ContainerWorkspace}, "")); len(got) != 3 {
+		Kind: tracker.ContainerWorkspace}, "")); !slices.Equal(got, want) {
 		t.Fatalf("the workspace strip grew with a project's policy: %v", got)
 	}
 }
