@@ -25,6 +25,7 @@ import { Badge } from "~/ui/primitives.tsx";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
+import { ErrorGlyph, LinkGlyph, NotificationsGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 
 /** "Agent seat" or "Human seat". */
 export function seatKindLabel(view: Pick<SeatView, "kind">): string {
@@ -58,7 +59,7 @@ export function ProblemCount({ api, nodeKey }: { api: BuilderApi; nodeKey: NodeK
   return (
     <span className="bnode-count">
       {count > 0 && (
-        <Badge tone="critical" icon="alert">
+        <Badge tone="critical" icon={ErrorGlyph}>
           {plural(count, "problem")}
         </Badge>
       )}
@@ -94,7 +95,7 @@ export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
 export function UnitMarks({ view }: { view: UnitView }) {
   if (view.danglingLead === null) return null;
   return (
-    <Badge tone="caution" icon="alert" title={view.danglingNote}>
+    <Badge tone="caution" icon={WarningGlyph} title={view.danglingNote}>
       Lead names no seat
     </Badge>
   );
@@ -107,17 +108,17 @@ export function SeatMarks({ view }: { view: SeatView }) {
   return (
     <>
       {view.placedByRef && (
-        <Badge outline icon="link" title="Declared at the root with a unit reference">
+        <Badge outline icon={LinkGlyph} title="Declared at the root with a unit reference">
           Placed by unit reference
         </Badge>
       )}
       {dangling && (
-        <Badge tone="caution" icon="alert" title={view.danglingNote}>
+        <Badge tone="caution" icon={WarningGlyph} title={view.danglingNote}>
           {`No unit named ${dangling}`}
         </Badge>
       )}
       {view.datadogFallback && (
-        <Badge outline icon="bell" title="Alerts that name no seat wake this seat">
+        <Badge outline icon={NotificationsGlyph} title="Alerts that name no seat wake this seat">
           Datadog fallback
         </Badge>
       )}

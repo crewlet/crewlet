@@ -14,12 +14,12 @@
 
 import { useState } from "react";
 import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 export function TurnCard({
   group,
@@ -48,7 +48,7 @@ export function TurnCard({
   return (
     <article className={cx("turn-card", group.live && "live", group.failed && "failed")}>
       <header className="turn-head" onClick={() => setOpen((v) => !v)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="sm" />
+        {open ? <KeyboardArrowDownGlyph size="sm" /> : <ChevronRightGlyph size="sm" />}
         <div className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
           <div className="row gap-1">
             {showRole && group.role && <strong className="t-cell">{group.role}</strong>}
@@ -128,7 +128,7 @@ export function TurnCard({
           <footer className="phase-foot">
             <Button
               size="sm"
-              icon="layers"
+              icon={LayersGlyph}
               onClick={() => nav.to(["turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >

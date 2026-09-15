@@ -37,11 +37,17 @@ import {
   TabPanel,
 } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  DescriptionGlyph,
+  DifferenceGlyph,
+  InfoGlyph,
+  ManufacturingGlyph,
+  ScheduleGlyph,
+} from "@crewlethq/icons/glyphs";
 
 type Lens = "active" | "audit" | "diff";
 
@@ -83,9 +89,9 @@ export function ConfigScreen() {
             value={lens as Lens}
             onChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: "file" },
-              { value: "audit", label: "History", icon: "clock" },
-              { value: "diff", label: "Diff", icon: "gitBranch" },
+              { value: "active", label: "Active", icon: DescriptionGlyph },
+              { value: "audit", label: "History", icon: ScheduleGlyph },
+              { value: "diff", label: "Diff", icon: DifferenceGlyph },
             ]}
           />
         }
@@ -99,7 +105,7 @@ export function ConfigScreen() {
               {active.data ? (
                 <Panel
                   title="Active revision"
-                  icon="file"
+                  icon={DescriptionGlyph}
                   subtitle="as the engine resolved it"
                   actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
                 >
@@ -115,7 +121,7 @@ export function ConfigScreen() {
                 </Panel>
               ) : (
                 <Empty
-                  icon="sliders"
+                  icon={ManufacturingGlyph}
                   title="No company configuration is active"
                   hint="The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Create the company from the org chart, or import one with crewlet config import or PUT /config."
                   action={
@@ -146,7 +152,7 @@ export function ConfigScreen() {
             >
               <Panel
                 title="Revisions"
-                icon="clock"
+                icon={ScheduleGlyph}
                 count={(audit.data ?? []).length}
                 padding="none"
               >
@@ -206,7 +212,7 @@ export function ConfigScreen() {
             {lens === "diff" && (
               <Panel
                 title={revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
-                icon="gitBranch"
+                icon={DifferenceGlyph}
                 subtitle={
                   against
                     ? `against revision ${against.slice(0, 10)}`
@@ -216,7 +222,7 @@ export function ConfigScreen() {
                 {!revision ? (
                   <Empty
                     inline
-                    icon="gitBranch"
+                    icon={DifferenceGlyph}
                     title="Pick a revision above"
                     hint="Its differences against the currently active document are shown here."
                   />
@@ -263,7 +269,7 @@ export function ConfigScreen() {
       </TabPanel>
 
       <div className="banner neutral">
-        <Icon name="info" size="sm" />
+        <InfoGlyph size="sm" />
         <span className="col" style={{ gap: 4 }}>
           <span>
             This screen reads. The organization is created and edited from the{" "}

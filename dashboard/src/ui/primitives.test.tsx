@@ -14,6 +14,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createRef } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { Button, ButtonLink, Code, CopyButton } from "./primitives.tsx";
+import { AddGlyph, ArrowUpwardGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
 
 afterEach(() => {
   cleanup();
@@ -53,7 +54,7 @@ describe("Button", () => {
     render(
       <Button
         ref={ref}
-        icon="more"
+        icon={MoreVertGlyph}
         variant="ghost"
         size="sm"
         title="Actions"
@@ -81,9 +82,9 @@ describe("Button", () => {
   test("an icon button is named by its title unless the caller names it more precisely", () => {
     render(
       <>
-        <Button icon="arrowUp" title="Move up" />
-        <Button icon="arrowUp" title="Move up" aria-label="Move goal 2 of 3 up" />
-        <Button icon="plus">Add</Button>
+        <Button icon={ArrowUpwardGlyph} title="Move up" />
+        <Button icon={ArrowUpwardGlyph} title="Move up" aria-label="Move goal 2 of 3 up" />
+        <Button icon={AddGlyph}>Add</Button>
       </>,
     );
     const [plain, named, labelled] = screen.getAllByRole("button");
@@ -101,13 +102,13 @@ describe("ButtonLink", () => {
   test("is an anchor wearing exactly the class list the matching Button wears", () => {
     render(
       <>
-        <Button variant="primary" size="sm" icon="plus">
+        <Button variant="primary" size="sm" icon={AddGlyph}>
           Create
         </Button>
-        <ButtonLink variant="primary" size="sm" icon="plus" href="#/org?lens=builder">
+        <ButtonLink variant="primary" size="sm" icon={AddGlyph} href="#/org?lens=builder">
           Create
         </ButtonLink>
-        <ButtonLink variant="ghost" icon="more" title="Open" href="#/org" />
+        <ButtonLink variant="ghost" icon={MoreVertGlyph} title="Open" href="#/org" />
       </>,
     );
     const button = screen.getByRole("button", { name: "Create" });

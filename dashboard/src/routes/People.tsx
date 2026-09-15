@@ -21,6 +21,7 @@ import { Badge, Empty, Panel, Segmented, SearchInput, TabPanel } from "~/ui/prim
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
+import { GroupGlyph } from "@crewlethq/icons/glyphs";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -140,7 +141,7 @@ export function People() {
       <TabPanel id={panel} value={group}>
         {!groups.length && (
           <Empty
-            icon="users"
+            icon={GroupGlyph}
             title={q ? `No seat matches “${q}”` : "This company has no seats"}
             hint={
               q

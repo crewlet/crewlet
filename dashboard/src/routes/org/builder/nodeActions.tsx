@@ -26,6 +26,17 @@ import { seatPath } from "~/lib/seats.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import {
+  AccountTreeGlyph,
+  ArrowOutwardGlyph,
+  CreateNewFolderGlyph,
+  DeleteGlyph,
+  EditGlyph,
+  MoveItemGlyph,
+  PersonAddGlyph,
+  PersonGlyph,
+  SmartToyGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** Where "Open seat" goes: the seat's own screen. */
 export type OpenScreen = (path: string[]) => void;
@@ -65,21 +76,21 @@ function addEntries(api: BuilderApi, parent: NodeKey): MenuEntry[] {
     {
       key: "add-unit",
       label: "Add unit",
-      icon: "folderPlus",
+      icon: CreateNewFolderGlyph,
       disabled: api.readOnly,
       onSelect: () => api.openAdd(at, "unit"),
     },
     {
       key: "add-agent",
       label: "Add agent seat",
-      icon: "userPlus",
+      icon: PersonAddGlyph,
       disabled: api.readOnly,
       onSelect: () => api.openAdd(at, "agent"),
     },
     {
       key: "add-human",
       label: "Add human seat",
-      icon: "userPlus",
+      icon: PersonAddGlyph,
       disabled: api.readOnly,
       onSelect: () => api.openAdd(at, "human"),
     },
@@ -101,14 +112,14 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
   const edit: MenuEntry = {
     key: "edit",
     label: "Edit",
-    icon: "pencil",
+    icon: EditGlyph,
     hint: <Kbd keys={["Enter"]} />,
     onSelect: () => api.openEditor(view.key),
   };
   const remove: MenuEntry = {
     key: "delete",
     label: "Delete",
-    icon: "trash",
+    icon: DeleteGlyph,
     danger: true,
     disabled: api.readOnly,
     hint: <Kbd keys={[deleteKey()]} />,
@@ -117,7 +128,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
   const move: MenuEntry = {
     key: "move",
     label: "Move to",
-    icon: "move",
+    icon: MoveItemGlyph,
     disabled: api.readOnly,
     onSelect: () => api.openMove(view.key),
   };
@@ -140,7 +151,7 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     entries.push({
       key: "open",
       label: "Open seat",
-      icon: "arrowUpRight",
+      icon: ArrowOutwardGlyph,
       onSelect: () => open(screen),
     });
   }
@@ -149,13 +160,13 @@ export function nodeMenu(api: BuilderApi, view: NodeView, open: OpenScreen): Men
     {
       key: "reports",
       label: "Edit reports",
-      icon: "sitemap",
+      icon: AccountTreeGlyph,
       onSelect: () => api.openEditor(view.key, "reports"),
     },
     {
       key: "kind",
       label: view.kind === "human" ? "Change to agent seat" : "Change to human seat",
-      icon: view.kind === "human" ? "cpu" : "user",
+      icon: view.kind === "human" ? SmartToyGlyph : PersonGlyph,
       disabled: api.readOnly,
       onSelect: () => api.openChangeKind(view.key),
     },
@@ -176,7 +187,7 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
     {
       key: "reports",
       label: "Edit reports",
-      icon: "sitemap",
+      icon: AccountTreeGlyph,
       hint: <Kbd keys={["Enter"]} />,
       onSelect: () => api.openEditor(view.key, "reports"),
     },
@@ -185,7 +196,7 @@ export function reportingMenu(api: BuilderApi, view: SeatView, open: OpenScreen)
     entries.push({
       key: "open",
       label: "Open seat",
-      icon: "arrowUpRight",
+      icon: ArrowOutwardGlyph,
       onSelect: () => open(screen),
     });
   }
@@ -261,7 +272,7 @@ export function leadMenu(api: BuilderApi, structure: Structure, unit: UnitView):
     {
       key: "other",
       label: "Choose another seat",
-      icon: "pencil",
+      icon: EditGlyph,
       disabled: api.readOnly,
       onSelect: () => api.openEditor(unit.key, "leadership"),
     },

@@ -11,11 +11,20 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  DnsGlyph,
+  ErrorGlyph,
+  GroupGlyph,
+  ManufacturingGlyph,
+  MemoryGlyph,
+  PersonGlyph,
+  TargetGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -55,7 +64,7 @@ export function Fleet() {
 
       {error && (
         <div className="banner critical">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           <span>
             This poll failed ({error}). What is below is the last reading that succeeded — on this
             screen above all, do not read it as now.
@@ -66,13 +75,13 @@ export function Fleet() {
       <Panel padding="none">
         <StatRow cols={4}>
           <Stat
-            icon="server"
+            icon={DnsGlyph}
             label="Live nodes"
             value={nodes.length}
             sub="holding an unexpired lease"
           />
           <Stat
-            icon="users"
+            icon={GroupGlyph}
             label="Seats placed"
             value={data?.seats?.length ?? 0}
             sub={
@@ -82,7 +91,7 @@ export function Fleet() {
             }
           />
           <Stat
-            icon="alert"
+            icon={WarningGlyph}
             label="Unplaceable"
             value={data?.unplaceable?.length ?? 0}
             sub={
@@ -92,7 +101,7 @@ export function Fleet() {
             }
           />
           <Stat
-            icon="sliders"
+            icon={ManufacturingGlyph}
             label="Behind on config"
             value={behind.length}
             sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
@@ -113,7 +122,7 @@ export function Fleet() {
               }
         }
       >
-        <Panel title="Nodes" icon="server" count={nodes.length} padding="none">
+        <Panel title="Nodes" icon={DnsGlyph} count={nodes.length} padding="none">
           <DataTable<FleetNode>
             rows={nodes}
             rowKey={(n) => n.id}
@@ -226,13 +235,13 @@ export function Fleet() {
         </Panel>
 
         {nodes.some((n) => n.config_error) && (
-          <Panel title="Config apply errors" icon="alert">
+          <Panel title="Config apply errors" icon={ErrorGlyph}>
             <div className="col gap-2">
               {nodes
                 .filter((n) => n.config_error)
                 .map((n) => (
                   <div key={n.id} className="banner critical">
-                    <Icon name="alert" size="sm" />
+                    <ErrorGlyph size="sm" />
                     <span>
                       <code className="inline">{n.id}</code> — {n.config_error}
                     </span>
@@ -245,7 +254,7 @@ export function Fleet() {
         <div className="grid grid-auto-lg">
           <Panel
             title="Seat placement"
-            icon="users"
+            icon={GroupGlyph}
             count={data?.seats?.length ?? 0}
             padding="none"
           >
@@ -290,7 +299,7 @@ export function Fleet() {
 
           <Panel
             title="Company-wide duties"
-            icon="cpu"
+            icon={MemoryGlyph}
             count={data?.duties?.length ?? 0}
             padding="none"
           >
@@ -329,11 +338,11 @@ export function Fleet() {
         </div>
 
         {(data?.unplaceable?.length || data?.unmanned_roles?.length) && (
-          <Panel title="Not running anywhere" icon="alert">
+          <Panel title="Not running anywhere" icon={WarningGlyph}>
             <div className="col gap-2">
               {data?.unmanned_roles?.map((r) => (
                 <div key={r} className="banner caution">
-                  <Icon name="user" size="sm" />
+                  <PersonGlyph size="sm" />
                   <span>
                     <strong>{r}</strong> has no seat running on any node. Work published to its
                     mailbox waits there — a durable subscription retains it — but nothing is
@@ -343,7 +352,7 @@ export function Fleet() {
               ))}
               {data?.unplaceable?.map((u) => (
                 <div key={u.handle} className="banner caution">
-                  <Icon name="target" size="sm" />
+                  <TargetGlyph size="sm" />
                   <span>
                     <strong>{u.handle}</strong> cannot be placed
                     {u.placement ? ` — it is pinned to ${u.placement}` : ""}

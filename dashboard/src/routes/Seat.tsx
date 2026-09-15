@@ -37,7 +37,6 @@ import {
 } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
@@ -70,6 +69,30 @@ import {
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  AccountTreeGlyph,
+  ArrowForwardGlyph,
+  BoltGlyph,
+  Book2Glyph,
+  CableGlyph,
+  CalendarClockGlyph,
+  DatabaseGlyph,
+  ErrorGlyph,
+  GroupGlyph,
+  HelpGlyph,
+  InfoGlyph,
+  KeyGlyph,
+  LayersGlyph,
+  LinkGlyph,
+  ManufacturingGlyph,
+  MemoryGlyph,
+  NeurologyGlyph,
+  PauseGlyph,
+  PersonGlyph,
+  TargetGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 
 type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
@@ -174,7 +197,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       <>
         <ScreenHead title={handle} />
         <Empty
-          icon="user"
+          icon={PersonGlyph}
           title={`No seat called “${handle}”`}
           hint="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
           action={
@@ -225,7 +248,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 handle this engine did not report cannot be named there. */}
             {seat.handle && (
               <Button
-                icon="sitemap"
+                icon={AccountTreeGlyph}
                 size="sm"
                 onClick={() => nav.to(["org"], { seat: seat.handle })}
               >
@@ -233,7 +256,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Button>
             )}
             <Button
-              icon="activity"
+              icon={TimelineGlyph}
               size="sm"
               onClick={() => nav.to(["activity"], { actor: seat.name })}
             >
@@ -245,7 +268,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
       {agent?.last_error && (
         <div className="banner critical">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           <span>
             <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
             {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
@@ -265,13 +288,13 @@ export function SeatScreen({ handle }: { handle: string }) {
       )}
       {state === "afk" && (
         <div className="banner caution">
-          <Icon name="pause" size="sm" />
+          <PauseGlyph size="sm" />
           <span>This seat is AFK: {afkReason(agent?.afk_reason)}.</span>
         </div>
       )}
       {sandbox?.status === "awaiting_input" && (
         <div className="banner caution">
-          <Icon name="help" size="sm" />
+          <HelpGlyph size="sm" />
           <span>
             A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
           </span>
@@ -287,11 +310,11 @@ export function SeatScreen({ handle }: { handle: string }) {
         value={tab as Tab}
         onChange={setTab}
         options={[
-          { value: "overview", label: "Overview", icon: "user" },
-          { value: "model", label: "Model activity", icon: "brain" },
-          { value: "memory", label: "Memory", icon: "database" },
-          { value: "cost", label: "Cost", icon: "coin" },
-          { value: "access", label: "Access", icon: "key" },
+          { value: "overview", label: "Overview", icon: PersonGlyph },
+          { value: "model", label: "Model activity", icon: NeurologyGlyph },
+          { value: "memory", label: "Memory", icon: DatabaseGlyph },
+          { value: "cost", label: "Cost", icon: TokenGlyph },
+          { value: "access", label: "Access", icon: KeyGlyph },
         ]}
       />
 
@@ -301,13 +324,13 @@ export function SeatScreen({ handle }: { handle: string }) {
             <Panel padding="none">
               <StatRow cols={4}>
                 <Stat
-                  icon="zap"
+                  icon={BoltGlyph}
                   label="State"
                   value={human ? "human" : state}
                   sub={statusLine(agent, { sandbox, seat })}
                 />
                 <Stat
-                  icon="coin"
+                  icon={TokenGlyph}
                   label="Tokens · 7d"
                   value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
                   sub={
@@ -317,7 +340,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   }
                 />
                 <Stat
-                  icon="layers"
+                  icon={LayersGlyph}
                   label="Turns in the record"
                   // Zero is a MEASUREMENT — this seat has taken no turns — and
                   // an em dash would claim nobody looked.
@@ -325,7 +348,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   sub="the phase history loaded below"
                 />
                 <Stat
-                  icon="users"
+                  icon={GroupGlyph}
                   label="Direct reports"
                   value={hierarchy ? reports.length : "Not reported"}
                   sub={
@@ -340,7 +363,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             </Panel>
 
             <div className="grid grid-auto-lg">
-              <Panel title="Who this is" icon="user">
+              <Panel title="Who this is" icon={PersonGlyph}>
                 <KeyValue
                   items={[
                     ["Role", seat.name],
@@ -411,7 +434,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                 />
               </Panel>
 
-              <Panel title="Configuration" icon="sliders" subtitle="from the company document">
+              <Panel
+                title="Configuration"
+                icon={ManufacturingGlyph}
+                subtitle="from the company document"
+              >
                 <SettingsState
                   error={config.error}
                   loading={config.loading}
@@ -435,7 +462,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </SettingsState>
               </Panel>
 
-              <Panel title="Profile" icon="book">
+              <Panel title="Profile" icon={Book2Glyph}>
                 <div className="col gap-3">
                   {seat.backstory && (
                     <div className="col gap-1">
@@ -512,7 +539,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {(configRole?.schedules?.length ?? 0) > 0 && (
               <Panel
                 title="Recurring work"
-                icon="calendar"
+                icon={CalendarClockGlyph}
                 count={configRole?.schedules?.length ?? 0}
                 padding="none"
               >
@@ -553,7 +580,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {!history.loading && !history.error && !turns.length && (
               <Empty
                 inline
-                icon="brain"
+                icon={NeurologyGlyph}
                 title="No phases in the record for this seat"
                 hint="A phase is recorded when it completes. A seat that has not taken a turn has nothing here."
               />
@@ -614,7 +641,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <div className="col gap-4">
                 <Panel
                   title="Private diary"
-                  icon="book"
+                  icon={Book2Glyph}
                   count={memory.data?.diary?.length ?? 0}
                   subtitle="what this seat chose to remember"
                   padding="none"
@@ -635,7 +662,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <Empty
                       inline
-                      icon="book"
+                      icon={Book2Glyph}
                       title="Nothing written yet"
                       hint="A seat writes here by calling reflect_and_persist during a turn."
                     />
@@ -644,7 +671,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
                 <Panel
                   title="Past turns"
-                  icon="layers"
+                  icon={LayersGlyph}
                   count={memory.data?.episodes?.length ?? 0}
                   subtitle="one row per completed turn, searched by similarity at turn start"
                   padding="none"
@@ -714,7 +741,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
                 <Panel
                   title="Skills it taught itself"
-                  icon="zap"
+                  icon={BoltGlyph}
                   count={memory.data?.skills?.length ?? 0}
                   subtitle="drafted from its own past work, loadable mid-turn"
                   padding="none"
@@ -738,7 +765,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <Empty
                       inline
-                      icon="zap"
+                      icon={BoltGlyph}
                       title="No synthesised skills"
                       hint="The learning loop drafts these from repeated work. A young company has none."
                     />
@@ -747,7 +774,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
                 <Panel
                   title="Who it has worked with"
-                  icon="users"
+                  icon={GroupGlyph}
                   count={memory.data?.counterparties?.length ?? 0}
                   padding="none"
                 >
@@ -767,7 +794,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <Empty
                       inline
-                      icon="users"
+                      icon={GroupGlyph}
                       title="No counterparty profiles"
                       hint="Built up from observed interactions."
                     />
@@ -783,13 +810,13 @@ export function SeatScreen({ handle }: { handle: string }) {
             <Panel padding="none">
               <StatRow cols={3}>
                 <Stat
-                  icon="coin"
+                  icon={TokenGlyph}
                   label="Tokens · 7d"
                   value={spend.data ? fmtCount(spend.data.totals.total_tokens) : "—"}
                   sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
                 />
                 <Stat
-                  icon="arrowRight"
+                  icon={ArrowForwardGlyph}
                   label="Input / output"
                   value={
                     spend.data
@@ -799,7 +826,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   sub="input includes any cached prefix, as the provider reports it"
                 />
                 <Stat
-                  icon="target"
+                  icon={TargetGlyph}
                   label="Configured budget"
                   value={
                     configRole
@@ -828,7 +855,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {agent?.budget ? (
               <Panel
                 title="Live budget meter"
-                icon="target"
+                icon={TargetGlyph}
                 subtitle="process-lifetime, not the 7-day window"
               >
                 <Meter
@@ -847,7 +874,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               </Panel>
             ) : (
               <div className="banner neutral">
-                <Icon name="info" size="sm" />
+                <InfoGlyph size="sm" />
                 <span>
                   {!configRole
                     ? "No engine is reporting a budget meter for this seat, so there is nothing measured to draw."
@@ -861,7 +888,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             {spend.loading && <Skeleton rows={4} />}
             <QueryState error={spend.error} loading={spend.loading}>
               <div className="grid grid-auto-lg">
-                <Panel title="By phase" icon="layers">
+                <Panel title="By phase" icon={LayersGlyph}>
                   <BarList
                     data={(spend.data?.by_phase ?? []).map((p) => ({
                       label: p.phase,
@@ -873,7 +900,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     emptyLabel="No calls in the window."
                   />
                 </Panel>
-                <Panel title="By model" icon="cpu">
+                <Panel title="By model" icon={MemoryGlyph}>
                   <BarList
                     data={(spend.data?.by_model ?? []).map((m) => ({
                       label: m.model,
@@ -886,7 +913,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </Panel>
               </div>
 
-              <Panel title="Recent turns" icon="layers" padding="none">
+              <Panel title="Recent turns" icon={LayersGlyph} padding="none">
                 <DataTable
                   rows={spend.data?.by_turn ?? []}
                   rowKey={(t) => t.turn_id}
@@ -937,7 +964,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           >
             {configRole && settings?.state === "found" && (
               <div className="col gap-4">
-                <Panel title="Identity on other surfaces" icon="link">
+                <Panel title="Identity on other surfaces" icon={LinkGlyph}>
                   {Object.keys(configRole.contact ?? {}).length ? (
                     <KeyValue
                       items={Object.entries(configRole.contact ?? {}).map(([k, v]) => [
@@ -948,20 +975,20 @@ export function SeatScreen({ handle }: { handle: string }) {
                   ) : (
                     <Empty
                       inline
-                      icon="link"
+                      icon={LinkGlyph}
                       title="No contact identities"
                       hint="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
                     />
                   )}
                 </Panel>
 
-                <Panel title="Integrations" icon="plug" subtitle="this seat's own settings">
+                <Panel title="Integrations" icon={CableGlyph} subtitle="this seat's own settings">
                   <SeatIntegrations role={configRole} />
                 </Panel>
 
                 <Panel
                   title="Tool credentials"
-                  icon="key"
+                  icon={KeyGlyph}
                   subtitle="names only: a credential value never reaches this page"
                 >
                   <ToolCredentials seat={seat} role={configRole} unit={settings.unit} />
@@ -1006,7 +1033,7 @@ function SettingsState({
     return (
       <Empty
         inline
-        icon="sliders"
+        icon={ManufacturingGlyph}
         title="No company configuration is active"
         hint="This seat's settings live in the company document, and none is active on this engine."
       />
@@ -1016,7 +1043,7 @@ function SettingsState({
     return (
       <Empty
         inline
-        icon="sliders"
+        icon={ManufacturingGlyph}
         title={`The active configuration has no seat named ${seat.name}`}
         hint="The org chart and the configuration can disagree for a moment while a new revision is applied."
       />
@@ -1026,7 +1053,7 @@ function SettingsState({
     return (
       <Empty
         inline
-        icon="sliders"
+        icon={ManufacturingGlyph}
         title={`More than one seat is named ${seat.name}`}
         hint="This revision was stored before seat names had to be unique, so its settings cannot be attributed to one of them. Rename one of the seats to fix it."
       />
@@ -1153,7 +1180,7 @@ function SeatIntegrations({ role }: { role: ConfigRole }) {
     return (
       <Empty
         inline
-        icon="plug"
+        icon={CableGlyph}
         title="No per-seat integration settings"
         hint="This seat uses the company's integrations as they are configured on the Integrations screen."
       />
@@ -1201,7 +1228,7 @@ function ToolCredentials({
     return (
       <Empty
         inline
-        icon="key"
+        icon={KeyGlyph}
         title="No per-seat tool credentials"
         hint="This seat uses whatever the shared MCP servers were configured with."
       />

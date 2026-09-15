@@ -19,13 +19,13 @@
  * outcome the operator has not seen.
  */
 
-import type { CSSProperties, ReactNode } from "react";
-import { Icon, type IconName } from "./Icon.tsx";
+import type { GlyphProps } from "@crewlethq/icons/glyphs";
+import type { CSSProperties, ComponentType, ReactNode } from "react";
 import { useModal } from "./useModal.ts";
 
 export function Dialog({
   title,
-  icon,
+  icon: Glyph,
   onClose,
   children,
   footer,
@@ -34,7 +34,7 @@ export function Dialog({
   onSubmit,
 }: {
   title: string;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
@@ -55,7 +55,7 @@ export function Dialog({
         onSubmit={onSubmit}
       >
         <header className="dialog-head">
-          {icon && <Icon name={icon} size="sm" />}
+          {Glyph && <Glyph size="sm" />}
           <strong style={{ fontSize: "var(--font-size-sm)" }}>{title}</strong>
         </header>
         <div className="dialog-body col gap-3">{children}</div>

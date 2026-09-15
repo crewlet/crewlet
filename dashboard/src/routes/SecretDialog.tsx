@@ -26,8 +26,8 @@ import { useState } from "react";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { ErrorGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 
 export function SecretDialog({
   /** The name being edited, or "" to store a new one. */
@@ -77,7 +77,7 @@ export function SecretDialog({
   return (
     <Dialog
       title={editing ? `Edit ${editing}` : "Store a secret"}
-      icon="key"
+      icon={KeyGlyph}
       onClose={onClose}
       dismissable={!busy}
       width={520}
@@ -120,7 +120,7 @@ export function SecretDialog({
 
       {editing && readers.length > 0 && (
         <div className="banner neutral">
-          <Icon name="info" size="sm" />
+          <InfoGlyph size="sm" />
           <span className="col" style={{ gap: 4 }}>
             <span>
               {readers.length === 1
@@ -141,7 +141,7 @@ export function SecretDialog({
 
       {error && (
         <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           <span>{error}</span>
         </div>
       )}

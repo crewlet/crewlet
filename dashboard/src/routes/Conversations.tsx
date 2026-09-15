@@ -21,12 +21,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { tsKey } from "~/lib/format.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 
 export function Conversations() {
   const org = useOrg();
@@ -53,19 +53,19 @@ export function Conversations() {
       <Panel padding="none">
         <StatRow cols={3}>
           <Stat
-            icon="link"
+            icon={LinkGlyph}
             label="Open channels"
             value={(channels.data?.channels ?? []).filter((c) => !c.closed_at).length}
             sub="one ask, one answer, then closed"
           />
           <Stat
-            icon="message"
+            icon={ChatGlyph}
             label="Messages"
             value={(channels.data?.channels ?? []).reduce((n, c) => n + c.messages, 0)}
             sub="across every channel in the record"
           />
           <Stat
-            icon="users"
+            icon={GroupGlyph}
             label="Pairs"
             value={
               new Set((channels.data?.channels ?? []).map((c) => `${c.requester}->${c.target}`))
@@ -79,7 +79,7 @@ export function Conversations() {
       {channels.loading && <Skeleton rows={4} />}
       {channels.data?.available === false ? (
         <div className="banner neutral">
-          <Icon name="link" size="sm" />
+          <LinkGlyph size="sm" />
           <span>
             No agent-to-agent channel record is reachable from this node. Channels live in the
             fleet's coordination store; a node that cannot read it says so rather than drawing an
@@ -158,7 +158,7 @@ export function Conversations() {
 
       <Section title="What this surface is, and is not">
         <div className="banner neutral">
-          <Icon name="info" size="sm" />
+          <InfoGlyph size="sm" />
           <span className="col" style={{ gap: 4 }}>
             <span>
               A2A is deliberately narrow: one ask, one answer, then the channel closes. Both halves

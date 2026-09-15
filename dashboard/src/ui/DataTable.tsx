@@ -14,9 +14,9 @@
  * shuffles itself while somebody is reading it.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import type { GlyphProps } from "@crewlethq/icons/glyphs";
+import { type ComponentType, type ReactNode, useMemo, useState } from "react";
 import { Empty } from "./primitives.tsx";
-import type { IconName } from "./Icon.tsx";
 
 export interface Column<T> {
   key: string;
@@ -39,7 +39,7 @@ export interface DataTableProps<T> {
   isFailed?: (row: T) => boolean;
   isSelected?: (row: T) => boolean;
   defaultSort?: { key: string; dir: "asc" | "desc" };
-  empty?: { title: ReactNode; hint?: ReactNode; icon?: IconName };
+  empty?: { title: ReactNode; hint?: ReactNode; icon?: ComponentType<GlyphProps> };
   maxHeight?: number | string;
 }
 

@@ -15,6 +15,7 @@ import { Badge, Chip, Empty, Panel, SearchInput, Stat, StatRow } from "~/ui/prim
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
+import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -58,10 +59,15 @@ export function Tools() {
 
       <Panel padding="none">
         <StatRow cols={3}>
-          <Stat icon="wrench" label="Total" value={tools.length} sub="across every origin" />
-          <Stat icon="box" label="Built in" value={builtins} sub="shipped by the engine itself" />
+          <Stat icon={BuildGlyph} label="Total" value={tools.length} sub="across every origin" />
           <Stat
-            icon="plug"
+            icon={Package2Glyph}
+            label="Built in"
+            value={builtins}
+            sub="shipped by the engine itself"
+          />
+          <Stat
+            icon={CableGlyph}
             label="From MCP servers"
             value={mcp}
             sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
@@ -96,7 +102,7 @@ export function Tools() {
 
       {!tools.length ? (
         <Empty
-          icon="wrench"
+          icon={BuildGlyph}
           title="No tools are registered"
           hint="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
         />

@@ -56,6 +56,7 @@ import { handlesOf, recordIntent, type BuilderState } from "./model/reducer.ts";
 import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
+import { DeleteGlyph } from "@crewlethq/icons/glyphs";
 
 type PlacedChoice = "keep" | "remove";
 
@@ -139,7 +140,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   return (
     <Dialog
       title={`Delete ${name}`}
-      icon="trash"
+      icon={DeleteGlyph}
       width={560}
       onClose={onClose}
       onSubmit={remove}

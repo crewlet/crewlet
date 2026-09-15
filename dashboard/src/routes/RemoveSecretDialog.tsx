@@ -25,8 +25,8 @@ import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { CheckGlyph, ErrorGlyph, KeyGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 
 export function RemoveSecretDialog({
   name,
@@ -69,7 +69,7 @@ export function RemoveSecretDialog({
   return (
     <Dialog
       title={`Remove ${name}`}
-      icon="key"
+      icon={KeyGlyph}
       onClose={onClose}
       dismissable={!busy}
       width={560}
@@ -95,7 +95,7 @@ export function RemoveSecretDialog({
 
       {referenced && (
         <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           <span className="col" style={{ gap: 6 }}>
             <span>
               {paths.length === 1
@@ -120,7 +120,7 @@ export function RemoveSecretDialog({
 
       {unchecked && (
         <div className="banner caution">
-          <Icon name="alert" size="sm" />
+          <WarningGlyph size="sm" />
           <span className="col" style={{ gap: 4 }}>
             <span>
               The active configuration could not be read, so it is not known whether anything points
@@ -133,7 +133,7 @@ export function RemoveSecretDialog({
 
       {!referenced && !unchecked && (
         <div className="banner neutral">
-          <Icon name="check" size="sm" />
+          <CheckGlyph size="sm" />
           <span>
             No field in the active configuration names this. Removing it changes nothing the company
             is running.
@@ -158,7 +158,7 @@ export function RemoveSecretDialog({
 
       {error && (
         <div className="banner critical" role="alert">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           <span>{error}</span>
         </div>
       )}

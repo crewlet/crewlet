@@ -32,6 +32,7 @@ import { isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
+import { RefreshGlyph } from "@crewlethq/icons/glyphs";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
 export type NameOf = (key: NodeKey) => string | null;
@@ -170,7 +171,7 @@ export function UpdateDraftDialog({
   return (
     <Dialog
       title={title}
-      icon="refresh"
+      icon={RefreshGlyph}
       width={640}
       onClose={onCancel}
       footer={

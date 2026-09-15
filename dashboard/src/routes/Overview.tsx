@@ -28,7 +28,6 @@ import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
 import { Badge, Button, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import {
   useAgents,
   useEvents,
@@ -44,6 +43,21 @@ import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
 import { useNow } from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  BoltGlyph,
+  Book2Glyph,
+  CheckGlyph,
+  FlagGlyph,
+  GroupGlyph,
+  LinkGlyph,
+  MoreVertGlyph,
+  NeurologyGlyph,
+  ScheduleGlyph,
+  TerminalGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** How far back the activity strip reaches, and how finely it is cut. */
 const STRIP_MINUTES = 60;
@@ -161,10 +175,10 @@ export function Overview() {
         }
         actions={
           <>
-            <Button icon="users" onClick={() => nav.to(["people"])}>
+            <Button icon={GroupGlyph} onClick={() => nav.to(["people"])}>
               People
             </Button>
-            <Button icon="brain" onClick={() => nav.to(["model"])}>
+            <Button icon={NeurologyGlyph} onClick={() => nav.to(["model"])}>
               Model activity
             </Button>
           </>
@@ -174,7 +188,7 @@ export function Overview() {
       {/* 1. What needs a person. Always first, always present. */}
       <Panel
         title="Needs a person"
-        icon="flag"
+        icon={FlagGlyph}
         count={attention.length}
         padding="none"
         actions={
@@ -191,7 +205,7 @@ export function Overview() {
             {attention.length > 8 && (
               <div className="attention-row" data-severity="info">
                 <span className="attention-icon">
-                  <Icon name="more" size="sm" />
+                  <MoreVertGlyph size="sm" />
                 </span>
                 <span className="t-caption">
                   and {attention.length - 8} more — every one of them is on the screen it belongs
@@ -203,7 +217,7 @@ export function Overview() {
         ) : (
           <Empty
             inline
-            icon="check"
+            icon={CheckGlyph}
             title="Nothing is waiting on you"
             hint="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
           />
@@ -214,7 +228,7 @@ export function Overview() {
       <Panel padding="none">
         <StatRow cols={4}>
           <Stat
-            icon="zap"
+            icon={BoltGlyph}
             label="Working now"
             value={live.length}
             sub={
@@ -224,7 +238,7 @@ export function Overview() {
             }
           />
           <Stat
-            icon="terminal"
+            icon={TerminalGlyph}
             label="Coding runs"
             value={sandboxes.length}
             sub={
@@ -234,7 +248,7 @@ export function Overview() {
             }
           />
           <Stat
-            icon="activity"
+            icon={TimelineGlyph}
             label={`Events · last ${STRIP_MINUTES}m`}
             value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
             sub={
@@ -244,7 +258,7 @@ export function Overview() {
             }
           />
           <Stat
-            icon="coin"
+            icon={TokenGlyph}
             label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
             value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
             sub={
@@ -259,7 +273,7 @@ export function Overview() {
       <div className="grid grid-auto-lg">
         <Panel
           title="Live seats"
-          icon="users"
+          icon={GroupGlyph}
           count={live.length}
           actions={
             <Button size="sm" variant="ghost" onClick={() => nav.to(["people"])}>
@@ -276,7 +290,7 @@ export function Overview() {
           ) : (
             <Empty
               inline
-              icon="clock"
+              icon={ScheduleGlyph}
               title="No seat is mid-turn"
               hint={
                 seatCount
@@ -289,7 +303,7 @@ export function Overview() {
 
         <Panel
           title={`Activity · last ${STRIP_MINUTES} minutes`}
-          icon="activity"
+          icon={TimelineGlyph}
           actions={
             <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
               Event log
@@ -316,7 +330,7 @@ export function Overview() {
               {!events.length && (
                 <Empty
                   inline
-                  icon="activity"
+                  icon={TimelineGlyph}
                   title="Nothing has happened yet"
                   hint="The feed fills as the engine publishes. A company with no integrations and no schedules has nothing to react to."
                 />
@@ -329,7 +343,7 @@ export function Overview() {
       <div className="grid grid-auto-lg">
         <Panel
           title="Spend by phase"
-          icon="coin"
+          icon={TokenGlyph}
           subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
           actions={
             <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
@@ -359,7 +373,7 @@ export function Overview() {
 
         <Panel
           title="Top seats by spend"
-          icon="users"
+          icon={GroupGlyph}
           subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
         >
           <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
@@ -373,19 +387,19 @@ export function Overview() {
         <div className="grid grid-auto">
           {[
             {
-              icon: "brain" as const,
+              icon: NeurologyGlyph,
               title: "Model activity",
               body: "Every phase the models ran, round by round, with the tools each round called and the prompts they saw.",
               path: ["model"],
             },
             {
-              icon: "link" as const,
+              icon: LinkGlyph,
               title: "Agent-to-agent",
               body: "The private channels seats opened with each other: one ask, one answer, then closed.",
               path: ["conversations"],
             },
             {
-              icon: "book" as const,
+              icon: Book2Glyph,
               title: "Knowledge",
               body: "Search the company knowledge base the way an agent does, and read what each seat has learned for itself.",
               path: ["knowledge"],
@@ -394,11 +408,11 @@ export function Overview() {
             <a key={card.title} className="seat-card" href={href(card.path)}>
               <div className="row">
                 <span className="attention-icon" data-severity="info">
-                  <Icon name={card.icon} size="sm" />
+                  <card.icon size="sm" />
                 </span>
                 <strong className="t-body">{card.title}</strong>
                 <span className="spacer" />
-                <Icon name="arrowRight" size="sm" />
+                <ArrowForwardGlyph size="sm" />
               </div>
               <span className="t-caption">{card.body}</span>
             </a>

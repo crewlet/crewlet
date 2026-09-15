@@ -1,6 +1,7 @@
 import { ScreenHead } from "~/app/Shell.tsx";
 import { Empty, Button } from "~/ui/primitives.tsx";
 import { useNavigator, useRoute } from "~/app/router.tsx";
+import { ExploreGlyph } from "@crewlethq/icons/glyphs";
 
 export function NotFound({ what }: { what: string }) {
   const route = useRoute();
@@ -9,7 +10,7 @@ export function NotFound({ what }: { what: string }) {
     <>
       <ScreenHead title="Not a screen" />
       <Empty
-        icon="compass"
+        icon={ExploreGlyph}
         title={`This URL names ${what}, and there is no such screen.`}
         hint={
           <>

@@ -18,12 +18,20 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
 import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { useMemo } from "react";
+import {
+  ArrowForwardGlyph,
+  Book2Glyph,
+  CloseGlyph,
+  DatabaseGlyph,
+  OpenInNewGlyph,
+  SearchGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export function Knowledge() {
   const org = useOrg();
@@ -59,12 +67,12 @@ export function Knowledge() {
             placeholder="Search the knowledge base — plain text, not a query language"
           />
         </div>
-        <Button variant="primary" type="submit" icon="search">
+        <Button variant="primary" type="submit" icon={SearchGlyph}>
           Search
         </Button>
         {q && (
           <Button
-            icon="x"
+            icon={CloseGlyph}
             onClick={() => {
               setDraft("");
               setQ("");
@@ -77,7 +85,7 @@ export function Knowledge() {
 
       {!q && (
         <Empty
-          icon="book"
+          icon={Book2Glyph}
           title="Search the company's shared knowledge"
           hint="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
@@ -93,7 +101,7 @@ export function Knowledge() {
           no company configured to go and wire Confluence is the wrong fix. */}
       {q && data?.available === false && (
         <div className="banner neutral">
-          <Icon name="book" size="sm" />
+          <Book2Glyph size="sm" />
           <span>
             This search could not run: {data.note || "the engine gave no reason"}.
             {data.reason === "no_backend" && (
@@ -120,7 +128,7 @@ export function Knowledge() {
           never started. */}
       {q && data?.available !== false && data?.note && (
         <div className="banner caution">
-          <Icon name="alert" size="sm" />
+          <WarningGlyph size="sm" />
           <span>
             The search did not complete: {data.note}. Knowledge search is best effort by design — a
             turn never dies because a wiki was slow — so an empty result here is not proof that
@@ -144,12 +152,12 @@ export function Knowledge() {
                   }
           }
         >
-          <Panel title="Results" icon="search" count={data?.hits?.length ?? 0} padding="none">
+          <Panel title="Results" icon={SearchGlyph} count={data?.hits?.length ?? 0} padding="none">
             <div className="list">
               {(data?.hits ?? []).map((hit) => (
                 <div key={hit.id} className="hit">
                   <a className="hit-title" href={hit.url} target="_blank" rel="noreferrer">
-                    {hit.title} <Icon name="external" size="xs" style={{ display: "inline" }} />
+                    {hit.title} <OpenInNewGlyph size="xs" style={{ display: "inline" }} />
                   </a>
                   <div className="row gap-1">
                     {hit.container && <Badge outline>{hit.container}</Badge>}
@@ -185,13 +193,13 @@ export function Knowledge() {
               >
                 <div className="row">
                   <span className="attention-icon" data-severity="info">
-                    <Icon name="database" size="sm" />
+                    <DatabaseGlyph size="sm" />
                   </span>
                   <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                     <strong className="truncate t-cell">{seat.name}</strong>
                     {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
                   </span>
-                  <Icon name="arrowRight" size="sm" />
+                  <ArrowForwardGlyph size="sm" />
                 </div>
                 <span className="t-caption truncate">
                   {seat.goal || "memory, episodes and skills"}

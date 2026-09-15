@@ -32,21 +32,32 @@
  * see.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ComponentType, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ALL_NAV } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { ModalPanel } from "~/ui/Dialog.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
 import { useListbox } from "~/ui/useListbox.ts";
 import { useModal } from "~/ui/useModal.ts";
+import {
+  type GlyphProps,
+  AccountTreeGlyph,
+  Book2Glyph,
+  BuildGlyph,
+  DescriptionGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  PersonGlyph,
+  SmartToyGlyph,
+  TimelineGlyph,
+} from "@crewlethq/icons/glyphs";
 
 interface Hit {
   id: string;
   group: string;
-  icon: IconName;
+  icon: ComponentType<GlyphProps>;
   label: string;
   hint: string;
   go: () => void;
@@ -109,7 +120,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `event-${query}`,
           group: "Open by id",
-          icon: "file",
+          icon: DescriptionGlyph,
           label: query,
           hint: "as an event",
           go: () => nav.to(["events", query]),
@@ -120,7 +131,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `trace-${query}`,
           group: "Open by id",
-          icon: "gitBranch",
+          icon: ForkRightGlyph,
           label: query,
           hint: "as a trace",
           go: () => nav.to(["traces", query]),
@@ -131,7 +142,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `turn-${query}`,
           group: "Open by id",
-          icon: "layers",
+          icon: LayersGlyph,
           label: query,
           hint: "as a turn",
           go: () => nav.to(["turns", query]),
@@ -171,7 +182,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `seat-${seat.key}`,
           group: "Seats",
-          icon: seat.kind === "human" ? "user" : "users",
+          icon: seat.kind === "human" ? PersonGlyph : SmartToyGlyph,
           label: seat.name,
           hint:
             seat.kind === "human"
@@ -190,7 +201,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: `unit-${unit.key}`,
           group: "Units",
-          icon: "sitemap",
+          icon: AccountTreeGlyph,
           label: unit.name,
           hint: `${unit.type || "unit"}${unit.lead ? ` · lead ${unit.lead.name}` : ""}`,
           go: () => nav.to(["org"], { unit: unit.name }),
@@ -207,7 +218,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           {
             id: `tool-${tool.name}`,
             group: "Tools",
-            icon: "wrench",
+            icon: BuildGlyph,
             label: tool.name,
             hint: tool.source,
             go: () => nav.to(["tools"], { q: tool.name }),
@@ -219,7 +230,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: "search-events",
           group: "Search",
-          icon: "activity",
+          icon: TimelineGlyph,
           label: `Events mentioning “${q.trim()}”`,
           hint: "the event log, filtered",
           go: () => nav.to(["activity"], { q: q.trim() }),
@@ -230,7 +241,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         {
           id: "search-knowledge",
           group: "Search",
-          icon: "book",
+          icon: Book2Glyph,
           label: `Knowledge base for “${q.trim()}”`,
           hint: "live search, run as the company",
           go: () => nav.to(["knowledge"], { q: q.trim() }),
@@ -356,7 +367,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => open(hit)}
                   >
-                    <Icon name={hit.icon} size="sm" />
+                    <hit.icon size="sm" />
                     <span className="truncate">{hit.label}</span>
                     <span className="palette-hint truncate">{hit.hint}</span>
                   </div>

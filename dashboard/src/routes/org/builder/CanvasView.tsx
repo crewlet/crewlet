@@ -60,7 +60,6 @@ import {
 } from "react";
 import { plural } from "~/lib/format.ts";
 import { Canvas, useCanvasOverlay, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { Menu, type MenuEntry } from "~/ui/Menu.tsx";
 import { Avatar, Badge, Button, Empty, cx } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
@@ -106,6 +105,16 @@ import {
   seatKindLabel,
 } from "./nodeMarks.tsx";
 import { treeStep, useOpenScreen, useReporting, useStructure, useTreeState } from "./useCharts.ts";
+import {
+  AccountTreeGlyph,
+  AddGlyph,
+  ApartmentGlyph,
+  ChevronRightGlyph,
+  CrownGlyph,
+  CycleGlyph,
+  FolderGlyph,
+  KeyboardArrowDownGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /**
  * The canvas of the Builder lens.
@@ -225,7 +234,7 @@ function ReportingChart({
   if (!chart.known) {
     return (
       <Empty
-        icon="sitemap"
+        icon={AccountTreeGlyph}
         title="Reporting lines appear after the check"
         hint="Who reports to whom is derived by the engine. It is drawn here once the engine has checked this draft."
       />
@@ -234,7 +243,7 @@ function ReportingChart({
   if (chart.roots.length === 0 && chart.cycles.length === 0) {
     return (
       <Empty
-        icon="sitemap"
+        icon={AccountTreeGlyph}
         title="No seats to report on"
         hint="Who reports to whom is drawn here once the organization has a seat."
       />
@@ -314,7 +323,7 @@ function StructureCard({
       <div className="bchart-card company">
         <div {...ctx.item(id)} className="bchart-head">
           <span className="bchart-line">
-            <Icon name="flag" size="sm" />
+            <ApartmentGlyph size="sm" />
             <span className="bchart-text">
               <span className="bchart-name truncate">{view.name || "Unnamed company"}</span>
               <span className="bchart-meta truncate">
@@ -342,7 +351,7 @@ function StructureCard({
     <div className="bchart-card unit">
       <div {...ctx.item(id)} className="bchart-head">
         <span className="bchart-line">
-          <Icon name="folder" size="sm" />
+          <FolderGlyph size="sm" />
           <span className="bchart-text">
             <span className="bchart-name truncate">{view.name}</span>
             <span className="bchart-meta truncate">
@@ -445,7 +454,7 @@ function ReportingCard({
         <span className="bchart-marks">
           {item.root && <Badge outline>No manager</Badge>}
           {item.cycleSize !== undefined && (
-            <Badge tone="caution" icon="refresh">
+            <Badge tone="caution" icon={CycleGlyph}>
               {`In a reporting cycle of ${plural(item.cycleSize, "seat")}`}
             </Badge>
           )}
@@ -470,7 +479,7 @@ function CycleGroupCard({ ctx, count }: { ctx: CardContext; count: number }) {
   return (
     <div className="bchart-card group">
       <div {...ctx.item(CYCLE_GROUP)} className="bchart-head">
-        <Icon name="refresh" size="sm" />
+        <CycleGlyph size="sm" />
         <span className="bchart-text">
           <span className="bchart-name">Reporting cycle</span>
           <span className="bchart-meta">
@@ -513,7 +522,7 @@ function ToggleButton({ ctx, id, name }: { ctx: CardContext; id: string; name: s
     <Button
       size="sm"
       variant="ghost"
-      icon={expanded ? "chevronDown" : "chevronRight"}
+      icon={expanded ? KeyboardArrowDownGlyph : ChevronRightGlyph}
       title={expanded ? `Collapse ${name}` : `Expand ${name}`}
       tabIndex={-1}
       onClick={(e) => {
@@ -529,7 +538,7 @@ function AddMenu({ ctx, view, api }: { ctx: CardContext; view: NodeView; api: Bu
   return (
     <Menu
       label={`Add to ${view.name || "the company"}`}
-      icon="plus"
+      icon={AddGlyph}
       items={addMenu(api, view)}
       layer={layer}
       triggerTabIndex={-1}
@@ -577,13 +586,13 @@ function LeadChip({
   const layer = useCanvasOverlay();
   return (
     <div className="bchart-lead" aria-hidden="true" {...ctx.press(unit.key)}>
-      <Icon name="crown" size="xs" />
+      <CrownGlyph size="xs" />
       {api.readOnly ? (
         <span className="truncate">{leadLabel(unit)}</span>
       ) : (
         <Menu
           label={`Lead of ${unit.name}`}
-          icon="chevronDown"
+          icon={KeyboardArrowDownGlyph}
           items={leadMenu(api, structure, unit)}
           layer={layer}
           triggerTabIndex={-1}

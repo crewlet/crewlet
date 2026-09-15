@@ -18,8 +18,8 @@
 import { useId, useState } from "react";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
+import { ErrorGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 
 export function TokenDialog({
   onClose,
@@ -64,7 +64,7 @@ export function TokenDialog({
   return (
     <Dialog
       title="API token"
-      icon="key"
+      icon={KeyGlyph}
       onClose={onClose}
       onSubmit={save}
       footer={
@@ -110,7 +110,7 @@ export function TokenDialog({
       </div>
       {refused && (
         <div className="banner critical">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           <span>
             This browser refused to store the token (private mode, or blocked site data). It will
             work until you reload.

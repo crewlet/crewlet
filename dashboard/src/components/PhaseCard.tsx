@@ -43,7 +43,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Code, Disclosure, PhaseTag, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -55,6 +54,14 @@ import {
 import { staleness } from "~/lib/seats.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  ChevronRightGlyph,
+  ErrorGlyph,
+  InfoGlyph,
+  KeyboardArrowDownGlyph,
+  TerminalGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 function ToolRow({
   name,
@@ -76,7 +83,7 @@ function ToolRow({
         // failed call showed its alert on its own line above the tool.
         mark={
           failed ? (
-            <Icon name="alert" size="xs" style={{ color: "var(--color-feedback-danger-ink)" }} />
+            <ErrorGlyph size="xs" style={{ color: "var(--color-feedback-danger-ink)" }} />
           ) : null
         }
         label={name}
@@ -181,7 +188,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
         {round.abandoned.map((a, i) => (
           <div key={i} className="abandoned">
             <div className="t-caption">
-              <Icon name="alert" size="xs" /> this attempt was abandoned mid-answer and retried
+              <WarningGlyph size="xs" /> this attempt was abandoned mid-answer and retried
             </div>
             {a.reasoning.trim() && <p className="prose muted">{a.reasoning.trim()}</p>}
             {a.content.trim() && <p className="prose muted">{a.content.trim()}</p>}
@@ -254,7 +261,7 @@ export function PhaseCard({
       )}
     >
       <header className="phase-head" onClick={() => setOpen((v) => !v)}>
-        <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+        {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
         <PhaseTag phase={record.phase} />
         {record.iteration > 1 && (
           <span className="t-caption" title="self-iterate round">
@@ -309,7 +316,7 @@ export function PhaseCard({
           </Badge>
         )}
         {record.backend === "sandbox" && (
-          <Badge tone="info" icon="terminal">
+          <Badge tone="info" icon={TerminalGlyph}>
             {record.codingAgent || "sandbox"}
           </Badge>
         )}
@@ -362,13 +369,13 @@ export function PhaseCard({
         <div className="phase-body">
           {record.failed && record.error && (
             <div className="banner critical">
-              <Icon name="alert" size="sm" />
+              <ErrorGlyph size="sm" />
               <span>{record.error}</span>
             </div>
           )}
           {record.notes && (
             <div className="banner neutral">
-              <Icon name="info" size="sm" />
+              <InfoGlyph size="sm" />
               <span>{record.notes}</span>
             </div>
           )}

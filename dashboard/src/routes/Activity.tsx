@@ -28,6 +28,7 @@ import { Badge, Button, Chip, Panel, SearchInput, Skeleton } from "~/ui/primitiv
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
+import { CloseGlyph } from "@crewlethq/icons/glyphs";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -140,7 +141,7 @@ export function Activity() {
         actions={
           filtered ? (
             <Button
-              icon="x"
+              icon={CloseGlyph}
               size="sm"
               onClick={() => {
                 setCategory("");

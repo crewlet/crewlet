@@ -43,6 +43,12 @@ import {
 import { isComposing } from "./keys.ts";
 import { Button } from "./primitives.tsx";
 import { Problems } from "./Problems.tsx";
+import {
+  AddGlyph,
+  ArrowDownwardGlyph,
+  ArrowUpwardGlyph,
+  DeleteGlyph,
+} from "@crewlethq/icons/glyphs";
 
 let minted = 0;
 const mint = () => `item-${++minted}`;
@@ -245,7 +251,7 @@ export function ListField({
                   <Button
                     variant="ghost"
                     size="sm"
-                    icon="arrowUp"
+                    icon={ArrowUpwardGlyph}
                     aria-label={`Move ${itemName} ${position} up`}
                     title="Move up"
                     disabled={disabled || index === 0}
@@ -258,7 +264,7 @@ export function ListField({
                   <Button
                     variant="ghost"
                     size="sm"
-                    icon="arrowDown"
+                    icon={ArrowDownwardGlyph}
                     aria-label={`Move ${itemName} ${position} down`}
                     title="Move down"
                     disabled={disabled || index === count - 1}
@@ -271,7 +277,7 @@ export function ListField({
                   <Button
                     variant="ghost"
                     size="sm"
-                    icon="trash"
+                    icon={DeleteGlyph}
                     aria-label={`Remove ${itemName} ${position}`}
                     title="Remove"
                     disabled={disabled}
@@ -298,7 +304,7 @@ export function ListField({
             addBox.current = el;
           },
         })}
-        <Button size="sm" icon="plus" onClick={add} disabled={disabled || draft.trim() === ""}>
+        <Button size="sm" icon={AddGlyph} onClick={add} disabled={disabled || draft.trim() === ""}>
           Add
         </Button>
       </div>

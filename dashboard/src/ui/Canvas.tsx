@@ -92,6 +92,7 @@ import {
   type Size,
   type View,
 } from "./viewport.ts";
+import { FitScreenGlyph, ZoomInGlyph, ZoomOutGlyph } from "@crewlethq/icons/glyphs";
 
 /** What a screen can ask of a canvas it holds a ref to. */
 export interface CanvasHandle {
@@ -504,7 +505,7 @@ export function Canvas({
               <Button
                 size="sm"
                 variant="ghost"
-                icon="zoomOut"
+                icon={ZoomOutGlyph}
                 title="Zoom out"
                 onClick={() => centreZoom(1 / ZOOM_STEP)}
                 disabled={!ready}
@@ -512,7 +513,7 @@ export function Canvas({
               <Button
                 size="sm"
                 variant="ghost"
-                icon="zoomIn"
+                icon={ZoomInGlyph}
                 title="Zoom in"
                 onClick={() => centreZoom(ZOOM_STEP)}
                 disabled={!ready}
@@ -520,7 +521,7 @@ export function Canvas({
               <Button
                 size="sm"
                 variant="ghost"
-                icon="maximize"
+                icon={FitScreenGlyph}
                 title="Fit to view"
                 onClick={() => content && apply(fit(content, sizeNow.current), true)}
                 disabled={!ready}

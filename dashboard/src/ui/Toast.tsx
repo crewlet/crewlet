@@ -20,7 +20,7 @@
 
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Icon } from "~/ui/Icon.tsx";
+import { CheckGlyph, CloseGlyph, ErrorGlyph } from "@crewlethq/icons/glyphs";
 
 export type ToastTone = "positive" | "critical";
 
@@ -85,7 +85,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       <div className="toast-host" role="status" aria-live="polite">
         {toasts.map((t) => (
           <div key={t.id} className={t.tone === "critical" ? "toast critical" : "toast positive"}>
-            <Icon name={t.tone === "critical" ? "alert" : "check"} size="sm" />
+            {t.tone === "critical" ? <ErrorGlyph size="sm" /> : <CheckGlyph size="sm" />}
             <span className="truncate" style={{ flex: 1 }}>
               {t.text}
             </span>
@@ -95,7 +95,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               aria-label="Dismiss"
               onClick={() => dismiss(t.id)}
             >
-              <Icon name="x" size="sm" />
+              <CloseGlyph size="sm" />
             </button>
           </div>
         ))}

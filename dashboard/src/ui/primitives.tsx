@@ -10,18 +10,30 @@
  */
 
 import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
   type AriaAttributes,
   type CSSProperties,
+  type ComponentType,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
   type Ref,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
 } from "react";
-import { Icon, type IconName } from "./Icon.tsx";
+import {
+  type GlyphProps,
+  CheckGlyph,
+  ChevronRightGlyph,
+  ContentCopyGlyph,
+  ErrorGlyph,
+  InboxGlyph,
+  InfoGlyph,
+  KeyboardArrowDownGlyph,
+  SearchGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
 
@@ -36,7 +48,7 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 export function Panel({
   title,
   subtitle,
-  icon,
+  icon: Glyph,
   count,
   actions,
   children,
@@ -46,7 +58,7 @@ export function Panel({
 }: {
   title?: ReactNode;
   subtitle?: ReactNode;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   count?: number | null;
   actions?: ReactNode;
   children?: ReactNode;
@@ -59,7 +71,7 @@ export function Panel({
       {(title || actions) && (
         <header className="panel-head">
           <div className="panel-title truncate">
-            {icon && <Icon name={icon} size="sm" style={{ color: "var(--color-text-tertiary)" }} />}
+            {Glyph && <Glyph size="sm" style={{ color: "var(--color-text-tertiary)" }} />}
             <span className="truncate">{title}</span>
             {count != null && <span className="count-chip">{count}</span>}
           </div>
@@ -134,7 +146,7 @@ function buttonClass({
 
 export function Button({
   children,
-  icon,
+  icon: Glyph,
   variant = "default",
   size = "md",
   onClick,
@@ -146,7 +158,7 @@ export function Button({
   ...forwarded
 }: ButtonPassthrough & {
   children?: ReactNode;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   variant?: ButtonVariant;
   size?: ButtonSize;
   /**
@@ -176,7 +188,7 @@ export function Button({
       aria-label={forwarded["aria-label"] ?? (!children ? title : undefined)}
       aria-pressed={active}
     >
-      {icon && <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />}
+      {Glyph && <Glyph size={size === "sm" ? "xs" : "sm"} />}
       {children}
     </button>
   );
@@ -195,7 +207,7 @@ export function Button({
 export function ButtonLink({
   href,
   children,
-  icon,
+  icon: Glyph,
   variant = "default",
   size = "md",
   block,
@@ -204,7 +216,7 @@ export function ButtonLink({
 }: {
   href: string;
   children?: ReactNode;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   variant?: ButtonVariant;
   size?: ButtonSize;
   block?: boolean;
@@ -220,7 +232,7 @@ export function ButtonLink({
       target={external ? "_blank" : undefined}
       rel={external ? "noreferrer" : undefined}
     >
-      {icon && <Icon name={icon} size={size === "sm" ? "xs" : "sm"} />}
+      {Glyph && <Glyph size={size === "sm" ? "xs" : "sm"} />}
       {children}
     </a>
   );
@@ -229,7 +241,7 @@ export function ButtonLink({
 export function Badge({
   children,
   tone = "neutral",
-  icon,
+  icon: Glyph,
   dot,
   outline,
   mono,
@@ -239,7 +251,7 @@ export function Badge({
 }: {
   children: ReactNode;
   tone?: Tone;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   dot?: boolean;
   outline?: boolean;
   mono?: boolean;
@@ -260,7 +272,7 @@ export function Badge({
   const inner = (
     <>
       {dot && <i className={cx("dot", tone !== "neutral" && tone)} />}
-      {icon && <Icon name={icon} size="xs" />}
+      {Glyph && <Glyph size="xs" />}
       {children}
     </>
   );
@@ -385,7 +397,7 @@ export function Segmented<T extends string>({
   panelId,
 }: {
   value: T;
-  options: { value: T; label: ReactNode; icon?: IconName; title?: string }[];
+  options: { value: T; label: ReactNode; icon?: ComponentType<GlyphProps>; title?: string }[];
   onChange: (value: T) => void;
   size?: "sm";
   ariaLabel: string;
@@ -425,7 +437,7 @@ export function Segmented<T extends string>({
           title={o.title}
           onClick={() => onChange(o.value)}
         >
-          {o.icon && <Icon name={o.icon} size="xs" />}
+          {o.icon && <o.icon size="xs" />}
           {o.label}
         </button>
       ))}
@@ -448,7 +460,12 @@ export function Tabs<T extends string>({
   panelId,
 }: {
   value: T;
-  options: { value: T; label: ReactNode; icon?: IconName; count?: number | null }[];
+  options: {
+    value: T;
+    label: ReactNode;
+    icon?: ComponentType<GlyphProps>;
+    count?: number | null;
+  }[];
   onChange: (value: T) => void;
   ariaLabel: string;
   panelId: string;
@@ -479,7 +496,7 @@ export function Tabs<T extends string>({
           tabIndex={i === selected ? 0 : -1}
           onClick={() => onChange(o.value)}
         >
-          {o.icon && <Icon name={o.icon} size="sm" />}
+          {o.icon && <o.icon size="sm" />}
           {o.label}
           {o.count != null && <span className="count-chip">{o.count}</span>}
         </button>
@@ -543,7 +560,7 @@ export function SearchInput({
 }) {
   return (
     <div className="search-input">
-      <Icon name="search" size="sm" />
+      <SearchGlyph size="sm" />
       <input
         className="input"
         type="search"
@@ -594,7 +611,7 @@ export function Select({
           </option>
         ))}
       </select>
-      <Icon name="chevronDown" size="xs" />
+      <KeyboardArrowDownGlyph size="xs" />
     </div>
   );
 }
@@ -688,14 +705,14 @@ export function Stat({
   value,
   unit,
   sub,
-  icon,
+  icon: Glyph,
   tone,
 }: {
   label: ReactNode;
   value: ReactNode;
   unit?: ReactNode;
   sub?: ReactNode;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   /**
    * The STATE this number is in, when it has one — the ink of the value moves
    * to that tone's step.
@@ -712,7 +729,7 @@ export function Stat({
   return (
     <div className="stat">
       <div className="stat-label">
-        {icon && <Icon name={icon} size="xs" />}
+        {Glyph && <Glyph size="xs" />}
         {label}
       </div>
       <div className={cx("stat-value truncate", tone && `tone-${tone}`)}>
@@ -737,13 +754,13 @@ export function Stat({
  * the list.
  */
 export function Empty({
-  icon = "inbox",
+  icon: Glyph = InboxGlyph,
   title,
   hint,
   action,
   inline,
 }: {
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   title: ReactNode;
   hint?: ReactNode;
   action?: ReactNode;
@@ -751,7 +768,7 @@ export function Empty({
 }) {
   return (
     <div className={cx("empty", inline && "inline")}>
-      <Icon name={icon} size="xl" />
+      <Glyph size={28} />
       <div className="empty-title">{title}</div>
       {hint && <div className="empty-sub">{hint}</div>}
       {action}
@@ -766,14 +783,15 @@ export function Banner({
   action,
 }: {
   tone?: "neutral" | "info" | "caution" | "critical";
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   children: ReactNode;
   action?: ReactNode;
 }) {
-  const fallback: IconName = tone === "critical" ? "alert" : tone === "caution" ? "alert" : "info";
+  const Glyph =
+    icon ?? (tone === "critical" ? ErrorGlyph : tone === "caution" ? WarningGlyph : InfoGlyph);
   return (
     <div className={cx("banner", tone)} role={tone === "critical" ? "alert" : undefined}>
-      <Icon name={icon ?? fallback} size="sm" />
+      <Glyph size="sm" />
       <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
       {action}
     </div>
@@ -875,7 +893,7 @@ export function Disclosure({
     <div className={cx("disclosure", tone && `tone-${tone}`)}>
       <div className="disclosure-bar">
         <button className="disclosure-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
-          <Icon name={open ? "chevronDown" : "chevronRight"} size="xs" />
+          {open ? <KeyboardArrowDownGlyph size="xs" /> : <ChevronRightGlyph size="xs" />}
           {mark}
           <span className={cx("truncate", mono && "mono")}>{label}</span>
           {count != null && <span className="count-chip">{count}</span>}
@@ -996,7 +1014,7 @@ export function CopyButton({
       <Button
         size={size}
         variant={variant}
-        icon={state === "copied" ? "check" : state === "failed" ? "alert" : "copy"}
+        icon={state === "copied" ? CheckGlyph : state === "failed" ? ErrorGlyph : ContentCopyGlyph}
         onClick={onClick}
         title={state === "failed" ? "the browser refused the clipboard" : title}
       >

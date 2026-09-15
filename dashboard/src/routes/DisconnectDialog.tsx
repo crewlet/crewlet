@@ -20,9 +20,9 @@ import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Avatar, Button } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
+import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -224,7 +224,7 @@ export function DisconnectDialog({
     return (
       <Dialog
         title={owed ? `Disconnecting ${name}` : `${name} disconnected`}
-        icon="plug"
+        icon={CableGlyph}
         onClose={onClose}
         width={520}
         footer={
@@ -273,7 +273,7 @@ export function DisconnectDialog({
   return (
     <Dialog
       title={`Disconnect ${name}`}
-      icon="plug"
+      icon={CableGlyph}
       onClose={onClose}
       dismissable={!busy}
       width={520}
@@ -333,7 +333,7 @@ export function DisconnectDialog({
                     target="_blank"
                     rel="noreferrer"
                   >
-                    <Icon name="external" size="xs" />
+                    <OpenInNewGlyph size="xs" />
                     Link to delete
                   </a>
                 </li>
@@ -349,7 +349,7 @@ export function DisconnectDialog({
             covering three surfaces left the tool half disconnected. */}
         {waitingOn && !error && (
           <div className="banner">
-            <Icon name="clock" size="sm" />
+            <ScheduleGlyph size="sm" />
             <span>
               {name} is being provisioned right now, so {waitingOn} has to wait its turn. Still
               trying.
@@ -359,7 +359,7 @@ export function DisconnectDialog({
 
         {error && (
           <div className="banner critical">
-            <Icon name="alert" size="sm" />
+            <ErrorGlyph size="sm" />
             <span className="col" style={{ gap: 4 }}>
               {stuck && (
                 <span>

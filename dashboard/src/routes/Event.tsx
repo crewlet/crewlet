@@ -14,6 +14,15 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  DatabaseGlyph,
+  DescriptionGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  TagGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
@@ -40,21 +49,25 @@ export function EventScreen({ eventId }: { eventId: string }) {
         actions={
           <>
             {data?.trace_id && (
-              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", data.trace_id])}>
+              <Button
+                size="sm"
+                icon={ForkRightGlyph}
+                onClick={() => nav.to(["traces", data.trace_id])}
+              >
                 Trace
               </Button>
             )}
             {data?.payload?.turn_id != null && (
               <Button
                 size="sm"
-                icon="layers"
+                icon={LayersGlyph}
                 onClick={() => nav.to(["turns", String(data.payload!.turn_id)])}
               >
                 Turn
               </Button>
             )}
             {data?.actor && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["seats", data.actor])}>
+              <Button size="sm" icon={PersonGlyph} onClick={() => nav.to(["seats", data.actor])}>
                 {data.actor}
               </Button>
             )}
@@ -77,7 +90,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
       >
         {data && (
           <>
-            <Panel title="Envelope" icon="file">
+            <Panel title="Envelope" icon={DescriptionGlyph}>
               <KeyValue
                 items={[
                   [
@@ -138,14 +151,14 @@ export function EventScreen({ eventId }: { eventId: string }) {
             </Panel>
 
             {phase && (
-              <Panel title="The phase this event records" icon="brain" padding="tight">
+              <Panel title="The phase this event records" icon={NeurologyGlyph} padding="tight">
                 <PhaseCard record={phase} defaultOpen showRole />
               </Panel>
             )}
 
             <Panel
               title="Payload"
-              icon="database"
+              icon={DatabaseGlyph}
               subtitle="verbatim, as the engine stored it"
               actions={
                 data.payload ? (
@@ -176,7 +189,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
             </Panel>
 
             {data.tags && Object.keys(data.tags).length > 0 && (
-              <Panel title="Tags" icon="hash">
+              <Panel title="Tags" icon={TagGlyph}>
                 <KeyValue
                   items={Object.entries(data.tags).map(([k, v]) => [
                     k,

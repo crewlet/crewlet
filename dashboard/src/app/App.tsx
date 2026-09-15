@@ -33,6 +33,7 @@ import { TraceScreen } from "~/routes/Trace.tsx";
 import { EventScreen } from "~/routes/Event.tsx";
 import { TurnScreen } from "~/routes/Turn.tsx";
 import { NotFound } from "~/routes/NotFound.tsx";
+import { ErrorGlyph } from "@crewlethq/icons/glyphs";
 
 function Screen() {
   const route = useRoute();
@@ -126,7 +127,7 @@ export class ScreenBoundary extends Component<BoundaryProps, BoundaryState> {
     if (!error) return this.props.children;
     return (
       <Empty
-        icon="alert"
+        icon={ErrorGlyph}
         title="This screen could not be drawn"
         hint="Something it received did not have the shape it expects. The rest of the dashboard keeps working, and the message below is what to include in a report."
         action={

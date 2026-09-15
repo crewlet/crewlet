@@ -25,7 +25,6 @@ import {
 } from "./CommandPalette.tsx";
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
 import { Badge, Button, ButtonLink, Segmented, cx } from "~/ui/primitives.tsx";
 import { isComposing } from "~/ui/keys.ts";
@@ -48,6 +47,16 @@ import {
   useThemePreference,
 } from "@crewlethq/ui";
 import { onTokenRequested } from "~/protocol/index.ts";
+import {
+  ComputerGlyph,
+  DarkModeGlyph,
+  KeyGlyph,
+  LightModeGlyph,
+  ManufacturingGlyph,
+  MenuGlyph,
+  RefreshGlyph,
+  SearchGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export function Shell({ children }: { children: ReactNode }) {
   const route = useRoute();
@@ -185,7 +194,7 @@ export function Shell({ children }: { children: ReactNode }) {
                     href={href(item.path)}
                     aria-current={activeKey === item.key ? "page" : undefined}
                   >
-                    <Icon name={item.icon} size="sm" />
+                    <item.icon size="sm" />
                     <span className="truncate">{item.label}</span>
                     {badge && (
                       <span className={cx("nav-badge", badge.attention && "attention")}>
@@ -230,9 +239,9 @@ export function Shell({ children }: { children: ReactNode }) {
               value={theme}
               onChange={setTheme}
               options={[
-                { value: "light", label: "", icon: "sun", title: "Light" },
-                { value: "system", label: "", icon: "monitor", title: "Follow the system" },
-                { value: "dark", label: "", icon: "moon", title: "Dark" },
+                { value: "light", label: "", icon: LightModeGlyph, title: "Light" },
+                { value: "system", label: "", icon: ComputerGlyph, title: "Follow the system" },
+                { value: "dark", label: "", icon: DarkModeGlyph, title: "Dark" },
               ]}
             />
             <span className="spacer" />
@@ -263,7 +272,7 @@ export function Shell({ children }: { children: ReactNode }) {
               the whole app into the next row. */}
           <span className="drawer-toggle" ref={drawerToggle}>
             <Button
-              icon="menu"
+              icon={MenuGlyph}
               variant="ghost"
               size="sm"
               title="Sections"
@@ -282,7 +291,7 @@ export function Shell({ children }: { children: ReactNode }) {
             aria-keyshortcuts={SEARCH_ARIA_KEYSHORTCUTS}
             onClick={() => setPaletteOpen(true)}
           >
-            <Icon name="search" size="sm" />
+            <SearchGlyph size="sm" />
             <span className="omni-label">Search</span>
             <Kbd keys={SEARCH_SHORTCUT} />
           </button>
@@ -293,7 +302,7 @@ export function Shell({ children }: { children: ReactNode }) {
             degraded state repairs itself when the engine comes back. */}
         {authRejected ? (
           <div className="degraded critical">
-            <Icon name="key" size="sm" />
+            <KeyGlyph size="sm" />
             <span>The engine refused this browser's API token.</span>
             <span className="spacer" />
             <Button size="sm" onClick={() => setTokenOpen(true)}>
@@ -302,14 +311,14 @@ export function Shell({ children }: { children: ReactNode }) {
           </div>
         ) : !connected ? (
           <div className="degraded caution">
-            <Icon name="refresh" size="sm" />
+            <RefreshGlyph size="sm" />
             <span>
               Reconnecting to the engine. Showing the last state received, and polling meanwhile.
             </span>
           </div>
         ) : engine?.configured === false ? (
           <div className="degraded caution">
-            <Icon name="sliders" size="sm" />
+            <ManufacturingGlyph size="sm" />
             <span className="col" style={{ gap: 2 }}>
               <span>
                 No company configuration is active: no seats are running and inbound webhooks are

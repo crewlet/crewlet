@@ -22,11 +22,10 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, ButtonLink, Empty, Skeleton } from "~/ui/primitives.tsx";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -36,6 +35,19 @@ import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { requestToken, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import {
+  type GlyphProps,
+  CableGlyph,
+  ChatGlyph,
+  CodeGlyph,
+  KeyGlyph,
+  KeyboardArrowDownGlyph,
+  LinkGlyph,
+  SettingsGlyph,
+  TargetGlyph,
+  TimelineGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -43,29 +55,34 @@ type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
  * What agents need in order to work, in the order the console asks about
  * them. Each tool answers exactly one capability.
  */
-const CAPABILITIES: { id: string; title: string; icon: IconName; description: string }[] = [
+const CAPABILITIES: {
+  id: string;
+  title: string;
+  icon: ComponentType<GlyphProps>;
+  description: string;
+}[] = [
   {
     id: "messaging",
     title: "Messaging",
-    icon: "message",
+    icon: ChatGlyph,
     description: "Where agents talk with you and with each other.",
   },
   {
     id: "tasks",
     title: "Task management",
-    icon: "target",
+    icon: TargetGlyph,
     description: "Where work is planned, assigned and tracked.",
   },
   {
     id: "code",
     title: "Code",
-    icon: "gitBranch",
+    icon: CodeGlyph,
     description: "Where agents commit, review and ship.",
   },
   {
     id: "observability",
     title: "Observability",
-    icon: "activity",
+    icon: TimelineGlyph,
     description: "Where agents watch production and respond.",
   },
 ];
@@ -1313,7 +1330,7 @@ export function EntryRow({
             aria-label={open ? `Hide ${entry.name} details` : `Show ${entry.name} details`}
             onClick={() => setOpen((was) => !was)}
           >
-            <Icon name="chevronDown" size="sm" />
+            <KeyboardArrowDownGlyph size="sm" />
           </button>
           {/* SETTINGS BESIDE THE DISCLOSURE, as a square the size of the
               chevron. It sat at the foot of the open card, which put an
@@ -1330,7 +1347,7 @@ export function EntryRow({
               title={`${entry.name} settings`}
               onClick={() => onConnect()}
             >
-              <Icon name="gear" size="sm" />
+              <SettingsGlyph size="sm" />
             </button>
           )}
           {actions}
@@ -1688,7 +1705,7 @@ export function Integrations() {
           ask the operator to keep seven copies consistent. */}
       {setup.base && !setup.base.present && (
         <div className="banner caution">
-          <Icon name="alert" size="sm" />
+          <WarningGlyph size="sm" />
           <span className="col" style={{ gap: 4 }}>
             <span>No public address is set, so no third-party app can deliver to this engine.</span>
             <span className="t-caption">
@@ -1701,7 +1718,7 @@ export function Integrations() {
       )}
       {setup.base?.present && (
         <div className="banner neutral">
-          <Icon name="link" size="sm" />
+          <LinkGlyph size="sm" />
           <span>
             Third-party apps reach this engine at <code className="inline">{setup.base.value}</code>
           </span>
@@ -1709,7 +1726,7 @@ export function Integrations() {
       )}
       {setup.guarded && (
         <div className="banner neutral">
-          <Icon name="key" size="sm" />
+          <KeyGlyph size="sm" />
           <span>
             Setting an integration up needs an operator token. This screen is showing what it can
             read without one.
@@ -1719,7 +1736,7 @@ export function Integrations() {
               anonymous reads allowed the socket is never refused, so a banner
               that only NAMES the missing credential leaves the reader with
               nothing on the page that can supply it. */}
-          <Button size="sm" icon="key" onClick={requestToken}>
+          <Button size="sm" icon={KeyGlyph} onClick={requestToken}>
             Set token
           </Button>
         </div>
@@ -1848,7 +1865,7 @@ export function Integrations() {
         )}
         {data && configured.length === 0 && (
           <Empty
-            icon="plug"
+            icon={CableGlyph}
             title="No integration is connected yet"
             hint="Until one is, the only thing that can wake a seat is a schedule. Connect a chat surface, a tracker or a code host from the cards below."
           />

@@ -32,6 +32,7 @@ import type { CheckStatus, SaveRules } from "./model/scheduler.ts";
 import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
+import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -213,7 +214,7 @@ export function ReviewSaveDialog({
   return (
     <Dialog
       title={create ? "Review and create the company" : "Review and save"}
-      icon="save"
+      icon={SaveGlyph}
       width={680}
       dismissable={!busy}
       onClose={onClose}
@@ -237,7 +238,7 @@ export function ReviewSaveDialog({
       {phase.kind === "refused" && <Banner tone="critical">{phase.message}</Banner>}
       {phase.kind === "retry" && <Banner tone="caution">{phase.message}</Banner>}
       {phase.kind === "settling" && (
-        <Banner tone="caution" icon="refresh">
+        <Banner tone="caution" icon={RefreshGlyph}>
           The engine's answer did not arrive. Checking whether the save was stored.
         </Banner>
       )}
@@ -265,7 +266,7 @@ export function ReviewSaveDialog({
         </ul>
       )}
       {status === "unreachable" && (
-        <Banner tone="caution" icon="plug">
+        <Banner tone="caution" icon={CableGlyph}>
           The engine could not be reached to check this draft. Saving still validates it.
         </Banner>
       )}

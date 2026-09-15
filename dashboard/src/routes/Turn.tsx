@@ -64,7 +64,6 @@ import {
   StatRow,
   cx,
 } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -88,6 +87,21 @@ import {
 import { prefetchBlocks, tellStory, type PrefetchBlock } from "~/lib/turnstory.ts";
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
+import {
+  BoltGlyph,
+  Book2Glyph,
+  CheckGlyph,
+  DatabaseGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  InfoGlyph,
+  NeurologyGlyph,
+  PersonGlyph,
+  ScheduleGlyph,
+  TimelineGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -234,7 +248,7 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
   return (
     <Panel
       title="What the turn was given"
-      icon="book"
+      icon={Book2Glyph}
       subtitle="the context blocks its prompt was assembled from"
       padding="tight"
     >
@@ -268,7 +282,7 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
         )}
         {gated.length > 0 && (
           <div className="banner neutral">
-            <Icon name="info" size="sm" />
+            <InfoGlyph size="sm" />
             <span>
               Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
               these filters were skipped — the executor searches later with{" "}
@@ -321,8 +335,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
       </time>
       <span className="what truncate">
         {event.failed && (
-          <Icon
-            name="alert"
+          <ErrorGlyph
             size="xs"
             style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
@@ -522,7 +535,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 chain, a guard that fired — which are precisely the turns with
                 no failed phase record to find. */}
             {trouble > 0 && (
-              <Badge tone="critical" icon="alert">
+              <Badge tone="critical" icon={ErrorGlyph}>
                 {trouble === 1 ? "1 problem" : `${trouble} problems`}
               </Badge>
             )}
@@ -536,7 +549,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             {clean && (
               <Badge
                 tone="positive"
-                icon="check"
+                icon={CheckGlyph}
                 title="no guard fired, no provider fell through, no call was refused"
               >
                 nothing went wrong
@@ -547,12 +560,12 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         actions={
           <>
             {role && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["seats", role])}>
+              <Button size="sm" icon={PersonGlyph} onClick={() => nav.to(["seats", role])}>
                 The seat
               </Button>
             )}
             {traceId && (
-              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", traceId])}>
+              <Button size="sm" icon={ForkRightGlyph} onClick={() => nav.to(["traces", traceId])}>
                 Trace
               </Button>
             )}
@@ -587,7 +600,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         <Panel padding="none">
           <StatRow cols={4}>
             <Stat
-              icon="user"
+              icon={PersonGlyph}
               label="Seat"
               value={role ? <SeatChip name={role} handle={role} size="md" /> : "—"}
               // The conversation key used to sit here, raw and truncated —
@@ -598,7 +611,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               sub={running ? "running now" : "ran this turn"}
             />
             <Stat
-              icon="clock"
+              icon={ScheduleGlyph}
               label="Took"
               value={
                 durationMs != null
@@ -616,7 +629,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
             />
             <Stat
-              icon="coin"
+              icon={TokenGlyph}
               label="Tokens"
               // THE TURN'S OWN PHASES. A worker's tokens are already charged
               // through the shared meter, which is why the engine keeps them
@@ -635,7 +648,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
             />
             <Stat
-              icon="check"
+              icon={CheckGlyph}
               label="Outcome"
               value={outcome.word}
               tone={outcome.tone}
@@ -653,7 +666,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.wentWrong.length > 0 && (
           <Panel
             title="What went wrong"
-            icon="alert"
+            icon={ErrorGlyph}
             count={story.wentWrong.length}
             subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
             padding="none"
@@ -664,7 +677,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
 
         {prefetch.length > 0 && <Prefetch blocks={prefetch} />}
 
-        <Panel title="Phases" icon="brain" count={own.length} padding="tight">
+        <Panel title="Phases" icon={NeurologyGlyph} count={own.length} padding="tight">
           <div className="col gap-2">
             {own.map((p, i) => (
               <PhaseCard key={p.key} record={p} nested={nested.get(p.key)} defaultOpen={i === 0} />
@@ -680,7 +693,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.did.length > 0 && (
           <Panel
             title="What else it did"
-            icon="zap"
+            icon={BoltGlyph}
             count={story.did.length}
             subtitle="work outside the tool loop: coding runs, delegations, colleagues"
             padding="none"
@@ -692,7 +705,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.leftBehind.length > 0 && (
           <Panel
             title="What the seat learned"
-            icon="database"
+            icon={DatabaseGlyph}
             count={story.leftBehind.length}
             // "What it left behind" read as work abandoned rather than as
             // memory written. This is the reflection pass — it runs AFTER the
@@ -708,7 +721,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {story.rest.length > 0 && (
           <Panel
             title="Also published"
-            icon="activity"
+            icon={TimelineGlyph}
             count={story.rest.length}
             subtitle="rows this build has no particular place for"
             padding="none"
@@ -724,7 +737,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {(rec.summary || rec.learning) && (
           <Panel
             title="The turn's own record"
-            icon="file"
+            icon={DescriptionGlyph}
             subtitle="the two events the engine closes every turn with"
             padding="tight"
           >

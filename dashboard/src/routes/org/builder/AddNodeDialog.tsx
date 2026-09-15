@@ -35,6 +35,7 @@ import { locate, seatNames, siblingsAt, unitNames } from "./model/draft.ts";
 import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
+import { AddGlyph } from "@crewlethq/icons/glyphs";
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
@@ -118,7 +119,7 @@ export function AddNodeDialog({
   return (
     <Dialog
       title={`Add to ${where}`}
-      icon="plus"
+      icon={AddGlyph}
       onClose={onClose}
       onSubmit={add}
       footer={

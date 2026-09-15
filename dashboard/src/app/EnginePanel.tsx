@@ -21,12 +21,18 @@
 import { useRef } from "react";
 import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Badge, Button, KeyValue } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { focusables, useModal } from "~/ui/useModal.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  CloseGlyph,
+  InfoGlyph,
+  KeyGlyph,
+  PowerSettingsNewGlyph,
+  RefreshGlyph,
+} from "@crewlethq/icons/glyphs";
 
 export function EnginePanel({
   onClose,
@@ -66,10 +72,10 @@ export function EnginePanel({
         panelRef={modal.panelRef}
       >
         <header className="dialog-head">
-          <Icon name="power" size="sm" />
+          <PowerSettingsNewGlyph size="sm" />
           <strong style={{ fontSize: "var(--font-size-sm)" }}>Engine</strong>
           <span className="spacer" />
-          <Button icon="x" variant="ghost" size="sm" onClick={onClose} title="Close" />
+          <Button icon={CloseGlyph} variant="ghost" size="sm" onClick={onClose} title="Close" />
         </header>
         <div className="dialog-body col gap-3" ref={body}>
           <div className="row">
@@ -85,7 +91,7 @@ export function EnginePanel({
 
           {authRejected && (
             <div className="banner critical">
-              <Icon name="key" size="sm" />
+              <KeyGlyph size="sm" />
               <span style={{ flex: 1 }}>
                 This browser's API token was refused. Reads and writes are both blocked.
               </span>
@@ -96,7 +102,7 @@ export function EnginePanel({
           )}
           {!connected && !authRejected && (
             <div className="banner caution">
-              <Icon name="refresh" size="sm" />
+              <RefreshGlyph size="sm" />
               <span>
                 Reconnecting. The page is showing the last state it received and polling the REST
                 snapshot meanwhile.
@@ -105,7 +111,7 @@ export function EnginePanel({
           )}
           {error && connected && (
             <div className="banner neutral">
-              <Icon name="info" size="sm" />
+              <InfoGlyph size="sm" />
               <span>
                 The engine is reachable but did not answer the health query ({error}). The fields
                 below may be stale.

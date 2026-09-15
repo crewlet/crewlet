@@ -58,26 +58,27 @@
  */
 
 import {
+  type ComponentType,
+  type KeyboardEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useId,
   useLayoutEffect,
   useRef,
   useState,
-  type KeyboardEvent,
-  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { Icon, type IconName } from "./Icon.tsx";
 import { Button, cx } from "./primitives.tsx";
 import { usePopup } from "./useModal.ts";
 import { VIEW_CHANGE_EVENT, placePopup } from "./viewport.ts";
+import { type GlyphProps, CheckGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
 
 export interface MenuItem {
   kind?: "item";
   key: string;
   label: string;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   onSelect: () => void;
   disabled?: boolean;
   /** A destructive action: drawn in the critical ink. */
@@ -129,7 +130,7 @@ function runs(entries: readonly MenuEntry[]): Run[] {
 export function Menu({
   label,
   items,
-  icon = "more",
+  icon: Glyph = MoreVertGlyph,
   children,
   layer,
   open: controlled,
@@ -141,7 +142,7 @@ export function Menu({
   /** The trigger's accessible name, such as "Actions for Software Engineer". */
   label: string;
   items: readonly MenuEntry[];
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   /** Visible trigger text; without it the trigger is an icon button named by `label`. */
   children?: ReactNode;
   /** A canvas overlay layer to render into (`useCanvasOverlay`). */
@@ -341,10 +342,10 @@ export function Menu({
     >
       {entry.checked !== undefined && (
         <span className="menu-item-check" aria-hidden="true">
-          {entry.checked && <Icon name="check" size="sm" />}
+          {entry.checked && <CheckGlyph size="sm" />}
         </span>
       )}
-      {entry.icon && <Icon name={entry.icon} size="sm" />}
+      {entry.icon && <entry.icon size="sm" />}
       <span className="menu-item-label">{entry.label}</span>
       {entry.hint && <span className="menu-item-hint">{entry.hint}</span>}
     </button>
@@ -388,7 +389,7 @@ export function Menu({
         }}
         variant="ghost"
         size={size}
-        icon={icon}
+        icon={Glyph}
         // An icon trigger is named by its title; one with visible text by the text.
         title={children ? undefined : label}
         aria-haspopup="menu"

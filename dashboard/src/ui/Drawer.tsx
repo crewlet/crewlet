@@ -26,15 +26,15 @@
  *   a drawer mid-write cannot be abandoned by any of the three.
  */
 
-import { useRef, type ReactNode } from "react";
+import { type ComponentType, type ReactNode, useRef } from "react";
 import { ModalPanel } from "./Dialog.tsx";
-import { Icon, type IconName } from "./Icon.tsx";
 import { Button } from "./primitives.tsx";
 import { focusables, useModal } from "./useModal.ts";
+import { type GlyphProps, CloseGlyph } from "@crewlethq/icons/glyphs";
 
 export function Drawer({
   title,
-  icon,
+  icon: Glyph,
   onClose,
   children,
   footer,
@@ -42,7 +42,7 @@ export function Drawer({
   onSubmit,
 }: {
   title: string;
-  icon?: IconName;
+  icon?: ComponentType<GlyphProps>;
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
@@ -61,13 +61,13 @@ export function Drawer({
     <div className="veil sheet-veil" ref={modal.veilRef} role="presentation">
       <ModalPanel className="sheet" title={title} panelRef={modal.panelRef} onSubmit={onSubmit}>
         <header className="sheet-head">
-          {icon && <Icon name={icon} size="sm" />}
+          {Glyph && <Glyph size="sm" />}
           <strong className="sheet-title truncate">{title}</strong>
           <span className="spacer" />
           <Button
             variant="ghost"
             size="sm"
-            icon="x"
+            icon={CloseGlyph}
             title="Close"
             onClick={onClose}
             disabled={!dismissable}

@@ -15,6 +15,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { DataTable } from "./DataTable.tsx";
 import { Segmented, TabPanel, Tabs, tabId } from "./primitives.tsx";
+import { ComputerGlyph, DarkModeGlyph, LightModeGlyph } from "@crewlethq/icons/glyphs";
 
 afterEach(cleanup);
 
@@ -82,9 +83,9 @@ describe("a tab row", () => {
 
 describe("a setting", () => {
   const themes = [
-    { value: "light", label: "", icon: "sun" as const, title: "Light" },
-    { value: "system", label: "", icon: "monitor" as const, title: "Follow the system" },
-    { value: "dark", label: "", icon: "moon" as const, title: "Dark" },
+    { value: "light", label: "", icon: LightModeGlyph, title: "Light" },
+    { value: "system", label: "", icon: ComputerGlyph, title: "Follow the system" },
+    { value: "dark", label: "", icon: DarkModeGlyph, title: "Dark" },
   ];
 
   test("is a radio group whose arrows select as they move", () => {

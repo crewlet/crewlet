@@ -9,13 +9,14 @@ import { afterEach, expect, test, vi } from "vitest";
 import { Dialog } from "./Dialog.tsx";
 import { Menu, type MenuEntry } from "./Menu.tsx";
 import { VIEW_CHANGE_EVENT } from "./viewport.ts";
+import { EditGlyph, MoveItemGlyph } from "@crewlethq/icons/glyphs";
 
 afterEach(cleanup);
 
 function entries(overrides: { onEdit?: () => void; onDelete?: () => void } = {}): MenuEntry[] {
   return [
-    { key: "edit", label: "Edit", icon: "pencil", onSelect: overrides.onEdit ?? (() => {}) },
-    { key: "move", label: "Move to", icon: "move", onSelect: () => {} },
+    { key: "edit", label: "Edit", icon: EditGlyph, onSelect: overrides.onEdit ?? (() => {}) },
+    { key: "move", label: "Move to", icon: MoveItemGlyph, onSelect: () => {} },
     { key: "open", label: "Open seat", disabled: true, onSelect: () => {} },
     { kind: "separator", key: "sep" },
     { key: "delete", label: "Delete", danger: true, onSelect: overrides.onDelete ?? (() => {}) },

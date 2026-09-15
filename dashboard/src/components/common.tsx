@@ -10,7 +10,6 @@
 
 import type { ReactNode } from "react";
 import { Avatar, Badge, Button, cx } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -26,6 +25,14 @@ import {
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 import { RelativeTime, formatRelative, useNow } from "@crewlethq/ui";
+import {
+  DatabaseGlyph,
+  ErrorGlyph,
+  InboxGlyph,
+  InfoGlyph,
+  KeyGlyph,
+  ScheduleGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
@@ -126,7 +133,7 @@ export function AttentionRow({ item }: { item: Attention }) {
   const inner = (
     <>
       <span className="attention-icon">
-        <Icon name={item.icon} size="sm" />
+        <item.icon size="sm" />
       </span>
       <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
         <span className="t-body" style={{ fontWeight: "var(--font-weight-medium)" }}>
@@ -187,8 +194,7 @@ export function EventRow({
       <span className="feed-actor truncate">{event.actor || "engine"}</span>
       <span className="feed-what truncate">
         {event.failed && (
-          <Icon
-            name="alert"
+          <ErrorGlyph
             size="xs"
             style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
@@ -258,7 +264,7 @@ export function QueryState({
   if (error === "unauthorized") {
     return (
       <div className="banner caution">
-        <Icon name="key" size="sm" />
+        <KeyGlyph size="sm" />
         <span>
           This answer is auth-gated. It needs an API token matching one of your{" "}
           <code className="inline">api.auth.tokens</code> entries.
@@ -268,7 +274,7 @@ export function QueryState({
             With anonymous reads allowed the socket is never refused, so the
             dialog's only other doors — a refusal, and the engine panel — both
             stay shut on exactly the screen that needs it. */}
-        <Button size="sm" icon="key" onClick={requestToken}>
+        <Button size="sm" icon={KeyGlyph} onClick={requestToken}>
           Set token
         </Button>
       </div>
@@ -277,7 +283,7 @@ export function QueryState({
   if (error === "no_event_store") {
     return (
       <div className="banner neutral">
-        <Icon name="database" size="sm" />
+        <DatabaseGlyph size="sm" />
         <span>
           This node keeps no event log, so there is no history to read. Set{" "}
           <code className="inline">store.path</code> in <code className="inline">crewlet.yaml</code>{" "}
@@ -289,7 +295,7 @@ export function QueryState({
   if (error === "unknown_query") {
     return (
       <div className="banner neutral">
-        <Icon name="info" size="sm" />
+        <InfoGlyph size="sm" />
         <span>
           The engine does not serve this answer — the subsystem behind it is not running on this
           node.
@@ -300,7 +306,7 @@ export function QueryState({
   if (error === "timeout") {
     return (
       <div className="banner caution">
-        <Icon name="clock" size="sm" />
+        <ScheduleGlyph size="sm" />
         <span>The engine did not answer within 10 seconds. It may be under load.</span>
       </div>
     );
@@ -308,7 +314,7 @@ export function QueryState({
   if (error) {
     return (
       <div className="banner critical">
-        <Icon name="alert" size="sm" />
+        <ErrorGlyph size="sm" />
         <span>The engine refused this query ({error}).</span>
       </div>
     );
@@ -317,7 +323,7 @@ export function QueryState({
   if (empty) {
     return (
       <div className="empty inline">
-        <Icon name="inbox" size="xl" />
+        <InboxGlyph size="xl" />
         <div className="empty-title">{empty.title}</div>
         {empty.hint && <div className="empty-sub">{empty.hint}</div>}
       </div>

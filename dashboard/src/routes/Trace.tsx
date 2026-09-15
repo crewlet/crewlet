@@ -13,10 +13,17 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import {
+  ChevronRightGlyph,
+  ErrorGlyph,
+  ForkRightGlyph,
+  LayersGlyph,
+  ScheduleGlyph,
+  TimelineGlyph,
+} from "@crewlethq/icons/glyphs";
 
 interface Node {
   event: EventRecord;
@@ -88,7 +95,11 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           </>
         }
         actions={
-          <Button size="sm" icon="activity" onClick={() => nav.to(["activity"], { q: traceId })}>
+          <Button
+            size="sm"
+            icon={TimelineGlyph}
+            onClick={() => nav.to(["activity"], { q: traceId })}
+          >
             In the log
           </Button>
         }
@@ -110,13 +121,13 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         <Panel padding="none">
           <StatRow cols={3}>
             <Stat
-              icon="layers"
+              icon={LayersGlyph}
               label="Spans"
               value={events.length}
               sub="events sharing this trace"
             />
             <Stat
-              icon="clock"
+              icon={ScheduleGlyph}
               label="Elapsed"
               value={to > from ? fmtDuration(to - from) : "—"}
               sub={
@@ -126,7 +137,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               }
             />
             <Stat
-              icon="alert"
+              icon={ErrorGlyph}
               label="Failures"
               value={failed}
               sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
@@ -134,7 +145,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           </StatRow>
         </Panel>
 
-        <Panel title="Spans" icon="gitBranch" padding="none">
+        <Panel title="Spans" icon={ForkRightGlyph} padding="none">
           <div className="list">
             {rows.map(({ event, depth }) => {
               // The bar's offset and width place the span inside the trace's
@@ -169,7 +180,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                   </span>
                   <span className="feed-tail">
                     <span className="faint">{humanize(event.category)}</span>
-                    <Icon name="chevronRight" size="xs" />
+                    <ChevronRightGlyph size="xs" />
                   </span>
                 </a>
               );

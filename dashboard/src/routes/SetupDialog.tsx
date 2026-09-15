@@ -43,12 +43,20 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Badge, Button } from "~/ui/primitives.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
+import {
+  CableGlyph,
+  ContentCopyGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  InfoGlyph,
+  LinkGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -876,7 +884,7 @@ export function SetupDialog({
   return (
     <Dialog
       title={connecting ? `Connect ${title}` : `${title} settings`}
-      icon="plug"
+      icon={CableGlyph}
       onClose={onClose}
       dismissable={!busy}
       width={560}
@@ -913,7 +921,7 @@ export function SetupDialog({
         ))}
         {manualSeats && (
           <div className="banner neutral">
-            <Icon name="info" size="sm" />
+            <InfoGlyph size="sm" />
             {/* ONE LINE. What follows it is the roster of agents to
                 configure, which says the rest by being there. */}
             <span>{title} does not support automatic agent provisioning at the moment.</span>
@@ -921,7 +929,7 @@ export function SetupDialog({
         )}
         {manual.map((section) => (
           <div key={sectionKey(section)} className="banner neutral">
-            <Icon name="link" size="sm" />
+            <LinkGlyph size="sm" />
             <span className="col" style={{ gap: 4 }}>
               <span>
                 Deliveries arrive at <code className="inline">{section.tool.public_url}</code>
@@ -994,7 +1002,7 @@ export function SetupDialog({
                     past Slack's cap) are one edit away from fixed. */}
                 {!seat?.manifest && seat?.manifest_note && (
                   <div className="banner caution">
-                    <Icon name="alert" size="sm" />
+                    <WarningGlyph size="sm" />
                     <span className="col" style={{ gap: 4 }}>
                       <span>No app manifest for {heading} yet.</span>
                       <span className="t-caption">{marked(seat.manifest_note)}</span>
@@ -1004,7 +1012,7 @@ export function SetupDialog({
                 {seat?.manifest && (
                   <details className="int-manifest">
                     <summary className="int-summary int-manifest-summary">
-                      <Icon name="file" size="sm" />
+                      <DescriptionGlyph size="sm" />
                       {/* NOT "for SRE Lead". The block this sits in is that
                           agent's and carries their name two lines above, so
                           repeating it here says nothing and pushes the words
@@ -1017,7 +1025,7 @@ export function SetupDialog({
                           forty lines they were copying instead of it. */}
                       <Button
                         size="sm"
-                        icon="copy"
+                        icon={ContentCopyGlyph}
                         onClick={(e) => {
                           e.preventDefault();
                           void navigator.clipboard?.writeText(seat.manifest ?? "");
@@ -1082,7 +1090,7 @@ export function SetupDialog({
                 `<title>` CHILD that draws one, so the hover would be silently
                 absent. The same words reach a screen reader as text. */}
             <span className="int-form-why" title={WHY_SECRETS}>
-              <Icon name="info" size="sm" />
+              <InfoGlyph size="sm" />
               <span className="sr-only">{WHY_SECRETS}</span>
             </span>
             <span>
@@ -1095,7 +1103,7 @@ export function SetupDialog({
 
       {error && (
         <div className="banner critical">
-          <Icon name="alert" size="sm" />
+          <ErrorGlyph size="sm" />
           {/* THE PROBLEMS, not the paragraph. A validation refusal is several
               of them joined with newlines, which HTML collapses into one run
               where the second problem's config path lands inside the first

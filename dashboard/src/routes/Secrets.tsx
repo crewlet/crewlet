@@ -28,7 +28,6 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
@@ -36,6 +35,14 @@ import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  AddGlyph,
+  CloseGlyph,
+  DatabaseGlyph,
+  EditGlyph,
+  KeyGlyph,
+  ShieldGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /**
  * How a read that did not answer is reported to the operator.
@@ -149,14 +156,14 @@ export function Secrets() {
         sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
         badges={<Badge outline>{plural(list.length, "credential")} held</Badge>}
         actions={
-          <Button icon="plus" variant="primary" onClick={() => setWriting({ editing: "" })}>
+          <Button icon={AddGlyph} variant="primary" onClick={() => setWriting({ editing: "" })}>
             Store a secret
           </Button>
         }
       />
 
       <div className="banner neutral">
-        <Icon name="shield" size="sm" />
+        <ShieldGlyph size="sm" />
         <span className="col" style={{ gap: 4 }}>
           <span>
             These live in the fleet's coordination store, sealed with the Tier A keyring, and every
@@ -173,15 +180,20 @@ export function Secrets() {
 
       <Panel padding="none">
         <StatRow cols={3}>
-          <Stat icon="key" label="Credentials" value={list.length} sub="names the fleet holds" />
           <Stat
-            icon="database"
+            icon={KeyGlyph}
+            label="Credentials"
+            value={list.length}
+            sub="names the fleet holds"
+          />
+          <Stat
+            icon={DatabaseGlyph}
             label="In the secret store"
             value={fromStore}
             sub="the rest resolve from this process's environment"
           />
           <Stat
-            icon="shield"
+            icon={ShieldGlyph}
             label="Distinct key ids"
             value={new Set(list.map((r) => r.key_id)).size}
             sub="a rekey moves every value onto a new one"
@@ -260,14 +272,14 @@ export function Secrets() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      icon="pencil"
+                      icon={EditGlyph}
                       title={`Edit ${s.name}`}
                       onClick={() => setWriting({ editing: s.name })}
                     />
                     <Button
                       size="sm"
                       variant="ghost"
-                      icon="x"
+                      icon={CloseGlyph}
                       title={`Remove ${s.name}`}
                       onClick={() => setRemoving(s.name)}
                     />

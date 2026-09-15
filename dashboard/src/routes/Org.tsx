@@ -37,6 +37,7 @@ import { Directory } from "./org/Directory.tsx";
 import { PreviousRevisionNote } from "./org/builder/AfterSaveStrip.tsx";
 import { Builder } from "./org/builder/Builder.tsx";
 import { builderSurfaces } from "./org/builder/surfaces.ts";
+import { AccountTreeGlyph, EditGlyph, FlagGlyph, GroupGlyph } from "@crewlethq/icons/glyphs";
 
 type Lens = "chart" | "directory" | "charter" | "builder";
 
@@ -62,10 +63,10 @@ export function OrgScreen() {
             value={lens}
             onChange={setLens}
             options={[
-              { value: "chart", label: "Chart", icon: "sitemap" },
-              { value: "directory", label: "Directory", icon: "users" },
-              { value: "charter", label: "Charter", icon: "flag" },
-              { value: "builder", label: "Builder", icon: "pencil" },
+              { value: "chart", label: "Chart", icon: AccountTreeGlyph },
+              { value: "directory", label: "Directory", icon: GroupGlyph },
+              { value: "charter", label: "Charter", icon: FlagGlyph },
+              { value: "builder", label: "Builder", icon: EditGlyph },
             ]}
           />
         }

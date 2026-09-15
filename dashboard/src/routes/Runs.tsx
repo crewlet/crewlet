@@ -16,12 +16,18 @@ import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Button, KeyValue, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  CloseGlyph,
+  ErrorGlyph,
+  HelpGlyph,
+  Package2Glyph,
+  TerminalGlyph,
+} from "@crewlethq/icons/glyphs";
 
 const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
   running: "info",
@@ -101,16 +107,26 @@ export function Runs() {
 
       <Panel padding="none">
         <StatRow cols={4}>
-          <Stat icon="terminal" label="Running" value={running} sub="a box is up and working" />
           <Stat
-            icon="help"
+            icon={TerminalGlyph}
+            label="Running"
+            value={running}
+            sub="a box is up and working"
+          />
+          <Stat
+            icon={HelpGlyph}
             label="Waiting on an answer"
             value={waiting}
             sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
           />
-          <Stat icon="box" label="In the record" value={rows.length} sub="live and finished" />
           <Stat
-            icon="alert"
+            icon={Package2Glyph}
+            label="In the record"
+            value={rows.length}
+            sub="live and finished"
+          />
+          <Stat
+            icon={ErrorGlyph}
             label="Failed"
             value={rows.filter((r) => r.status === "failed").length}
             sub="in the retained record"
@@ -222,7 +238,7 @@ export function Runs() {
       {detail && (
         <Panel
           title={`Run ${detail.turn_id.slice(0, 8)}`}
-          icon="terminal"
+          icon={TerminalGlyph}
           actions={
             <>
               {detail.trace_id && (
@@ -236,7 +252,7 @@ export function Runs() {
               <Button
                 size="sm"
                 variant="ghost"
-                icon="x"
+                icon={CloseGlyph}
                 onClick={() => setSelected("")}
                 title="Close"
               />
@@ -245,7 +261,7 @@ export function Runs() {
         >
           {detail.status === "awaiting_input" && (
             <div className="banner caution" style={{ marginBottom: "var(--spacing-3)" }}>
-              <Icon name="help" size="sm" />
+              <HelpGlyph size="sm" />
               <span className="col" style={{ gap: 2 }}>
                 <strong>{detail.question || "The run asked a question."}</strong>
                 <span className="t-caption">

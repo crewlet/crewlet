@@ -26,11 +26,21 @@ import {
 } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
-import { Icon } from "~/ui/Icon.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import {
+  ArrowForwardGlyph,
+  AutorenewGlyph,
+  DatabaseGlyph,
+  GroupGlyph,
+  LayersGlyph,
+  MemoryGlyph,
+  ScheduleGlyph,
+  TargetGlyph,
+  TokenGlyph,
+} from "@crewlethq/icons/glyphs";
 
 const WINDOWS = ["1", "7", "30"] as const;
 
@@ -111,13 +121,13 @@ export function Spend() {
         <Panel padding="none">
           <StatRow cols={4}>
             <Stat
-              icon="coin"
+              icon={TokenGlyph}
               label={`Tokens · ${tokens?.since_days ?? "—"}d`}
               value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
               sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
             />
             <Stat
-              icon="cpu"
+              icon={MemoryGlyph}
               label="Model calls"
               value={tokens ? fmtCount(tokens.totals.calls) : "—"}
               sub={
@@ -127,7 +137,7 @@ export function Spend() {
               }
             />
             <Stat
-              icon="arrowRight"
+              icon={ArrowForwardGlyph}
               label="Input / output"
               value={
                 tokens
@@ -137,7 +147,7 @@ export function Spend() {
               sub="input includes any cached prefix, as the provider reports it"
             />
             <Stat
-              icon="clock"
+              icon={ScheduleGlyph}
               label="Counted through"
               value={
                 tokens?.aggregated_through ? (
@@ -158,7 +168,7 @@ export function Spend() {
         {org && org.max > 0 && (
           <Panel
             title="Company budget meter"
-            icon="target"
+            icon={TargetGlyph}
             subtitle="process-lifetime — not the window above"
             actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
           >
@@ -179,7 +189,7 @@ export function Spend() {
         )}
 
         <div className="grid grid-auto-lg">
-          <Panel title="By phase" icon="layers" subtitle="where the tokens actually go">
+          <Panel title="By phase" icon={LayersGlyph} subtitle="where the tokens actually go">
             <div className="col gap-3">
               <BarList data={phase} emptyLabel="No model calls in this window." />
               {phase.length > 0 && (
@@ -187,7 +197,11 @@ export function Spend() {
               )}
             </div>
           </Panel>
-          <Panel title="By model" icon="cpu" subtitle="from each completion's own reported model">
+          <Panel
+            title="By model"
+            icon={MemoryGlyph}
+            subtitle="from each completion's own reported model"
+          >
             <div className="col gap-3">
               <BarList data={models} limit={8} emptyLabel="No model calls in this window." />
               <p className="t-caption">
@@ -199,7 +213,11 @@ export function Spend() {
         </div>
 
         {(tokens?.by_worker ?? []).length > 0 && (
-          <Panel title="Background workers" icon="refresh" subtitle="spend outside any seat's turn">
+          <Panel
+            title="Background workers"
+            icon={AutorenewGlyph}
+            subtitle="spend outside any seat's turn"
+          >
             <BarList
               data={(tokens?.by_worker ?? []).map((w, i) => ({
                 label: w.worker,
@@ -212,7 +230,12 @@ export function Spend() {
           </Panel>
         )}
 
-        <Panel title="By seat" icon="users" count={tokens?.by_agent?.length ?? 0} padding="none">
+        <Panel
+          title="By seat"
+          icon={GroupGlyph}
+          count={tokens?.by_agent?.length ?? 0}
+          padding="none"
+        >
           <DataTable
             rows={tokens?.by_agent ?? []}
             rowKey={(a) => a.agent_id || a.role}
@@ -272,7 +295,7 @@ export function Spend() {
 
         <Panel
           title="Recent turns"
-          icon="layers"
+          icon={LayersGlyph}
           count={tokens?.by_turn?.length ?? 0}
           padding="none"
         >
@@ -322,14 +345,14 @@ export function Spend() {
 
         <Panel
           title="Durable budget counters"
-          icon="database"
+          icon={DatabaseGlyph}
           subtitle="the fleet's shared ledger, not this process's meter"
           padding="none"
         >
           {budgets.loading && !budgets.data && <Skeleton rows={3} />}
           {budgets.data && budgets.data.durable === false ? (
             <div className="banner neutral" style={{ margin: "var(--spacing-3)" }}>
-              <Icon name="database" size="sm" />
+              <DatabaseGlyph size="sm" />
               <span>
                 The durable counter could not be READ — which is not the same as it being zero. It
                 lives in the fleet's coordination store; this node could not reach it.

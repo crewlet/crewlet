@@ -42,6 +42,7 @@ import { handlesOf, recordIntent } from "./model/reducer.ts";
 import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
+import { MoveItemGlyph } from "@crewlethq/icons/glyphs";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -130,7 +131,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
   return (
     <Dialog
       title={`Move ${name}`}
-      icon="move"
+      icon={MoveItemGlyph}
       width={560}
       onClose={onClose}
       onSubmit={move}

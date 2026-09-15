@@ -32,6 +32,13 @@ import { Banner, Button, ButtonLink, Code, CopyButton, Skeleton } from "~/ui/pri
 import { useRecheck } from "~/routes/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
+import {
+  CheckGlyph,
+  CloseGlyph,
+  DescriptionGlyph,
+  ErrorGlyph,
+  RefreshGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /**
  * How often the two answers are read while the apply is still moving. The
@@ -170,7 +177,13 @@ export function AfterSaveStrip({
     <>
       <Banner
         tone={state.tone === "critical" ? "critical" : "info"}
-        icon={state.tone === "positive" ? "check" : state.tone === "critical" ? "alert" : "refresh"}
+        icon={
+          state.tone === "positive"
+            ? CheckGlyph
+            : state.tone === "critical"
+              ? ErrorGlyph
+              : RefreshGlyph
+        }
         action={
           <span className="row gap-1 wrap">
             {saved.parentRevisionId ? (
@@ -200,7 +213,13 @@ export function AfterSaveStrip({
                 Open the fleet
               </ButtonLink>
             )}
-            <Button size="sm" variant="ghost" icon="x" title="Dismiss" onClick={onDismiss} />
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={CloseGlyph}
+              title="Dismiss"
+              onClick={onDismiss}
+            />
           </span>
         }
       >
@@ -237,7 +256,7 @@ export function PreviousRevisionNote() {
   if (!saved || saved.epoch === null) return null;
   if ((stream.data?.applied_epoch ?? 0) >= saved.epoch) return null;
   return (
-    <Banner tone="neutral" icon="refresh">
+    <Banner tone="neutral" icon={RefreshGlyph}>
       This node is still applying revision{" "}
       <code className="inline">{shortRevision(saved.revisionId)}</code>, so what is drawn below is
       the revision before it.
@@ -290,7 +309,7 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
   return (
     <Dialog
       title="The company as YAML"
-      icon="file"
+      icon={DescriptionGlyph}
       width={720}
       onClose={onClose}
       footer={

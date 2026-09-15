@@ -29,6 +29,7 @@ import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
+import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
 
 /** What each starting point gives the operator, in one line. */
 const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
@@ -91,7 +92,7 @@ export function CreateCompany({
   return (
     <Panel
       title="Create the company"
-      icon="sitemap"
+      icon={AccountTreeGlyph}
       subtitle="the charter, a shape to start from, and your own seat"
     >
       <div className="col gap-4 measure">
@@ -192,7 +193,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   return (
     <Panel
       title="The company is created"
-      icon="check"
+      icon={CheckGlyph}
       subtitle="two steps the dashboard cannot take for you"
       actions={
         <Button size="sm" variant="ghost" onClick={onDismiss}>

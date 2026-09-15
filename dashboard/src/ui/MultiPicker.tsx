@@ -33,11 +33,11 @@
  */
 
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Icon } from "./Icon.tsx";
 import { Problems } from "./Problems.tsx";
 import { isComposing } from "./keys.ts";
 import { cx } from "./primitives.tsx";
 import { useListbox } from "./useListbox.ts";
+import { CheckGlyph, CloseGlyph } from "@crewlethq/icons/glyphs";
 
 export interface PickerOption {
   value: string;
@@ -188,7 +188,7 @@ export function MultiPicker({
                 disabled={disabled}
                 onClick={() => remove(v)}
               >
-                <Icon name="x" size="xs" />
+                <CloseGlyph size="xs" />
               </button>
             </li>
           ))}
@@ -243,7 +243,7 @@ export function MultiPicker({
                     {...listbox.optionHandlers(i)}
                   >
                     <span className="multi-picker-tick" aria-hidden="true">
-                      {isChosen && <Icon name="check" size="xs" />}
+                      {isChosen && <CheckGlyph size="xs" />}
                     </span>
                     <span className="truncate">{option.label}</span>
                     {option.hint && <span className="multi-picker-hint">{option.hint}</span>}

@@ -9,6 +9,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import { CalendarClockGlyph, ErrorGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
   fired: "positive",
@@ -40,19 +41,19 @@ export function Schedules() {
       <Panel padding="none">
         <StatRow cols={3}>
           <Stat
-            icon="calendar"
+            icon={CalendarClockGlyph}
             label="Schedules"
             value={schedules.length}
             sub="across every seat and unit"
           />
           <Stat
-            icon="clock"
+            icon={ScheduleGlyph}
             label="Firing within the hour"
             value={due.length}
             sub={due.length ? due.map((s) => s.name).join(", ") : "nothing due soon"}
           />
           <Stat
-            icon="alert"
+            icon={ErrorGlyph}
             label="Recent failures"
             value={runs.filter((r) => OUTCOME_TONE[r.outcome] === "critical").length}
             sub={`in the last ${runs.length} recorded runs`}
@@ -73,7 +74,7 @@ export function Schedules() {
               }
         }
       >
-        <Panel title="Defined" icon="calendar" count={schedules.length} padding="none">
+        <Panel title="Defined" icon={CalendarClockGlyph} count={schedules.length} padding="none">
           <DataTable
             rows={schedules}
             rowKey={(s) => `${s.scope}:${s.scope_name}:${s.name}`}
@@ -146,7 +147,7 @@ export function Schedules() {
           />
         </Panel>
 
-        <Panel title="Recent runs" icon="clock" count={runs.length} padding="none">
+        <Panel title="Recent runs" icon={ScheduleGlyph} count={runs.length} padding="none">
           <DataTable
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${r.name}:${r.scope_name}`}

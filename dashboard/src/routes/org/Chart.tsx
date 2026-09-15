@@ -27,8 +27,8 @@ import { seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
-import { Icon } from "~/ui/Icon.tsx";
 import { Avatar, Badge, Banner, ButtonLink, Empty, Panel, cx } from "~/ui/primitives.tsx";
+import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -78,7 +78,7 @@ export function Chart({ index }: { index: OrgIndex }) {
     const unconfigured = engine.data?.configured === false;
     return (
       <Empty
-        icon="sitemap"
+        icon={AccountTreeGlyph}
         title="No organization is loaded"
         hint={
           unconfigured
@@ -99,14 +99,14 @@ export function Chart({ index }: { index: OrgIndex }) {
   return (
     <>
       {!index.hierarchy && (
-        <Banner tone="neutral" icon="info">
+        <Banner tone="neutral" icon={InfoGlyph}>
           This engine did not report the hierarchy it derived, so seats are drawn where the document
           places them. Inherited leads and seats moved into a unit by their{" "}
           <code className="inline">unit</code> reference are not shown.
         </Banner>
       )}
       {index.rootSeats.length > 0 && (
-        <Panel title="Org-wide" icon="crown" subtitle="seats above every unit">
+        <Panel title="Org-wide" icon={CrownGlyph} subtitle="seats above every unit">
           <div className="org-seats">
             {index.rootSeats.map((seat) => (
               <SeatNode key={seat.key} seat={seat} live={live} selected={selection.seat === seat} />
@@ -136,7 +136,7 @@ function UnitBlock({ unit, live, selection }: { unit: Unit; live: Live; selectio
   return (
     <div id={unitElementId(unit)} className={cx("org-unit", selected && "selected")}>
       <div className="org-unit-head">
-        <Icon name="folder" size="sm" style={{ color: "var(--color-text-muted)" }} />
+        <FolderGlyph size="sm" style={{ color: "var(--color-text-muted)" }} />
         <button
           type="button"
           className="org-unit-name t-body truncate"
@@ -154,7 +154,7 @@ function UnitBlock({ unit, live, selection }: { unit: Unit; live: Live; selectio
         {unit.lead && (
           <Badge
             tone="neutral"
-            icon="crown"
+            icon={CrownGlyph}
             title={unit.leadInherited ? "Inherited from a parent unit" : "This unit's own lead"}
           >
             {unit.lead.name}

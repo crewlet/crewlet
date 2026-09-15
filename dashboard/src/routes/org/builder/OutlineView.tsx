@@ -48,7 +48,6 @@ import {
   type ReactNode,
 } from "react";
 import type { Derived } from "~/protocol/index.ts";
-import { Icon } from "~/ui/Icon.tsx";
 import { Menu } from "~/ui/Menu.tsx";
 import { Avatar, Button } from "~/ui/primitives.tsx";
 import { VIEW_CHANGE_EVENT } from "~/ui/viewport.ts";
@@ -84,6 +83,15 @@ import {
   seatKindLabel,
 } from "./nodeMarks.tsx";
 import { treeStep, useOpenScreen, useStructure, useTreeState } from "./useCharts.ts";
+import {
+  ApartmentGlyph,
+  ChevronRightGlyph,
+  CreateNewFolderGlyph,
+  CrownGlyph,
+  FolderGlyph,
+  KeyboardArrowDownGlyph,
+  PersonAddGlyph,
+} from "@crewlethq/icons/glyphs";
 
 /** The columns, in order. Their positions are the cells' `aria-colindex`. */
 const COLUMNS = ["Name", "Kind or type", "Handle", "Lead or reports to", "Problems", "Actions"];
@@ -487,7 +495,7 @@ export function OutlineView() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            icon={b.kind === "unit" ? "folderPlus" : "userPlus"}
+                            icon={b.kind === "unit" ? CreateNewFolderGlyph : PersonAddGlyph}
                             tabIndex={stop(id, i + 1) ? 0 : -1}
                             onClick={() =>
                               api.openAdd(parent === COMPANY_KEY ? null : parent, b.kind)
@@ -640,7 +648,7 @@ function NameCell({
           <Button
             size="sm"
             variant="ghost"
-            icon={expanded ? "chevronDown" : "chevronRight"}
+            icon={expanded ? KeyboardArrowDownGlyph : ChevronRightGlyph}
             title={expanded ? `Collapse ${name}` : `Expand ${name}`}
             tabIndex={-1}
             onClick={onToggle}
@@ -649,8 +657,10 @@ function NameCell({
       </span>
       {view.type === "seat" ? (
         <Avatar name={view.name} size="sm" human={view.kind === "human"} />
+      ) : view.type === "company" ? (
+        <ApartmentGlyph size="sm" />
       ) : (
-        <Icon name={view.type === "company" ? "flag" : "folder"} size="sm" />
+        <FolderGlyph size="sm" />
       )}
       <span className="truncate">{name}</span>
       {view.type === "seat" && <SeatMarks view={view as SeatView} />}
@@ -690,7 +700,7 @@ function LeadOrManager({
     <span data-cell-widget="">
       <Menu
         label={`Lead of ${unit.name}`}
-        icon="crown"
+        icon={CrownGlyph}
         items={leadMenu(api, structure, unit)}
         layer={layer}
         triggerTabIndex={tabStop ? 0 : -1}

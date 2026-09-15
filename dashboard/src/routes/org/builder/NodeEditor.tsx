@@ -115,6 +115,7 @@ import {
   unpinnedProvider,
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
+import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 
 export function NodeEditor({
   nodeKey,
@@ -245,7 +246,7 @@ function EditorShell({
     <>
       <Drawer
         title={title}
-        icon="pencil"
+        icon={EditGlyph}
         onClose={requestClose}
         // ALWAYS A FORM. The panel is a <form> only while it has a submit
         // handler, and swapping the element as Apply became unavailable would
@@ -278,7 +279,7 @@ function EditorShell({
       {confirming && (
         <Dialog
           title="Discard your changes?"
-          icon="alert"
+          icon={WarningGlyph}
           onClose={() => setConfirming(null)}
           footer={
             <>

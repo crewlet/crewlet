@@ -11,22 +11,23 @@ import { Section } from "~/components/common.tsx";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
 import { Empty, Panel } from "~/ui/primitives.tsx";
+import { ExploreGlyph, ShieldGlyph, TargetGlyph } from "@crewlethq/icons/glyphs";
 
 export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex }) {
   const policies = org.policies ?? [];
   return (
     <div className="col gap-4">
-      <Panel title="Mission" icon="target">
+      <Panel title="Mission" icon={TargetGlyph}>
         <p className="t-body measure">
           {org.mission || <span className="faint">No mission is set.</span>}
         </p>
       </Panel>
       {org.vision && (
-        <Panel title="Vision" icon="compass">
+        <Panel title="Vision" icon={ExploreGlyph}>
           <p className="t-body measure">{org.vision}</p>
         </Panel>
       )}
-      <Panel title="Policies" icon="shield" count={policies.length}>
+      <Panel title="Policies" icon={ShieldGlyph} count={policies.length}>
         {policies.length ? (
           <ol className="col gap-2" style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}>
             {policies.map((p, i) => (
@@ -38,7 +39,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
         ) : (
           <Empty
             inline
-            icon="shield"
+            icon={ShieldGlyph}
             title="No policies are set"
             hint="Policies render into every planner's prompt in full. They are the company's standing instructions."
           />

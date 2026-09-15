@@ -39,6 +39,7 @@ import {
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { RelativeTime, useNow } from "@crewlethq/ui";
+import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
 
@@ -303,7 +304,7 @@ export function ModelActivity() {
         {filtering && (
           <Button
             size="sm"
-            icon="x"
+            icon={CloseGlyph}
             onClick={() => {
               setRole("");
               setPhase("");
@@ -320,7 +321,7 @@ export function ModelActivity() {
 
       {!loading && !filtered.length && !error && (
         <Empty
-          icon="brain"
+          icon={NeurologyGlyph}
           title={filtering ? "Nothing matches these filters" : "No model activity in the record"}
           hint={
             filtering
