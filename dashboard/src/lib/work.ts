@@ -442,9 +442,28 @@ export function buildItemsParams(args: {
   // what every rule in the tracker is written at, and `done` and `closed` are
   // two of them rather than one negation. The third segment deletes the key,
   // including one a view brought with it.
-  if (filters.scope === "open") params.status_group = "not_started,active";
-  else if (filters.scope === "closed") params.status_group = "done,closed";
-  else delete params.status_group;
+  //
+  // AND `show_closed` TRAVELS WITH IT, because the group alone cannot widen
+  // the answer. `internal/tracker/read.go` ANDs an unconditional
+  // `t.status_group IN ('not_started','active')` unless this key is set, so
+  // sending `done,closed` without it asks for the intersection of the two
+  // disjoint halves — the Closed segment returned nothing at all, on every
+  // company, and All returned exactly what Open did. Measured against a
+  // seeded company: 0 rows and 14 rows where the answers are 1 and 15.
+  //
+  // The segment owns BOTH keys together rather than one of them. A saved view
+  // may carry its own `show_closed`, and leaving it under a segment that
+  // contradicts it is how a screen comes to show a scope nobody picked.
+  if (filters.scope === "open") {
+    params.status_group = "not_started,active";
+    delete params.show_closed;
+  } else if (filters.scope === "closed") {
+    params.status_group = "done,closed";
+    params.show_closed = "true";
+  } else {
+    delete params.status_group;
+    params.show_closed = "true";
+  }
 
   if (filters.blocked) params.blocked = true;
   if (filters.overdue) params.due = "overdue";

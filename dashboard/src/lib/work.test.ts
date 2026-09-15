@@ -327,6 +327,34 @@ test("the three scope segments are three real questions", () => {
   expect(all.status_group).toBeUndefined();
 });
 
+// AND TWO OF THE THREE HAVE TO SAY `show_closed`, because a status group
+// alone cannot widen the answer: `internal/tracker/read.go` ANDs an
+// unconditional `t.status_group IN ('not_started','active')` unless the key
+// is set. So `done,closed` without it is the intersection of two disjoint
+// halves — Closed returned NOTHING on every company, and All returned
+// exactly what Open did, with no error and no empty state to say so.
+//
+// Asserted here rather than on a screen because it is not a rendering
+// question: both segments drew a perfectly ordinary empty board.
+test("the segments that include finished work say so on the wire", () => {
+  expect(build({ filters: { ...NO_FILTERS, scope: "closed" } }).show_closed).toBe("true");
+  expect(build({ filters: { ...NO_FILTERS, scope: "" } }).show_closed).toBe("true");
+  // Open is the one that must NOT: the group already excludes finished work,
+  // and a key contradicting the segment a reader picked is worse than absent.
+  expect(build({ filters: { ...NO_FILTERS, scope: "open" } }).show_closed).toBeUndefined();
+});
+
+// THE SEGMENT OWNS BOTH KEYS, not one of them. A saved view carrying
+// `show_closed` is a default like any other, and a segment that overrode the
+// group while leaving the flag would ask a question neither the view nor the
+// reader posed.
+test("a view's own show_closed loses to the segment on screen", () => {
+  const view = { show_closed: "recent:168h" };
+  expect(build({ view, filters: { ...NO_FILTERS, scope: "open" } }).show_closed).toBeUndefined();
+  expect(build({ view, filters: { ...NO_FILTERS, scope: "closed" } }).show_closed).toBe("true");
+  expect(build({ view, filters: { ...NO_FILTERS, scope: "" } }).show_closed).toBe("true");
+});
+
 // A VIEW IS A SET OF DEFAULTS AND EVERY EXPLICIT KEY OVERRIDES IT, which is
 // what makes picking another assignee on a saved board give you that board
 // with one key changed rather than a board that quietly stops being saved.
