@@ -67,6 +67,9 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
         open
         stackBody
         title="Change the kind of seat"
+        // The one action IS Close; a control beside the title saying the same
+        // word twice is the duplicate this pass is removing.
+        showCloseButton={false}
         onClose={onClose}
         footer={
           <Button variant="secondary" onClick={onClose}>

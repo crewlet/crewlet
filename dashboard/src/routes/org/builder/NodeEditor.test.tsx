@@ -76,6 +76,32 @@ function errorOf(control: HTMLElement): HTMLElement | null {
   return null;
 }
 const apply = () => fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+/**
+ * Whether Apply refuses a press, which is `aria-disabled` rather than the
+ * native attribute: a natively disabled button takes no focus and no hover,
+ * so the reason it cannot be pressed would be unreachable by exactly the
+ * reader who needs it. The design system's Button soft-disables and links the
+ * reason with `aria-describedby`.
+ */
+const applyRefuses = (): boolean =>
+  screen.getByRole("button", { name: "Apply" }).getAttribute("aria-disabled") === "true";
+
+/**
+ * The reason DRAWN in the sheet's foot, as opposed to the copy Apply points
+ * at with `aria-describedby`, which is out of view so that a reader who tabs
+ * straight to the control hears it there rather than only at the other end of
+ * the band. A query by text alone finds both, so the drawn one is the one the
+ * button does not name.
+ */
+const shownReason = (text: string): HTMLElement => {
+  const announced = new Set(
+    (screen.getByRole("button", { name: "Apply" }).getAttribute("aria-describedby") ?? "").split(
+      " ",
+    ),
+  );
+  return screen.getAllByText(text).find((el) => !announced.has(el.id))!;
+};
 const seatData = (state: BuilderState, key: NodeKey): ConfigRole => {
   const found = locate(state.draft, key);
   if (found?.kind !== "seat") throw new Error(`no seat ${key}`);
@@ -136,7 +162,7 @@ describe("applying", () => {
     expect(view.state().log.ops).toHaveLength(0);
     expect(view.onClose).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+    expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     expect(view.onClose).toHaveBeenCalledTimes(2);
   });
 
@@ -163,9 +189,7 @@ describe("applying", () => {
 
   test("a read-only builder applies nothing", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev", { readOnly: true });
-    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(applyRefuses()).toBe(true);
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
     view.unmount();
   });
@@ -193,6 +217,84 @@ describe("applying", () => {
 
     edit(keyedState(connected()), "seat:dev", readOnly);
     expect(enabled()).toEqual([]);
+  });
+});
+
+/*
+ * THE PANEL'S OWN HEAD, which is what the console commits its edit panel from
+ * and what this sheet did not have: a 49px band with a close control alone,
+ * and the commit pair in a foot past 970px of scroll on a seat with a dozen
+ * fields.
+ */
+describe("the head", () => {
+  /** The panel's mark: the first drawing in it, which is the head's glyph. */
+  const mark = (): string => document.querySelector("svg")!.outerHTML;
+
+  test("Cancel and Apply are in the head, before every field, and there is no second way out", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    const apply = screen.getByRole("button", { name: "Apply" });
+    const firstField = field("Name");
+    for (const control of [cancel, apply]) {
+      expect(
+        control.compareDocumentPosition(firstField) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+    // Cancel IS the way out. A close control beside the title would be a
+    // second, unnamed spelling of it, which is what the console does not have
+    // and what this panel drew at the same time as Cancel.
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+  });
+
+  /*
+   * THE NODE'S OWN MARK, not a pencil on all four. The head used to draw an
+   * edit glyph for the company, a unit, an agent seat and a human seat alike,
+   * so the panel said that it edits rather than what it is editing.
+   */
+  test("each kind of node is marked as its own kind", () => {
+    const human = fixtureCompany();
+    human.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    const cases: [CompanyDocument, NodeKey][] = [
+      [fixtureCompany(), COMPANY_KEY],
+      [fixtureCompany(), "unit:Engineering"],
+      [fixtureCompany(), "seat:dev"],
+      [human, "seat:dev"],
+    ];
+    const drawn: string[] = [];
+    for (const [doc, key] of cases) {
+      edit(keyedState(doc), key);
+      drawn.push(mark());
+      cleanup();
+    }
+    expect(new Set(drawn).size).toBe(4);
+  });
+});
+
+/*
+ * THE HUE, STATED RATHER THAN OFFERED. The console's agent editor ends with a
+ * picker over six colour schemes and stores the answer on the node; a Crewlet
+ * company document has no colour field, so this dashboard derives the hue from
+ * the seat's own key. The derivation is right; the silence was not, and an
+ * operator who saw the console's picker found neither the control nor a reason
+ * it was gone.
+ */
+describe("the colour", () => {
+  test("an agent seat says which hue it is drawn in, and why it cannot be set", () => {
+    edit(keyedState(fixtureCompany()), "seat:dev");
+    expect(screen.getByText("Colour")).toBeDefined();
+    expect(screen.getByText(/hue follows the seat's own identity/)).toBeDefined();
+    // Stated, never written: there is no control to change it.
+    expect(screen.queryByRole("radio", { name: /purple|cyan|green|amber|rose|blue/i })).toBeNull();
+  });
+
+  test("a human seat and a unit have no hue to say", () => {
+    const doc = fixtureCompany();
+    doc.units![0]!.roles![1] = { name: "Dev", kind: "human", contact: { github_login: "dev" } };
+    edit(keyedState(doc), "seat:dev");
+    expect(screen.queryByText("Colour")).toBeNull();
+    cleanup();
+    edit(keyedState(fixtureCompany()), "unit:Engineering");
+    expect(screen.queryByText("Colour")).toBeNull();
   });
 });
 
@@ -227,7 +329,7 @@ describe("the unsaved-changes prompt", () => {
     const view = edit(keyedState(connected()), "seat:dev");
     change();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    const prompt = screen.getByRole("dialog", { name: "Discard your changes?" });
+    const prompt = screen.getByRole("alertdialog", { name: "Discard your changes?" });
     expect(view.onClose).not.toHaveBeenCalled();
     fireEvent.click(within(prompt).getByRole("button", { name: "Discard changes" }));
     expect(view.onClose).toHaveBeenCalledTimes(1);
@@ -243,11 +345,11 @@ describe("the unsaved-changes prompt", () => {
     const view = edit(keyedState(fixtureCompany()), "seat:dev");
     const link = () =>
       within(screen.getByText("GitHub is not connected.", { exact: false })).getByRole("link");
-    const prompt = () => screen.findByRole("dialog", { name: "Discard your changes?" });
+    const prompt = () => screen.findByRole("alertdialog", { name: "Discard your changes?" });
     // Untouched: the link simply goes.
     fireEvent.click(link());
     await waitFor(() => expect(location.hash).toBe("#/integrations"));
-    expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+    expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     act(() => {
       location.hash = "#/org?lens=builder";
     });
@@ -279,8 +381,8 @@ describe("the unsaved-changes prompt", () => {
   test("a schedule toggle is a change too", () => {
     const view = edit(keyedState(fixtureCompany()), "unit:Engineering");
     fireEvent.click(screen.getByRole("checkbox", { name: "Enabled: standup" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.getByRole("dialog", { name: "Discard your changes?" })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("alertdialog", { name: "Discard your changes?" })).toBeDefined();
     expect(view.onClose).not.toHaveBeenCalled();
   });
 
@@ -289,12 +391,12 @@ describe("the unsaved-changes prompt", () => {
     type("Goal", "Ship");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
-    expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+    expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     expect((field("Goal") as HTMLTextAreaElement).value).toBe("Ship");
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+    expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
     expect(screen.getByRole("dialog", { name: "Edit Dev" })).toBeDefined();
     expect(view.onClose).not.toHaveBeenCalled();
   });
@@ -419,10 +521,8 @@ describe("seat fields", () => {
     for (const [key, label, reason] of cases) {
       edit(keyedState(fixtureCompany()), key);
       type(label, "  ");
-      expect(screen.getByText(reason)).toBeDefined();
-      expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(
-        true,
-      );
+      expect(shownReason(reason)).toBeDefined();
+      expect(applyRefuses()).toBe(true);
       cleanup();
     }
   });
@@ -484,18 +584,20 @@ describe("seat fields", () => {
     doc.units![0]!.roles![1]!.token_budget = -5;
     edit(keyedState(doc), "seat:dev", { readOnly: true });
     expect(screen.getByText(/cannot be changed right now/)).toBeDefined();
-    expect(screen.queryByText("Correct the token budget first.")).toBeNull();
+    // The foot says the posture, not the field: a form nobody can write is
+    // not a form with a mistake in it.
+    expect(
+      shownReason("These fields are for reading, so there is nothing to apply."),
+    ).toBeDefined();
     cleanup();
     edit(keyedState(doc), "seat:dev");
-    expect(screen.getByText("Correct the token budget first.")).toBeDefined();
+    expect(shownReason("Correct the token budget first.")).toBeDefined();
   });
 
   test("a malformed token budget blocks Apply with the reason", () => {
     edit(keyedState(fixtureCompany()), "seat:dev");
     type("Token budget", "lots");
-    expect((screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(applyRefuses()).toBe(true);
     expect(
       screen.getByText("Give a whole number of tokens, or leave it empty for unlimited."),
     ).toBeDefined();
@@ -851,13 +953,28 @@ describe("a unit", () => {
     });
   });
 
-  test("a custom unit type is typed in its own box and applied", () => {
+  /*
+   * ONE CONTROL FOR ONE STRING. The type used to be a select whose "Custom
+   * type" option revealed a SECOND labelled field below it, so a custom type
+   * cost two stacked controls. It is one field that offers the engine's nine
+   * names and takes whatever is typed, which is exactly what the engine
+   * accepts.
+   */
+  test("a unit type the engine does not name is typed in the same one box", () => {
     const view = edit(keyedState(fixtureCompany()), "unit:Platform");
-    choose("Type", "Custom type");
-    type("Custom type", "tribe");
+    expect(screen.queryByLabelText(labelled("Custom type"))).toBeNull();
+    type("Type", "tribe");
     apply();
     const found = locate(view.state().draft, "unit:Platform");
     expect(found?.kind === "unit" && found.node.data.type).toBe("tribe");
+  });
+
+  test("the nine names the engine knows are offered in that same box", () => {
+    const view = edit(keyedState(fixtureCompany()), "unit:Platform");
+    choose("Type", "Department");
+    apply();
+    const found = locate(view.state().draft, "unit:Platform");
+    expect(found?.kind === "unit" && found.node.data.type).toBe("department");
   });
 
   test("renaming a unit names its masked literal credentials and links to Secrets", () => {
@@ -932,15 +1049,14 @@ describe("the charter", () => {
   test("renaming the company needs its consequences confirmed before Apply", () => {
     const view = edit(keyedState(fixtureCompany()), COMPANY_KEY);
     type("Company name", "Acme Labs");
-    const applyButton = screen.getByRole("button", { name: "Apply" }) as HTMLButtonElement;
-    expect(applyButton.disabled).toBe(true);
+    expect(applyRefuses()).toBe(true);
     // The same sentence the review asks the operator to accept before a save,
     // so the two cannot come to describe one consequence two ways.
     expect(screen.getByText(ACKNOWLEDGEMENT_TEXT.company_rename)).toBeDefined();
     fireEvent.click(
       screen.getByRole("checkbox", { name: "I understand what renaming the company does" }),
     );
-    expect(applyButton.disabled).toBe(false);
+    expect(applyRefuses()).toBe(false);
     apply();
     expect(view.state().draft.company.name).toBe("Acme Labs");
     expect(view.state().log.ops).toHaveLength(1);

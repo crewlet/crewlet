@@ -73,6 +73,9 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         open
         stackBody
         title="Delete"
+        // The one action IS Close; a control beside the title saying the same
+        // word twice is the duplicate this pass is removing.
+        showCloseButton={false}
         onClose={onClose}
         footer={
           <Button variant="secondary" onClick={onClose}>
@@ -152,6 +155,22 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       title={`Delete ${name}`}
       icon={<DeleteGlyph />}
       size="md"
+      /*
+       * AN ALERT, NOT A DIALOG. This interrupts to ask something consequential
+       * and irreversible once the draft is saved, so a reader's software is
+       * asked to announce the whole surface rather than its name alone: the
+       * name says what is being deleted and the body says what goes with it.
+       *
+       * It keeps the framed shape, unlike the discard prompt, and that is not
+       * an oversight. The console's delete is one sentence because its model
+       * has no references: this one carries what the removal clears, who
+       * takes over a Datadog fallback, which vendor identities are left
+       * behind, and a mass-removal acknowledgement. Those are sections of a
+       * form, and a form with no bands around it is a wall of text.
+       */
+      role="alertdialog"
+      // ONE WAY OUT PER JOB: Cancel is in the foot.
+      showCloseButton={false}
       onClose={onClose}
       onSubmit={remove}
       footer={

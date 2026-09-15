@@ -174,13 +174,15 @@ export function UpdateDraftDialog({
       title={title}
       icon={<RefreshGlyph />}
       size="lg"
+      // ONE WAY OUT PER JOB. "Not now" is in the foot; a close control beside
+      // the title would be a second, unnamed spelling of it.
+      showCloseButton={false}
       onClose={onCancel}
+      // The reason the primary action is unavailable, at the foot's own start
+      // edge rather than a flexing span inside the actions.
+      footerStart={pending > 0 ? `Choose for ${plural(pending, "conflict")} first.` : undefined}
       footer={
         <>
-          {pending > 0 && (
-            <span className="t-caption muted">Choose for {plural(pending, "conflict")} first.</span>
-          )}
-          <span className="spacer" />
           <Button variant="secondary" onClick={onCancel}>
             {update.restoring ? "Discard the kept draft" : "Not now"}
           </Button>

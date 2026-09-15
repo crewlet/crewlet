@@ -56,6 +56,9 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
         open
         stackBody
         title="Move"
+        // The one action IS Close; a control beside the title saying the same
+        // word twice is the duplicate this pass is removing.
+        showCloseButton={false}
         onClose={onClose}
         footer={
           <Button variant="secondary" onClick={onClose}>

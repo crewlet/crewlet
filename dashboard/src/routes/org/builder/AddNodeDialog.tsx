@@ -121,6 +121,10 @@ export function AddNodeDialog({
       stackBody
       title={`Add to ${where}`}
       icon={<AddGlyph />}
+      // ONE WAY OUT PER JOB. Cancel is in the foot; a close control beside the
+      // title would be a second, unnamed spelling of it, which is what the
+      // console's own dialogs do not have.
+      showCloseButton={false}
       onClose={onClose}
       onSubmit={add}
       footer={

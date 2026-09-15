@@ -99,7 +99,11 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
   const menu = await screen.findByRole("menu", { name: "Actions for CEO" });
   fireEvent.click(within(menu).getByRole("menuitem", { name: /^Delete/ }));
-  await waitFor(() => expect(screen.getByRole("dialog", { name: "Delete CEO" })).toBeDefined());
+  // An ALERT dialog: a removal interrupts to ask something a save makes
+  // permanent, so the whole surface is announced rather than its name alone.
+  await waitFor(() =>
+    expect(screen.getByRole("alertdialog", { name: "Delete CEO" })).toBeDefined(),
+  );
 });
 
 /** A menu's entries as a person meets them: the label and the icon drawn beside it. */
@@ -208,7 +212,7 @@ test("Back off the lens over a changed editor asks first, and keeping the change
   const editor = await typeIntoTheEditor();
 
   act(() => history.back());
-  const asked = await screen.findByRole("dialog", { name: "Discard your changes?" });
+  const asked = await screen.findByRole("alertdialog", { name: "Discard your changes?" });
   expect(asked.textContent).toContain("you are leaving the builder");
   await waitFor(() => expect(location.hash).toBe(onTable));
   fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
@@ -228,7 +232,7 @@ test("Back within the lens asks nothing, and the editor keeps what was typed", a
   act(() => history.back());
   await waitFor(() => expect(location.hash).toBe(onCanvas));
   await screen.findByRole("tree", { name: "Structure chart" });
-  expect(screen.queryByRole("dialog", { name: "Discard your changes?" })).toBeNull();
+  expect(screen.queryByRole("alertdialog", { name: "Discard your changes?" })).toBeNull();
   expect(screen.getByRole("dialog", { name: "Edit CEO" })).toBe(editor);
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });

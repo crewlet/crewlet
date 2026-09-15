@@ -73,6 +73,8 @@ import {
 import {
   ACKNOWLEDGEMENT_TEXT,
   EditorSection,
+  HueFact,
+  NodeGlyph,
   NodeProblems,
   NotConnected,
   ReadOnlyFact,
@@ -81,6 +83,7 @@ import {
   UNIQUE_NAME_HELP,
   UnitTypeField,
   placeOnFields,
+  type NodeGlyphKind,
 } from "./dialogParts.tsx";
 import { declaredHandle, type Segment } from "./model/document.ts";
 import { allSeats, allUnits, locate, type DraftSeat, type DraftUnit } from "./model/draft.ts";
@@ -109,11 +112,11 @@ import {
   unpinnedProvider,
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
-import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
 import {
   Button,
   Callout,
   Checkbox,
+  ConfirmModal,
   EmptyState,
   FormField,
   InlineCode,
@@ -203,8 +206,19 @@ function placedOn(api: BuilderApi, key: NodeKey): PlacedProblem[] {
   return (api.state.check.problems.byNode.get(key) ?? []).filter((p) => current.has(p.source));
 }
 
+/**
+ * Why Apply is unavailable when it is the posture rather than the form.
+ *
+ * NOT THE BANNER'S OWN SENTENCE. The callout at the top of the panel says the
+ * organization cannot be changed right now; repeating it on the button reads
+ * it out twice to anybody using a screen reader, once on entering the form
+ * and again on reaching the control.
+ */
+const READ_ONLY_REASON = "These fields are for reading, so there is nothing to apply.";
+
 function EditorShell({
   title,
+  mark,
   name,
   dirty,
   blocked,
@@ -216,6 +230,8 @@ function EditorShell({
   children,
 }: {
   title: string;
+  /** What is being edited, for the panel's own mark: see `NodeGlyph`. */
+  mark: NodeGlyphKind;
   /** How the node is named in the discard prompt. */
   name: string;
   dirty: boolean;
@@ -249,6 +265,7 @@ function EditorShell({
     leave?.();
   };
   const disabled = readOnly || blocked !== null;
+  const reason = readOnly ? READ_ONLY_REASON : (blocked ?? undefined);
   return (
     <>
       <Modal
@@ -256,7 +273,11 @@ function EditorShell({
         variant="sheet"
         stackBody
         title={title}
-        icon={<EditGlyph />}
+        // THE NODE'S OWN MARK, not a pencil: the same glyph the table row and
+        // the chart card carry for this node, so the three surfaces mark it
+        // identically and the panel says what it is editing before its title
+        // is read.
+        icon={<NodeGlyph kind={mark} size="md" />}
         onClose={requestClose}
         // ALWAYS A FORM. The panel is a <form> only while it has a submit
         // handler, and swapping the element as Apply became unavailable would
@@ -265,17 +286,47 @@ function EditorShell({
         onSubmit={() => {
           if (!disabled) onApply();
         }}
-        footer={
+        // COMMITTED FROM THE HEAD, as the console's edit panel is. A seat's
+        // form is a column a reader scrolls (1,764px against a 794px window
+        // on a seat with a dozen fields), and Apply at the foot of it is a
+        // button they have to travel the whole form to reach and travel back
+        // from to see the field they were applying. With Cancel in the band
+        // there is no close control beside it doing the same thing.
+        showCloseButton={false}
+        headerActions={
           <>
-            {blocked && !readOnly && <span className="t-caption spacer">{blocked}</span>}
-            <Button variant="tertiary" onClick={requestClose}>
+            <Button variant="secondary" size="small" onClick={requestClose}>
               Cancel
             </Button>
-            <Button variant="primary" type="submit" disabled={disabled}>
+            <Button
+              variant="primary"
+              size="small"
+              type="submit"
+              /*
+               * SOFT, NOT NATIVE. A natively disabled button takes no focus
+               * and no hover, so the reason it cannot be pressed is
+               * unreachable by exactly the reader who needs it; this says the
+               * same thing to a screen reader and leaves the control where it
+               * was. The reason is the one in the foot, said again where the
+               * control is: a reader who tabs straight to Apply never passes
+               * the line at the other end of the band.
+               */
+              disabledReason={disabled ? reason : undefined}
+            >
               Apply
             </Button>
           </>
         }
+        /*
+         * WHY APPLY REFUSES, DRAWN, at the foot's own start edge. It used to
+         * be a hand-rolled flexing span inside the actions, which put it 130px
+         * from Cancel with the band's first 257px empty, because the end
+         * slot's own auto margin and a `flex: 1 1 auto` child were two spacing
+         * mechanisms in one band. The button says the same sentence out of
+         * view, which is not a second statement of it: a reader who tabs
+         * straight to Apply never passes this line at the other end.
+         */
+        footerStart={disabled ? reason : undefined}
       >
         {readOnly && (
           <Callout variant="neutral">
@@ -286,31 +337,27 @@ function EditorShell({
         <NodeProblems problems={problems} />
         {children}
       </Modal>
-      {confirming && (
-        <Modal
-          open
-          stackBody
-          title="Discard your changes?"
-          icon={<WarningGlyph />}
-          onClose={() => setConfirming(null)}
-          footer={
-            <>
-              <Button variant="tertiary" onClick={() => setConfirming(null)}>
-                Keep editing
-              </Button>
-              <Button variant="danger" onClick={discard}>
-                Discard changes
-              </Button>
-            </>
-          }
-        >
-          <p className="t-body">
-            {confirming.leave === null
-              ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
-              : `The changes to ${name} have not been applied to the draft, and you are leaving the builder. Discarding them leaves the draft as it was and goes on to where you were going.`}
-          </p>
-        </Modal>
-      )}
+      {/*
+       * ONE QUESTION, ONE ANSWER, and nothing around it: the prompt shape,
+       * which is what the console draws here too. `destructive` makes it an
+       * alertdialog, so a reader's software announces the whole prompt rather
+       * than its name alone: the name asks about discarding and the sentence
+       * is the consequence.
+       */}
+      <ConfirmModal
+        open={confirming !== null}
+        destructive
+        title="Discard your changes?"
+        message={
+          confirming?.leave === undefined || confirming.leave === null
+            ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
+            : `The changes to ${name} have not been applied to the draft, and you are leaving the builder. Discarding them leaves the draft as it was and goes on to where you were going.`
+        }
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        onClose={() => setConfirming(null)}
+        onConfirm={discard}
+      />
     </>
   );
 }
@@ -487,6 +534,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
   return (
     <EditorShell
       title="Edit the charter"
+      mark="company"
       name="the charter"
       dirty={dirty}
       blocked={blocked}
@@ -624,6 +672,7 @@ function UnitEditor({
   return (
     <EditorShell
       title={`Edit ${unit.data.name || "unit"}`}
+      mark="unit"
       name={unit.data.name || "this unit"}
       dirty={dirty}
       blocked={blocked}
@@ -827,6 +876,7 @@ function SeatEditor({
   return (
     <EditorShell
       title={`Edit ${data.name || "seat"}`}
+      mark={human ? "human" : "agent"}
       name={data.name || "this seat"}
       dirty={dirty}
       blocked={blocked}
@@ -1002,6 +1052,13 @@ function SeatEditor({
             disabled={disabled}
           />
           <DocumentFacts data={data} handle={handle} />
+          {/*
+           * Last, where the console's agent editor ends too. An agent seat is
+           * the only node the chart tints, so it is the only one with a hue
+           * to state: a human seat wears the dashed boundary and a unit is
+           * the chart's own neutral surface (`nodeTone.ts`).
+           */}
+          <HueFact nodeKey={key} />
         </>
       )}
     </EditorShell>

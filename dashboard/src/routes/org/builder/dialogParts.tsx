@@ -10,7 +10,7 @@
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
-import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 
 import { Problems } from "~/components/Problems.tsx";
 import type { Acknowledgement } from "./model/changes.ts";
@@ -19,7 +19,10 @@ import { CONTACT_IDENTITIES } from "./model/templates.ts";
 import type { PlacedProblem, ProblemLink } from "./model/problems.ts";
 import { strandedSentence, type StrandedSchedule } from "./preflight.ts";
 import { TOOL_NAMES, workingNote, type Tool } from "./nodeFacts.ts";
-import { Callout, InlineCode } from "@crewlethq/ui";
+import { toneOfKey } from "./nodeTone.ts";
+import { Callout, Combobox, FormField, InlineCode } from "@crewlethq/ui";
+import { CrewletIcon } from "@crewlethq/icons";
+import { AccountTreeGlyph, ApartmentGlyph, PersonGlyph } from "@crewlethq/icons/glyphs";
 
 /** How deep an [EditorSection] sits inside others; 0 for one directly in a drawer or dialog. */
 const SectionDepth = createContext(0);
@@ -122,6 +125,66 @@ export function ReadOnlyFact({
   );
 }
 
+/** What a node IS, as far as its mark is concerned. */
+export type NodeGlyphKind = "company" | "unit" | "agent" | "human";
+
+/*
+ * The agent mark is the Crewlet figure, which is an SVG sized by its own
+ * width and height rather than by a glyph step, so the two steps this screen
+ * draws are named here once. They are the icons package's own `sm` and `md`.
+ */
+const GLYPH_PIXELS: Readonly<Record<"sm" | "md", number>> = { sm: 14, md: 16 };
+
+/**
+ * A node's mark: a building for the company, a tree for a unit, a person for
+ * a human seat and the Crewlet figure for an agent seat.
+ *
+ * ONE MAPPING, because a node marked three ways is a node a reader has to
+ * learn three times. The editor's own head used to draw a pencil on all four,
+ * which said the panel edits rather than what it is editing.
+ */
+export function NodeGlyph({ kind, size = "sm" }: { kind: NodeGlyphKind; size?: "sm" | "md" }) {
+  if (kind === "company") return <ApartmentGlyph size={size} />;
+  if (kind === "unit") return <AccountTreeGlyph size={size} />;
+  if (kind === "human") return <PersonGlyph size={size} />;
+  return <CrewletIcon width={GLYPH_PIXELS[size]} height={GLYPH_PIXELS[size]} />;
+}
+
+/**
+ * The hue an agent seat is drawn in, stated rather than offered.
+ *
+ * The console's agent editor ends with a picker over six colour schemes and
+ * stores the answer on the node. A Crewlet company document has no colour
+ * field, so this dashboard DERIVES the hue from the seat's own key instead
+ * (`nodeTone.ts`), which is right and was also silent: an operator who saw
+ * the console's picker found neither the control nor a reason it was gone.
+ * So the hue is a read-only fact, the same idiom every field this builder
+ * shows but cannot write already uses. No new config field, no operation.
+ */
+export function HueFact({ nodeKey }: { nodeKey: string }) {
+  const tone = toneOfKey(nodeKey);
+  return (
+    <ReadOnlyFact
+      label="Colour"
+      reason="The hue follows the seat's own identity, so it survives a rename and a move. A Crewlet company document holds no colour, so there is nothing to set here."
+    >
+      <span className="row">
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            width: "var(--spacing-3)",
+            height: "var(--spacing-3)",
+            borderRadius: "var(--radius-circle)",
+            background: `var(--color-node-${tone})`,
+          }}
+        />
+        {tone.charAt(0).toUpperCase() + tone.slice(1)}
+      </span>
+    </ReadOnlyFact>
+  );
+}
+
 /**
  * Why a name has to be free, said where one is typed.
  *
@@ -172,13 +235,21 @@ export const UNIT_TYPES = [
   "unit",
 ] as const;
 
-const CUSTOM = "__custom__";
-
 /**
- * A unit's type: one of the engine's well-known names, or a custom one.
+ * A unit's type: one of the engine's well-known names, or anything else.
  *
- * Empty is the engine's default, `team` (`org.propagateDownward`), and says
- * so rather than showing an unlabelled blank.
+ * ONE CONTROL, WHICH IS WHAT THE VALUE IS. This used to be a select whose
+ * "Custom type" option revealed a SECOND full-width labelled field under it,
+ * so a custom type cost two stacked controls for one string, and the list
+ * carried both "Team (the default)" and "Team", which read as two answers.
+ * The console draws one row of pills where the Custom pill turns into a box
+ * IN ITS OWN PLACE; the same idea here is a field that offers the nine names
+ * and takes whatever is typed, because that is exactly what the engine
+ * accepts.
+ *
+ * EMPTY IS THE ENGINE'S DEFAULT, `team` (`org.propagateDownward`), and the
+ * placeholder and the help line say so rather than a row in the list
+ * standing in for it.
  */
 export function UnitTypeField({
   value,
@@ -191,50 +262,51 @@ export function UnitTypeField({
   error?: string;
   disabled?: boolean;
 }) {
-  const known = value === "" || (UNIT_TYPES as readonly string[]).includes(value);
-  // Chosen, not inferred: picking "Custom type" opens an empty box to type
-  // into, and the value is whatever is typed there, even while it happens to
-  // match nothing yet.
-  const [custom, setCustom] = useState(!known);
-  const choices: FieldChoice[] = [
-    { value: "", label: "Team (the default)" },
-    ...UNIT_TYPES.map((type) => ({
-      value: type,
-      label: type.charAt(0).toUpperCase() + type.slice(1),
-    })),
-    { value: CUSTOM, label: "Custom type" },
-  ];
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  // WHAT IS OFFERED IS THE CALLER'S QUESTION, and here it is a prefix of what
+  // has been typed: somebody typing "te" is naming a type, not searching. An
+  // exact match offers the whole list again, so the field can be reopened to
+  // change an answer rather than offering the one already given.
+  const typed = value.trim().toLowerCase();
+  const exact = (UNIT_TYPES as readonly string[]).includes(typed);
+  const options = UNIT_TYPES.filter((type) => typed === "" || exact || type.startsWith(typed)).map(
+    (type) => ({ value: type, label: type.charAt(0).toUpperCase() + type.slice(1) }),
+  );
   return (
-    <>
-      <ConfigField
-        label="Type"
-        kind="choice"
-        choices={choices}
-        value={custom ? CUSTOM : value}
-        onChange={(next) => {
-          if (next === CUSTOM) {
-            setCustom(true);
-            if (known) onChange("");
-            return;
-          }
-          setCustom(false);
-          onChange(next);
-        }}
-        help="Informational: the engine runs every unit type the same way."
-        error={custom ? undefined : error}
-        disabled={disabled}
-      />
-      {custom && (
-        <ConfigField
-          label="Custom type"
-          kind="id"
+    <FormField
+      htmlFor={id}
+      label="Type"
+      helper="Informational: the engine runs every unit type the same way. Left empty it is team, the engine's own default."
+      error={error}
+    >
+      {(field) => (
+        <Combobox
+          id={field.id}
+          label="Unit types"
           value={value}
-          onChange={onChange}
-          error={error}
-          disabled={disabled}
+          placeholder="team"
+          disabled={disabled ?? false}
+          error={field.invalid}
+          aria-describedby={field.describedBy}
+          open={open && options.length > 0}
+          onOpenChange={setOpen}
+          options={options}
+          onValueChange={(next) => {
+            onChange(next);
+            setOpen(true);
+          }}
+          // Focus AND a press: the list is what the field is for, so reaching
+          // the field by either route offers it.
+          onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
+          // Closed on the way out, and after the press that chose a name:
+          // blur fires before the list's own mousedown, so the choice is
+          // taken on mousedown rather than on click.
+          onBlur={() => setOpen(false)}
         />
       )}
-    </>
+    </FormField>
   );
 }
 

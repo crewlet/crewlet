@@ -217,15 +217,23 @@ export function ReviewSaveDialog({
       icon={<SaveGlyph />}
       size="lg"
       dismissable={!busy}
+      // ONE WAY OUT PER JOB. Cancel is in the foot; a close control beside
+      // the title would be a second, unnamed spelling of it.
+      showCloseButton={false}
       onClose={onClose}
+      // The secondary road out of the unknown state, at the foot's own start
+      // edge. It used to be the first thing in the actions with a flexing
+      // span shoved after it, so two spacing mechanisms fought in one band:
+      // the end slot's own auto margin and a `flex: 1 1 auto` child inside it.
+      footerStart={
+        unknown ? (
+          <Button variant="secondary" onClick={onCheckAgain} disabled={busy}>
+            Check again
+          </Button>
+        ) : undefined
+      }
       footer={
         <>
-          {unknown && (
-            <Button variant="secondary" onClick={onCheckAgain} disabled={busy}>
-              Check again
-            </Button>
-          )}
-          <span className="spacer" />
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
