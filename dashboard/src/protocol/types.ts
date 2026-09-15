@@ -1996,6 +1996,50 @@ export interface Page extends PageSummary {
   created_at?: string;
 }
 
+/** One change to a page, from the wiki's own history table. */
+export interface PageChange {
+  id: string;
+  page_id: string;
+  /** The page's CURRENT title and container, resolved by the read: a feed of
+   *  uuids is a feed nobody reads. Empty for a page that has been purged, whose
+   *  entries are the record it ever existed. */
+  title?: string;
+  container?: string;
+  kind: string;
+  actor?: string;
+  actor_kind?: string;
+  operator_id?: string;
+  comment_id?: string;
+  excerpt?: string;
+  /** The turn that made this change — what a wiki cannot have, and what makes
+   *  "why did this page change" one click. */
+  turn_id?: string;
+  /** A change that announced nothing. A fact about the change rather than its
+   *  importance: a label edit is quiet by construction. */
+  quiet?: boolean;
+  at: string;
+  log_seq: number;
+}
+
+export interface PageActivityAnswer {
+  changes: PageChange[];
+  next_cursor?: string;
+  read_level?: ReadLevel;
+  complete?: boolean;
+}
+
+/** One saved version of a page, BODY INCLUDED — which is what the revision
+ *  summaries on the detail could say existed and never show. */
+export interface PageRevisionBody {
+  page_id: string;
+  version: number;
+  title: string;
+  body: string;
+  message?: string;
+  author?: string;
+  created_at: string;
+}
+
 export interface PageDetail {
   page: Page;
   revision: number;
@@ -2747,6 +2791,8 @@ export interface QueryMap {
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };
+  page_activity: PageActivityAnswer;
+  page_revision: PageRevisionBody;
   conversations: ConversationsAnswer;
   a2a_channels: A2AAnswer;
   knowledge: KnowledgeAnswer;

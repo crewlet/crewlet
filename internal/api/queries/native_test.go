@@ -174,6 +174,16 @@ type stubPages struct {
 	// fresh is the whole ask, so a route that carried the level and
 	// dropped the bounds or the floor beside it is visible too.
 	fresh statelog.Freshness
+
+	// activity and revision are what the two newest reads were asked, so a
+	// case can prove a filter reached the reader rather than only that
+	// rows came back.
+	activity     pages.PageActivityQuery
+	changes      []pages.PageChange
+	revision     pages.Revision
+	revisionHeld bool
+	askedPage    string
+	askedVersion int
 }
 
 func (s *stubPages) List(_ context.Context, f pages.Filter,
@@ -195,6 +205,24 @@ func (s *stubPages) Containers(_ context.Context,
 ) ([]pages.ContainerListing, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
+}
+
+func (s *stubPages) Activity(_ context.Context, q pages.PageActivityQuery) (
+	pages.PageActivity, error) {
+
+	s.activity = q
+	s.level, s.fresh = q.Freshness.Level, q.Freshness
+	return pages.PageActivity{
+		Changes: s.changes, Level: q.Freshness.Level, Complete: true,
+	}, s.err
+}
+
+func (s *stubPages) Revision(_ context.Context, pageID string, version int,
+	fresh statelog.Freshness,
+) (pages.Revision, bool, error) {
+	s.askedPage, s.askedVersion = pageID, version
+	s.level, s.fresh = fresh.Level, fresh
+	return s.revision, s.revisionHeld, s.err
 }
 
 // personalQuestions are the four scoped by the caller's own seat — see

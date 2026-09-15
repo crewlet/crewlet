@@ -247,6 +247,15 @@ func (emptyPages) Get(context.Context, string, statelog.Freshness) (pages.Detail
 	return pages.Detail{}, nil
 }
 
+func (emptyPages) Activity(context.Context, pages.PageActivityQuery) (pages.PageActivity, error) {
+	return pages.PageActivity{}, nil
+}
+
+func (emptyPages) Revision(context.Context, string, int, statelog.Freshness) (
+	pages.Revision, bool, error) {
+	return pages.Revision{}, false, nil
+}
+
 func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
 	return nil, nil
 }

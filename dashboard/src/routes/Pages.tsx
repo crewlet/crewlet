@@ -33,6 +33,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
+import type { PageRevision } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -367,35 +368,184 @@ export function PageView({ container, title }: { container: string; title: strin
               )}
             </Panel>
 
-            <Panel title={`History (${data.history?.length ?? 0})`}>
-              {data.history?.length ? (
-                <ul className="list">
-                  {data.history.map((rev) => (
-                    <li key={rev.version} className="row" style={{ gap: "var(--space-2)" }}>
-                      <Icon name="file" size="sm" />
-                      <span className="mono">v{rev.version}</span>
-                      <span>{rev.author ? seatName(rev.author) : "the engine"}</span>
-                      {rev.message && <span className="muted truncate">{rev.message}</span>}
-                      <span className="spacer" />
-                      <span className="muted" title={fmtDateTime(rev.created_at)}>
-                        {relTime(rev.created_at, now)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                // The METADATA ONLY note matters: a reader who expected to
-                // click a version and read it should be told why they cannot
-                // rather than left looking for the link.
-                <span className="muted">
-                  Only this version exists. Past versions are kept as metadata here; reading one
-                  back is a coordination read the engine does on demand.
-                </span>
-              )}
-            </Panel>
+            <PageHistory
+              pageID={page.id}
+              history={data.history ?? []}
+              seatName={seatName}
+              now={now}
+            />
+
+            <PageChanges pageID={page.id} seatName={seatName} now={now} />
           </>
         )}
       </QueryState>
     </>
+  );
+}
+
+/**
+ * A page's saved versions, and the body of whichever one is open.
+ *
+ * # A list of version numbers is not a history
+ *
+ * The detail answer carries revision SUMMARIES — a version, an author, a
+ * message, an instant — which says a page was edited eleven times and not what
+ * any of those edits did. This panel used to render exactly that and tell the
+ * reader why they could not click one: "past versions are kept as metadata
+ * here; reading one back is a coordination read the engine does on demand."
+ * There was no such read. The bodies sat in `pages_revisions` reachable only
+ * by reading the page at its head.
+ *
+ * # An old version is an ordinary absence
+ *
+ * A page keeps a bounded number of revisions, so asking for one the node no
+ * longer holds is not a failure — and the panel says which of the two happened
+ * rather than rendering a blank.
+ */
+function PageHistory({
+  pageID,
+  history,
+  seatName,
+  now,
+}: {
+  pageID: string;
+  history: PageRevision[];
+  seatName: (handle: string) => string;
+  now: number;
+}) {
+  // WHICH VERSION IS OPEN, as a FILTER: stepping through a page's versions
+  // must not fill the back stack with every one the reader glanced at.
+  const [open, setOpen] = useParam("version", "", "filter");
+  const version = Number(open) || 0;
+  const body = useQuery("page_revision", { page: pageID, version }, { enabled: version > 0 });
+
+  return (
+    <Panel title={`History (${history.length})`} icon="clock">
+      {history.length ? (
+        <div className="list">
+          {history.map((rev) => (
+            <button
+              key={rev.version}
+              type="button"
+              className={`thread-entry as-row${rev.version === version ? " selected" : ""}`}
+              onClick={() => setOpen(rev.version === version ? "" : String(rev.version))}
+            >
+              <span className="row gap-2">
+                <Icon name="file" size="sm" />
+                <span className="mono">v{rev.version}</span>
+                <span>{rev.author ? seatName(rev.author) : "the engine"}</span>
+                {rev.message && <span className="muted truncate">{rev.message}</span>}
+                <span className="spacer" />
+                <span className="muted" title={fmtDateTime(rev.created_at)}>
+                  {relTime(rev.created_at, now)}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <span className="muted">Only this version exists — nobody has saved over it.</span>
+      )}
+
+      {version > 0 && (
+        <div style={{ marginTop: "var(--space-3)" }}>
+          <QueryState error={body.error} loading={body.loading}>
+            {body.data ? (
+              <>
+                <p className="t-caption faint">
+                  Version {body.data.version}
+                  {body.data.title ? ` — “${body.data.title}”` : ""}, as it was saved.
+                </p>
+                <div className="prose">{body.data.body || "This version had no body."}</div>
+              </>
+            ) : (
+              // NOT FOUND IS NOT A FAILURE. A page keeps a bounded number
+              // of revisions, so an older one is an ordinary absence — and
+              // saying which of the two happened is the whole point.
+              !body.loading && (
+                <Empty
+                  inline
+                  icon="clock"
+                  title="This node no longer holds that version"
+                  hint="A page keeps a bounded number of revisions. The entry above is the record that it existed."
+                />
+              )
+            )}
+          </QueryState>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * Everything that happened to this page, which is not the same as its saves.
+ *
+ * `pages_history` has one row per change since the domain landed — ten change
+ * kinds, who made it, whether it announced anything, and the TURN that made it
+ * — and the schema ships an index literally named "one page's activity". Until
+ * now nothing read a single row of it: a comment, a rename, a move, a label
+ * edit and a status change all happened and left no trace any screen could
+ * show. Only saves appeared, through the revision list.
+ *
+ * THE TURN IS WHAT A WIKI CANNOT HAVE. An edit made by a seat carries the turn
+ * that made it, so "why did this page change" is one click rather than a
+ * search of the event log.
+ */
+function PageChanges({
+  pageID,
+  seatName,
+  now,
+}: {
+  pageID: string;
+  seatName: (handle: string) => string;
+  now: number;
+}) {
+  const feed = useQuery("page_activity", { page: pageID }, { pollMs: 60_000 });
+  const changes = feed.data?.changes ?? [];
+  return (
+    <Panel title={`Activity (${changes.length})`} icon="activity">
+      <QueryState
+        error={feed.error}
+        loading={feed.loading}
+        empty={
+          changes.length
+            ? undefined
+            : {
+                title: "Nothing has happened to this page",
+                hint: "Every change writes an entry — a save, a comment, a rename, a move, a label. A page with none was created and left alone.",
+              }
+        }
+      >
+        <div className="list">
+          {changes.map((change) => (
+            <div key={change.id} className="thread-entry">
+              <span className="row gap-2">
+                <Badge outline>{change.kind}</Badge>
+                <span>{change.actor ? seatName(change.actor) : "the engine"}</span>
+                {change.quiet && (
+                  <span className="faint t-caption" title="this change announced nothing">
+                    quiet
+                  </span>
+                )}
+                <span className="spacer" />
+                {change.turn_id && (
+                  <a
+                    className="t-link t-caption"
+                    href={href(["activity", "turns", change.turn_id])}
+                  >
+                    turn →
+                  </a>
+                )}
+                <span className="muted" title={fmtDateTime(change.at)}>
+                  {relTime(change.at, now)}
+                </span>
+              </span>
+              {change.excerpt && <p className="t-caption faint">{change.excerpt}</p>}
+            </div>
+          ))}
+        </div>
+      </QueryState>
+    </Panel>
   );
 }

@@ -416,6 +416,12 @@ func Register(r *Registry, s Sources) {
 		// navigation, and folding them together would ship every
 		// container's record with every page listing.
 		r.Register("containers", s.containers)
+		// WHAT HAPPENED TO THE PAGES, which `pages_history` has recorded
+		// since the domain landed with two indexes naming readers nobody
+		// wrote — and ONE REVISION'S BODY, which the detail's summaries
+		// could say existed and never show.
+		r.Register("page_activity", s.pageActivity)
+		r.Register("page_revision", s.pageRevision)
 	}
 	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
 		s.Counterparties != nil {

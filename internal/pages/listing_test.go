@@ -158,3 +158,174 @@ func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
 			listed, n)
 	}
 }
+
+func (r *roundTrip) activity(q pages.PageActivityQuery) pages.PageActivity {
+	r.t.Helper()
+	if q.Freshness.Level == "" {
+		q.Freshness = statelog.Freshness{Level: statelog.ReadSession}
+	}
+	got, err := r.reader.Activity(r.t.Context(), q)
+	if err != nil {
+		r.t.Fatalf("Activity(%+v): %v", q, err)
+	}
+	return got
+}
+
+// EVERY CHANGE, not only the saves.
+//
+// `pages_history` has had one row per change since the domain landed — ten
+// kinds, who made it, whether it announced anything, and the turn that made it
+// — and the schema ships an index literally named "one page's activity". Until
+// now nothing read a single row of it: a comment, a rename, a move, a label
+// edit and a status change all happened and left no trace any screen could
+// show, because the only visible history was the revision list, which is
+// SAVES.
+func TestEveryChangeToAPageIsReadable(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), page.Page.ID,
+		pages.NewComment{Body: "does this still hold?"}); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	r.drain()
+
+	got := r.activity(pages.PageActivityQuery{Page: page.Page.ID})
+	kinds := map[pages.ChangeKind]int{}
+	for _, change := range got.Changes {
+		kinds[change.Kind]++
+	}
+	if kinds[pages.ChangeCreated] == 0 {
+		t.Errorf("the create left no entry: %+v", got.Changes)
+	}
+	if kinds[pages.ChangeComment] == 0 {
+		t.Errorf("the comment left no entry, and a revision list cannot "+
+			"show one: %+v", got.Changes)
+	}
+	// THE TITLE IS RESOLVED, because a feed of uuids is a feed nobody
+	// reads — and it is the page's CURRENT one, which is the honest
+	// answer for a renamed page's old entries.
+	for _, change := range got.Changes {
+		if change.Title != "Runbook" {
+			t.Errorf("a change names %q, want the page's title", change.Title)
+		}
+	}
+	// NEWEST FIRST, which is what makes a cursor a keyset rather than an
+	// offset.
+	for i := 1; i < len(got.Changes); i++ {
+		if got.Changes[i].LogSeq > got.Changes[i-1].LogSeq {
+			t.Fatalf("entry %d sorts above %d: %+v", i, i-1, got.Changes)
+		}
+	}
+}
+
+// ONE PAGE, ONE CONTAINER, OR ONE KIND — the three narrowings, and each is a
+// different question a reader actually asks.
+func TestThePageFeedNarrowsByPageContainerAndKind(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	if _, err := r.store.EnsureContainer(t.Context(), "PROD", "Prod", ""); err != nil {
+		t.Fatalf("EnsureContainer: %v", err)
+	}
+	r.drain()
+	eng := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "prose"})
+	r.write(author("jane"), pages.NewPage{
+		Container: "PROD", Title: "Deploys", Body: "prose",
+	})
+	if _, _, err := r.store.Comment(t.Context(), author("bob"), eng.Page.ID,
+		pages.NewComment{Body: "a remark"}); err != nil {
+		t.Fatalf("Comment: %v", err)
+	}
+	r.drain()
+
+	all := r.activity(pages.PageActivityQuery{})
+	if len(all.Changes) < 3 {
+		t.Fatalf("the company-wide feed has %d changes, want at least three",
+			len(all.Changes))
+	}
+
+	onePage := r.activity(pages.PageActivityQuery{Page: eng.Page.ID})
+	for _, change := range onePage.Changes {
+		if change.PageID != eng.Page.ID {
+			t.Errorf("one page's feed carries %s", change.PageID)
+		}
+	}
+
+	oneContainer := r.activity(pages.PageActivityQuery{Container: "PROD"})
+	if len(oneContainer.Changes) == 0 {
+		t.Fatal("PROD's feed is empty and a page was created in it")
+	}
+	for _, change := range oneContainer.Changes {
+		if change.Container != "PROD" {
+			t.Errorf("PROD's feed carries a change in %q", change.Container)
+		}
+	}
+
+	comments := r.activity(pages.PageActivityQuery{Kinds: []pages.ChangeKind{pages.ChangeComment}})
+	if len(comments.Changes) != 1 {
+		t.Fatalf("the comment filter gave %d changes, want the one comment",
+			len(comments.Changes))
+	}
+
+	// AND AN UNKNOWN KIND IS REFUSED rather than read as a filter that
+	// matches nothing, which reads to a person as a quiet company.
+	if _, err := r.reader.Activity(t.Context(), pages.PageActivityQuery{
+		Kinds:     []pages.ChangeKind{"vandalised"},
+		Freshness: statelog.Freshness{Level: statelog.ReadSession},
+	}); err == nil {
+		t.Error("an unknown change kind was accepted")
+	}
+}
+
+// A REVISION IS A BODY, and the detail's summaries could only ever say that
+// one existed.
+//
+// The panel that rendered them told the reader why they could not click one:
+// "past versions are kept as metadata here; reading one back is a coordination
+// read the engine does on demand." There was no such read.
+func TestAPastRevisionAnswersItsOwnBody(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), pages.NewPage{Title: "Runbook", Body: "the first draft"})
+	second := "the second draft"
+	if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID, pages.Save{
+		BaseVersion: page.Page.Version, Body: &second, Message: "rewrote it",
+	}); err != nil {
+		t.Fatalf("SavePage: %v", err)
+	}
+	r.drain()
+
+	fresh := statelog.Freshness{Level: statelog.ReadSession}
+	// REVISION N IS THE BODY AT VERSION N, including the newest — the
+	// other reading collides with itself on the first save.
+	first, held, err := r.reader.Revision(t.Context(), page.Page.ID, 1, fresh)
+	if err != nil {
+		t.Fatalf("Revision 1: %v", err)
+	}
+	if !held || first.Body != "the first draft" {
+		t.Fatalf("version 1 is held=%v body=%q, want the first draft", held, first.Body)
+	}
+	latest, held, err := r.reader.Revision(t.Context(), page.Page.ID, 2, fresh)
+	if err != nil {
+		t.Fatalf("Revision 2: %v", err)
+	}
+	if !held || latest.Body != "the second draft" || latest.Message != "rewrote it" {
+		t.Fatalf("version 2 is %+v", latest)
+	}
+
+	// A VERSION THIS NODE DOES NOT HOLD IS NOT FOUND, never an error and
+	// never an empty body: a page keeps a bounded number of revisions, so
+	// an old one is an ordinary absence and a reader has to tell it from a
+	// page that never existed.
+	if _, held, err := r.reader.Revision(t.Context(), page.Page.ID, 99, fresh); err != nil {
+		t.Errorf("an absent version answered an error: %v", err)
+	} else if held {
+		t.Error("a version nobody saved reports itself held")
+	}
+
+	// AND A VERSION THAT IS NOT A VERSION is refused rather than read as
+	// the newest: zero is what an unset parameter arrives as.
+	if _, _, err := r.reader.Revision(t.Context(), page.Page.ID, 0, fresh); err == nil {
+		t.Error("version 0 was accepted")
+	}
+}
