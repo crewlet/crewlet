@@ -260,7 +260,7 @@ export function QueryState({
         <span className="spacer" />
         {/* The banner used to say "set a token" and offer nothing that could.
             With anonymous reads allowed the socket is never refused, so the
-            dialog's only other doors — a refusal, and the engine panel — both
+            dialog's only other doors — a socket refusal, and the palette — both
             stay shut on exactly the screen that needs it. */}
         <Button size="sm" icon="key" onClick={requestToken}>
           Set token
