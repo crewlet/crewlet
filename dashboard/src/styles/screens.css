@@ -2474,3 +2474,66 @@ a.work-cal-chip:hover {
   color: var(--text-secondary);
   white-space: nowrap;
 }
+
+/* A LINE DIFF. Monospace and line-numbered on both sides, because the two
+   numbers are what a reader uses to find the paragraph in the version beside
+   it. Marked with a glyph as well as a tint: colour alone is not a signal, and
+   a printed or forced-colours render loses the tint entirely. */
+.diff {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: var(--lh-normal);
+}
+.diff-section + .diff-section,
+.diff-skip + .diff-line {
+  border-top: 1px solid var(--border-subtle);
+}
+/* A GAP SAYS WHAT IT STANDS FOR. Silently closed, a document edited at both
+   ends looks like one rewritten in the middle. */
+.diff-skip {
+  padding: var(--space-1) var(--space-3);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-2xs);
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 3.5ch 3.5ch 2ch minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: 1px var(--space-3) 1px var(--space-2);
+}
+.diff-no {
+  color: var(--text-muted);
+  text-align: right;
+  user-select: none;
+}
+.diff-mark {
+  user-select: none;
+  text-align: center;
+}
+.diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-line.is-add {
+  background: var(--positive-soft);
+}
+.diff-line.is-add .diff-mark {
+  color: var(--positive-ink);
+}
+.diff-line.is-remove {
+  background: var(--critical-soft);
+}
+.diff-line.is-remove .diff-mark {
+  color: var(--critical-ink);
+}
+.diff-add-ink {
+  color: var(--positive-ink);
+}
+.diff-del-ink {
+  color: var(--critical-ink);
+}

@@ -321,6 +321,9 @@ Two properties differ from the vendor path and both are visible:
   with no document — it is reachable by address and by search, and it is
   missing from `GET /containers` and from the Knowledge rail. That is what a
   space nobody declared looks like.
+- **A BODY HAS A HISTORY**, and revision N is the body at version N. The
+  dashboard reads any one of them back and shows what a save changed against
+  the version before it, by line.
 - **A body is MARKDOWN**, and the only format — see `internal/pages`. The
   dashboard renders it (headings, lists, tables, code, links), with raw HTML
   shown as its own text and a link's scheme restricted to `http(s):`,

@@ -23,15 +23,25 @@
 
 import { useMemo } from "react";
 import { renderMarkdown } from "~/lib/markdown.ts";
+import { collapse, diffLines, diffStat, type DiffSection } from "~/lib/diff.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Empty, Panel, SearchInput, Segmented, Select, Skeleton } from "~/ui/primitives.tsx";
+import {
+  Badge,
+  Empty,
+  Panel,
+  SearchInput,
+  Segmented,
+  Select,
+  Skeleton,
+  cx,
+} from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
+import { fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { PageRevision } from "~/protocol/index.ts";
@@ -403,6 +413,49 @@ export function PageView({ container, title }: { container: string; title: strin
  * longer holds is not a failure — and the panel says which of the two happened
  * rather than rendering a blank.
  */
+/**
+ * A line diff, rendered as the document it is.
+ *
+ * MONOSPACE AND LINE-NUMBERED on both sides, because the two numbers are what
+ * a reader uses to find the paragraph in the version beside it. A skipped run
+ * is a row of its own saying how many lines it stands for: a gap silently
+ * closed makes a document edited at both ends look like one rewritten in the
+ * middle.
+ */
+function DiffPane({ sections }: { sections: DiffSection[] }) {
+  return (
+    <div className="diff">
+      {sections.map((section, s) => (
+        <div key={s} className="diff-section">
+          {section.skipped > 0 && (
+            <div className="diff-skip">{plural(section.skipped, "unchanged line")}</div>
+          )}
+          {section.lines.map((line, i) => (
+            // THE CLASS NAMES ARE LITERALS, never assembled from the value:
+            // a stylesheet gate that cannot see a class cannot tell a rule
+            // this file relies on from one nothing uses.
+            <div
+              key={i}
+              className={cx(
+                "diff-line",
+                line.kind === "add" && "is-add",
+                line.kind === "remove" && "is-remove",
+              )}
+            >
+              <span className="diff-no">{line.before ?? ""}</span>
+              <span className="diff-no">{line.after ?? ""}</span>
+              <span className="diff-mark">
+                {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
+              </span>
+              <span className="diff-text">{line.text || " "}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function PageHistory({
   pageID,
   history,
@@ -419,6 +472,32 @@ function PageHistory({
   const [open, setOpen] = useParam("version", "", "filter");
   const version = Number(open) || 0;
   const body = useQuery("page_revision", { page: pageID, version }, { enabled: version > 0 });
+  // WHAT THIS SAVE CHANGED, which is the question somebody opens a history
+  // for and which the panel could not answer: it showed any ONE version, so
+  // the answer was to open two and read both.
+  //
+  // The PREVIOUS version by position in the list, not `version - 1`: a page
+  // keeps a bounded number of revisions, so the one below this in the history
+  // is the one that was actually saved before it — and off a trimmed page
+  // `version - 1` is a read that comes back not found.
+  const previous = useMemo(() => {
+    const i = history.findIndex((rev) => rev.version === version);
+    return i >= 0 ? (history[i + 1]?.version ?? 0) : 0;
+  }, [history, version]);
+  const [lens, setLens] = useParam("lens", "diff", "filter");
+  const prior = useQuery(
+    "page_revision",
+    { page: pageID, version: previous },
+    { enabled: version > 0 && previous > 0 && lens === "diff" },
+  );
+  const diff = useMemo(
+    () =>
+      body.data && prior.data
+        ? collapse(diffLines(prior.data.body ?? "", body.data.body ?? ""))
+        : [],
+    [body.data, prior.data],
+  );
+  const stat = useMemo(() => diffStat(diff.flatMap((section) => section.lines)), [diff]);
 
   return (
     <Panel title={`History (${history.length})`} icon="clock">
@@ -453,17 +532,62 @@ function PageHistory({
           <QueryState error={body.error} loading={body.loading}>
             {body.data ? (
               <>
-                <p className="t-caption faint">
-                  Version {body.data.version}
-                  {body.data.title ? ` — “${body.data.title}”` : ""}, as it was saved.
-                </p>
-                <div className="prose md">
-                  {body.data.body ? (
-                    renderMarkdown(body.data.body)
-                  ) : (
-                    <span className="muted">This version had no body.</span>
+                <div className="row wrap gap-2">
+                  <span className="t-caption faint">
+                    Version {body.data.version}
+                    {body.data.title ? ` — “${body.data.title}”` : ""}, as it was saved.
+                  </span>
+                  <span className="spacer" />
+                  {/* THE FIRST VERSION HAS NOTHING TO COMPARE WITH, which is
+                      a fact about the page rather than a lens the reader
+                      failed to pick — so the control is absent rather than
+                      offering a diff that can only say "everything". */}
+                  {previous > 0 && (
+                    <Segmented
+                      ariaLabel="What to show"
+                      value={lens}
+                      onChange={setLens}
+                      options={[
+                        { value: "diff", label: `Changes from v${previous}` },
+                        { value: "full", label: "The whole version" },
+                      ]}
+                    />
                   )}
                 </div>
+                {lens === "diff" && previous > 0 ? (
+                  <QueryState error={prior.error} loading={prior.loading}>
+                    {prior.data &&
+                      (stat.identical ? (
+                        // IDENTICAL IS ITS OWN ANSWER. A save that changed
+                        // only the title leaves the body untouched, and a
+                        // pane of unmarked lines reads as one that failed
+                        // to load.
+                        <Empty
+                          inline
+                          icon="check"
+                          title="This save did not change the body"
+                          hint="A page's title, its labels and its place in the tree are saved beside its body — this version's prose is the one before it."
+                        />
+                      ) : (
+                        <>
+                          <p className="t-caption">
+                            <span className="diff-add-ink">+{stat.added}</span>{" "}
+                            <span className="diff-del-ink">−{stat.removed}</span> against v
+                            {previous}
+                          </p>
+                          <DiffPane sections={diff} />
+                        </>
+                      ))}
+                  </QueryState>
+                ) : (
+                  <div className="prose md">
+                    {body.data.body ? (
+                      renderMarkdown(body.data.body)
+                    ) : (
+                      <span className="muted">This version had no body.</span>
+                    )}
+                  </div>
+                )}
               </>
             ) : (
               // NOT FOUND IS NOT A FAILURE. A page keeps a bounded number

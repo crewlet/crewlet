@@ -412,6 +412,16 @@ reader could tick would report a change that never reached the page.
 speech: its line breaks are load-bearing there and it is not markdown. A
 document carries `.prose.md` beside it.
 
+A page's history shows **what a save changed**, not only what one version
+said. `lib/diff.ts` is a line diff over the two revisions — Myers, by line,
+with no word-level refinement inside a changed line, because these documents
+are rewritten in paragraphs and a word diff makes a small edit prettier and a
+large one unreadable. Unchanged runs collapse to a row saying how many lines
+they stand for: a gap silently closed makes a document edited at both ends
+look like one rewritten in the middle. "This save did not change the body" is
+its own answer, because a title, a label and a move are saved beside a body
+and a pane of unmarked lines reads as one that failed to load.
+
 ---
 
 ## The transcript is stable, and reads in order
