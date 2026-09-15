@@ -15,43 +15,54 @@
  * do, and whether closing is allowed. A dialog mid-write passes
  * `dismissable={false}` so a stray click cannot abandon a request whose
  * outcome the operator has not seen.
+ *
+ * # The behaviour and the chrome are two things
+ *
+ * [useModal] is the behaviour and [Dialog] is one presentation of it. The
+ * split exists because the command palette is a modal whose header IS its
+ * input: forced through `Dialog` it would grow a title bar it does not want,
+ * so it hand-rolled the veil instead and got none of the behaviour — no focus
+ * moved in, no focus returned to the row that opened it, and an Escape
+ * handler on the input alone, which does nothing the moment focus is anywhere
+ * else in the panel. A second presentation is fine; a second implementation
+ * of "what a modal does" is how two of them start disagreeing.
  */
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 
-export function Dialog({
-  title,
-  icon,
+/**
+ * What every modal in this dashboard does, whatever it looks like.
+ *
+ * Returns the props for the veil and for the panel inside it. Focus moves to
+ * the panel's first control on open and returns to whatever opened it on
+ * close; Escape closes; a mousedown on the veil closes and one inside the
+ * panel does not.
+ *
+ * ON `document` RATHER THAN THE PANEL, which is the whole reason Escape is
+ * here and not on a caller's own handler: a key listener bound to one input
+ * stops working the instant the reader tabs into the list beside it.
+ */
+export function useModal({
+  label,
   onClose,
-  children,
-  footer,
-  width = 480,
   dismissable = true,
-  onSubmit,
 }: {
-  title: string;
-  icon?: IconName;
+  label: string;
   onClose: () => void;
-  children: ReactNode;
-  footer?: ReactNode;
-  width?: number;
-  /** False while a request is in flight: the veil and Escape stop closing. */
   dismissable?: boolean;
-  /** When given, the shell is a form and Enter submits it. */
-  onSubmit?: () => void;
 }) {
-  // HTMLElement, because the shell is a <form> when it submits and a <div>
-  // when it does not, and one ref has to reach whichever was rendered.
+  // HTMLElement, because a caller's shell may be a <form> or a <div> and one
+  // ref has to reach whichever was rendered.
   const ref = useRef<HTMLElement | null>(null);
-  // WHERE FOCUS CAME FROM, so it can go back. A dialog that returns focus to
+  // WHERE FOCUS CAME FROM, so it can go back. A modal that returns focus to
   // the document body leaves a keyboard reader at the top of the page, which
-  // on this dashboard means the nav rather than the row they opened.
+  // on this dashboard means the rail rather than the row they opened.
   const opener = useRef<Element | null>(null);
 
   useEffect(() => {
     opener.current = document.activeElement;
-    // The first control, or the dialog itself when it has none, so a screen
+    // The first control, or the panel itself when it has none, so a screen
     // reader announces the label rather than continuing behind the veil.
     const focusable = ref.current?.querySelector<HTMLElement>(
       "input, select, textarea, button, [href], [tabindex]:not([tabindex='-1'])",
@@ -74,6 +85,48 @@ export function Dialog({
     return () => document.removeEventListener("keydown", onKey);
   }, [dismissable, onClose]);
 
+  return {
+    veil: {
+      className: "veil",
+      role: "presentation" as const,
+      onMouseDown: () => dismissable && onClose(),
+    },
+    shell: {
+      role: "dialog" as const,
+      "aria-modal": true,
+      "aria-label": label,
+      tabIndex: -1,
+      ref: (el: HTMLElement | null) => {
+        ref.current = el;
+      },
+      onMouseDown: (e: React.MouseEvent) => e.stopPropagation(),
+    },
+  };
+}
+
+export function Dialog({
+  title,
+  icon,
+  onClose,
+  children,
+  footer,
+  width = 480,
+  dismissable = true,
+  onSubmit,
+}: {
+  title: string;
+  icon?: IconName;
+  onClose: () => void;
+  children: ReactNode;
+  footer?: ReactNode;
+  width?: number;
+  /** False while a request is in flight: the veil and Escape stop closing. */
+  dismissable?: boolean;
+  /** When given, the shell is a form and Enter submits it. */
+  onSubmit?: () => void;
+}) {
+  const { veil, shell: modal } = useModal({ label: title, onClose, dismissable });
+
   const body = (
     <>
       <header className="dialog-head">
@@ -86,20 +139,13 @@ export function Dialog({
   );
 
   const shell = {
+    ...modal,
     className: "dialog",
     style: { width: `min(${width}px, 100%)` },
-    role: "dialog" as const,
-    "aria-modal": true,
-    "aria-label": title,
-    tabIndex: -1,
-    ref: (el: HTMLElement | null) => {
-      ref.current = el;
-    },
-    onMouseDown: (e: React.MouseEvent) => e.stopPropagation(),
   };
 
   return (
-    <div className="veil" onMouseDown={() => dismissable && onClose()} role="presentation">
+    <div {...veil}>
       {onSubmit ? (
         <form
           {...shell}

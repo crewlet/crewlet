@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useModal } from "~/ui/Dialog.tsx";
 import { DESTINATIONS } from "./nav.ts";
 import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -122,9 +123,13 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+  // THE SHELL EVERY OTHER MODAL USES. This one hand-rolled its veil because
+  // `Dialog`'s chrome is a title bar and the palette's header IS its input —
+  // and so it had none of the behaviour: focus was moved in but never
+  // returned, so closing left a keyboard reader at the top of the page rather
+  // than on the row they opened it from, and Escape was bound to the input
+  // alone, which does nothing once focus is in the result list beside it.
+  const { veil, shell } = useModal({ label: "Search", onClose });
 
   const index = useMemo(() => indexOrg(org), [org]);
 
@@ -384,22 +389,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       e.preventDefault();
       hits[cursor]?.go();
       onClose();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
     }
+    // ESCAPE IS THE SHELL'S, on `document`, so it closes from the result list
+    // and from the footer too.
   }
 
   let flat = -1;
   return (
-    <div className="veil" onMouseDown={onClose} role="presentation">
-      <div
-        className="palette"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Search"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
+    <div {...veil}>
+      <div {...shell} className="palette">
         <input
           ref={inputRef}
           className="palette-input"
