@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/ledger"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
@@ -118,6 +120,11 @@ func everySeam(t *testing.T) queries.Sources {
 		Config:   surface,
 		Work:     emptyWork{},
 		Pages:    emptyPages{},
+		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
+		// no index is a real shape this sweep can describe.
+		WorkSearch:     emptyWork{},
+		Conversations:  emptyConversations{},
+		Counterparties: emptyCounterparties{},
 		// THE RETENTION DOCUMENT, which the Fleet screen's replication
 		// panels read. A pass-through on the real surface, so the seam is
 		// a function rather than a reader — and this sweep is about which
@@ -201,6 +208,33 @@ func (emptyWork) Person(context.Context, tracker.PersonQuery, time.Time) (tracke
 func (emptyWork) Inbox(context.Context, tracker.InboxQuery, time.Time) (
 	tracker.InboxAnswer, error) {
 	return tracker.InboxAnswer{}, nil
+}
+
+func (emptyWork) Routing(context.Context, tracker.RoutingQuery, time.Time) (
+	tracker.RoutingAnswer, error) {
+	return tracker.RoutingAnswer{}, nil
+}
+
+func (emptyWork) Search(context.Context, string, int) ([]tracker.Ranked, error) {
+	return nil, nil
+}
+
+// emptyConversations and emptyCounterparties are the two per-seat stores with
+// nothing in them, on emptyWork's terms.
+type emptyConversations struct{}
+
+func (emptyConversations) Threads(context.Context, string, int) ([]ledgerstore.Thread, error) {
+	return nil, nil
+}
+
+func (emptyConversations) History(context.Context, string, string, int) ([]ledger.Session, error) {
+	return nil, nil
+}
+
+type emptyCounterparties struct{}
+
+func (emptyCounterparties) List(context.Context, string) ([]learning.Profile, error) {
+	return nil, nil
 }
 
 type emptyPages struct{}

@@ -38,6 +38,10 @@ var namedRoutes = []struct {
 	path map[string]string
 }{
 	{method: "GET", pattern: "/agents/{id}/memory", what: "agent_memory", path: map[string]string{"id": "id"}},
+	// One seat's external threads. Under /agents/{id}/ beside its memory,
+	// because it is the same kind of fact — what this seat has said and
+	// remembered — rather than a company-wide listing.
+	{method: "GET", pattern: "/agents/{id}/conversations", what: "conversations", path: map[string]string{"id": "handle"}},
 	{method: "GET", pattern: "/agents/{id}", what: "agent", path: map[string]string{"id": "id"}},
 	// The literal segment beats the wildcard, so /events/trace/{id} is not
 	// read as an event whose id is "trace" — net/http resolves the more
@@ -68,6 +72,11 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/activity", what: "work_activity"},
 	{method: "GET", pattern: "/work/my-work", what: "work_my_work"},
 	{method: "GET", pattern: "/work/inbox", what: "work_inbox"},
+	// SEARCH AND ROUTING, both above /work/{id} for the reason the comment
+	// there gives: a literal segment beats the wildcard, so neither is read
+	// as a task whose key is "search" or "routing".
+	{method: "GET", pattern: "/work/search", what: "work_search"},
+	{method: "GET", pattern: "/work/routing/{record_id}", what: "work_routing", path: map[string]string{"record_id": "record_id"}},
 	{method: "GET", pattern: "/work/views", what: "work_views"},
 	{method: "GET", pattern: "/work/goals", what: "work_goals"},
 	{method: "GET", pattern: "/work/catalogue", what: "work_catalogue"},

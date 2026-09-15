@@ -170,6 +170,26 @@ type Sources struct {
 	Work  WorkReader
 	Pages PageReader
 
+	// WorkSearch is the ranked item search, and it is SEPARATE from
+	// [Sources.Work] because the two fail independently: the rows are the
+	// fleet's and the lexical index is this node's own, so a node still
+	// building one answers every board question and cannot rank a word.
+	// Nil leaves `work_search` unregistered, which is what a screen needs
+	// in order to offer the board's filters instead of an empty ranking.
+	WorkSearch WorkSearcher
+
+	// Conversations is the seat's own thread ledger — what it has said on
+	// a surface this engine does not own, and the record that stops it
+	// replying twice in one thread. Typed on the client since the client
+	// had types and registered nowhere, so the panel that reads it drew an
+	// empty list for every seat in every company.
+	Conversations Conversations
+
+	// Counterparties is what the learning loop remembers about WHO a seat
+	// has worked with — the one memory object that is about somebody else,
+	// and the one the memory answer never carried.
+	Counterparties Counterparties
+
 	// PublicBase is where third-party apps reach this deployment, RESOLVED,
 	// or nil when this process cannot say.
 	//
@@ -356,6 +376,11 @@ func Register(r *Registry, s Sources) {
 		// this person's own read and snooze marks, swept on a 365-day
 		// retention and reaching no screen.
 		r.Register("work_inbox", s.workInbox)
+		// WHO ONE CHANGE WOKE. The applier has written the set
+		// since the domain landed and its only trace on any surface
+		// was `work_activity.notified`: a boolean saying that
+		// somebody, somewhere, was told.
+		r.Register("work_routing", s.workRouting)
 		r.Register("work_goals", s.workGoals)
 		r.Register("work_catalogue", s.workCatalogue)
 		r.Register("work_person", s.workPerson)
@@ -369,11 +394,31 @@ func Register(r *Registry, s Sources) {
 		// container's record with every page listing.
 		r.Register("containers", s.containers)
 	}
-	if s.Diary != nil || s.Episodes != nil || s.Skills != nil {
+	if s.Diary != nil || s.Episodes != nil || s.Skills != nil ||
+		s.Counterparties != nil {
+
+		// FOUR HALVES NOW. Each is gated inside the answer rather than
+		// here, so a node holding one of them answers with that one and
+		// empty lists for the rest — which is what a client needs to
+		// tell "this seat has learned nothing" from "this node does not
+		// keep that half".
 		r.Register("agent_memory", s.agentMemory)
 	}
 	if s.Channels != nil {
 		r.Register("a2a_channels", s.a2aChannels)
+	}
+	if s.WorkSearch != nil {
+		// SEARCH IS A QUESTION, not a filter on the board, and it is
+		// gated on its own index rather than on the tracker: the ranked
+		// reader is what `search_work` gives a seat, and the operator
+		// reading the same company had only `q=` — an escaped LIKE over
+		// the excerpt, gated to a span of days.
+		r.Register("work_search", s.workSearch)
+	}
+	if s.Conversations != nil {
+		// SCOPED, like every other per-seat question — see
+		// [Sources.viewerHandle].
+		r.Register("conversations", s.conversations)
 	}
 	if s.Config != nil {
 		// OPERATOR-ONLY, all three. Reading the config document exposes

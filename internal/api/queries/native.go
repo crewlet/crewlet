@@ -120,6 +120,8 @@ type WorkReader interface {
 		tracker.MyWork, error)
 	Person(ctx context.Context, q tracker.PersonQuery, now time.Time) (tracker.PersonState, error)
 	Inbox(ctx context.Context, q tracker.InboxQuery, now time.Time) (tracker.InboxAnswer, error)
+	Routing(ctx context.Context, q tracker.RoutingQuery, now time.Time) (
+		tracker.RoutingAnswer, error)
 }
 
 // PageReader is the knowledge read side this surface calls.

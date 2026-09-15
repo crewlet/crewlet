@@ -824,7 +824,64 @@ func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 		}
 		out["skills"] = rows
 	}
+	// THE THIRD MEMORY, and the one that is about somebody ELSE. The diary
+	// is what a seat learned about the work and the episodes are what it
+	// learned about doing it; a counterparty profile is what it learned
+	// about a colleague — how often they interact, what it believes about
+	// them, and when it last checked. The key has been on this answer since
+	// the answer existed, always as an empty list, because nothing read the
+	// store behind it.
+	//
+	// KEYED ON THE HANDLE, which is what `observer_handle` holds — unlike
+	// the diary, whose key is the derived agent id. Both are asked with the
+	// dashboard's one identifier and the one that does not recognise it
+	// answers nothing.
+	profiles, err := s.counterpartiesFor(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]map[string]any, 0, len(profiles))
+	for _, profile := range profiles {
+		rows = append(rows, counterpartyRow(profile))
+	}
+	out["counterparties"] = rows
 	return out, nil
+}
+
+// counterpartyRow is one profile as a screen reads it.
+//
+// THE TWO INSTANTS ARE BOTH CARRIED, because they measure different cadences
+// and the difference is the interesting one: `last_updated_at` moves on every
+// interaction and `last_corroborated_at` only when the traits actually
+// changed, so a colleague seen daily whose profile has not moved in months is
+// one this seat has stopped learning about. Carrying one of them would make
+// that state invisible — which is the same state the Plan phase's prefetch
+// demotes on, so a screen showing one number would disagree with the prompt.
+func counterpartyRow(p learning.Profile) map[string]any {
+	subject := map[string]any{"name": p.Subject.Name}
+	if p.Subject.Handle != "" {
+		subject["handle"] = p.Subject.Handle
+	}
+	if p.Subject.ExternalID != "" {
+		subject["external_id"] = p.Subject.ExternalID
+		subject["platform"] = p.Subject.Platform
+	}
+	traits := p.Traits
+	if traits == nil {
+		// AN EMPTY MAP, never null: a profile whose traits failed to
+		// decode and one that has none read identically to a client
+		// that has to guard the field either way.
+		traits = map[string]any{}
+	}
+	return map[string]any{
+		"subject":              subject,
+		"resolved":             p.Subject.Resolved(),
+		"traits":               traits,
+		"interactions":         p.InteractionCount,
+		"first_seen_at":        p.FirstSeenAt,
+		"last_updated_at":      p.LastUpdatedAt,
+		"last_corroborated_at": p.LastCorroboratedAt,
+	}
 }
 
 // MemoryPageLimit bounds each collection of a seat's memory page.
