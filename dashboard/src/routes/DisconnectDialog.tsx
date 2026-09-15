@@ -18,11 +18,11 @@
 
 import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Avatar, Button } from "~/ui/primitives.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -222,11 +222,13 @@ export function DisconnectDialog({
   // of that promise nobody could see.
   if (orphans) {
     return (
-      <Dialog
+      <Modal
+        open
+        stackBody
         title={owed ? `Disconnecting ${name}` : `${name} disconnected`}
-        icon={CableGlyph}
+        icon={<CableGlyph />}
         onClose={onClose}
-        width={520}
+        size="md"
         footer={
           <Button variant="primary" onClick={onClose}>
             Done
@@ -266,17 +268,19 @@ export function DisconnectDialog({
             </p>
           )}
         </div>
-      </Dialog>
+      </Modal>
     );
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`Disconnect ${name}`}
-      icon={CableGlyph}
+      icon={<CableGlyph />}
       onClose={onClose}
       dismissable={!busy}
-      width={520}
+      size="md"
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
@@ -384,6 +388,6 @@ export function DisconnectDialog({
           </div>
         )}
       </div>
-    </Dialog>
+    </Modal>
   );
 }

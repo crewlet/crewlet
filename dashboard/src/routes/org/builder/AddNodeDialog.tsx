@@ -19,7 +19,6 @@
 
 import { useState } from "react";
 import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.ts";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { Button, Segmented } from "~/ui/primitives.tsx";
 import { useBuilder, type AddKind } from "./BuilderContext.tsx";
@@ -36,6 +35,7 @@ import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
 import { AddGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
@@ -117,9 +117,11 @@ export function AddNodeDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`Add to ${where}`}
-      icon={AddGlyph}
+      icon={<AddGlyph />}
       onClose={onClose}
       onSubmit={add}
       footer={
@@ -197,6 +199,6 @@ export function AddNodeDialog({
           </p>
         </>
       )}
-    </Dialog>
+    </Modal>
   );
 }

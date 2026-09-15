@@ -33,7 +33,6 @@
 import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { Banner, Button, Segmented } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
@@ -57,6 +56,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { DeleteGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 type PlacedChoice = "keep" | "remove";
 
@@ -71,9 +71,15 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
 
   if (!found) {
     return (
-      <Dialog title="Delete" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}>
+      <Modal
+        open
+        stackBody
+        title="Delete"
+        onClose={onClose}
+        footer={<Button onClick={onClose}>Close</Button>}
+      >
         <p className="t-body">This node is no longer in the draft.</p>
-      </Dialog>
+      </Modal>
     );
   }
 
@@ -138,10 +144,12 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`Delete ${name}`}
-      icon={DeleteGlyph}
-      width={560}
+      icon={<DeleteGlyph />}
+      size="md"
       onClose={onClose}
       onSubmit={remove}
       footer={
@@ -222,7 +230,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
           onChange={setAcknowledged}
         />
       )}
-    </Dialog>
+    </Modal>
   );
 }
 

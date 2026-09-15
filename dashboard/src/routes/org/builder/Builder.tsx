@@ -54,8 +54,6 @@ import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hook
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Menu, type MenuEntry } from "~/ui/Menu.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import {
   Badge,
   Banner,
@@ -68,7 +66,6 @@ import {
   cx,
   type Tone,
 } from "~/ui/primitives.tsx";
-import { ToastProvider, useToast } from "~/ui/Toast.tsx";
 import {
   BuilderContext,
   keepsTheLens,
@@ -141,7 +138,16 @@ import {
   VisibilityGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { LayerHost, isComposing, isModalLayerOpen } from "@crewlethq/ui";
+import {
+  LayerHost,
+  Menu,
+  Modal,
+  ToastProvider,
+  isComposing,
+  isModalLayerOpen,
+  type MenuEntry,
+  useToast,
+} from "@crewlethq/ui";
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -459,11 +465,13 @@ export function Builder({
   const [kept] = useState(() => (storage === undefined ? sessionDraftStorage() : storage));
   return (
     <div ref={container} className="org-builder">
-      <ToastProvider>
-        {/* The builder's own layer host. A fullscreen element renders only its
-            own subtree, so a dialog portalled to the application's root host
-            while the canvas is fullscreen is not painted at all. */}
-        <LayerHost>
+      {/* The builder's own layer host, with its own toast stack INSIDE it. A
+          fullscreen element renders only its own subtree, so a dialog or a
+          toast portalled to the application's root while the canvas is
+          fullscreen is not painted at all: the reader presses Save and
+          nothing happens. useToast finds the nearest provider. */}
+      <LayerHost>
+        <ToastProvider>
           <Lens
             surfaces={surfaces}
             transport={transport}
@@ -472,8 +480,8 @@ export function Builder({
             keys={keys}
             container={container}
           />
-        </LayerHost>
-      </ToastProvider>
+        </ToastProvider>
+      </LayerHost>
     </div>
   );
 }
@@ -1170,7 +1178,7 @@ function Lens({
     {
       key: "undo",
       label: "Undo",
-      icon: UndoGlyph,
+      icon: <UndoGlyph />,
       onSelect: handlers.undo,
       disabled: !canUndo,
       hint: <Kbd keys={UNDO_KEYS} />,
@@ -1178,19 +1186,24 @@ function Lens({
     {
       key: "redo",
       label: "Redo",
-      icon: RedoGlyph,
+      icon: <RedoGlyph />,
       onSelect: handlers.redo,
       disabled: !canRedo,
       hint: <Kbd keys={REDO_KEYS} />,
     },
     { kind: "separator", key: "s1" },
-    { key: "expand", label: "Expand all", icon: AddGlyph, onSelect: handlers.expandAll },
-    { key: "collapse", label: "Collapse all", icon: RemoveGlyph, onSelect: handlers.collapseAll },
+    { key: "expand", label: "Expand all", icon: <AddGlyph />, onSelect: handlers.expandAll },
+    {
+      key: "collapse",
+      label: "Collapse all",
+      icon: <RemoveGlyph />,
+      onSelect: handlers.collapseAll,
+    },
     { kind: "separator", key: "s2" },
     {
       key: "discard",
       label: "Discard changes",
-      icon: DeleteGlyph,
+      icon: <DeleteGlyph />,
       onSelect: handlers.discard,
       disabled: readOnly || !changed,
       danger: true,
@@ -1257,12 +1270,10 @@ function Lens({
             </span>
             <Menu
               label={selectedView ? `Actions for ${selectedName}` : "Add to the organization"}
-              icon={selectedView ? MoreVertGlyph : AddGlyph}
+              icon={selectedView ? <MoreVertGlyph /> : <AddGlyph />}
               items={toolbarItems}
-              size="sm"
-            >
-              {selectedView ? selectedName : "Add"}
-            </Menu>
+              trigger={selectedView ? selectedName : "Add"}
+            />
             <span className="spacer" />
             <FullscreenToggle container={container} />
             <Badge tone={look.tone} icon={look.icon}>
@@ -1542,9 +1553,11 @@ function Lens({
         )}
 
         {leaving && (
-          <Dialog
+          <Modal
+            open
+            stackBody
             title="Leave the builder?"
-            icon={WarningGlyph}
+            icon={<WarningGlyph />}
             onClose={() => setLeaving(null)}
             footer={
               <>
@@ -1566,13 +1579,15 @@ function Lens({
               This browser cannot keep the draft, so leaving the builder discards every change in
               it. Save it first, or leave without it.
             </p>
-          </Dialog>
+          </Modal>
         )}
 
         {companyExists && (
-          <Dialog
+          <Modal
+            open
+            stackBody
             title="A company already exists on this engine"
-            icon={WarningGlyph}
+            icon={<WarningGlyph />}
             onClose={() => setCompanyExists(false)}
             footer={
               <>
@@ -1588,7 +1603,7 @@ function Lens({
               starts a company cannot be applied to one that exists, and it is never replayed onto
               it: open the company and make the changes there.
             </p>
-          </Dialog>
+          </Modal>
         )}
 
         {dialog && (
@@ -1708,9 +1723,11 @@ function DialogHost({
   switch (dialog.type) {
     case "discard":
       return (
-        <Dialog
+        <Modal
+          open
+          stackBody
           title="Discard changes"
-          icon={DeleteGlyph}
+          icon={<DeleteGlyph />}
           onClose={onClose}
           footer={
             <>
@@ -1722,7 +1739,7 @@ function DialogHost({
           }
         >
           <p>Every change in this draft is discarded. The saved configuration is not touched.</p>
-        </Dialog>
+        </Modal>
       );
     case "add": {
       const Add = surfaces.add;

@@ -27,7 +27,6 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Banner, Button, ButtonLink, Code, CopyButton, Skeleton } from "~/ui/primitives.tsx";
 import { useRecheck } from "~/routes/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
@@ -39,6 +38,7 @@ import {
   ErrorGlyph,
   RefreshGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 /**
  * How often the two answers are read while the apply is still moving. The
@@ -307,10 +307,12 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
   }, []);
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title="The company as YAML"
-      icon={DescriptionGlyph}
-      width={720}
+      icon={<DescriptionGlyph />}
+      size="lg"
       onClose={onClose}
       footer={
         <>
@@ -342,6 +344,6 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
           </Code>
         </>
       )}
-    </Dialog>
+    </Modal>
   );
 }

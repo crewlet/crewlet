@@ -41,7 +41,7 @@ const liveRegion = () => document.querySelector(".org-builder-live")!;
 const labels = (menu: HTMLElement) =>
   within(menu)
     .getAllByRole("menuitem")
-    .map((item) => item.querySelector(".menu-item-label")!.textContent);
+    .map((item) => item.querySelector(".crewlet-menu__label")!.textContent);
 
 describe("the posture table", () => {
   test("a served configuration opens edit mode", async () => {

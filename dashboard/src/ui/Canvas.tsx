@@ -33,7 +33,7 @@
  * - AN OVERLAY LAYER, untransformed, sits over the viewport. Menus and pickers
  *   opened from an item render there (see `useCanvasOverlay`), positioned from
  *   the item's viewport rectangle, so they are neither scaled by the zoom nor
- *   clipped inside a card. The layer receives `VIEW_CHANGE_EVENT` whenever the
+ *   clipped inside a card. The layer receives `LAYER_REPOSITION_EVENT` whenever the
  *   content moves beneath it.
  * - FIT HAPPENS ONCE, on the first layout that has both a measured viewport
  *   and content bounds, and again only on request. A data push that changes
@@ -54,9 +54,7 @@
  */
 
 import {
-  createContext,
   useCallback,
-  useContext,
   useEffect,
   useId,
   useImperativeHandle,
@@ -70,10 +68,10 @@ import {
   type Ref,
 } from "react";
 import { Button } from "./primitives.tsx";
+import { LayerNode } from "./layerNode.tsx";
 import {
   IDENTITY,
   PAN_STEP,
-  VIEW_CHANGE_EVENT,
   ZOOM_STEP,
   anchor,
   beyondSlop,
@@ -93,6 +91,7 @@ import {
   type View,
 } from "./viewport.ts";
 import { FitScreenGlyph, ZoomInGlyph, ZoomOutGlyph } from "@crewlethq/icons/glyphs";
+import { LAYER_REPOSITION_EVENT, LayerHost } from "@crewlethq/ui";
 
 /** What a screen can ask of a canvas it holds a ref to. */
 export interface CanvasHandle {
@@ -108,16 +107,6 @@ export interface CanvasHandle {
   screenRect(target: Rect): Rect;
   /** The current view. */
   view(): View;
-}
-
-const OverlayContext = createContext<HTMLElement | null>(null);
-
-/**
- * The untransformed overlay layer of the canvas this is rendered inside, or
- * null outside a canvas (and before the layer has mounted).
- */
-export function useCanvasOverlay(): HTMLElement | null {
-  return useContext(OverlayContext);
 }
 
 /** Controls that take a press themselves, so a press on one never starts a pan. */
@@ -230,7 +219,7 @@ export function Canvas({
   const notify = useRef(onViewChange);
   notify.current = onViewChange;
   useLayoutEffect(() => {
-    layer?.dispatchEvent(new CustomEvent(VIEW_CHANGE_EVENT, { detail: view }));
+    layer?.dispatchEvent(new CustomEvent(LAYER_REPOSITION_EVENT, { detail: view }));
     notify.current?.(view);
   }, [view, layer]);
 
@@ -241,7 +230,7 @@ export function Canvas({
   const settled = (e: ReactTransitionEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget) return;
     setAnimate(false);
-    layer?.dispatchEvent(new CustomEvent(VIEW_CHANGE_EVENT, { detail: viewNow.current }));
+    layer?.dispatchEvent(new CustomEvent(LAYER_REPOSITION_EVENT, { detail: viewNow.current }));
   };
 
   useImperativeHandle(
@@ -470,29 +459,30 @@ export function Canvas({
       data-panning={panning}
       data-touch-active={touchActive}
     >
-      <div
-        className="canvas-viewport"
-        ref={viewport}
-        tabIndex={0}
-        role="group"
-        aria-roledescription="canvas"
-        aria-label={label}
-        aria-describedby={helpID}
-        onPointerDown={onPointerDown}
-        onKeyDown={onKeyDown}
-        onScroll={onScroll}
-      >
+      <LayerHost>
+        <LayerNode onNode={setLayer} />
         <div
-          className="canvas-world"
-          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
-          onTransitionEnd={settled}
+          className="canvas-viewport"
+          ref={viewport}
+          tabIndex={0}
+          role="group"
+          aria-roledescription="canvas"
+          aria-label={label}
+          aria-describedby={helpID}
+          onPointerDown={onPointerDown}
+          onKeyDown={onKeyDown}
+          onScroll={onScroll}
         >
-          <OverlayContext.Provider value={layer}>{children}</OverlayContext.Provider>
+          <div
+            className="canvas-world"
+            style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}
+            onTransitionEnd={settled}
+          >
+            {children}
+          </div>
         </div>
-      </div>
-      <div className="canvas-overlay" ref={setLayer}>
-        {overlay}
-      </div>
+        <div className="canvas-overlay">{overlay}</div>
+      </LayerHost>
       {(controls || touchActive) && (
         <div className="canvas-controls">
           {touchActive && (

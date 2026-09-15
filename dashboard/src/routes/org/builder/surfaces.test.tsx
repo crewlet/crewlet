@@ -79,8 +79,8 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
 
 /** A menu's entries as a person meets them: the label and the icon drawn beside it. */
 const entries = (menu: HTMLElement) =>
-  [...menu.querySelectorAll<HTMLElement>(".menu-item")].map((item) => ({
-    label: item.querySelector(".menu-item-label")!.textContent,
+  [...menu.querySelectorAll<HTMLElement>(".crewlet-menu__item")].map((item) => ({
+    label: item.querySelector(".crewlet-menu__label")!.textContent,
     icon: item.querySelector("svg path")?.getAttribute("d") ?? null,
     disabled: item.getAttribute("aria-disabled") === "true",
   }));
@@ -106,7 +106,7 @@ test("the toolbar offers the selected seat's own card menu: its entries, order a
   )!;
   card.focus();
   fireEvent.keyDown(card, { key: "ContextMenu" });
-  const own = view.container.querySelector<HTMLElement>(".canvas-overlay [role='menu']")!;
+  const own = view.container.querySelector<HTMLElement>(".crewlet-layer-host [role='menu']")!;
   expect(own.getAttribute("aria-label")).toBe("Actions for CEO");
   expect(toolbar).toEqual(entries(own));
   expect(toolbar.map((e) => e.label)).toContain("Edit reports");

@@ -16,10 +16,10 @@
  */
 
 import { useId, useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
 import { ErrorGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 export function TokenDialog({
   onClose,
@@ -62,9 +62,11 @@ export function TokenDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title="API token"
-      icon={KeyGlyph}
+      icon={<KeyGlyph />}
       onClose={onClose}
       onSubmit={save}
       footer={
@@ -117,6 +119,6 @@ export function TokenDialog({
           </span>
         </div>
       )}
-    </Dialog>
+    </Modal>
   );
 }

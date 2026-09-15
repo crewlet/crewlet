@@ -25,7 +25,6 @@
  */
 
 import { configValueKind, plural } from "~/lib/format.ts";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Button, Segmented } from "~/ui/primitives.tsx";
 import type { Choice, RebaseEntry } from "./model/history.ts";
 import { isRecord, jsonEqual } from "./model/json.ts";
@@ -33,6 +32,7 @@ import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
 import { RefreshGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
 export type NameOf = (key: NodeKey) => string | null;
@@ -169,10 +169,12 @@ export function UpdateDraftDialog({
   const title = update.restoring ? "Restore the kept draft" : "Update my draft and review";
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={title}
-      icon={RefreshGlyph}
-      width={640}
+      icon={<RefreshGlyph />}
+      size="lg"
       onClose={onCancel}
       footer={
         <>
@@ -262,6 +264,6 @@ export function UpdateDraftDialog({
           })}
         </section>
       )}
-    </Dialog>
+    </Modal>
   );
 }

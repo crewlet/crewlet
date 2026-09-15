@@ -22,7 +22,6 @@ import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { Banner, Button } from "~/ui/primitives.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
@@ -33,6 +32,7 @@ import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -212,10 +212,12 @@ export function ReviewSaveDialog({
           : "Save";
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={create ? "Review and create the company" : "Review and save"}
-      icon={SaveGlyph}
-      width={680}
+      icon={<SaveGlyph />}
+      size="lg"
       dismissable={!busy}
       onClose={onClose}
       footer={
@@ -362,6 +364,6 @@ export function ReviewSaveDialog({
           </>
         }
       />
-    </Dialog>
+    </Modal>
   );
 }

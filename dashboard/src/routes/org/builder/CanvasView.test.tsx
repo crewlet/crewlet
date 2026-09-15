@@ -103,7 +103,7 @@ const pointerPress = (name: string) => {
 };
 const focused = () => document.activeElement?.getAttribute("data-tree-id");
 /** A menu item's label, without the shortcut hint beside it. */
-const label = (el: HTMLElement) => el.querySelector(".menu-item-label")!.textContent;
+const label = (el: HTMLElement) => el.querySelector(".crewlet-menu__label")!.textContent;
 /** A treeitem's node name. */
 const nameOf = (el: HTMLElement) => el.querySelector(".bchart-name")!.textContent;
 
@@ -412,7 +412,7 @@ describe("keys", () => {
     dev.focus();
     press("ContextMenu");
     const menu = screen.getByRole("menu", { name: "Actions for Dev" });
-    expect(container.querySelector(".canvas-overlay")!.contains(menu)).toBe(true);
+    expect(container.querySelector(".crewlet-layer-host")!.contains(menu)).toBe(true);
     expect(within(menu).getAllByRole("menuitem").map(label)).toEqual([
       "Edit",
       "Open seat",
@@ -445,7 +445,7 @@ describe("menus", () => {
     const { spies, container } = mount();
     fireEvent.click(screen.getByRole("button", { name: "Add to Platform", hidden: true }));
     // In the overlay layer, so the zoom neither scales nor clips it.
-    expect(container.querySelector(".canvas-overlay")!.contains(screen.getByRole("menu"))).toBe(
+    expect(container.querySelector(".crewlet-layer-host")!.contains(screen.getByRole("menu"))).toBe(
       true,
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Add human seat" }));

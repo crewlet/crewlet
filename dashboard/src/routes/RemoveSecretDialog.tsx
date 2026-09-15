@@ -23,10 +23,10 @@
 
 import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CheckGlyph, ErrorGlyph, KeyGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 export function RemoveSecretDialog({
   name,
@@ -67,12 +67,14 @@ export function RemoveSecretDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`Remove ${name}`}
-      icon={KeyGlyph}
+      icon={<KeyGlyph />}
       onClose={onClose}
       dismissable={!busy}
-      width={560}
+      size="md"
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={busy}>
@@ -162,6 +164,6 @@ export function RemoveSecretDialog({
           <span>{error}</span>
         </div>
       )}
-    </Dialog>
+    </Modal>
   );
 }

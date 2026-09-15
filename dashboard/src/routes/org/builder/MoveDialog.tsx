@@ -24,7 +24,6 @@
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
@@ -43,6 +42,7 @@ import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { MoveItemGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -54,9 +54,15 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
 
   if (!found) {
     return (
-      <Dialog title="Move" onClose={onClose} footer={<Button onClick={onClose}>Close</Button>}>
+      <Modal
+        open
+        stackBody
+        title="Move"
+        onClose={onClose}
+        footer={<Button onClick={onClose}>Close</Button>}
+      >
         <p className="t-body">This node is no longer in the draft.</p>
-      </Dialog>
+      </Modal>
     );
   }
 
@@ -129,10 +135,12 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
     destination === COMPANY_KEY ? "the top level" : chosen ? pathName(destination) : "";
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={`Move ${name}`}
-      icon={MoveItemGlyph}
-      width={560}
+      icon={<MoveItemGlyph />}
+      size="md"
       onClose={onClose}
       onSubmit={move}
       footer={
@@ -190,7 +198,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       )}
       <StrandedNotes stranded={stranded} />
       <WorkingNotes names={working} />
-    </Dialog>
+    </Modal>
   );
 }
 

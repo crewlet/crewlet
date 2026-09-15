@@ -7,8 +7,8 @@
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { ToastProvider } from "@crewlethq/ui";
 
-import { ToastProvider } from "~/ui/Toast";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   HELD,
@@ -133,7 +133,7 @@ test("the form is rendered from the requirement list", () => {
 // A MINTABLE SECRET HAS NO INPUT. Asking a person to invent a shared token is
 // asking them to invent a password.
 test("a mintable secret is not on the form at all", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
@@ -146,7 +146,7 @@ test("a mintable secret is not on the form at all", () => {
   // plumbing in the middle of a form somebody is filling in.
   expect(screen.queryByText("Shared token")).toBeNull();
   expect(screen.queryByText(/generates this/)).toBeNull();
-  expect(container.querySelectorAll('input[type="password"]').length).toBe(0);
+  expect(baseElement.querySelectorAll('input[type="password"]').length).toBe(0);
 });
 
 // A HELD CREDENTIAL SHOWS THAT IT IS HELD, and never what it is.
@@ -1538,10 +1538,10 @@ function perSeatSections() {
 // to see how many were left. Folded, the dialog opens as the roster it is:
 // every agent named, each saying whether it is done.
 test("a per-seat app gives every agent its own collapsible block", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks.length).toBe(2);
   expect(screen.getByText("SRE Lead")).toBeDefined();
   expect(screen.getByText("Builder")).toBeDefined();
@@ -1582,10 +1582,10 @@ test("an app the engine cannot provision says so before the blocks", () => {
 // hand is a second instruction for a step the first one already did, and two
 // instructions for one step is how one of them goes stale.
 test("an agent's block does not ask for its delivery address twice", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).not.toContain("Paste that address");
   expect(blocks[0]!.textContent).not.toContain("/webhooks/slack/sre-lead");
 });
@@ -1596,10 +1596,10 @@ test("an agent's block does not ask for its delivery address twice", () => {
 // fields lost the one thing that said whose they were: a three-agent company
 // showed three identical "Default channel" boxes in one list.
 test("an agent's optional field is inside that agent's block", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   expect(blocks[0]!.textContent).toContain("Default channel");
   // ONCE, AND ONLY THERE. Gathered at the foot of the dialog it appeared per
   // agent with nothing saying whose each one was.
@@ -1650,17 +1650,17 @@ test("a vendor link inside an agent's block names the app", () => {
 
 // A CLOSED BLOCK IS STILL A BLOCK SOMEBODY CAN OPEN.
 test("an agent's block opens when its summary is clicked", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog sections={perSeatSections()} title="Slack" onClose={() => {}} onDone={() => {}} />,
   );
-  const blocks = [...container.querySelectorAll("details.int-seat-form")];
+  const blocks = [...baseElement.querySelectorAll("details.int-seat-form")];
   const closed = blocks[1] as HTMLDetailsElement;
   expect(closed.open).toBe(false);
   closed.open = true;
   fireEvent(closed, new Event("toggle"));
-  expect((container.querySelectorAll("details.int-seat-form")[1] as HTMLDetailsElement).open).toBe(
-    true,
-  );
+  expect(
+    (baseElement.querySelectorAll("details.int-seat-form")[1] as HTMLDetailsElement).open,
+  ).toBe(true);
 });
 
 // THE APP AN AGENT IS BUILT FROM, offered rather than described.
@@ -1675,7 +1675,7 @@ test("an agent's block offers the manifest its app is built from", () => {
     ...perSeatTool,
     seats: [{ ...perSeatTool.seats![0]!, manifest: '{\n  "display_information": {}\n}' }],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
@@ -1683,13 +1683,13 @@ test("an agent's block offers the manifest its app is built from", () => {
       onDone={() => {}}
     />,
   );
-  const block = container.querySelector("details.int-seat-form");
+  const block = baseElement.querySelector("details.int-seat-form");
   // NOT "for SRE Lead": the block this sits in is that agent's and carries
   // their name two lines above, so repeating it says nothing and pushes the
   // words that do off the end of a narrow dialog.
   expect(block?.textContent).toContain("App manifest");
   expect(block?.textContent).not.toContain("App manifest for");
-  expect(container.querySelector(".int-manifest-text")?.textContent).toContain(
+  expect(baseElement.querySelector(".int-manifest-text")?.textContent).toContain(
     "display_information",
   );
   // INSIDE THE AGENT'S OWN BLOCK, because a per-seat app has one manifest
@@ -1702,7 +1702,7 @@ test("an agent's block offers the manifest its app is built from", () => {
 // The request URL is built from the company's public address, so without one
 // there is no app definition worth pasting.
 test("an agent with no manifest is offered no manifest", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: perSeatTool, seat: "sre-lead" }]}
       title="Slack"
@@ -1710,7 +1710,7 @@ test("an agent with no manifest is offered no manifest", () => {
       onDone={() => {}}
     />,
   );
-  expect(container.querySelector(".int-manifest")).toBeNull();
+  expect(baseElement.querySelector(".int-manifest")).toBeNull();
   expect(screen.queryByText(/App manifest/)).toBeNull();
 });
 
@@ -1754,7 +1754,7 @@ test("an agent with no manifest is told why not", () => {
       },
     ],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: noted, seat: "sre-lead" }]}
       title="Slack"
@@ -1765,7 +1765,7 @@ test("an agent with no manifest is told why not", () => {
   expect(screen.getByText(/No app manifest for SRE Lead yet/)).toBeDefined();
   expect(screen.getByText(/integrations.public_base_url/)).toBeDefined();
   // AND NO EMPTY BOX to copy nothing out of.
-  expect(container.querySelector(".int-manifest")).toBeNull();
+  expect(baseElement.querySelector(".int-manifest")).toBeNull();
 });
 
 // A MANIFEST OUTRANKS ITS OWN ABSENCE. Both rendered would be a block saying
@@ -1810,7 +1810,7 @@ test("copying the manifest does not toggle its disclosure", () => {
     ...perSeatTool,
     seats: [{ ...perSeatTool.seats![0]!, manifest }],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "SRE Lead", tool: withManifest, seat: "sre-lead" }]}
       title="Slack"
@@ -1818,7 +1818,7 @@ test("copying the manifest does not toggle its disclosure", () => {
       onDone={() => {}}
     />,
   );
-  const fold = container.querySelector("details.int-manifest") as HTMLDetailsElement;
+  const fold = baseElement.querySelector("details.int-manifest") as HTMLDetailsElement;
   expect(fold.open).toBe(false);
   // THE DEFAULT IS CANCELLED, which is the actual mechanism: fireEvent
   // reports what dispatchEvent did, and jsdom does not implement a
@@ -1961,7 +1961,13 @@ test("saving a connected app does not say it connected", async () => {
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
-  await vi.waitFor(() => expect(screen.getByText(/Datadog settings saved/)).toBeTruthy());
+  // Drawn and spoken: the toaster keeps a live region beside the visible
+  // stack, so the sentence is in the document twice on purpose.
+  await vi.waitFor(() =>
+    expect(
+      screen.getByText(/Datadog settings saved/, { selector: ".crewlet-toast__message" }),
+    ).toBeTruthy(),
+  );
   expect(screen.queryByText(/Datadog connected/)).toBeNull();
 });
 
@@ -2199,7 +2205,7 @@ test("choosing the gated answer reveals its field", () => {
 // showing. Every choice this product declares carries a default, so the empty
 // option is never the truth on a form somebody has opened.
 test("a dropdown holding an answer offers no placeholder", () => {
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "Datadog", tool }]}
       title="Datadog"
@@ -2207,7 +2213,7 @@ test("a dropdown holding an answer offers no placeholder", () => {
       onDone={() => {}}
     />,
   );
-  for (const select of container.querySelectorAll("select")) {
+  for (const select of baseElement.querySelectorAll("select")) {
     expect(select.value).not.toBe("");
     const empty = [...select.options].filter((o) => o.value === "");
     expect(empty).toHaveLength(0);
@@ -2242,7 +2248,7 @@ test("a value the choices do not contain is shown as itself", () => {
       },
     ],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "GitHub", tool: narrowed }]}
       title="GitHub"
@@ -2250,7 +2256,7 @@ test("a value the choices do not contain is shown as itself", () => {
       onDone={() => {}}
     />,
   );
-  const select = container.querySelector("select");
+  const select = baseElement.querySelector("select");
   expect(select?.value).toBe("auto");
 });
 
@@ -2283,7 +2289,7 @@ test("a revealed field is marked required and follows its question", () => {
       { ...gated },
     ],
   };
-  const { container } = render(
+  const { baseElement } = render(
     <SetupDialog
       sections={[{ name: "GitHub", tool: coverage }]}
       title="GitHub"
@@ -2291,9 +2297,9 @@ test("a revealed field is marked required and follows its question", () => {
       onDone={() => {}}
     />,
   );
-  fireEvent.change(container.querySelector("select")!, { target: { value: "true" } });
+  fireEvent.change(baseElement.querySelector("select")!, { target: { value: "true" } });
 
-  const labels = [...container.querySelectorAll("label")].map((l) => l.textContent ?? "");
+  const labels = [...baseElement.querySelectorAll("label")].map((l) => l.textContent ?? "");
   const token = labels.findIndex((t) => t.startsWith("Organization token"));
   const choice = labels.findIndex((t) => t.startsWith("Which GitHub activity"));
   expect(token).toBeGreaterThan(-1);

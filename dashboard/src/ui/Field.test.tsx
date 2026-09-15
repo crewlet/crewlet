@@ -9,8 +9,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useState } from "react";
-import { Dialog } from "./Dialog.tsx";
 import { Field } from "./Field.tsx";
+import { Modal } from "@crewlethq/ui";
 
 afterEach(cleanup);
 
@@ -349,16 +349,16 @@ test("Escape closes the list without clearing the field", () => {
 test("a press on the dialog's veil with the list open closes only the list", () => {
   const closed = vi.fn();
   const { container } = render(
-    <Dialog title="Connect GitHub" onClose={closed}>
+    <Modal open stackBody title="Connect GitHub" onClose={closed}>
       <Editable />
-    </Dialog>,
+    </Modal>,
   );
   const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
   fireEvent.change(input, { target: { value: "$GH" } });
   fireEvent.keyUp(input, { key: "H" });
   expect(screen.getByRole("listbox")).toBeTruthy();
 
-  const veil = container.querySelector(".veil")!;
+  const veil = document.querySelector(".crewlet-modal-overlay")!;
   fireEvent.pointerDown(veil);
   fireEvent.click(veil);
   expect(screen.queryByRole("listbox")).toBeNull();

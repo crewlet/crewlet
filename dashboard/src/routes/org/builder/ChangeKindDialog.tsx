@@ -29,7 +29,6 @@
 
 import { useState } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { Banner, Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
@@ -52,6 +51,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { PersonGlyph, SmartToyGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -64,13 +64,15 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
 
   if (found?.kind !== "seat") {
     return (
-      <Dialog
+      <Modal
+        open
+        stackBody
         title="Change the kind of seat"
         onClose={onClose}
         footer={<Button onClick={onClose}>Close</Button>}
       >
         <p className="t-body">This seat is no longer in the draft.</p>
-      </Dialog>
+      </Modal>
     );
   }
 
@@ -139,10 +141,12 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
     becoming === "human" ? `Change ${name} to a human seat` : `Change ${name} to an agent seat`;
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={title}
-      icon={becoming === "human" ? PersonGlyph : SmartToyGlyph}
-      width={560}
+      icon={becoming === "human" ? <PersonGlyph /> : <SmartToyGlyph />}
+      size="md"
       onClose={onClose}
       onSubmit={change}
       footer={
@@ -231,6 +235,6 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
 
       <StrandedNotes stranded={stranded} />
       <WorkingNotes names={working} />
-    </Dialog>
+    </Modal>
   );
 }

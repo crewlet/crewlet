@@ -16,8 +16,7 @@ import { Router } from "./router.tsx";
 import { Shell } from "./Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, requestToken } from "~/protocol/index.ts";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Drawer } from "~/ui/Drawer.tsx";
+import { Modal } from "@crewlethq/ui";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -63,9 +62,15 @@ function press(key: string, init: Partial<KeyboardEventInit> = {}): boolean {
 function EditorScreen() {
   const [open, setOpen] = useState(true);
   return open ? (
-    <Drawer title="Edit Software Engineer" onClose={() => setOpen(false)}>
+    <Modal
+      open
+      variant="sheet"
+      stackBody
+      title="Edit Software Engineer"
+      onClose={() => setOpen(false)}
+    >
       <input aria-label="Name" />
-    </Drawer>
+    </Modal>
   ) : (
     <p>editor closed</p>
   );
@@ -231,9 +236,9 @@ test("search never opens over a dialog whose write is still in flight", () => {
   // operator saw whether the write took.
   function Saving() {
     return (
-      <Dialog title="Saving" onClose={() => {}} dismissable={false}>
+      <Modal open stackBody title="Saving" onClose={() => {}} dismissable={false}>
         <button>Wait</button>
-      </Dialog>
+      </Modal>
     );
   }
   mount(<Saving />);

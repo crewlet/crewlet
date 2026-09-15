@@ -23,11 +23,11 @@
  */
 
 import { useState } from "react";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Button } from "~/ui/primitives.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { ErrorGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 export function SecretDialog({
   /** The name being edited, or "" to store a new one. */
@@ -75,12 +75,14 @@ export function SecretDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={editing ? `Edit ${editing}` : "Store a secret"}
-      icon={KeyGlyph}
+      icon={<KeyGlyph />}
       onClose={onClose}
       dismissable={!busy}
-      width={520}
+      size="md"
       onSubmit={() => void submit()}
       footer={
         <>
@@ -145,6 +147,6 @@ export function SecretDialog({
           <span>{error}</span>
         </div>
       )}
-    </Dialog>
+    </Modal>
   );
 }

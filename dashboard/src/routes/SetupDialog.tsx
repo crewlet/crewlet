@@ -41,10 +41,8 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button } from "~/ui/primitives.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
-import { useToast } from "~/ui/Toast.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
@@ -57,6 +55,7 @@ import {
   LinkGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Modal, useToast } from "@crewlethq/ui";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -882,12 +881,14 @@ export function SetupDialog({
   }
 
   return (
-    <Dialog
+    <Modal
+      open
+      stackBody
       title={connecting ? `Connect ${title}` : `${title} settings`}
-      icon={CableGlyph}
+      icon={<CableGlyph />}
       onClose={onClose}
       dismissable={!busy}
-      width={560}
+      size="md"
       onSubmit={() => void submit()}
       footer={
         <>
@@ -1111,7 +1112,7 @@ export function SetupDialog({
           <Problems detail={error} />
         </div>
       )}
-    </Dialog>
+    </Modal>
   );
 
   /**

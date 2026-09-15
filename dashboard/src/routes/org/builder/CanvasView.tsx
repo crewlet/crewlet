@@ -59,8 +59,7 @@ import {
   type ReactNode,
 } from "react";
 import { plural } from "~/lib/format.ts";
-import { Canvas, useCanvasOverlay, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Menu, type MenuEntry } from "~/ui/Menu.tsx";
+import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
 import { Avatar, Badge, Button, Empty, cx } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
@@ -115,6 +114,7 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Menu, type MenuEntry } from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.
@@ -534,13 +534,11 @@ function ToggleButton({ ctx, id, name }: { ctx: CardContext; id: string; name: s
 }
 
 function AddMenu({ ctx, view, api }: { ctx: CardContext; view: NodeView; api: BuilderApi }) {
-  const layer = useCanvasOverlay();
   return (
     <Menu
       label={`Add to ${view.name || "the company"}`}
-      icon={AddGlyph}
+      icon={<AddGlyph />}
       items={addMenu(api, view)}
-      layer={layer}
       triggerTabIndex={-1}
       onOpenChange={(opened) => opened && ctx.activate(view.key)}
     />
@@ -558,12 +556,10 @@ function MoreMenu({
   label: string;
   items: MenuEntry[];
 }) {
-  const layer = useCanvasOverlay();
   return (
     <Menu
       label={`Actions for ${label}`}
       items={items}
-      layer={layer}
       triggerTabIndex={-1}
       open={ctx.menuOpen(id)}
       onOpenChange={(opened) => ctx.setMenuOpen(id, opened)}
@@ -583,7 +579,6 @@ function LeadChip({
   unit: UnitView;
   ctx: CardContext;
 }) {
-  const layer = useCanvasOverlay();
   return (
     <div className="bchart-lead" aria-hidden="true" {...ctx.press(unit.key)}>
       <CrownGlyph size="xs" />
@@ -592,14 +587,12 @@ function LeadChip({
       ) : (
         <Menu
           label={`Lead of ${unit.name}`}
-          icon={KeyboardArrowDownGlyph}
+          icon={<KeyboardArrowDownGlyph />}
           items={leadMenu(api, structure, unit)}
-          layer={layer}
           triggerTabIndex={-1}
           onOpenChange={(opened) => opened && ctx.activate(unit.key)}
-        >
-          {leadLabel(unit)}
-        </Menu>
+          trigger={leadLabel(unit)}
+        />
       )}
     </div>
   );

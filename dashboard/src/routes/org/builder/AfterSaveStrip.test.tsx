@@ -154,7 +154,9 @@ describe("in the builder", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await screen.findByText("Saved. The engine is applying it.");
+    await screen.findByText("Saved. The engine is applying it.", {
+      selector: ".crewlet-toast__message",
+    });
   }
 
   test("the strip follows the saved revision and offers the diff", async () => {

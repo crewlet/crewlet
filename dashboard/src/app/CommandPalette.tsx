@@ -37,7 +37,6 @@ import { ALL_NAV } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
-import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
 import {
   type GlyphProps,
@@ -51,7 +50,7 @@ import {
   SmartToyGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useListbox, useModalLayer } from "@crewlethq/ui";
+import { Modal, useListbox } from "@crewlethq/ui";
 
 interface Hit {
   id: string;
@@ -103,7 +102,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const modal = useModalLayer({ onClose });
 
   const index = useMemo(() => indexOrg(org), [org]);
 
@@ -293,10 +291,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   let flat = -1;
   return (
-    <div
-      className="veil"
-      ref={modal.veilRef}
-      role="presentation"
+    <Modal
+      open
+      flush
+      placement="top"
+      ariaLabel="Search"
+      className="palette"
+      showCloseButton={false}
+      onClose={onClose}
       onKeyDown={(e) => {
         // Handled, so the shell's window listener leaves the press alone
         // rather than opening search again on the same key.
@@ -305,88 +307,86 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         onClose();
       }}
     >
-      <ModalPanel className="palette" title="Search" panelRef={modal.panelRef}>
-        <input
-          className="palette-input"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            // A new query is a new list: the best match leads it.
-            listbox.setActive(0);
-          }}
-          onKeyDown={listbox.onKeyDown}
-          placeholder="Search screens, seats, units and tools, or paste an event, trace or turn id"
-          role="combobox"
-          aria-label="Search"
-          aria-expanded={true}
-          aria-controls={listbox.listId}
-          aria-autocomplete="list"
-          aria-activedescendant={listbox.active >= 0 ? listbox.optionId(listbox.active) : undefined}
-          autoComplete="off"
-          spellCheck={false}
-        />
-        {/* Never empty, so there is no "nothing matches" state: with no query
+      <input
+        className="palette-input"
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          // A new query is a new list: the best match leads it.
+          listbox.setActive(0);
+        }}
+        onKeyDown={listbox.onKeyDown}
+        placeholder="Search screens, seats, units and tools, or paste an event, trace or turn id"
+        role="combobox"
+        aria-label="Search"
+        aria-expanded={true}
+        aria-controls={listbox.listId}
+        aria-autocomplete="list"
+        aria-activedescendant={listbox.active >= 0 ? listbox.optionId(listbox.active) : undefined}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {/* Never empty, so there is no "nothing matches" state: with no query
             every screen is listed, and any query offers the event log and the
             knowledge base as the last two results. */}
-        <div
-          className="palette-results"
-          ref={listRef}
-          id={listbox.listId}
-          role="listbox"
-          aria-label="Results"
-        >
-          {groups.map(([group, items], g) => (
-            // By position, not by name: a group's name has spaces in it
-            // ("Open by id"), and `aria-labelledby` splits on them.
-            <div key={group} role="group" aria-labelledby={`${id}-group-${g}`}>
-              <div className="palette-group" id={`${id}-group-${g}`} role="presentation">
-                {group}
-              </div>
-              {items.map((hit) => {
-                flat++;
-                const mine = flat;
-                return (
-                  // NOT A BUTTON: focus never leaves the input, so a result is
-                  // reached by the arrows and the pointer, and a tab stop per
-                  // result is forty stops between the input and itself.
-                  // Opened on CLICK rather than the shared list's mousedown:
-                  // nothing here closes on blur, and search gone on the press
-                  // would leave its release to land on the screen beneath.
-                  // The press itself is prevented all the same, so it does
-                  // not move focus to the dialog around the list: a combobox
-                  // that loses its input to a press dragged off a row names
-                  // no highlight, and typing reaches nothing.
-                  <div
-                    key={hit.id}
-                    id={listbox.optionId(mine)}
-                    className="palette-item"
-                    role="option"
-                    aria-selected={mine === listbox.active}
-                    onMouseEnter={listbox.optionHandlers(mine).onMouseEnter}
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => open(hit)}
-                  >
-                    <hit.icon size="sm" />
-                    <span className="truncate">{hit.label}</span>
-                    <span className="palette-hint truncate">{hit.hint}</span>
-                  </div>
-                );
-              })}
+      <div
+        className="palette-results"
+        ref={listRef}
+        id={listbox.listId}
+        role="listbox"
+        aria-label="Results"
+      >
+        {groups.map(([group, items], g) => (
+          // By position, not by name: a group's name has spaces in it
+          // ("Open by id"), and `aria-labelledby` splits on them.
+          <div key={group} role="group" aria-labelledby={`${id}-group-${g}`}>
+            <div className="palette-group" id={`${id}-group-${g}`} role="presentation">
+              {group}
             </div>
-          ))}
-        </div>
-        <div className="palette-foot">
-          <span>
-            <Kbd keys={["ArrowUp"]} /> <Kbd keys={["ArrowDown"]} /> move
-          </span>
-          <span>
-            <Kbd keys={["Enter"]} /> open
-          </span>
-          <span>
-            <Kbd keys={["Escape"]} /> close
-          </span>
-        </div>
-      </ModalPanel>
-    </div>
+            {items.map((hit) => {
+              flat++;
+              const mine = flat;
+              return (
+                // NOT A BUTTON: focus never leaves the input, so a result is
+                // reached by the arrows and the pointer, and a tab stop per
+                // result is forty stops between the input and itself.
+                // Opened on CLICK rather than the shared list's mousedown:
+                // nothing here closes on blur, and search gone on the press
+                // would leave its release to land on the screen beneath.
+                // The press itself is prevented all the same, so it does
+                // not move focus to the dialog around the list: a combobox
+                // that loses its input to a press dragged off a row names
+                // no highlight, and typing reaches nothing.
+                <div
+                  key={hit.id}
+                  id={listbox.optionId(mine)}
+                  className="palette-item"
+                  role="option"
+                  aria-selected={mine === listbox.active}
+                  onMouseEnter={listbox.optionHandlers(mine).onMouseEnter}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => open(hit)}
+                >
+                  <hit.icon size="sm" />
+                  <span className="truncate">{hit.label}</span>
+                  <span className="palette-hint truncate">{hit.hint}</span>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <div className="palette-foot">
+        <span>
+          <Kbd keys={["ArrowUp"]} /> <Kbd keys={["ArrowDown"]} /> move
+        </span>
+        <span>
+          <Kbd keys={["Enter"]} /> open
+        </span>
+        <span>
+          <Kbd keys={["Escape"]} /> close
+        </span>
+      </div>
+    </Modal>
   );
 }

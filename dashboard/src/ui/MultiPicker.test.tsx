@@ -7,9 +7,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { Dialog } from "./Dialog.tsx";
-import { Drawer } from "./Drawer.tsx";
 import { MultiPicker, type PickerOption } from "./MultiPicker.tsx";
+import { Modal } from "@crewlethq/ui";
 
 afterEach(cleanup);
 
@@ -38,9 +37,9 @@ function Manages({ initial = [] as string[], inDrawer = false, onClose = () => {
   return (
     <>
       {inDrawer ? (
-        <Drawer title="Edit seat" onClose={onClose}>
+        <Modal open variant="sheet" stackBody title="Edit seat" onClose={onClose}>
           {picker}
-        </Drawer>
+        </Modal>
       ) : (
         picker
       )}
@@ -74,10 +73,10 @@ test("the search box is a labelled list combobox, and the list is multiselectabl
 // drawer's own start on its first control gives way to it.
 test("autoFocus starts a drawer on the search box, with the list closed", () => {
   render(
-    <Drawer title="Edit seat" onClose={() => {}}>
+    <Modal open variant="sheet" stackBody title="Edit seat" onClose={() => {}}>
       <input aria-label="Name" />
       <MultiPicker label="Manages" options={OPTIONS} value={[]} onChange={() => {}} autoFocus />
-    </Drawer>,
+    </Modal>,
   );
   expect(document.activeElement).toBe(box());
   expect(box().getAttribute("aria-expanded")).toBe("false");
@@ -183,14 +182,14 @@ test("a search that matches nothing says so, offers no listbox, and Escape still
 test("a press on the veil with the list open closes the list and leaves the dialog", () => {
   const closed = vi.fn();
   const { container } = render(
-    <Dialog title="Edit seat" onClose={closed}>
+    <Modal open stackBody title="Edit seat" onClose={closed}>
       <Manages />
-    </Dialog>,
+    </Modal>,
   );
   fireEvent.keyDown(box(), { key: "ArrowDown" });
   expect(screen.getByRole("listbox")).toBeDefined();
 
-  const veil = container.querySelector(".veil")!;
+  const veil = document.querySelector(".crewlet-modal-overlay")!;
   fireEvent.pointerDown(veil);
   fireEvent.click(veil);
   expect(screen.queryByRole("listbox")).toBeNull();
@@ -201,9 +200,9 @@ test("with no list on screen, Escape is the drawer's on the first press", () => 
   let closed = 0;
   function Empty() {
     return (
-      <Drawer title="Edit seat" onClose={() => closed++}>
+      <Modal open variant="sheet" stackBody title="Edit seat" onClose={() => closed++}>
         <MultiPicker label="Manages" options={[]} value={[]} onChange={() => {}} />
-      </Drawer>
+      </Modal>
     );
   }
   render(<Empty />);

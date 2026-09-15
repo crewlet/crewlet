@@ -48,8 +48,6 @@ import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Dialog } from "~/ui/Dialog.tsx";
-import { Drawer } from "~/ui/Drawer.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { ListField } from "~/ui/ListField.tsx";
 import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
@@ -116,6 +114,7 @@ import {
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import { Modal } from "@crewlethq/ui";
 
 export function NodeEditor({
   nodeKey,
@@ -132,12 +131,12 @@ export function NodeEditor({
   const found = locate(state.draft, nodeKey);
   if (!found) {
     return (
-      <Drawer title="Edit" onClose={onClose}>
+      <Modal open variant="sheet" stackBody title="Edit" onClose={onClose}>
         <Empty
           title="This node is no longer in the draft"
           hint="It was removed by an undo or an update onto a newer revision. Close this editor and choose another node."
         />
-      </Drawer>
+      </Modal>
     );
   }
   // ONE FORM PER OPENING, NOT PER KEY. The Builder mounts a new editor for
@@ -244,9 +243,12 @@ function EditorShell({
   const disabled = readOnly || blocked !== null;
   return (
     <>
-      <Drawer
+      <Modal
+        open
+        variant="sheet"
+        stackBody
         title={title}
-        icon={EditGlyph}
+        icon={<EditGlyph />}
         onClose={requestClose}
         // ALWAYS A FORM. The panel is a <form> only while it has a submit
         // handler, and swapping the element as Apply became unavailable would
@@ -275,11 +277,13 @@ function EditorShell({
         <Refusal message={refusal} />
         <NodeProblems problems={problems} />
         {children}
-      </Drawer>
+      </Modal>
       {confirming && (
-        <Dialog
+        <Modal
+          open
+          stackBody
           title="Discard your changes?"
-          icon={WarningGlyph}
+          icon={<WarningGlyph />}
           onClose={() => setConfirming(null)}
           footer={
             <>
@@ -297,7 +301,7 @@ function EditorShell({
               ? `The changes to ${name} have not been applied to the draft. Discarding them leaves the draft as it was.`
               : `The changes to ${name} have not been applied to the draft, and you are leaving the builder. Discarding them leaves the draft as it was and goes on to where you were going.`}
           </p>
-        </Dialog>
+        </Modal>
       )}
     </>
   );

@@ -167,7 +167,7 @@ test("a press on a result keeps focus in the search box, and its click opens the
 test("a press on the veil closes search on its click, as every modal's veil does", () => {
   const onClose = vi.fn();
   mount(onClose);
-  const veil = document.querySelector(".veil")!;
+  const veil = document.querySelector(".crewlet-modal-overlay")!;
   // The results are the modal's body, not a popup above it: a popup would
   // close on the press, before the click a tap ends with, and let that click
   // land on the screen the veil was covering.

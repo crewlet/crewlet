@@ -9,9 +9,8 @@
  */
 
 import { Component, type ReactNode } from "react";
-import { LayerHost } from "@crewlethq/ui";
+import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
-import { ToastProvider } from "~/ui/Toast.tsx";
 import { Button, Code, Empty } from "~/ui/primitives.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";

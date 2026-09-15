@@ -13,8 +13,9 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { Canvas, useCanvasOverlay, type CanvasHandle } from "./Canvas.tsx";
-import { VIEW_CHANGE_EVENT, ZOOM_STEP, fit, type Rect, type View } from "./viewport.ts";
+import { Canvas, type CanvasHandle } from "./Canvas.tsx";
+import { ZOOM_STEP, fit, type Rect, type View } from "./viewport.ts";
+import { LAYER_REPOSITION_EVENT, useLayerContainer } from "@crewlethq/ui";
 
 type Callback = (entries: { contentRect: { width: number; height: number } }[]) => void;
 
@@ -319,9 +320,11 @@ test("a data push while a requested move eases does not cut the easing short", (
 test("an easing ends with its transition, and a clamp after it moves at once", () => {
   const { container, handle, rerender } = mount();
   const canvas = container.querySelector(".canvas")!;
-  const overlay = container.querySelector(".canvas-overlay")!;
+  // The layer the canvas tells when the content moves is the host over the
+  // viewport, which is what every surface anchored inside it listens on.
+  const overlay = container.querySelector(".crewlet-layer-host")!;
   const told = vi.fn();
-  overlay.addEventListener(VIEW_CHANGE_EVENT, told);
+  overlay.addEventListener(LAYER_REPOSITION_EVENT, told);
 
   act(() => handle.current!.zoomBy(ZOOM_STEP * ZOOM_STEP));
   expect(canvas.getAttribute("data-animate")).toBe("true");
@@ -356,8 +359,11 @@ test("a request that moves nothing starts no easing", () => {
 });
 
 test("items inside reach an overlay layer that the zoom does not transform", () => {
+  // The canvas IS a layer host, so an overlay opened from a card portals into
+  // the untransformed layer over the viewport rather than into the world that
+  // the zoom scales.
   function Menu() {
-    const layer = useCanvasOverlay();
+    const layer = useLayerContainer();
     const [open] = useState(true);
     return layer && open
       ? createPortal(<div role="menu" aria-label="Seat actions" />, layer)
@@ -369,6 +375,7 @@ test("items inside reach an overlay layer that the zoom does not transform", () 
     </Canvas>,
   );
   const menu = screen.getByRole("menu", { name: "Seat actions" });
-  expect(menu.parentElement?.classList.contains("canvas-overlay")).toBe(true);
+  expect(menu.parentElement?.classList.contains("crewlet-layer-host")).toBe(true);
   expect(world(container).contains(menu)).toBe(false);
+  expect(container.querySelector(".canvas")?.contains(menu)).toBe(true);
 });
