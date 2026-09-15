@@ -58,6 +58,7 @@ import {
   CodeBlock,
   cx,
   Disclosure,
+  EmptyValue,
   RelativeTime,
   Tag,
   useNow,
@@ -314,7 +315,7 @@ export function PhaseCard({
         {record.emptyAnswerRounds > 0 && (
           <Tag
             variant="warning"
-            title="the model answered with nothing — no response and no tool call — and was re-asked"
+            title="the model answered with nothing (no response and no tool call) and was re-asked"
           >
             {record.emptyAnswerRounds} empty
           </Tag>
@@ -336,14 +337,22 @@ export function PhaseCard({
           </Tag>
         )}
 
-        <span className="phase-meta mono">{record.model || "—"}</span>
+        <span className="phase-meta mono">
+          {record.model || <EmptyValue label="Model not recorded" />}
+        </span>
         <span className="phase-meta t-num" title="tool rounds used">
-          {ledger.length || record.roundNum > 0
-            ? `${Math.max(ledger.length, record.roundNum)}r`
-            : "—"}
+          {ledger.length || record.roundNum > 0 ? (
+            `${Math.max(ledger.length, record.roundNum)}r`
+          ) : (
+            <EmptyValue label="No tool round recorded" />
+          )}
         </span>
         <span className="phase-meta t-num" title="total tokens">
-          {record.totalTokens ? fmtCount(record.totalTokens) : "—"}
+          {record.totalTokens ? (
+            fmtCount(record.totalTokens)
+          ) : (
+            <EmptyValue label="Tokens not reported" />
+          )}
         </span>
         {/* HOW LONG THIS PHASE TOOK. Only derivable since the phase's own
             `agent_phase_started` is folded onto its record (see `withStarts`)

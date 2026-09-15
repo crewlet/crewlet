@@ -662,6 +662,43 @@ test("no query names a class no stylesheet draws", () => {
 });
 
 /**
+ * The shared composition layer spells no em dash, in copy or as a value.
+ *
+ * TWO RULES MEET HERE. The product writes no em dash in anything that ships,
+ * and an absent value is `EmptyValue` rather than a punctuation mark a screen
+ * reader says "dash" to or skips. Both were broken in the same three files: a
+ * tooltip and two sentences carried the dash as punctuation, and five header
+ * facts drew a bare one where a model, a round count or a token total was
+ * missing, so the cell with the least to say said nothing at all.
+ *
+ * SCOPED TO `components/`, and that is not a compromise: these files are the
+ * engine's own composition, finished here and imported by every screen, so no
+ * later package may edit one. A rule they cannot be held to is a rule nobody
+ * can keep. The screens still owe the same sweep and own their own copy.
+ */
+test("no shared component spells an em dash, in its copy or for an absent value", () => {
+  // `files` matches on the BASENAME as it walks, so the directory is a filter
+  // over what comes back rather than part of the pattern.
+  const shared = files(/\.tsx$/).filter(
+    ({ name }) => name.startsWith("components/") && !name.endsWith(".test.tsx"),
+  );
+  const offenders = shared
+    .filter(({ text }) => code(text).includes("\u2014"))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+  // A pattern that matched nothing would pass that for ever, and the scan has
+  // to be reading these files at all.
+  expect(shared.map(({ name }) => name)).toContain("components/common.tsx");
+  // A dash a comment spells is a dash nobody reads, so `code` takes it out
+  // first. A comment that FOLLOWS code on its line is not taken out, here or
+  // in any scan above: a `//` inside a string is indistinguishable from one
+  // that opens a comment without parsing, and every rule here would rather
+  // report a line twice than read past one.
+  expect(code("// a prose \u2014 in a note\n").includes("\u2014")).toBe(false);
+  expect(code('const a = "a \u2014 in copy";').includes("\u2014")).toBe(true);
+});
+
+/**
  * A rule no element can match is a rule that is already wrong.
  *
  * A STYLESHEET IS NOT SELF-CHECKING. Every other scan here is about what a

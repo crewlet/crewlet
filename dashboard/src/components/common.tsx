@@ -30,6 +30,7 @@ import {
   Card,
   cx,
   EmptyState,
+  EmptyValue,
   formatRelative,
   InlineCode,
   RelativeTime,
@@ -191,7 +192,7 @@ export function SeatCard({
           <div className="row gap-1">
             <Tag variant="info">{call.phase}</Tag>
             <span className="t-caption t-num">
-              round {call.round_num >= 0 ? call.round_num + 1 : "—"}
+              round {call.round_num >= 0 ? call.round_num + 1 : <EmptyValue label="Not reported" />}
             </span>
             <span className="spacer" />
             <RelativeTime className="t-caption" value={call.updated_at} now={now} />
@@ -357,7 +358,7 @@ export function QueryState({
     return (
       <Callout variant="neutral" icon={<InfoGlyph size="sm" />}>
         <span>
-          The engine does not serve this answer — the subsystem behind it is not running on this
+          The engine does not serve this answer. The subsystem behind it is not running on this
           node.
         </span>
       </Callout>

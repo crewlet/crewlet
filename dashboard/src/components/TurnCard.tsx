@@ -18,7 +18,7 @@ import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
-import { Button, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
+import { Button, EmptyValue, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
 import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 export function TurnCard({
@@ -86,7 +86,11 @@ export function TurnCard({
         )}
         {group.failed && <Tag variant="danger">failed</Tag>}
         <span className="phase-meta t-num" title="tokens across every phase of this turn">
-          {group.totalTokens ? fmtCount(group.totalTokens) : "—"}
+          {group.totalTokens ? (
+            fmtCount(group.totalTokens)
+          ) : (
+            <EmptyValue label="Tokens not reported" />
+          )}
         </span>
         {span != null && (
           <span className="phase-meta t-num" title="from the first phase to the last">
@@ -136,7 +140,7 @@ export function TurnCard({
               Open the whole turn
             </Button>
             <span className="t-caption">
-              what woke it, what it was given, and what it learned — the events no phase carries
+              what woke it, what it was given, and what it learned: the events no phase carries
             </span>
             <span className="spacer" />
           </footer>

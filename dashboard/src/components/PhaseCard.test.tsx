@@ -166,3 +166,22 @@ test("a failed tool call is named as failed, not coloured as failed", () => {
   expect(screen.getByRole("button", { name: /read_file failed/ })).toBeDefined();
   expect(screen.getByRole("button", { name: "submit_work" })).toBeDefined();
 });
+
+/**
+ * A HEADER FACT THE ENGINE DID NOT REPORT IS A MARKED ABSENCE.
+ *
+ * The three facts in this header that can be missing, the model, the round
+ * count and the token total, each drew a bare em dash: a mark a screen reader
+ * reads as "dash" or skips, and the design system's own absent mark is not
+ * one. A reader on the cell with the least to say heard nothing at all, and
+ * nothing told them whether the phase used no tokens or whether nobody
+ * counted them.
+ */
+test("a header fact the engine did not report says so, rather than drawing a dash", () => {
+  render(<PhaseCard record={phase({ model: "", totalTokens: 0, roundNum: 0 })} />);
+  for (const said of ["Model not recorded", "No tool round recorded", "Tokens not reported"]) {
+    expect(screen.getByText(said)).toBeDefined();
+  }
+  // And the punctuation is the design system's, not this file's idea of one.
+  expect(document.body.textContent).not.toContain("—");
+});
