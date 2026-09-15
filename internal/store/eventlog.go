@@ -395,14 +395,23 @@ func qualifiedListColumns(joined bool) string {
 	return strings.Join(parts, ", ")
 }
 
-// List returns a page of events, newest first, ordered by (time, id)
-// descending.
-func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
-	limit := q.Limit
-	if limit <= 0 {
-		limit = defaultListLimit
-	}
-
+// predicate is the FROM, the WHERE terms and their arguments a query's filters
+// compile to — everything the caller ASKED FOR, and nothing about where a page
+// resumes.
+//
+// SHARED, because [EventLog.List] and [EventLog.Histogram] answer two halves of
+// one screen: a bar counting rows the list below it would not show is worse
+// than no bar at all, and two copies of six filters is how that happens. The
+// cursor is deliberately NOT here — it is where a page resumes and moves with
+// every page, while these are what the reader asked for and do not, so folding
+// it in would make a histogram change as somebody scrolled.
+//
+// `col` qualifies a column name for whichever FROM was built, and callers use
+// it for every column rather than for the two that collide: qualifying only
+// `event_time` and `event_id` — the pair the party table also carries — would
+// work today and break the day that table grows a column sharing a name with
+// one of these.
+func (q ListQuery) predicate() (from string, where []string, args []any, col func(string) string) {
 	// The RelatedAgent filter is a JOIN rather than another WHERE clause,
 	// because "involves this agent" is one fact spread over five places on
 	// the event, and the party table is where it was normalised to. The
@@ -410,19 +419,15 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	// primary key — so the work scales with the number of MATCHES rather
 	// than with the size of the log. See schema/0016.
 	joined := q.RelatedAgent != ""
-	// EVERY column of the log is qualified when joined, not just the two
-	// that collide. Qualifying only `event_time` and `event_id` — the pair
-	// the party table also carries — would work today and break the day
-	// that table grows a column sharing a name with one of these.
-	col := func(name string) string {
+	col = func(name string) string {
 		if joined {
 			return "crewlet_events." + name
 		}
 		return name
 	}
 
-	where := []string{col("event_time") + " >= ?"}
-	args := []any{EncodeTime(now().Add(-EventHistory))}
+	where = []string{col("event_time") + " >= ?"}
+	args = []any{EncodeTime(now().Add(-EventHistory))}
 	addEq := func(name, val string) {
 		if val != "" {
 			where = append(where, col(name)+" = ?")
@@ -447,7 +452,7 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		args = append(args, EncodeTime(q.Until))
 	}
 
-	from := "crewlet_events"
+	from = "crewlet_events"
 	if joined {
 		from = `crewlet_events JOIN crewlet_event_parties
 			ON crewlet_event_parties.event_time = crewlet_events.event_time
@@ -455,6 +460,19 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 		where = append(where, "crewlet_event_parties.party = ?")
 		args = append(args, q.RelatedAgent)
 	}
+	return from, where, args, col
+}
+
+// List returns a page of events, newest first, ordered by (time, id)
+// descending.
+func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error) {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = defaultListLimit
+	}
+
+	from, where, args, col := q.predicate()
+	joined := q.RelatedAgent != ""
 
 	if q.Before != nil {
 		// Keyset, not OFFSET: (event_time, event_id) is the primary key,

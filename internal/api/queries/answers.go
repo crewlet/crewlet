@@ -287,6 +287,14 @@ func Register(r *Registry, s Sources) {
 	}
 	if s.Events != nil {
 		r.Register("events", s.events)
+		// THE SAME ROWS WITH A TIME AXIS, which the listing has no
+		// dimension for: a page of rows says what happened and nothing
+		// about when the company was busy. A second question rather than
+		// a flag on the first, because the two answers have different
+		// shapes and one route returning either would make every caller
+		// branch on what came back — the same split `tokens` and
+		// `token_series` already carry.
+		r.Register("event_series", s.eventSeries)
 		r.Register("event", s.event)
 		r.Register("trace", s.trace)
 		// A turn is its own question, not a slice of the trace: one trace
@@ -742,37 +750,11 @@ func (s Sources) stream(ctx context.Context, _ Params) (any, error) {
 // store filtered, and the difference shows up as rows that vanish when a reader
 // scrolls.
 func (s Sources) events(ctx context.Context, p Params) (any, error) {
-	q := store.ListQuery{
-		Limit:        Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage),
-		Type:         p.String("type"),
-		Source:       p.String("source"),
-		Category:     p.String("category"),
-		TraceID:      p.String("trace_id"),
-		Actor:        p.String("actor"),
-		RelatedAgent: p.String("agent"),
-		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
-		// DEAD: the column exists, the reader filters on it, and no
-		// surface ever passed one — so "every event of this turn" was
-		// answerable by the store and unaskable from anywhere.
-		TurnID: p.String("turn_id"),
-	}
-	// THE WINDOW, which is what a reader scrubbing a time range means and
-	// is NOT the cursor: a cursor is where a page resumes and moves with
-	// every page, while these are what was asked for and do not.
-	since, err := instantParam(p, "since")
+	q, err := eventFilters(p)
 	if err != nil {
 		return nil, err
 	}
-	until, err := instantParam(p, "until")
-	if err != nil {
-		return nil, err
-	}
-	q.Since, q.Until = since, until
-	if !since.IsZero() && !until.IsZero() && !until.After(since) {
-		return nil, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
-			"window is half-open, so an empty one names no rows at all",
-			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
-	}
+	q.Limit = Clamp(p.Int("limit", 0), DefaultEventPage, MaxEventPage)
 	if before := p.String("before_id"); before != "" {
 		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
 		if err != nil {
@@ -798,6 +780,77 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// the walk. Saying so beats a client inferring it wrongly.
 		"exhausted": len(rows) == 0,
 	}, nil
+}
+
+// eventSeries answers the log's own time axis.
+//
+// THE FILTERS ARE THE LISTING'S, read through the same function, because the
+// two are halves of one screen: a bar counting rows the list below it would not
+// show is worse than no bar at all. The store compiles both from one predicate;
+// this makes sure both are handed the same one.
+func (s Sources) eventSeries(ctx context.Context, p Params) (any, error) {
+	filters, err := eventFilters(p)
+	if err != nil {
+		return nil, err
+	}
+	bucket := store.EventBucket(p.String("bucket"))
+	if !bucket.Valid() {
+		return nil, fmt.Errorf("%w: bucket %q is not one of %v",
+			ErrBadParams, bucket, store.EventBuckets)
+	}
+	got, err := s.Events.Histogram(ctx, store.HistogramQuery{ListQuery: filters, Bucket: bucket})
+	switch {
+	case errors.Is(err, store.ErrHistogramBucket),
+		errors.Is(err, store.ErrHistogramSpan),
+		errors.Is(err, store.ErrHistogramRelated):
+		// A REQUEST THIS SURFACE UNDERSTOOD AND REFUSED, so it answers
+		// 400 with the store's own sentence rather than 500 with
+		// "something went wrong": every one of these names the parameter
+		// the caller has to change.
+		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+	case err != nil:
+		return nil, err
+	}
+	return got, nil
+}
+
+// eventFilters reads the filters both the listing and its axis take.
+//
+// ONE READER, for the reason the store has one predicate: a filter added to the
+// list and forgotten here would draw an axis over a wider set than the rows
+// beneath it, silently.
+func eventFilters(p Params) (store.ListQuery, error) {
+	q := store.ListQuery{
+		Type:         p.String("type"),
+		Source:       p.String("source"),
+		Category:     p.String("category"),
+		TraceID:      p.String("trace_id"),
+		Actor:        p.String("actor"),
+		RelatedAgent: p.String("agent"),
+		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
+		// DEAD: the column exists, the reader filters on it, and no
+		// surface ever passed one — so "every event of this turn" was
+		// answerable by the store and unaskable from anywhere.
+		TurnID: p.String("turn_id"),
+	}
+	// THE WINDOW, which is what a reader scrubbing a time range means and
+	// is NOT the cursor: a cursor is where a page resumes and moves with
+	// every page, while these are what was asked for and do not.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return store.ListQuery{}, err
+	}
+	q.Since, q.Until = since, until
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		return store.ListQuery{}, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+			"window is half-open, so an empty one names no rows at all",
+			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
+	}
+	return q, nil
 }
 
 // instantParam reads an RFC 3339 instant, or the zero time when absent.

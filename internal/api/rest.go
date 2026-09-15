@@ -47,6 +47,12 @@ var namedRoutes = []struct {
 	// read as an event whose id is "trace" — net/http resolves the more
 	// specific pattern rather than the first registered.
 	{method: "GET", pattern: "/events/trace/{trace_id}", what: "trace", path: map[string]string{"trace_id": "trace_id"}},
+	// THE LOG'S OWN TIME AXIS, beside the listing rather than a parameter
+	// of it: the two answers have different shapes, and one route returning
+	// either would make every caller branch on what came back. The literal
+	// segment beats the wildcard below, so this is not read as an event
+	// whose id is "series".
+	{method: "GET", pattern: "/events/series", what: "event_series"},
 	{method: "GET", pattern: "/events/{id}", what: "event", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/events", what: "events"},
 	// THE LIST OF TURNS. Not under /events/: a turn is not an event, and
