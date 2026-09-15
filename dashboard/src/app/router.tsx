@@ -569,13 +569,27 @@ export function Router({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     adoptEntry();
-    const read = () => setRoute(parseHash(location.hash));
+    // The entry the browser is on, when this state is not already on it. The
+    // comparison is what makes the catch-up below free: an event for a hash
+    // this router already holds leaves the route object alone, so nothing
+    // below it re-renders for a move that did not happen.
+    const read = () =>
+      setRoute((was) => {
+        const next = parseHash(location.hash);
+        return next.hash === was.hash ? was : next;
+      });
     const follow = () => {
       if (traversed()) read();
     };
     window.addEventListener("hashchange", follow);
     window.addEventListener("popstate", follow);
     window.addEventListener("crewlet:route", read);
+    // A SCREEN CAN MOVE IN ITS OWN FIRST EFFECT, and React runs a child's
+    // effects before its parent's, so the listeners above did not exist when
+    // it did: a table correcting a page past the end of its rows wrote the
+    // corrected page into the URL and this state never heard of it, leaving
+    // the reader on a page the link no longer names and no rows on it.
+    read();
     return () => {
       window.removeEventListener("hashchange", follow);
       window.removeEventListener("popstate", follow);
