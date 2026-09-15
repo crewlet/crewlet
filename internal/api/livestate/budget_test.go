@@ -15,7 +15,7 @@ func meterReport(meterID string, seq int, agents ...map[string]any) map[string]a
 	}
 	return map[string]any{
 		"meter_id": meterID, "seq": seq,
-		"org_used_tokens": 500, "org_max_tokens": 1000, "org_refused_at": "",
+		"org_used_tokens": 500, "org_max_tokens": 1000,
 		"agents": rows,
 	}
 }
@@ -23,7 +23,7 @@ func meterReport(meterID string, seq int, agents ...map[string]any) map[string]a
 func seatMeter(role string, used, max int) map[string]any {
 	return map[string]any{
 		"role": role, "agent_id": "a-1",
-		"used_tokens": used, "max_tokens": max, "refused_at": "",
+		"used_tokens": used, "max_tokens": max,
 	}
 }
 

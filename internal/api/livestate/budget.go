@@ -36,9 +36,8 @@ func (s *LiveState) applyBudget(payload map[string]any) Change {
 		MeterID: meterID,
 		Seq:     seq,
 		Org: Meter{
-			Used:      num(payload, "org_used_tokens"),
-			Max:       num(payload, "org_max_tokens"),
-			RefusedAt: str(payload, "org_refused_at"),
+			Used: num(payload, "org_used_tokens"),
+			Max:  num(payload, "org_max_tokens"),
 		},
 	}
 	change.Budget = true
@@ -62,9 +61,8 @@ func (s *LiveState) applyBudget(payload map[string]any) Change {
 			agent.runtimeID = str(fields, "agent_id")
 		}
 		agent.budget = &Meter{
-			Used:      num(fields, "used_tokens"),
-			Max:       num(fields, "max_tokens"),
-			RefusedAt: str(fields, "refused_at"),
+			Used: num(fields, "used_tokens"),
+			Max:  num(fields, "max_tokens"),
 		}
 		change.agentMoved(role)
 	}
