@@ -322,7 +322,7 @@ export function fieldValueState(field: WorkFieldValue): string {
 // Views
 // ---------------------------------------------------------------------------
 
-export type Shape = "list" | "board" | "calendar";
+export type Shape = "list" | "board" | "calendar" | "timeline";
 
 /** The shape a view is drawn in. */
 export function shapeOf(viewKey: string, views: WorkView[]): Shape {
@@ -424,12 +424,14 @@ export function anyFilter(f: TrackerFilters): boolean {
  * make the filter controls lie about what is on screen the moment somebody
  * touched one.
  *
- * # The three shapes ask three different questions of one grammar
+ * # The four shapes ask four different questions of one grammar
  *
  * A board is `group_by` and no cursor — across a set of columns there is no
  * single order to be after. A list is a page with a sort. A calendar is a DATE
  * RANGE and no grouping at all, because its own axis is the month it is
- * drawing and a column inside a day is not a thing.
+ * drawing and a column inside a day is not a thing. A timeline is a big
+ * unpaged page ordered by start: its axis is derived from the rows present, so
+ * a second page would redraw the first one's window.
  */
 export function buildItemsParams(args: {
   container: string;
@@ -487,6 +489,29 @@ export function buildItemsParams(args: {
     if (range) params.due = `range:${range.from}..${range.to}`;
     params.limit = 500;
     params.sort = "due";
+    return params;
+  } else if (shape === "timeline") {
+    // THE TIMELINE KEEPS ITS GROUPING, unlike the calendar: a band per
+    // assignee or per status is one axis stacked on the other, which is the
+    // arrangement the view is for — where a month drawn from columns has
+    // nothing in its cells.
+    if (axis) {
+      params.group_by = axis;
+      params.group_limit = 100;
+      set("group", filters.group);
+    } else {
+      delete params.group_by;
+      delete params.group;
+    }
+    // MORE ROWS THAN A LIST, because a bar is one line where a list row is
+    // three or four and the window is derived from the rows present: a
+    // timeline paged at a hundred would draw a different axis on every page.
+    params.limit = 500;
+    // AND IT ARRIVES IN THE AXIS'S OWN ORDER unless the reader asked
+    // otherwise, so the bars descend rather than zig-zag. The builtin view
+    // carries the same value; this is what holds when a saved view or a
+    // filter change drops it.
+    params.sort = filters.sort || "start";
     return params;
   } else {
     if (axis) {

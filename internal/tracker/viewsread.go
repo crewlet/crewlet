@@ -111,6 +111,7 @@ const (
 	ViewKeyList     = "list"
 	ViewKeyBoard    = "board"
 	ViewKeyCalendar = "calendar"
+	ViewKeyTimeline = "timeline"
 	ViewKeySprint   = "sprint"
 	ViewKeyBacklog  = "backlog"
 )
@@ -210,13 +211,21 @@ func viewScope(container Container) statelog.ScopeSet {
 	}}.Normalised()
 }
 
-// implicitViews is the three every container has, plus the two a sprinting
+// implicitViews is the four every container has, plus the two a sprinting
 // project adds.
 func implicitViews(ctx context.Context, tx *sql.Tx, container Container) ([]ViewRow, error) {
 	rows := []ViewRow{
 		{Key: ViewKeyList, Name: "List", Type: ViewList, Container: container, Builtin: true},
 		{Key: ViewKeyBoard, Name: "Board", Type: ViewBoard, Container: container, Builtin: true},
 		{Key: ViewKeyCalendar, Name: "Calendar", Type: ViewCalendar, Container: container, Builtin: true},
+		// THE TIMELINE SORTS BY START, which is the arrangement its axis
+		// already has: a bar chart down a date axis whose rows arrive in
+		// rank order draws a staircase nobody can read, and re-sorting in
+		// the client would make the ORDER of a page depend on which rows
+		// the page happened to contain.
+		{Key: ViewKeyTimeline, Name: "Timeline", Type: ViewTimeline,
+			Container: container, Builtin: true,
+			Params: map[string]string{"sort": "start"}},
 	}
 	if container.Kind != ContainerProject || container.ID == "" {
 		return rows, nil

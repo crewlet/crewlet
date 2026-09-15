@@ -2549,3 +2549,266 @@ a.work-cal-chip:hover {
   flex-direction: column;
   gap: var(--space-1);
 }
+
+/* ---- The timeline ------------------------------------------------------
+   A date axis drawn as absolute positions over a fixed-width strip rather
+   than as a CSS grid: a bar's left and width come from `lib/timeline.ts` in
+   day columns, and a grid would need one track per day — three hundred and
+   seventy of them at the cap, each of which the engine lays out.
+
+   The strip scrolls horizontally inside the panel and the NAME column does
+   not, so a reader who has scrolled to November still knows which row is
+   which. */
+.tl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-3);
+}
+.tl-band {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.tl-band-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.tl-band-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--track-tight);
+  color: var(--heading);
+}
+.tl-band-count {
+  font-size: var(--fs-xs);
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tl-none {
+  font-size: var(--fs-sm);
+  color: var(--ink-muted);
+  padding: var(--space-3);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+/* THE SCROLLER holds the axis; the names are laid over its left edge and
+   pinned, so the two never drift out of row alignment. */
+.tl-scroll {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.tl-inner {
+  position: relative;
+  /* The names sit over the left of the strip, so the bars start clear of
+     them. A margin rather than padding: the absolute positions inside are
+     measured from the content box. */
+  margin-left: 260px;
+  min-width: max-content;
+}
+.tl-axis {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.tl-tick {
+  position: absolute;
+  top: 5px;
+  font-size: var(--fs-xs);
+  color: var(--ink-muted);
+  padding-left: 4px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tl-today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+}
+.tl-rows {
+  position: relative;
+}
+.tl-rule {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border-subtle);
+}
+.tl-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent-line);
+}
+.tl-arrows {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.tl-arrow {
+  fill: none;
+  stroke-width: 1.5;
+}
+.tl-arrow.is-open {
+  stroke: var(--critical-ink);
+}
+.tl-arrow.is-cleared {
+  stroke: var(--border-strong);
+}
+.tl-head {
+  fill: var(--border-strong);
+}
+
+.tl-bar {
+  position: absolute;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  overflow: hidden;
+  text-decoration: none;
+  border: 1px solid transparent;
+  min-width: 10px;
+}
+.tl-bar:hover {
+  filter: brightness(1.06);
+}
+.tl-bar.selected {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.tl-bar-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-bar[data-tone="planned"] {
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+.tl-bar[data-tone="active"] {
+  background: var(--info-soft);
+  border-color: var(--info-ink);
+  color: var(--info-ink);
+}
+.tl-bar[data-tone="done"] {
+  background: var(--positive-soft);
+  border-color: var(--positive-ink);
+  color: var(--positive-ink);
+}
+.tl-bar[data-tone="overdue"] {
+  background: var(--caution-soft);
+  border-color: var(--caution-ink);
+  color: var(--caution-ink);
+}
+.tl-bar[data-tone="blocked"],
+.tl-bar[data-tone="critical"] {
+  background: var(--critical-soft);
+  border-color: var(--critical-ink);
+  color: var(--critical-ink);
+}
+/* A ONE-DAY BAR IS A MARKER, not a span: the two dashed ends say the other
+   end of the span was never stated, so nobody reads it as work that takes
+   exactly one day. */
+.tl-bar[data-kind="deadline"],
+.tl-bar[data-kind="began"] {
+  border-style: dashed;
+}
+.tl-bar[data-kind="inverted"] {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    var(--critical-soft) 4px,
+    var(--critical-soft) 8px
+  );
+}
+
+.tl-names {
+  position: absolute;
+  left: 0;
+  top: 24px;
+  z-index: 3;
+  background: var(--surface);
+  border-right: 1px solid var(--border-subtle);
+}
+.tl-name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  text-decoration: none;
+  min-width: 0;
+}
+.tl-name:hover {
+  background: var(--surface-hover);
+}
+.tl-name.selected {
+  background: var(--accent-soft);
+}
+
+.tl-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tl-unscheduled {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.tl-aside-note {
+  font-size: var(--fs-xs);
+  color: var(--ink-muted);
+}
+.tl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.tl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 28ch;
+  padding: 2px var(--space-2);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  text-decoration: none;
+}
+.tl-chip:hover {
+  background: var(--surface-hover);
+}
+/* A NARROW BAR'S LABEL, beside it. `pointer-events: none` so it never eats a
+   click meant for the bar it names or for one further along the row. */
+.tl-bar-aside {
+  position: absolute;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-xs);
+  color: var(--ink-muted);
+  white-space: nowrap;
+  pointer-events: none;
+}

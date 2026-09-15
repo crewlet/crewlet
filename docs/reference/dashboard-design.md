@@ -217,7 +217,7 @@ because every single-modifier combination worth having is already the browser's.
 |---|---|---|
 | `#/` → `#/inbox` | **Inbox** — the landing screen | `band=decisions\|notices` · `state=unread\|all\|snoozed` · `reason=` |
 | `#/me` | **My work** — the seven claims, plus what reached you | `handle=` (an operator reading somebody else's day) |
-| `#/work` | **All work** | `view=list\|board\|calendar` + the filter grammar |
+| `#/work` | **All work** | `view=list\|board\|calendar\|timeline` + the filter grammar |
 | `#/work/search` | **Search** — the company's work ranked against a phrase | `q=` |
 | `#/work/views` · `#/work/views/{id}` | **Saved views** — the inventory, and one view run | |
 | `#/work/{KEY}` | **Project** | the same view strip, scoped to the project |
@@ -1191,11 +1191,14 @@ is one of the rules on this page applied to a tracker.
   counts beside them, and choosing one is a SECTION change rather than a
   filter. `All work` is a real destination above them, because "what is the
   whole company doing" is a question somebody asks.
-- **Five views over ONE answer.** List, Board, Calendar, Sprint and Backlog
-  differ in how rows are SHAPED and never in what was asked for — the board's
-  columns are the server's own grouping, and the calendar buckets rows the
-  server already returned. A view that fetched differently would be a second
-  idea of what the filters mean.
+- **Six views over ONE answer.** List, Board, Calendar, Timeline, Sprint and
+  Backlog differ in how rows are SHAPED and never in what was asked for — the
+  board's columns are the server's own grouping, the calendar buckets rows the
+  server already returned, and the timeline lays out the `start`, `due` and
+  `waiting_on` those same rows carry. A view that fetched differently would be
+  a second idea of what the filters mean. The timeline's own window is derived
+  from the rows on screen, which is why it asks for a big unpaged page: a
+  second page would redraw the first one's axis.
 - **A view SETS the scope segment.** Open / Closed / All is the single
   authority on the status group a read asks for: the screen spreads a view's
   saved parameters and then writes that one key from the segment. So a
