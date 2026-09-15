@@ -1466,6 +1466,22 @@ func (f *FleetStore) mutateChannel(ctx context.Context, what, id string, apply f
 
 // OpenChannels returns every channel still open, by id.
 func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) {
+	return f.listChannels(ctx, coord.Channel.Open)
+}
+
+// AllChannels returns every channel this store still holds, by id.
+func (f *FleetStore) AllChannels(ctx context.Context) ([]coord.Channel, error) {
+	return f.listChannels(ctx, func(coord.Channel) bool { return true })
+}
+
+// listChannels walks the bucket and keeps what matches.
+//
+// ONE WALK FOR BOTH LISTINGS, so the decode, the key check and the ordering
+// cannot drift between them — which is how one of two near-identical loops
+// stops handling an undecodable key the way the other does.
+func (f *FleetStore) listChannels(ctx context.Context, keep func(coord.Channel) bool) (
+	[]coord.Channel, error) {
+
 	var out []coord.Channel
 	err := f.each(ctx, f.channels, func(kve jetstream.KeyValueEntry) error {
 		id, ok := decodeKey(kve.Key())
@@ -1476,7 +1492,7 @@ func (f *FleetStore) OpenChannels(ctx context.Context) ([]coord.Channel, error) 
 		if err != nil {
 			return err
 		}
-		if ch.Open() {
+		if keep(ch) {
 			out = append(out, ch)
 		}
 		return nil

@@ -1118,6 +1118,15 @@ func (h *fleetHarness) openChannels() []coord.Channel {
 	return got
 }
 
+func (h *fleetHarness) allChannels() []coord.Channel {
+	h.t.Helper()
+	got, err := h.f.AllChannels(h.ctx)
+	if err != nil {
+		h.t.Fatalf("AllChannels: %v", err)
+	}
+	return got
+}
+
 func channelIDs(chs []coord.Channel) []string {
 	out := make([]string, 0, len(chs))
 	for _, ch := range chs {
@@ -1243,6 +1252,44 @@ var channelCases = []fleetCase{{
 		want := []string{"c-a", "c-b"}
 		if !slices.Equal(got, want) {
 			h.t.Errorf("open channels = %v, want %v", got, want)
+		}
+	},
+}, {
+	// TWO LISTINGS WITH OPPOSITE RULES, and the store owes both.
+	//
+	// The idle sweep must see ONLY the open ones — a closed channel
+	// re-reported is a second close for one channel, which draws two
+	// closes on a dashboard. A read surface must see BOTH, or the record
+	// this store keeps until the purge horizon is one nothing can ever
+	// show, and a company's closed-ask history is reachable only through
+	// the event log, one event at a time.
+	name: "every channel is listable, closed ones included",
+	fn: func(h *fleetHarness) {
+		at := h.now()
+		h.openChannel("c-b", "alice", "bob", at)
+		h.openChannel("c-a", "alice", "carol", at)
+		h.openChannel("c-c", "alice", "dave", at)
+		if _, found := h.closeChannel("c-c", at.Add(time.Minute)); !found {
+			h.t.Fatal("CloseChannel lost a channel")
+		}
+
+		got := channelIDs(h.allChannels())
+		want := []string{"c-a", "c-b", "c-c"}
+		if !slices.Equal(got, want) {
+			h.t.Errorf("all channels = %v, want %v — in id order, like the "+
+				"open listing, so two walks cannot order one bucket two ways",
+				got, want)
+		}
+		// AND THE CLOSE IS ON THE ROW, which is what makes the retained
+		// record worth keeping: a listing that lost the instant would
+		// answer "this channel exists" and nothing a reader came for.
+		for _, ch := range h.allChannels() {
+			if ch.ID != "c-c" {
+				continue
+			}
+			if ch.Open() || ch.ClosedAt.IsZero() {
+				h.t.Errorf("c-c is listed as %+v, want it closed with its instant", ch)
+			}
 		}
 	},
 }, {

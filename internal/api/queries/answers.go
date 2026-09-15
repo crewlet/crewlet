@@ -88,7 +88,13 @@ type Sources struct {
 	// surface reads open channels and nothing else, and a source that could
 	// reach the activation pointer would eventually be given a reason to.
 	Channels interface {
+		// TWO LISTINGS WITH OPPOSITE RULES — see the coordination
+		// contract. The idle sweep's is open-only, because a closed
+		// channel re-reported is a second close for one channel; a read
+		// surface needs both, or the record the fleet keeps until the
+		// purge horizon is one nothing can ever show.
 		OpenChannels(ctx context.Context) ([]coord.Channel, error)
+		AllChannels(ctx context.Context) ([]coord.Channel, error)
 	}
 
 	// Knowledge resolves the company's ONE knowledge backend, behind the
