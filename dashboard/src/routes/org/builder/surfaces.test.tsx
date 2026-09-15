@@ -69,16 +69,14 @@ async function tableRow(name: string): Promise<HTMLElement> {
   return row as HTMLElement;
 }
 
-/** Opens the CEO's editor from its row's own actions menu. */
+/**
+ * Opens the CEO's editor from its row's own Edit control, which is where the
+ * table draws it: Edit is one of the three the console puts on a row, so it is
+ * a button rather than an entry of the menu beside it.
+ */
 async function openTheEditorFromTheTable(): Promise<void> {
   const row = await tableRow("CEO");
-  fireEvent.click(within(row).getByRole("button", { name: "Row actions" }));
-  const menu = await screen.findByRole("menu", { name: "Row actions" });
-  fireEvent.click(
-    within(menu)
-      .getAllByRole("menuitem")
-      .find((m) => menuEntryLabel(m) === "Edit")!,
-  );
+  fireEvent.click(within(row).getByRole("button", { name: "Edit CEO" }));
 }
 
 // A dialog the lens opens is a component the model never sees, so the one
@@ -274,13 +272,7 @@ test("every opening of the editor builds its own node's form", async () => {
   await screen.findByText("No problems");
   await typeIntoTheEditor();
   const dev = await tableRow("Dev");
-  fireEvent.click(within(dev).getByRole("button", { name: "Row actions" }));
-  const menu = await screen.findByRole("menu", { name: "Row actions" });
-  fireEvent.click(
-    within(menu)
-      .getAllByRole("menuitem")
-      .find((m) => menuEntryLabel(m) === "Edit")!,
-  );
+  fireEvent.click(within(dev).getByRole("button", { name: "Edit Dev" }));
   const next = await screen.findByRole("dialog", { name: "Edit Dev" });
   expect((within(next).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("");
 });

@@ -25,10 +25,14 @@
  * IS, what its handle and its manager are, what the last dry run placed on it,
  * and what each action MEANS to the draft.
  *
- * EVERY ACTION IS THE CHART'S OWN LIST (`nodeMenu`), in the row's menu at the
- * end of it, with Edit and Delete also drawn as the two controls the console
- * puts on a row and the Add pill offering the three kinds a unit can take.
- * Read-only disables them and never hides them, exactly as on the canvas.
+ * EVERY ACTION IS THE CHART'S OWN LIST (`nodeMenu`), AND EACH HAS ONE OWNER.
+ * The console's row draws an add pill, a pencil and a trash, so those three
+ * are the row's own controls here; the menu at the end of the row carries what
+ * has no button of its own (Open seat, Edit reports, Change kind, Move to, and
+ * the two moves among the siblings), and a row whose menu would be empty draws
+ * none. They were drawn BOTH ways once: on the company's row every entry of
+ * the menu was already a button 32 pixels to its left. Read-only disables all
+ * of them and never hides them, exactly as on the canvas.
  *
  * MOVING A ROW AMONG ITS SIBLINGS is Alt with an arrow, and the same two
  * entries in the row's menu. It has a consequence: the engine's primary
@@ -42,11 +46,11 @@ import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
-import { isDeletable, leadLabel, nodeMenu, type OpenScreen } from "./nodeActions.tsx";
+import { addSections, isDeletable, leadLabel, nodeMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
-  SeatTags,
-  UnitTags,
+  SeatMarks,
+  UnitMarks,
   handleLabel,
   managerLabel,
   seatKindLabel,
@@ -60,14 +64,13 @@ import {
   ApartmentGlyph,
   ArrowDownwardGlyph,
   ArrowUpwardGlyph,
-  CreateNewFolderGlyph,
   DeleteGlyph,
   EditGlyph,
   MoreVertGlyph,
   PersonGlyph,
-  SmartToyGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
+  EmptyValue,
   IconButton,
   Menu,
   OrgTable,
@@ -95,9 +98,11 @@ const COLUMNS: readonly TreeGridColumn[] = [
   // THE NAME TAKES THE MOST, and by more than it looks: it is the only column
   // that also holds the row's mark, its indent and whatever a push puts in its
   // trailing slot, so a seat four levels down has a fraction of this track
-  // left for the word a reader is scanning for.
-  { key: "name", header: "Name", width: "minmax(0, 4fr)" },
-  { key: "kind", header: "Kind or type", width: "minmax(0, 1.25fr)" },
+  // left for the word a reader is scanning for. It takes the Kind column's
+  // share as well: what a row IS is the word under its name, which is where
+  // the console writes it and where the chart's own cards write it, and a
+  // column repeating that word cost 145px of a 1269px table to say it twice.
+  { key: "name", header: "Name", width: "minmax(0, 5.25fr)" },
   { key: "handle", header: "Handle", width: "minmax(0, 1.75fr)" },
   { key: "lead", header: "Lead or reports to", width: "minmax(0, 1.75fr)" },
   { key: "problems", header: "Problems", width: "minmax(0, 1fr)" },
@@ -120,22 +125,37 @@ const COLUMNS: readonly TreeGridColumn[] = [
  * while a conflict or a kept draft is waiting. It is a REASON rather than a
  * flag for the same rule the menus follow: read-only disables, it never hides,
  * so an operator learns what the builder does and why it will not do it now.
+ *
+ * The add pill's own kinds carry the refusal WITHOUT this sentence, because
+ * the design system's pill takes a flag: they are drawn, announced as
+ * unavailable and refuse the press, and the reason is the one part that does
+ * not travel. It belongs on `AddPillSection`, where both surfaces would get
+ * it, rather than in a second pill drawn here.
  */
 const REFUSED = "This draft is read-only here.";
 
 /** Which column is which, so a cell is never drawn by its number alone. */
 const NAME = 1;
-const KIND = 2;
-const HANDLE = 3;
-const LEAD = 4;
-const PROBLEMS = 5;
-const ACTIONS = 6;
+const HANDLE = 2;
+const LEAD = 3;
+const PROBLEMS = 4;
+const ACTIONS = 5;
 
-/** "Company", the unit's own type, or which kind of seat. */
+/**
+ * "Company", the unit's own type, or which kind of seat: the word a row writes
+ * under its name.
+ *
+ * CAPITALISED, because it is a caption rather than a value, and because the
+ * chart writes the same word on the same node: one draft read "Team" on the
+ * card and "team" on the row. The type is the founder's own word from the
+ * document, so the first letter is the only thing touched.
+ */
 function kindLabel(view: NodeView): string {
   if (view.type === "company") return "Company";
-  if (view.type === "unit") return view.unitType || "Unit";
-  return seatKindLabel(view);
+  if (view.type === "seat") return seatKindLabel(view);
+  const type = view.unitType.trim();
+  if (type === "") return "Unit";
+  return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
 /** A node's mark: the same one the chart draws for it, from the same list. */
@@ -171,6 +191,40 @@ function moveEntries(reorder: Reorder, key: NodeKey): MenuEntry[] {
       onSelect: () => reorder.move(key, 1),
     },
   ];
+}
+
+/**
+ * WHAT THE STRIP ALREADY DRAWS, by the keys `nodeActions` gives those entries.
+ * A key rather than a label, because a label is what a menu SAYS and two of
+ * these say different things on different nodes ("Change to human seat"), and
+ * because a renamed label would silently stop matching and put the entry back
+ * on the row twice.
+ */
+const DRAWN_ON_THE_ROW = new Set(["add-unit", "add-agent", "add-human", "edit", "delete"]);
+
+/**
+ * A row's menu: every action of the node that the row does not already draw as
+ * a control of its own, plus the two moves among its siblings.
+ *
+ * SEPARATORS ARE PART OF THE SUBTRACTION. `nodeMenu` groups its entries with
+ * rules, and taking the adds and Delete out of a unit's menu left a rule at
+ * the top, a rule at the bottom and two in a row in the middle: a menu of
+ * three actions drawn as five. One survives only between two actions.
+ */
+function rowMenu(api: BuilderApi, view: NodeView, open: OpenScreen, reorder: Reorder): MenuEntry[] {
+  const kept = [...nodeMenu(api, view, open), ...moveEntries(reorder, view.key)].filter(
+    (entry) => entry.kind === "separator" || !DRAWN_ON_THE_ROW.has(entry.key),
+  );
+  const menu: MenuEntry[] = [];
+  for (const entry of kept) {
+    if (entry.kind !== "separator") {
+      menu.push(entry);
+      continue;
+    }
+    if (menu.length > 0 && menu[menu.length - 1]!.kind !== "separator") menu.push(entry);
+  }
+  if (menu.length > 0 && menu[menu.length - 1]!.kind === "separator") menu.pop();
+  return menu;
 }
 
 export function TableView() {
@@ -214,10 +268,16 @@ export function TableView() {
               iconRing={view.type === "seat" && view.kind === "human" ? "dashed" : "none"}
               name={<span className="btable-label">{view.name || "Unnamed company"}</span>}
               caption={kindLabel(view)}
+              // THE SAME GLYPHS THE CHART DRAWS, for the same reason: a row is
+              // a rank tall. As tags the marks were the row's own height (one
+              // measured tag took the caption from 13.2px to 20 and the row
+              // from 36 to 36.6), so a seat's height depended on its wiring
+              // and two of them would have burst the name column. Each glyph
+              // carries its sentence as its own name and its tooltip.
               captionMarks={
                 <>
-                  {view.type === "unit" && <UnitTags view={view} />}
-                  {view.type === "seat" && <SeatTags view={view} />}
+                  {view.type === "unit" && <UnitMarks view={view} />}
+                  {view.type === "seat" && <SeatMarks view={view} />}
                 </>
               }
               // The live state of a saved agent seat, in the slot that keeps
@@ -227,10 +287,16 @@ export function TableView() {
               tone={nodeTone(view)}
             />
           );
-        case KIND:
-          return kindLabel(view);
+        /*
+         * A CELL THAT CANNOT HOLD A VALUE SAYS SO ONCE, in the one mark the
+         * design system draws for it: the company's row read "Not a seat" in
+         * one column and "Not a seat or unit" in the next, two phrasings of
+         * one idea written out as sentences on the first row a reader meets.
+         * The dash is drawn and the meaning is spoken, and it stays distinct
+         * from the different fact that no check has answered yet.
+         */
         case HANDLE:
-          if (view.type !== "seat") return <span className="muted">Not a seat</span>;
+          if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
           return view.handle ? (
             handleLabel(view.handle)
           ) : (
@@ -238,7 +304,7 @@ export function TableView() {
           );
         case LEAD:
           if (view.type === "unit") return leadLabel(view);
-          if (view.type !== "seat") return <span className="muted">Not a seat or unit</span>;
+          if (view.type !== "seat") return <EmptyValue label="Not applicable" />;
           return view.manager === undefined || view.manager === null ? (
             <span className="muted">{managerLabel(view.manager)}</span>
           ) : (
@@ -300,7 +366,14 @@ export function TableView() {
       cellHasControl={(_id, column) => column === ACTIONS}
       onRowKey={onRowKey}
       onRowKeyDown={onRowKeyDown}
-      hasRowMenu={() => true}
+      // A REAL PREDICATE, because the row draws the actions the console draws
+      // and the menu carries the rest: the company's would be empty, and an
+      // empty menu is a control that opens onto nothing for a pointer and a
+      // ContextMenu key that answers with a blank surface.
+      hasRowMenu={(id) => {
+        const node = structure.nodes.get(id as NodeKey);
+        return node !== undefined && rowMenu(api, node, open, reorder).length > 0;
+      }}
       // SELECTION IS THE BUILDER'S, so the row a link names is marked here and
       // the toolbar acts on whatever the reader last touched, exactly as it
       // does on the chart.
@@ -312,14 +385,20 @@ export function TableView() {
 }
 
 /**
- * The controls at the end of a row: what the console puts there, plus the rest
- * of what the engine can do to a node.
+ * The controls at the end of a row: what the console puts there, and the rest
+ * of what the engine can do to a node behind one menu.
  *
- * TWO DRAWINGS OF ONE LIST. Edit and Delete are drawn as the two controls the
- * console's table gives a row, because they are the two an operator reaches
- * for; every action, those two included, is also in the row's own menu, which
- * is `nodeMenu` itself rather than a second list. The menu is what the
- * ContextMenu key and Shift+F10 open, so the grid owns whether it is up.
+ * ONE OWNER PER ACTION. The console's row is an add pill, a pencil and a
+ * trash; the engine can do five more things to a node, so those five are the
+ * row's menu. Every one of the eight was offered TWICE before: the strip drew
+ * Edit and Delete and the menu beside it opened with Edit and ended with
+ * Delete, and on the company's row the whole menu was the three adds and Edit,
+ * every one of them already a button 32 pixels to its left.
+ *
+ * TAKEN FROM `nodeMenu` RATHER THAN LISTED AGAIN, because a second list is how
+ * the chart and the table come to offer different things: the entries the
+ * strip draws are subtracted from the one list, so an action added there
+ * arrives here with no edit at all.
  */
 function RowControls({
   api,
@@ -334,62 +413,52 @@ function RowControls({
   reorder: Reorder;
   view: NodeView;
 }) {
-  const at = view.key === COMPANY_KEY ? null : view.key;
+  const name = view.name || "the company";
+  const menu = rowMenu(api, view, open, reorder);
   return (
-    <OrgTableActions>
+    <>
+      {/* OUTSIDE THE STRIP, because it is not one of the quiet controls: the
+          console draws the plus on every row that can take a child and keeps
+          only the pencil and the trash behind the reveal. */}
       {view.type !== "seat" && (
         <OrgTableAdd
-          label={`Add to ${view.name || "the company"}`}
+          label={`Add to ${name}`}
           onOpen={() => grid.opened(view.key, ACTIONS)}
-          options={[
-            {
-              key: "unit",
-              label: "Add unit",
-              icon: <CreateNewFolderGlyph />,
-              ...(api.readOnly ? { disabledReason: REFUSED } : {}),
-              onSelect: () => api.openAdd(at, "unit"),
-            },
-            {
-              key: "agent",
-              label: "Add agent seat",
-              icon: <SmartToyGlyph />,
-              ...(api.readOnly ? { disabledReason: REFUSED } : {}),
-              onSelect: () => api.openAdd(at, "agent"),
-            },
-            {
-              key: "human",
-              label: "Add human seat",
-              icon: <PersonGlyph />,
-              ...(api.readOnly ? { disabledReason: REFUSED } : {}),
-              onSelect: () => api.openAdd(at, "human"),
-            },
-          ]}
+          sections={addSections(api, view)}
         />
       )}
-      <IconButton
-        size="sm"
-        label={`Edit ${view.name || "the company"}`}
-        icon={<EditGlyph />}
-        onClick={() => api.openEditor(view.key)}
-      />
-      {isDeletable(view) && (
+      <OrgTableActions>
         <IconButton
           size="sm"
-          variant="ghost-danger"
-          label={`Delete ${view.name}`}
-          icon={<DeleteGlyph />}
-          {...(api.readOnly ? { disabledReason: REFUSED } : {})}
-          onClick={() => api.openDelete(view.key)}
+          label={`Edit ${name}`}
+          icon={<EditGlyph />}
+          onClick={() => api.openEditor(view.key)}
         />
-      )}
-      <Menu
-        label="Row actions"
-        icon={<MoreVertGlyph />}
-        align="end"
-        open={grid.menuOpen(view.key)}
-        onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
-        items={[...nodeMenu(api, view, open), ...moveEntries(reorder, view.key)]}
-      />
-    </OrgTableActions>
+        {isDeletable(view) && (
+          <IconButton
+            size="sm"
+            variant="ghost-danger"
+            label={`Delete ${view.name}`}
+            icon={<DeleteGlyph />}
+            {...(api.readOnly ? { disabledReason: REFUSED } : {})}
+            onClick={() => api.openDelete(view.key)}
+          />
+        )}
+        {menu.length > 0 && (
+          <Menu
+            /* NAMED AFTER THE NODE IT ACTS ON, exactly as the chart names the
+               same control: "Row actions" on every row is several identically
+               named controls, and none of them says which row it would act
+               on. */
+            label={`Actions for ${name}`}
+            icon={<MoreVertGlyph />}
+            align="end"
+            open={grid.menuOpen(view.key)}
+            onOpenChange={(up) => grid.setMenuOpen(view.key, up)}
+            items={menu}
+          />
+        )}
+      </OrgTableActions>
+    </>
   );
 }
