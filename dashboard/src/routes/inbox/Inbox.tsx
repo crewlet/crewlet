@@ -62,6 +62,12 @@ export function Inbox() {
   const budget = useOrgBudget();
   const { connected, authRejected } = useConnection();
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // THE DURABLE CODING RUNS, because a parked one is the longest-lived item
+  // this queue has by construction: it is waiting for a person. The live
+  // projection sweeps a sandbox entry after twelve hours, so reading it here
+  // dropped the row exactly when it had been ignored long enough to matter.
+  // Slow, like the runs board's own poll: a run's lifetime is minutes.
+  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
 
   // THE STATE IS IN THE URL, like every other screen: which band, whether
   // read notices are shown, and which reasons are being looked at.
@@ -98,6 +104,7 @@ export function Inbox() {
       attentionQueue({
         agents,
         sandboxes,
+        runs: runs?.runs ?? [],
         budget,
         engine: engine ?? null,
         seats: index.seats,
@@ -105,7 +112,7 @@ export function Inbox() {
         authRejected,
         now,
       }),
-    [agents, sandboxes, budget, engine, index.seats, connected, authRejected, now],
+    [agents, sandboxes, runs, budget, engine, index.seats, connected, authRejected, now],
   );
 
   // EVERY REASON THAT IS ACTUALLY ON THE PAGE, so the filter offers what the

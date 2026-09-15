@@ -19,6 +19,7 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
   return {
     agents: [],
     sandboxes: [],
+    runs: [],
     budget: {},
     engine: { status: "ok", configured: true },
     seats: [],
@@ -54,36 +55,106 @@ describe("what it surfaces", () => {
   // `running`, `awaiting_clarification`, `resumed`, `done`, `failed` and
   // `reseed` — so the condition it was guarding never fired on a real run and
   // the test passed against a fixture no engine produces.
-  const parked = (status: string) => ({
-    turn_id: "t1",
-    role: "Dev A",
-    agent_handle: "dev-a",
-    agent_id: "",
-    coding_agent: "claude-code",
-    sandbox_id: "s1",
-    task: "",
-    status,
-    started_at: "2026-01-01T11:00:00Z",
-    question: "Which branch should I target?",
-  });
+  //
+  // AND FROM THE DURABLE ROW, not the projection. The live push sweeps a
+  // sandbox entry after twelve hours, so a run parked on a question — the
+  // longest-lived item this list can hold, since it is waiting for a person —
+  // used to leave the queue exactly when it had been ignored long enough to
+  // matter, and the dashboard reported a quiet company.
+  const parked = (status: string, over: Record<string, unknown> = {}) =>
+    ({
+      turn_id: "t1",
+      role: "Dev A",
+      agent_handle: "dev-a",
+      status,
+      coding_agent: "claude-code",
+      placement: "direct",
+      task_description: "",
+      question: "Which branch should I target?",
+      audience: "",
+      branch: "",
+      trace_id: "",
+      owner: "",
+      box_exists: true,
+      paused_at: "2026-01-01T11:00:00Z",
+      pause_ttl_seconds: 0,
+      started_at: "2026-01-01T10:00:00Z",
+      updated_at: "2026-01-01T11:00:00Z",
+      answerable_in_chat: false,
+      ...over,
+    }) as never;
 
   test("a run paused on a question carries the question", () => {
-    const items = attentionQueue(input({ sandboxes: [parked("awaiting_clarification")] }));
+    const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
-    expect(items[0]?.path).toEqual(["activity", "runs"]);
+    // THE RUN'S OWN ADDRESS. It was `#/activity/runs?run=`, a query key the
+    // runs screen stopped reading when a run became an object.
+    expect(items[0]?.path).toEqual(["activity", "runs", "t1"]);
+  });
+
+  // WHEN IT PARKED, never when it started: this row is about how long
+  // somebody has been waited on, and a run that worked for an hour before
+  // asking has been waiting for none of it.
+  test("it is ordered by when it parked, not when it started", () => {
+    const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
+    expect(items[0]?.at).toBe("2026-01-01T11:00:00Z");
+  });
+
+  // THE DEADLINE IS THE COST OF IGNORING IT: the box is reclaimed at the
+  // pause TTL and the work is gone, so a row that said only "waiting on an
+  // answer" gave no reason to answer today rather than tomorrow.
+  test("a pause window that runs out says when", () => {
+    const items = attentionQueue(
+      input({ runs: [parked("awaiting_clarification", { pause_ttl_seconds: 7_200 })] }),
+    );
+    expect(items[0]?.detail).toContain("reclaimed in 1h 0m");
+  });
+
+  // A TTL OF ZERO IS NOT A DEADLINE OF NOW. Zero means the box is not
+  // reclaimed on a timer at all, and inventing a countdown for it would be
+  // the zero-value-as-a-setting mistake on a screen.
+  test("a run with no pause window is given no false deadline", () => {
+    const items = attentionQueue(input({ runs: [parked("awaiting_clarification")] }));
+    expect(items[0]?.detail).not.toContain("reclaimed");
   });
 
   // A BOX REAPED PAST ITS PAUSE TTL is the same fact one step worse: the work
   // is gone and only the question survives, and `sandbox.Awaiting` counts it.
   test("a run whose box was reaped is waiting on a person too", () => {
-    const items = attentionQueue(input({ sandboxes: [parked("reseed")] }));
-    expect(items[0]?.detail).toBe("Which branch should I target?");
+    const items = attentionQueue(input({ runs: [parked("reseed")] }));
+    expect(items[0]?.detail).toContain("Which branch should I target?");
+    expect(items[0]?.detail).toContain("already reclaimed");
   });
 
   // AND A RUNNING ONE IS NOT WAITING ON ANYBODY. Without this the condition
   // above could be `status !== "running"` and still pass every case here.
   test("a running run is not in the queue", () => {
-    expect(attentionQueue(input({ sandboxes: [parked("running")] }))).toEqual([]);
+    expect(attentionQueue(input({ runs: [parked("running")] }))).toEqual([]);
+  });
+
+  // THE PROJECTION IS NOT A SOURCE FOR THIS. A parked entry on the live push
+  // and nothing on the durable rows means the sweep already dropped it — and
+  // the queue must read the rows, so this produces nothing.
+  test("a parked entry on the live push alone raises nothing", () => {
+    const items = attentionQueue(
+      input({
+        sandboxes: [
+          {
+            turn_id: "t1",
+            role: "Dev A",
+            agent_handle: "dev-a",
+            agent_id: "",
+            coding_agent: "claude-code",
+            sandbox_id: "s1",
+            task: "",
+            status: "awaiting_clarification",
+            started_at: "2026-01-01T11:00:00Z",
+            question: "Which branch should I target?",
+          },
+        ],
+      }),
+    );
+    expect(items.filter((i) => i.id.startsWith("sandbox-"))).toEqual([]);
   });
 
   test("a live round that stopped moving is surfaced, and escalates", () => {

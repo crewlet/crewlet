@@ -82,6 +82,11 @@ export function LiveNow() {
   const { connected, authRejected } = useConnection();
   const now = useNow();
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // THE DURABLE CODING RUNS, the same source the Inbox reads for the same
+  // reason: the live projection sweeps a parked run after twelve hours, and
+  // two screens computing one queue from two sources would disagree about
+  // whether anybody is waiting.
+  const { data: runs } = useQuery("sandbox_runs", undefined, { pollMs: 30_000 });
   // NOT ALIGNED to a bucket: the strip's cell is its own, finer than either of
   // the engine's, and its newest cell is the minute in progress.
   const range = useTimeRange(now, STRIP_OFFER, false);
@@ -92,6 +97,7 @@ export function LiveNow() {
       attentionQueue({
         agents,
         sandboxes,
+        runs: runs?.runs ?? [],
         budget,
         engine: engine ?? null,
         seats: index.seats,
@@ -99,7 +105,7 @@ export function LiveNow() {
         authRejected,
         now,
       }),
-    [agents, sandboxes, budget, engine, index.seats, connected, authRejected, now],
+    [agents, sandboxes, runs, budget, engine, index.seats, connected, authRejected, now],
   );
 
   const live = useMemo(

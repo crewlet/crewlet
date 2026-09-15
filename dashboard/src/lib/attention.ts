@@ -13,7 +13,13 @@
  * item carries where to go.
  */
 
-import type { AgentRow, EngineHealth, OrgBudget, SandboxEntry } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  EngineHealth,
+  OrgBudget,
+  SandboxEntry,
+  SandboxRun,
+} from "~/protocol/index.ts";
 import type { IconName } from "~/ui/Icon.tsx";
 import { runState, staleness, type Seat } from "./seats.ts";
 
@@ -37,7 +43,26 @@ export interface Attention {
 
 export interface AttentionInput {
   agents: AgentRow[];
+  /**
+   * The live projection, which is what a seat is doing NOW.
+   *
+   * It is the right source for that and the wrong one for anything that
+   * waits: the projection sweeps a sandbox entry at `sandboxEntryMaxAge` (12
+   * hours), so a run parked on a question leaves this list while still
+   * waiting — see `runs`.
+   */
   sandboxes: SandboxEntry[];
+  /**
+   * The DURABLE coding-run rows, which is what is still waiting.
+   *
+   * THE SWEEP IS THE WHOLE REASON THIS IS A SECOND INPUT. A run parked on a
+   * question is the longest-lived thing in this list by construction — it is
+   * waiting for a person, who is by definition not there — and it was read
+   * from the projection, which drops it after twelve hours. So the queue lost
+   * the item exactly when it had been ignored long enough to matter, and the
+   * dashboard reported a quiet company.
+   */
+  runs: SandboxRun[];
   budget: OrgBudget;
   engine: EngineHealth | null;
   seats: Seat[];
@@ -50,7 +75,7 @@ const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
-  const { agents, sandboxes, budget, engine, connected, authRejected, now } = input;
+  const { agents, sandboxes, runs, budget, engine, connected, authRejected, now } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -148,23 +173,28 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     });
   }
 
-  // --- sandboxes -----------------------------------------------------------
-  for (const box of sandboxes) {
+  // --- coding runs ---------------------------------------------------------
+  // FROM THE DURABLE ROWS, not from the projection: see `runs` above.
+  for (const run of runs) {
     // THE ENGINE'S OWN WORDS. `awaiting_input` is not one of them, so this
     // condition never fired and a run parked on a question reached the queue
     // through no path at all. `reseed` is the same fact one step worse — the
     // box was reaped past its pause TTL and only the question survives.
-    if (box.status !== "awaiting_clarification" && box.status !== "reseed") continue;
+    if (run.status !== "awaiting_clarification" && run.status !== "reseed") continue;
     out.push({
-      id: `sandbox-${box.turn_id}`,
+      id: `sandbox-${run.turn_id}`,
       severity: "caution",
       icon: "help",
-      title: `${box.role || box.agent_handle} is waiting on an answer`,
-      detail: box.question || "A coding run paused on a clarification and cannot continue.",
-      path: ["activity", "runs"],
-      query: { run: box.turn_id },
-      at: box.started_at,
-      who: box.agent_handle,
+      title: `${run.role || run.agent_handle} is waiting on an answer`,
+      detail: waitingDetail(run, now),
+      // THE RUN'S OWN PATH. It was `#/activity/runs?run=`, which the runs
+      // screen stopped reading when a run became an object with an address.
+      path: ["activity", "runs", run.turn_id],
+      // WHEN IT PARKED, not when it started: what this row is about is how
+      // long somebody has been waited on, and a run that worked for an hour
+      // before asking has been waiting for none of it.
+      at: run.paused_at || run.started_at,
+      who: run.agent_handle,
     });
   }
 
@@ -243,4 +273,33 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     if (at !== bt) return bt - at;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
+}
+
+/**
+ * What a parked run's row says, with its deadline where there is one.
+ *
+ * THE DEADLINE IS THE COST OF IGNORING IT, which is what this whole list is
+ * ordered by: a paused box is reclaimed at `pause_ttl_seconds` and the run
+ * comes back as `reseed` — the question survives, the working tree does not.
+ * A row that said only "waiting on an answer" gave a reader no reason to
+ * answer today rather than tomorrow.
+ *
+ * A RUN WITH NO TTL IS NOT GIVEN A FALSE ONE. Zero means the box is not
+ * reclaimed on a timer (see the `pause_ttl_seconds` zero-value rule), so the
+ * sentence simply ends.
+ */
+function waitingDetail(run: SandboxRun, now: number): string {
+  const asked = run.question || "A coding run paused on a clarification and cannot continue.";
+  if (run.status === "reseed") {
+    return `${asked} The box was already reclaimed, so answering restarts the work from the question.`;
+  }
+  const ttl = run.pause_ttl_seconds;
+  const parked = run.paused_at ? Date.parse(run.paused_at) : NaN;
+  if (!(ttl > 0) || Number.isNaN(parked)) return asked;
+  const left = parked + ttl * 1_000 - now;
+  if (left <= 0) return `${asked} Its box is past its pause window and may be reclaimed.`;
+  const hours = Math.floor(left / 3_600_000);
+  const minutes = Math.round((left % 3_600_000) / 60_000);
+  const when = hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+  return `${asked} Its box is reclaimed in ${when}.`;
 }
