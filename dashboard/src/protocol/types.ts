@@ -1274,11 +1274,47 @@ export interface WorkSummary {
   /** Data a badge and a filter read. It gates nothing: closing a task with
    *  open blockers is allowed. */
   blocked?: boolean;
+  /** What `blocked` is the one-bit answer to: the same edges, carrying WHICH
+   *  task holds this one up rather than only that something does.
+   *
+   *  It is on the ROW because a renderer that draws the RELATION between two
+   *  rows cannot derive it from either of them — the alternative is a
+   *  single-task read per bar. `blocked` is exactly "some entry here is
+   *  `open`", computed from the same rows in the same statement, so a badge
+   *  can never appear beside no edges.
+   *
+   *  A blocker the caller's own filter excluded is an id this page holds no
+   *  row for. That is the honest answer, not an omission: the edge exists and
+   *  this page cannot draw it. */
+  waiting_on?: WorkBlocker[];
   archived?: boolean;
   rank?: string;
   updated: string;
   /** The composed log position this row was last written at. */
   version: number;
+}
+
+/** One dependency edge as the task that waits on it sees it.
+ *
+ *  THE STATE TRAVELS WITH THE EDGE rather than being looked up per end,
+ *  because a renderer holds one page of rows and a blocker is routinely not on
+ *  it: without `open` here, drawing a cleared edge differently from a live one
+ *  would need a read per blocker — and with the blocker off the page there is
+ *  nothing to read it from. */
+export interface WorkBlocker {
+  /** The blocking task's ID, never its key: an edge is drawn between two rows
+   *  on one page and `WorkSummary.id` is what they are matched on. */
+  id: string;
+  /** Whether the blocker is still holding this task up. `false` is a settled
+   *  fact rather than a missing one — the blocker has finished. */
+  open?: boolean;
+  /** The blocker not listing this task back: the residue of a dependency
+   *  gesture whose mirror did not land, which the repair duty is working on. */
+  one_sided?: boolean;
+  /** The repair duty's DECISION that this edge will never be mirrored — a
+   *  different fact from "not mirrored yet", and the one that stops a reader
+   *  waiting for it to settle. */
+  one_sided_final?: boolean;
 }
 
 /** What an answer could NOT account for: records this node holds and cannot

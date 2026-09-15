@@ -69,11 +69,66 @@ type TaskRow struct {
 	// Blocked is DATA a filter and a badge read. It gates nothing: closing
 	// a task with open blockers is allowed, and the facts a reviewer would
 	// want are returned beside the status rather than enforced.
-	Blocked  bool      `json:"blocked,omitempty"`
+	Blocked bool `json:"blocked,omitempty"`
+
+	// WaitingOn is what [TaskRow.Blocked] is the one-bit answer to: the
+	// same edges, carrying WHICH task holds this one up rather than only
+	// that something does.
+	//
+	// It is on the ROW for the reason [TaskRow.Type] is — a renderer that
+	// draws the RELATION between two rows cannot derive it from either of
+	// them, and the alternative is a single-task read per bar. The two
+	// facts are computed from one set of rows in one statement, so a
+	// renderer can never show a blocked badge beside no edges or edges
+	// beside no badge: `Blocked` is exactly "some entry here is Open", and
+	// [TestTheBlockedFlagIsTheEdgesItCarries] is what holds that.
+	//
+	// EVERY edge, not only the open ones, because "this waited on that and
+	// that is finished" is what a plan looks like once it has been
+	// executed — a timeline that dropped a cleared edge would redraw its
+	// own history every time a blocker closed.
+	WaitingOn []Blocker `json:"waiting_on,omitempty"`
+
 	Archived bool      `json:"archived,omitempty"`
 	Rank     Rank      `json:"rank,omitempty"`
 	Updated  time.Time `json:"updated"`
 	Version  uint64    `json:"version"`
+}
+
+// Blocker is one dependency edge as the task that waits on it sees it.
+//
+// THE STATE TRAVELS WITH THE EDGE rather than being looked up per end,
+// because a renderer holds one page of rows and a blocker is routinely not on
+// it: without `Open` here, drawing a cleared edge differently from a live one
+// would need a read per blocker, and with the blocker off the page there is
+// nothing to read it from.
+type Blocker struct {
+	// ID is the blocking task's, never its key: an edge is drawn between
+	// two rows on one page and [TaskRow.ID] is what they are matched on. A
+	// blocker the caller's own filter excluded is an id it holds no row
+	// for, which is the honest answer — the edge exists and this page
+	// cannot draw it.
+	ID string `json:"id"`
+
+	// Open is whether the blocker is still holding this task up. FALSE is
+	// a settled fact rather than a missing one: the edge is known and the
+	// blocker has finished.
+	Open bool `json:"open,omitempty"`
+
+	// OneSided is the blocker not listing this task back — the residue of
+	// a dependency gesture whose mirror did not land, which the repair
+	// duty is still working on.
+	//
+	// It is DERIVED from the other end's rows rather than carried on a
+	// record, and it is here because an edge nobody can see from the
+	// blocker's side is one a reader should be told about rather than
+	// shown as ordinary.
+	OneSided bool `json:"one_sided,omitempty"`
+
+	// OneSidedFinal is the repair duty's DECISION that this edge will
+	// never be mirrored — a different fact from "not mirrored yet", and
+	// the one that stops a reader waiting for it to settle.
+	OneSidedFinal bool `json:"one_sided_final,omitempty"`
 }
 
 // Incomplete says what an answer could not account for.
@@ -1630,7 +1685,73 @@ func readTasksJoined(ctx context.Context, tx *sql.Tx, extraJoin string,
 		out[i].Overdue = out[i].Due != nil &&
 			out[i].StatusGroup.Open() && out[i].Due.Before(dayStart)
 	}
+	// AND THE DEPENDENCY EDGES, in ONE statement over the page rather than
+	// one per row: the page's ids are already in hand, and the alternative
+	// — a correlated subquery in the SELECT above — cannot return a
+	// collection at all, which is why `blocked` was a bit in the first
+	// place.
+	if err := loadBlockers(ctx, tx, out); err != nil {
+		return nil, "", err
+	}
 	return out, cursor, nil
+}
+
+// loadBlockers fills [TaskRow.WaitingOn] for one page, in one statement.
+//
+// TWO TABLES, because the edge's two halves live apart and neither alone is
+// the answer: `tracker_relations` is the AUTHORED edge and carries the mirror
+// flags, `tracker_task_deps` is the DERIVED one and carries whether the
+// blocker is still open. The join is exact — [Applier.maintainDeps] writes one
+// deps row per `waiting_on` relation from the same record, in the same
+// transaction — so a LEFT JOIN that missed would be a bug rather than an
+// absence, and it is a LEFT one anyway because a read that dropped an edge
+// over a row it could not pair would report FEWER dependencies than exist,
+// which is the one direction a caller cannot detect.
+func loadBlockers(ctx context.Context, tx *sql.Tx, rows []TaskRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	at := make(map[string]int, len(rows))
+	ids := make([]any, 0, len(rows))
+	for i := range rows {
+		at[rows[i].ID] = i
+		ids = append(ids, rows[i].ID)
+	}
+	query := `SELECT r.task_id, r.other_id, r.one_sided, r.one_sided_final,
+	                 COALESCE(d.blocker_open, 0)
+	          FROM tracker_relations r
+	          LEFT JOIN tracker_task_deps d
+	                 ON d.task_id = r.task_id AND d.blocker_id = r.other_id
+	          WHERE r.kind = ? AND r.task_id IN (` +
+		strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",") + `)
+	          ORDER BY r.task_id, r.other_id`
+	args := append([]any{string(RelationWaitingOn)}, ids...)
+	found, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("tracker: read the dependencies of a page: %w", err)
+	}
+	defer func() { _ = found.Close() }()
+	for found.Next() {
+		var task string
+		var edge Blocker
+		var oneSided, oneSidedFinal, open int
+		if err := found.Scan(&task, &edge.ID, &oneSided, &oneSidedFinal,
+			&open); err != nil {
+			return fmt.Errorf("tracker: read a dependency edge: %w", err)
+		}
+		i, ok := at[task]
+		if !ok {
+			continue
+		}
+		edge.Open = open == 1
+		edge.OneSided = oneSided == 1
+		edge.OneSidedFinal = oneSidedFinal == 1
+		rows[i].WaitingOn = append(rows[i].WaitingOn, edge)
+	}
+	if err := found.Err(); err != nil {
+		return fmt.Errorf("tracker: walk the dependency edges: %w", err)
+	}
+	return nil
 }
 
 // countHint counts to the ceiling and stops, reporting whether it stopped.

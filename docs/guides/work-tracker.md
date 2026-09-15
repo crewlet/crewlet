@@ -700,6 +700,17 @@ Both states are in the attention queue: `flag=one_sided` is the repair still
 pending, `flag=one_sided_final` the one a person has to resolve. The `flag`
 filter takes any number of values and matches a task carrying **any** of them.
 
+**Every row says what it waits on.** A listed task carries `blocked` — one bit,
+"something is holding this up" — and `waiting_on`, the same edges carrying
+*which* task, whether that blocker is still `open`, and whether the edge is
+`one_sided` or `one_sided_final`. The two are computed from one set of rows in
+one statement, so `blocked` is exactly "some entry in `waiting_on` is open" and
+a screen can never show a blocked badge beside no dependencies. A blocker your
+own filter excluded is an id you hold no row for — the honest answer, since the
+edge exists and that page cannot draw it. Cleared edges stay on the row rather
+than disappearing when the blocker finishes: what a plan looked like once it
+was executed is the thing a timeline is for.
+
 `waiting_on`, `blocking`, `linked` and `linked_pages` on `update_work_item`
 take one of two explicit shapes and never a bare list:
 
