@@ -42,7 +42,8 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Disclosure, PhaseTag } from "~/ui/primitives.tsx";
+import { Disclosure } from "~/ui/primitives.tsx";
+import { PhaseTag } from "./PhaseTag.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,

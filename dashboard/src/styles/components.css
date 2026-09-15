@@ -60,46 +60,6 @@
   }
 }
 
-/* Phase is the one categorical identity outside a chart, because it is what a
-   reader tracks across the Model, Seat, Activity and Trace screens. */
-.phase-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: var(--font-letter-spacing-wide);
-  text-transform: uppercase;
-  padding: 1px var(--spacing-2);
-  border-radius: var(--radius-xs);
-}
-.phase-tag[data-phase="onboarding"] {
-  color: var(--color-phase-onboarding-ink);
-  background: color-mix(in srgb, var(--color-phase-onboarding) 14%, transparent);
-}
-.phase-tag[data-phase="execute"] {
-  color: var(--color-phase-execute-ink);
-  background: color-mix(in srgb, var(--color-phase-execute) 14%, transparent);
-}
-.phase-tag[data-phase="review"] {
-  color: var(--color-phase-review-ink);
-  background: color-mix(in srgb, var(--color-phase-review) 14%, transparent);
-}
-/* The NESTED calls, muted: a sub-agent, the round-cap judge and a learning
-   worker all run UNDER one of the three phases above, and giving them a hue
-   of their own would put four or five categorical colours on one turn card
-   and make the phase a reader is tracking harder, not easier to find. They
-   were previously unstyled rather than muted, which left them transparent:
-   the same tag rendered as a badge beside `execute` and as bare text beside
-   `auxiliary`. */
-.phase-tag[data-phase="subagent"],
-.phase-tag[data-phase="judge"],
-.phase-tag[data-phase="auxiliary"],
-.phase-tag[data-phase="turn"] {
-  color: var(--color-text-tertiary);
-  background: var(--color-surface-inset);
-}
-
 /* ---- Avatar -------------------------------------------------------------
    A monogram, and it is NEUTRAL. The system this replaces coloured a seat by
    `PALETTE[hash(name) % 8]`, over the same eight families it also used for

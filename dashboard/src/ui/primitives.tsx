@@ -43,23 +43,6 @@ export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "a
 // ---------------------------------------------------------------------------
 
 /**
- * A phase mark.
- *
- * Phase is the one categorical identity the product spends colour on outside a
- * chart, because it is what a reader follows across the Model, Seat, Activity
- * and Trace screens. The three hues are measured to stay separable under
- * protan and deutan vision, and the word is always present beside the colour.
- */
-export function PhaseTag({ phase, children }: { phase: string; children?: ReactNode }) {
-  const key = (phase || "").toLowerCase();
-  return (
-    <span className="phase-tag" data-phase={key}>
-      {children ?? (key || "—")}
-    </span>
-  );
-}
-
-/**
  * The id of the tab that labels a tab panel, so a panel and the tab row that
  * controls it agree on it without passing ids between them.
  */

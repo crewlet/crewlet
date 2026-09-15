@@ -13,7 +13,7 @@
  */
 
 import { useState } from "react";
-import { PhaseTag } from "~/ui/primitives.tsx";
+import { PhaseTag } from "./PhaseTag.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
