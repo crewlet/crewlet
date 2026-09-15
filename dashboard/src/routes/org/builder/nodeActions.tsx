@@ -19,23 +19,22 @@
  * stays available.
  */
 
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { seatPath } from "~/lib/seats.ts";
-import type { BuilderApi } from "./BuilderContext.tsx";
+import type { AddKind, BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
+import { CrewletIcon } from "@crewlethq/icons";
 import {
   AccountTreeGlyph,
   ArrowOutwardGlyph,
-  CreateNewFolderGlyph,
   DeleteGlyph,
   EditGlyph,
   MoveItemGlyph,
-  PersonAddGlyph,
   PersonGlyph,
   SmartToyGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Kbd, isApplePlatform, type MenuEntry } from "@crewlethq/ui";
+import { Kbd, isApplePlatform, type AddPillSection, type MenuEntry } from "@crewlethq/ui";
 
 /** Where "Open seat" goes: the seat's own screen. */
 export type OpenScreen = (path: string[]) => void;
@@ -55,36 +54,58 @@ export function isDeletable(view: NodeView): boolean {
 
 const deleteKey = () => (isApplePlatform() ? "Backspace" : "Delete");
 
+/**
+ * WHAT CAN GO UNDER A PARENT, once, for the three surfaces that ask.
+ *
+ * The node's menu, the toolbar and the pill on the branch below a node are
+ * three drawings of ONE list, so the kind, the word for it and the mark it
+ * wears are decided here rather than three times. The marks are the ones the
+ * chart draws on the nodes themselves, so what a reader presses to add an
+ * agent seat carries the mark every agent seat in the chart wears.
+ */
+const ADD_CHOICES: readonly { kind: AddKind; label: string; icon: ReactNode }[] = [
+  { kind: "unit", label: "Add unit", icon: <AccountTreeGlyph /> },
+  { kind: "agent", label: "Add agent seat", icon: <CrewletIcon /> },
+  { kind: "human", label: "Add human seat", icon: <PersonGlyph /> },
+];
+
+/** Where an add under `parent` lands: the company root is `null`. */
+const addTarget = (parent: NodeKey) => (parent === COMPANY_KEY ? null : parent);
+
 function addEntries(api: BuilderApi, parent: NodeKey): MenuEntry[] {
-  const at = parent === COMPANY_KEY ? null : parent;
-  return [
-    {
-      key: "add-unit",
-      label: "Add unit",
-      icon: <CreateNewFolderGlyph />,
-      disabled: api.readOnly,
-      onSelect: () => api.openAdd(at, "unit"),
-    },
-    {
-      key: "add-agent",
-      label: "Add agent seat",
-      icon: <PersonAddGlyph />,
-      disabled: api.readOnly,
-      onSelect: () => api.openAdd(at, "agent"),
-    },
-    {
-      key: "add-human",
-      label: "Add human seat",
-      icon: <PersonAddGlyph />,
-      disabled: api.readOnly,
-      onSelect: () => api.openAdd(at, "human"),
-    },
-  ];
+  const at = addTarget(parent);
+  return ADD_CHOICES.map((choice) => ({
+    key: `add-${choice.kind}`,
+    label: choice.label,
+    icon: choice.icon,
+    disabled: api.readOnly,
+    onSelect: () => api.openAdd(at, choice.kind),
+  }));
 }
 
 /** The Add menu of the company or a unit. */
 export function addMenu(api: BuilderApi, view: NodeView): MenuEntry[] {
   return view.type === "seat" ? [] : addEntries(api, view.key);
+}
+
+/**
+ * The same list as the sections of the pill on a node's branch.
+ *
+ * NAMED AFTER THE NODE, because a chart draws one of these per branch: nine
+ * sections called "Add unit" are nine controls a reader tells apart by looking
+ * at where they are, and the name is the tooltip as well.
+ */
+export function addSections(api: BuilderApi, view: NodeView): AddPillSection[] {
+  if (view.type === "seat") return [];
+  const at = addTarget(view.key);
+  const name = view.name || "the company";
+  return ADD_CHOICES.map((choice) => ({
+    key: choice.kind,
+    label: `${choice.label} to ${name}`,
+    icon: choice.icon,
+    disabled: api.readOnly,
+    onSelect: () => api.openAdd(at, choice.kind),
+  }));
 }
 
 /** A seat's saved screen, when the saved company has the seat. */

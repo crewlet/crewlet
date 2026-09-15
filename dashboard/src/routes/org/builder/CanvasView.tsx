@@ -64,7 +64,7 @@ import {
 } from "./chartModel.ts";
 import { COMPANY_KEY } from "./model/keys.ts";
 import {
-  addMenu,
+  addSections,
   isDeletable,
   leadLabel,
   leadMenu,
@@ -87,7 +87,6 @@ import { useOpenScreen, useReporting, useStructure } from "./useCharts.ts";
 import { CrewletIcon } from "@crewlethq/icons";
 import {
   AccountTreeGlyph,
-  AddGlyph,
   ApartmentGlyph,
   ChevronRightGlyph,
   CycleGlyph,
@@ -97,6 +96,7 @@ import {
   PersonGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
+  AddPill,
   EmptyState,
   IconButton,
   Menu,
@@ -666,22 +666,34 @@ function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; n
  * The Add on a node's branch: the three kinds a company or a unit can take,
  * under the node their children hang from.
  *
- * The same entries the node's own menu and the toolbar offer, because there is
- * one list of what can be added under a parent and three places that ask for
- * it. It is absent on a read-only draft rather than present and refusing.
+ * THE MARK SPLITS INTO THE THREE rather than opening a menu of them. What can
+ * go under a node is three things and the choice between them is the whole of
+ * the decision, so the design system's `AddPill` asks it in place: the mark the
+ * pointer arrived at grows into the kinds, each one within a few pixels of
+ * where the mark was. It is the console chart's own gesture, which this chart
+ * is drawn to match.
  *
- * A MARK RATHER THAN A WORD, and it is named after the node it belongs to. A
- * visible "Add" is its own accessible name, so nine of them on one chart are
- * nine controls called "Add" and which node each belongs to is read off the
- * geometry. Named, each says the node it adds to, which is also its tooltip.
+ * The same list the node's own menu and the toolbar offer (`addSections` and
+ * `addMenu` are one list in `nodeActions.tsx`), because there is one answer to
+ * what can be added under a parent and three places that ask for it. It is
+ * absent on a read-only draft rather than present and refusing.
+ *
+ * A MARK RATHER THAN A WORD, and both it and each of its kinds are named after
+ * the node they belong to. A visible "Add" is its own accessible name, so nine
+ * of them on one chart are nine controls called "Add" and which node each
+ * belongs to is read off the geometry.
+ *
+ * THE KEYBOARD NEVER REACHES IT, and does not need to: the strip it sits in is
+ * pointer-only and out of the tab order, and the same three kinds are in the
+ * node's own menu, which the ContextMenu key and Shift+F10 open, and in the
+ * toolbar, which mirrors the selected node.
  */
 function AddButton({ api, view }: { api: BuilderApi; view: NodeView }) {
   return (
-    <Menu
+    <AddPill
       label={`Add to ${view.name || "the company"}`}
-      icon={<AddGlyph />}
-      items={addMenu(api, view)}
-      triggerTabIndex={-1}
+      sections={addSections(api, view)}
+      tabIndex={-1}
     />
   );
 }

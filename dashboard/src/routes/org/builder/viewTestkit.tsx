@@ -239,25 +239,65 @@ export class LayoutObserver {
     if (entries.length > 0) this.callback(entries, this as unknown as ResizeObserver);
   }
 
-  /** Reports every observed element's size, a few rounds, so cards rendered by a layout are measured too. */
-  static settle(): void {
+  /**
+   * Reports every observed element's size, a few rounds, so cards rendered by a
+   * layout are measured too, and then lands every card at its target.
+   *
+   * THE CHART TRAVELS. The design system tweens a relayout over real frames, so
+   * a card's transform in the tick a suite changed the draft in is where the
+   * card WAS; jsdom's own frames fire on a timer nothing here waits for. The
+   * harness owns the frame queue instead and runs it past the tween's length,
+   * so every suite reads the chart at rest, which is what each of them is
+   * about. A suite about the travel itself drives [runFrames].
+   */
+  static settle(motion = true): void {
     for (let round = 0; round < 4; round++) {
       act(() => {
         for (const observer of [...LayoutObserver.instances]) observer.deliver();
       });
     }
+    if (motion) settleMotion();
   }
 
   static install(): () => void {
     const real = globalThis.ResizeObserver;
+    const realFrame = globalThis.requestAnimationFrame;
+    const realCancelFrame = globalThis.cancelAnimationFrame;
     LayoutObserver.instances = [];
     LayoutObserver.sizer = defaultSizer;
+    frames.length = 0;
     // Before any suite render, for the reason `known` gives.
     parts ??= treeCanvasParts();
     globalThis.ResizeObserver = LayoutObserver as unknown as typeof ResizeObserver;
+    globalThis.requestAnimationFrame = ((frame: FrameRequestCallback) =>
+      frames.push(frame)) as typeof globalThis.requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      frames[id - 1] = null;
+    }) as typeof globalThis.cancelAnimationFrame;
     return () => {
       globalThis.ResizeObserver = real;
+      globalThis.requestAnimationFrame = realFrame;
+      globalThis.cancelAnimationFrame = realCancelFrame;
     };
+  }
+}
+
+/** The frames the chart asked for and has not been given: see [LayoutObserver.settle]. */
+const frames: (FrameRequestCallback | null)[] = [];
+
+/** Runs every pending frame at `at`, as a browser does when it paints. */
+export function runFrames(at: number): void {
+  const due = [...frames];
+  frames.length = 0;
+  act(() => {
+    for (const frame of due) frame?.(at);
+  });
+}
+
+/** Runs frames until nothing is travelling: a relayout takes well under a second. */
+function settleMotion(): void {
+  for (let round = 0; round < 4 && frames.some(Boolean); round++) {
+    runFrames(performance.now() + 1000);
   }
 }
 
@@ -309,8 +349,13 @@ const known = (): ReturnType<typeof treeCanvasParts> => {
 
 function defaultSizer(el: Element): { width: number; height: number } | null {
   if (isCanvasViewport(el)) return VIEWPORT;
-  const { card, gap } = known();
+  const { card, gap, margin } = known();
   if (el.classList.contains(gap)) return { width: 24, height: 32 };
+  // NONE, so a suite reads the coordinates the layout alone decides. The space
+  // the chart keeps around itself is the design system's own measurement from
+  // its own tokens, and a suite that added it to every expected position would
+  // be asserting that value here as well as there.
+  if (el.classList.contains(margin)) return { width: 0, height: 0 };
   if (el.classList.contains(card)) {
     const items = el.querySelectorAll("[role='treeitem']").length;
     return { width: CARD_WIDTH, height: Math.max(1, items) * ROW_HEIGHT };

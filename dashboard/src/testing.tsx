@@ -99,6 +99,8 @@ export function isDrawnAs<T extends ElementType>(
 export function treeCanvasParts(): {
   card: string;
   gap: string;
+  /** The space the chart keeps around itself, which the layout also measures. */
+  margin: string;
   links: string;
   /** What a card gains when it stands for somebody outside the system. */
   outlined: string;
@@ -121,6 +123,7 @@ export function treeCanvasParts(): {
 function referenceChart(outline: boolean): {
   card: string;
   gap: string;
+  margin: string;
   links: string;
   cardClasses: string[];
 } {
@@ -144,12 +147,21 @@ function referenceChart(outline: boolean): {
   // The treeitem is the caller's own element here, drawn with no class, so the
   // card is simply what holds it.
   const card = item?.parentElement ?? null;
-  // The probe is the one element the tree's own parent holds that is neither
-  // the tree nor the connectors: it has no content and no role, by design.
-  const probe = [...(tree?.parentElement?.children ?? [])].find((el) => el !== tree && el !== svg);
+  // The probes are the elements the tree's own parent holds that are neither
+  // the tree nor the connectors: each has no content and no role, by design.
+  // There are two and the chart draws them in the order the layout reads them,
+  // the gaps between cards and then the space around the whole chart; a third
+  // one, or one fewer, is a package this harness no longer understands.
+  const probes = [...(tree?.parentElement?.children ?? [])].filter(
+    (el) => el !== tree && el !== svg,
+  );
+  if (probes.length !== 2) {
+    throw new Error(`the tree canvas draws ${probes.length} measuring probes, not two`);
+  }
   const read = {
     card: className(card),
-    gap: className(probe ?? null),
+    gap: className(probes[0] ?? null),
+    margin: className(probes[1] ?? null),
     links: className(svg),
     cardClasses: [...(card?.classList ?? [])],
   };

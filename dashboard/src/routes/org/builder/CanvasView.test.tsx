@@ -36,6 +36,8 @@ import {
   LayoutObserver,
   builderSpies,
   canvasWorld,
+  CARD_WIDTH,
+  ROW_HEIGHT,
   chartCard,
   chartCards,
   chartLinks,
@@ -629,16 +631,48 @@ describe("a seat's hue", () => {
 });
 
 describe("menus", () => {
-  test("the Add menu of a unit and of the company asks for the right parent and kind", () => {
+  /*
+   * THE ADD ON A BRANCH SPLITS rather than opening a menu. What can go under a
+   * node is three things, so the mark grows into the three where it stands: in
+   * the chart rather than over it, which is the opposite of what a menu does
+   * and is the point, because the choice a reader presses is within a few
+   * pixels of the mark they pointed at. Each section names the node, so the
+   * nine on this chart are nine controls a reader can tell apart.
+   */
+  test("the Add on a branch splits into the kinds, each asking the right parent", () => {
     const { spies, container } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "Add to Platform", hidden: true }));
-    // Over the chart rather than in it, so the zoom neither scales nor clips it.
-    expect(canvasWorld(container).contains(screen.getByRole("menu"))).toBe(false);
+    const press = (name: string) =>
+      fireEvent.click(screen.getByRole("button", { name, hidden: true }));
+    press("Add to Platform");
+    expect(
+      canvasWorld(container).contains(
+        screen.getByRole("button", { name: "Add human seat to Platform", hidden: true }),
+      ),
+    ).toBe(true);
+    press("Add human seat to Platform");
+    expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
+    press("Add to Acme");
+    press("Add unit to Acme");
+    expect(spies.openAdd).toHaveBeenLastCalledWith(null, "unit");
+  });
+
+  /*
+   * AND THE KEYBOARD NEVER NEEDS IT. The branch strip is pointer-only and out
+   * of the tab order, so the same three kinds have to be somewhere a key
+   * reaches: they are the first entries of the node's own menu, which is one
+   * list with the pill's sections (`nodeActions.addSections`).
+   */
+  test("the same three kinds are in the node's own menu, for the keyboard", () => {
+    const { spies } = mount();
+    item("Platform").focus();
+    press("ContextMenu");
+    expect(screen.getAllByRole("menuitem").map(label).slice(0, 3)).toEqual([
+      "Add unit",
+      "Add agent seat",
+      "Add human seat",
+    ]);
     fireEvent.click(screen.getByRole("menuitem", { name: "Add human seat" }));
     expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
-    fireEvent.click(screen.getByRole("button", { name: "Add to Acme", hidden: true }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Add unit" }));
-    expect(spies.openAdd).toHaveBeenLastCalledWith(null, "unit");
   });
 
   test("a seat this draft created has no screen to open, and read-only disables every change", () => {
@@ -840,6 +874,56 @@ describe("the reporting chart", () => {
     mount(unchecked, { chart: "reporting" });
     expect(screen.getByText("Reporting lines appear after the check")).toBeDefined();
     expect(screen.queryByRole("tree")).toBeNull();
+  });
+});
+
+/*
+ * THE SHAPE OF THE CHART, which is the whole of why this builder draws the
+ * console's org chart node rather than a panel. A rank of an organization is a
+ * row a reader scans across: two units of one company sit on one line whether
+ * or not one of them carries a lead along its bottom edge, and a seat beside a
+ * unit does too. The LAYOUT is the design system's, and what this case asserts
+ * is that the builder asked for that layout, which it does by the appearance it
+ * draws in: a chart of panels would hang each card under its own parent, and a
+ * unit with a lead would drop its whole subtree half a card below its
+ * neighbour's.
+ */
+describe("the shape of the chart", () => {
+  const boxOf = (name: string) => chartCard(item(name));
+  const topOf = (name: string) =>
+    Number(/translate\((-?[\d.]+)px, (-?[\d.]+)px\)/.exec(boxOf(name).style.transform)![2]);
+
+  /*
+   * A UNIT THAT CARRIES A LEAD IS TALLER than one that does not, and in a
+   * browser that is what makes this question real. Every card is one row to the
+   * default sizer, so this case says which cards are tall itself: Engineering
+   * has a lead in the fixture and Sales has none.
+   */
+  const LEAD_STRIP = ROW_HEIGHT / 2;
+  const withLeadStrip = () => {
+    const plain = LayoutObserver.sizer;
+    LayoutObserver.sizer = (el) => {
+      const size = plain(el);
+      // A card is what the default sizer measured at the card width; the one
+      // that says who leads it is half a row taller than the rest.
+      if (!size || size.width !== CARD_WIDTH) return size;
+      const led = el.textContent?.includes("Lead: VP Engineering") === true;
+      return led ? { ...size, height: size.height + LEAD_STRIP } : size;
+    };
+  };
+
+  test("every node of a depth is drawn on one line, whatever its card holds", () => {
+    withLeadStrip();
+    mount();
+    // Engineering is half a row taller than Sales and they are still one rank:
+    // the taller card sets the rank's height and the shorter is centred in it,
+    // so their two tops differ by exactly half the difference.
+    expect(topOf("Sales") - topOf("Engineering")).toBe(LEAD_STRIP / 2);
+    // The rank below starts under the TALLER of the two rather than under each
+    // card's own bottom, so the seats of both units are on one line.
+    expect(topOf("VP Engineering")).toBe(topOf("Platform"));
+    expect(topOf("Account Executive")).toBe(topOf("Platform"));
+    expect(topOf("Platform")).toBeGreaterThan(topOf("Engineering"));
   });
 });
 
