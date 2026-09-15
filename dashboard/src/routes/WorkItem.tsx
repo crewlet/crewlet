@@ -17,6 +17,7 @@
  */
 
 import { useMemo } from "react";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
@@ -329,7 +330,7 @@ export function ItemBody({
     <>
       <Wrap title="Description">
         {item.body ? (
-          <div className="prose">{item.body}</div>
+          <div className="prose md">{renderMarkdown(item.body)}</div>
         ) : (
           <span className="muted">No description was written.</span>
         )}
@@ -439,11 +440,11 @@ function Thread({
           </div>
           {/* A REMOVED COMMENT KEEPS ITS ROW so replies still resolve against
               something — and says so, rather than rendering as an empty one. */}
-          <div className="prose">
+          <div className="prose md">
             {comment.removed ? (
               <span className="faint">(this comment was removed)</span>
             ) : (
-              comment.body
+              renderMarkdown(comment.body)
             )}
           </div>
         </div>

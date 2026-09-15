@@ -376,6 +376,44 @@ where the answer is.
 
 ---
 
+## Markdown is rendered, not printed
+
+Page bodies, work-item descriptions and both kinds of comment are **markdown
+by contract** — every one of the tools that writes them says so in its own
+schema — and the dashboard printed them as literal characters: a reader saw
+`## Decision`, `- [ ] ship it` and `[the guide](https://…)` as the text an
+agent typed rather than as the document it wrote.
+
+`lib/markdown.ts` renders a CommonMark subset to React nodes. It is in-tree
+for the same reason the rest of this engine writes its own small pieces: a
+markdown library's real surface is its HTML passthrough and the sanitiser that
+has to follow it, and this renderer needs **neither** — it emits no raw HTML
+under any input, so there is no `dangerouslySetInnerHTML` on the path and
+nothing to sanitise.
+
+Two rules are load-bearing, because a page is written by an agent acting on
+content it read somewhere else:
+
+- **Raw HTML is text.** A `<script>` in a body renders as the characters
+  `<script>`, and the reader still sees what the page said.
+- **A link's scheme is an allowlist** — `http:`, `https:`, `mailto:` and the
+  app's own `#/` routes. Anything else (`javascript:`, `data:`, a
+  protocol-relative `//host`, a bare `/path`) renders as its own **label**
+  rather than as a link, and an image with a refused source renders as its alt
+  text. An allowlist rather than a denylist: enumerating the bad schemes is
+  wrong the moment a browser grows one more.
+
+An outbound link opens in a new tab with `rel="noopener noreferrer"`; an
+in-app `#/` link does neither, because it *is* this application. A task
+list's checkboxes are disabled — this surface performs no writes, and a box a
+reader could tick would report a change that never reached the page.
+
+`.prose` on its own stays a `pre-wrap` block, which is right for a model's own
+speech: its line breaks are load-bearing there and it is not markdown. A
+document carries `.prose.md` beside it.
+
+---
+
 ## The transcript is stable, and reads in order
 
 The sharpest complaint about the screen this replaces was that the LLM calls

@@ -311,6 +311,11 @@ Two properties differ from the vendor path and both are visible:
 
 - **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
 - **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists. The gate is this node's FIRST BUILD — one lap over every corpus — and not "nothing is waiting to be indexed": a page saved a moment ago is ordinary staleness, and reading the gate off a pending count made every empty search on a company with people in it answer "still building" instead. After the first lap a search is a true answer over slightly older rows, which is what a search always is.
+- **A body is MARKDOWN**, and the only format — see `internal/pages`. The
+  dashboard renders it (headings, lists, tables, code, links), with raw HTML
+  shown as its own text and a link's scheme restricted to `http(s):`,
+  `mailto:` and the app's own routes: a page is written by an agent acting on
+  content it read somewhere else, so a href in one is untrusted input.
 - **A title is an ADDRESS.** It is unique within its container, claimed
   first-writer-wins on the fleet, and a page is fetched by `CONTAINER/Title`
   as readily as by its id. The address is the title NORMALISED — lowercased

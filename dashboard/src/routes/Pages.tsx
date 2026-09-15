@@ -22,6 +22,7 @@
  */
 
 import { useMemo } from "react";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Empty, Panel, SearchInput, Segmented, Select, Skeleton } from "~/ui/primitives.tsx";
@@ -319,7 +320,7 @@ export function PageView({ container, title }: { container: string; title: strin
           <>
             <Panel>
               {page.body ? (
-                <div className="prose">{page.body}</div>
+                <div className="prose md">{renderMarkdown(page.body)}</div>
               ) : (
                 <span className="muted">This page has no body.</span>
               )}
@@ -359,7 +360,7 @@ export function PageView({ container, title }: { container: string; title: strin
                         </span>
                         {c.edited_at && <span className="muted">(edited)</span>}
                       </div>
-                      <div className="prose">{c.body}</div>
+                      <div className="prose md">{renderMarkdown(c.body)}</div>
                     </div>
                   ))}
                 </div>
@@ -456,7 +457,13 @@ function PageHistory({
                   Version {body.data.version}
                   {body.data.title ? ` — “${body.data.title}”` : ""}, as it was saved.
                 </p>
-                <div className="prose">{body.data.body || "This version had no body."}</div>
+                <div className="prose md">
+                  {body.data.body ? (
+                    renderMarkdown(body.data.body)
+                  ) : (
+                    <span className="muted">This version had no body.</span>
+                  )}
+                </div>
               </>
             ) : (
               // NOT FOUND IS NOT A FAILURE. A page keeps a bounded number

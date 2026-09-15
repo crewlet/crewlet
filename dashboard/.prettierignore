@@ -1,1 +1,8 @@
 node_modules
+
+# THE MARKDOWN FIXTURES ARE EXACT BYTES, and a formatter is the one tool that
+# must not touch them: prettier strips the two trailing spaces that make a hard
+# line break, normalises the table's own column widths, and renumbers an
+# ordered list — each of which is a case the renderer is tested on. A fixture a
+# formatter has rewritten tests the formatter, not the renderer.
+src/test/markdown/

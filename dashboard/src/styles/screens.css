@@ -2345,3 +2345,132 @@ a.work-cal-chip:hover {
     display: none;
   }
 }
+
+/* RENDERED MARKDOWN. `.prose` on its own is a plain `pre-wrap` block, which is
+   right for a model's speech — its own line breaks are load-bearing there and
+   it is not markdown. A page body and a work item's description ARE markdown
+   by contract, so they carry `.md` beside it: the whitespace rule goes back to
+   normal (the renderer decides what a break is) and the block elements it
+   emits get the spacing a document needs. */
+.prose.md {
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+/* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
+   siblings. The other way round — a `margin: 0` reset per element type after
+   the sibling rule — is how the rhythm died: the shorthand resets margin-top
+   too, at the same specificity and later in the file, so headings, paragraphs
+   and lists all ran together with no gap at all. */
+.prose.md :where(p, h2, h3, h4, h5, h6, ul, ol, pre, blockquote, .md-table) {
+  margin: 0;
+}
+.prose.md > * + * {
+  margin-top: var(--space-3);
+}
+.prose.md h2,
+.prose.md h3,
+.prose.md h4,
+.prose.md h5,
+.prose.md h6 {
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--text-primary);
+}
+/* A heading opens a section, so it gets more air above it than a paragraph —
+   except the first one, which has the panel's own padding above it already. */
+.prose.md > * + :is(h2, h3, h4, h5, h6) {
+  margin-top: var(--space-5);
+}
+.prose.md h2 {
+  font-size: var(--fs-md);
+}
+.prose.md h3 {
+  font-size: var(--fs-sm);
+}
+.prose.md h4,
+.prose.md h5,
+.prose.md h6 {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.prose.md ul,
+.prose.md ol {
+  padding-inline-start: var(--space-5);
+}
+.prose.md li + li {
+  margin-top: var(--space-1);
+}
+.prose.md li > ul,
+.prose.md li > ol {
+  margin-top: var(--space-1);
+}
+/* A task list keeps its box on the line rather than in the marker's place:
+   the marker is what says "list", and the box is what says "done". */
+.prose.md ul.md-tasks {
+  list-style: none;
+  padding-inline-start: 0;
+}
+.prose.md ul.md-tasks > li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+/* The item's own content is ONE column beside the box, never a second cell
+   of the row: a sublist belongs under the line it hangs off, not beside it. */
+.prose.md .md-task-body {
+  min-width: 0;
+  flex: 1;
+}
+.prose.md .md-task-body > * + * {
+  margin-top: var(--space-2);
+}
+.prose.md ul.md-tasks input[type="checkbox"] {
+  margin-top: 0.2em;
+  /* The box is a RENDERING of what the document says and this surface writes
+     nothing, so it is disabled — and a disabled control at its browser
+     default reads as greyed-out noise beside the text it belongs to. */
+  accent-color: var(--accent);
+  opacity: 0.85;
+}
+.prose.md blockquote {
+  margin: 0;
+  padding-inline-start: var(--space-3);
+  border-inline-start: 2px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.prose.md hr {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--space-4) 0;
+}
+.prose.md a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose.md img {
+  max-width: 100%;
+  border-radius: var(--r-sm);
+}
+
+/* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
+   written for a document and can be wider than the column it lands in here. */
+.md-table {
+  overflow-x: auto;
+}
+.md-table table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: var(--fs-2xs);
+}
+.md-table th,
+.md-table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+}
+.md-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
