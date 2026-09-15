@@ -641,6 +641,50 @@
   border-bottom: none;
 }
 
+/* A thread entry that IS the control — the row a reader clicks to select one
+   of a list. A <button> rather than a div with a handler, because a list you
+   arrow through is a list a keyboard reaches; the browser's own button chrome
+   is what is being removed here, not the semantics. */
+.thread-entry.as-row {
+  width: 100%;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.thread-entry.as-row:hover {
+  background: var(--surface-hover);
+}
+.thread-entry.as-row.selected {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.thread-entry.as-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* ---- Ranked search ------------------------------------------------------ */
+
+/* A hit's PLACE in the answer. A number rather than a bar, because that is
+   what the engine produces: the fusion arithmetic is finished before a
+   coordinator sees these, so there is no score left to draw a length from —
+   and a bar with nothing behind it is the same defect as a zeroed field,
+   wearing a chart's clothes. */
+.rank-place {
+  display: inline-block;
+  min-width: 1.75em;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---- Knowledge ---------------------------------------------------------- */
 
 .hit {

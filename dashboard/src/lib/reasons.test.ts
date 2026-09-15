@@ -12,7 +12,33 @@
  */
 
 import { describe, expect, test } from "vitest";
-import { reasonPhrase, reasonWhy } from "./reasons.ts";
+import { reasonAbout, reasonPhrase, reasonWhy } from "./reasons.ts";
+
+/** The engine's twenty, as this table spells them. The Go gate
+ *  `TestEveryWakeReasonReadsAsEnglishOnTheClient` is what keeps this in step
+ *  with the engine; here it is the set the two-voice rule is walked over. */
+const KNOWN = [
+  "mention",
+  "prioritised",
+  "blocking",
+  "asked",
+  "answered",
+  "assignee",
+  "unassigned",
+  "reporter",
+  "thread",
+  "unblocked",
+  "routed_to",
+  "parent_assignee",
+  "checklist",
+  "collaborator",
+  "goal_owner",
+  "sprint",
+  "watcher",
+  "unwatched",
+  "purged",
+  "lead_fallback",
+];
 
 describe("reason phrasing", () => {
   test("a known reason reads as a sentence about a person", () => {
@@ -28,6 +54,37 @@ describe("reason phrasing", () => {
   test("a reason this build does not know renders as itself", () => {
     expect(reasonPhrase("summoned_by_owl")).toBe("summoned by owl");
     expect(reasonWhy("summoned_by_owl")).toContain("summoned_by_owl");
+  });
+
+  // TWO VOICES, and neither is the other's fallback. A change's routing lists
+  // COLLEAGUES, so "assigned to you" beside somebody else's name is a sentence
+  // about the wrong person — which is what the Woke tab rendered until this
+  // existed. Every reason has to carry both, or the surface that lacks one
+  // silently borrows the other's pronoun.
+  test("a reason about somebody else is not in the second person", () => {
+    expect(reasonAbout("assignee")).toBe("assignee");
+    expect(reasonAbout("lead_fallback")).toBe("the unit's lead");
+    expect(reasonAbout("watcher")).toBe("watching");
+  });
+
+  // AND NO THIRD-PERSON FORM SAYS "YOU". This is the rule rather than a
+  // spot-check on three of them: the failure is one entry keeping the inbox's
+  // wording, which reads perfectly on its own line and is a sentence about the
+  // wrong person on every routing list in the product.
+  test("no third-person form is in the second person", () => {
+    for (const reason of KNOWN) {
+      expect(reasonAbout(reason).toLowerCase(), `${reason} reads as second person`).not.toMatch(
+        /\byou\b|\byour\b|\byours\b/,
+      );
+      // And the second-person form is still second-person, so the two
+      // have not quietly become one table with one voice.
+      expect(reasonPhrase(reason), `${reason} has no phrase`).toBeTruthy();
+    }
+  });
+
+  test("an unknown reason has a third-person form too", () => {
+    expect(reasonAbout("summoned_by_owl")).toBe("summoned by owl");
+    expect(reasonAbout("")).toBe("no reason recorded");
   });
 
   test("an empty reason does not become an empty chip", () => {

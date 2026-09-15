@@ -29,13 +29,14 @@ import {
   TypeIcon,
   type RowChrome,
 } from "~/components/work.tsx";
-import { Badge, Button, Panel, Skeleton, Tabs } from "~/ui/primitives.tsx";
+import { Badge, Button, Empty, Panel, Skeleton, Tabs } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { fmtDate, fmtDateTime, fmtCount, fmtDuration, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { reasonAbout } from "~/lib/reasons.ts";
 import {
   describeHistory,
   fieldValueState,
@@ -46,11 +47,13 @@ import {
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import type {
+  WorkChange,
   WorkComment,
   WorkFieldDef,
   WorkItemDetail,
   WorkLink,
   WorkProjectDetail,
+  WorkRoutingAnswer,
   WorkSummary,
 } from "~/protocol/index.ts";
 
@@ -287,6 +290,9 @@ export function ItemBody({
 }) {
   const item = detail.task;
   const [tab, setTab] = useParam("thread", "comments");
+  // WHICH CHANGE'S ROUTING IS OPEN. A filter rather than a section: stepping
+  // through the announced changes must not fill the back stack.
+  const [record, setRecord] = useParam("record", "", "filter");
 
   // A SUBTREE IS ITS OWN QUESTION. `parent=` turns the root-only subtask mode
   // off, so this is the one read that can see the children of a task — the
@@ -357,10 +363,22 @@ export function ItemBody({
           options={[
             { value: "comments", label: "Thread", icon: "message", count: comments.length },
             { value: "history", label: "History", icon: "activity", count: history.length },
+            // THE FACT NO OTHER TRACKER RECORDS. Every tracker can say a
+            // change notified somebody; this one records, per change and
+            // per person, the ONE reason of twenty it reached them under
+            // and whether it ASKS anything of them.
+            {
+              value: "woke",
+              label: "Woke",
+              icon: "bell",
+              count: history.filter((entry) => !entry.quiet).length,
+            },
           ]}
         />
         {tab === "comments" ? (
           <Thread comments={comments} chrome={chrome} now={now} more={detail.comments_cursor} />
+        ) : tab === "woke" ? (
+          <Woke history={history} chrome={chrome} now={now} record={record} onPick={setRecord} />
         ) : (
           <History detail={detail} chrome={chrome} now={now} />
         )}
@@ -476,6 +494,202 @@ function History({
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * Who each announced change woke, and under which reason.
+ *
+ * # The list is the item's OWN history, not a second query
+ *
+ * The detail answer already carries every change; the only thing missing was
+ * the routing, and that is one question per change rather than one per item.
+ * So the left half is a filter over what is already here — the announced
+ * changes — and only the SELECTED one is asked about.
+ *
+ * # A quiet change has no row
+ *
+ * `quiet` means the commit carried no notification at all, which is most field
+ * edits and every bulk one. Listing them here would bury the handful that
+ * actually reached somebody under the hundreds that did not try to.
+ *
+ * # Three empty answers, three sentences
+ *
+ * `nobody`, `swept` and `unknown` are different facts and send a reader
+ * somewhere different — at who has left the company, at the retention horizon,
+ * and at neither. They are one empty list on every other tracker.
+ */
+function Woke({
+  history,
+  chrome,
+  now,
+  record,
+  onPick,
+}: {
+  history: WorkChange[];
+  chrome: RowChrome;
+  now: number;
+  record: string;
+  onPick: (id: string) => void;
+}) {
+  const announced = useMemo(() => history.filter((entry) => !entry.quiet), [history]);
+  // THE NEWEST ANNOUNCED CHANGE by default, because a reader opening this tab
+  // is almost always asking about what just happened.
+  const selected = record || announced[0]?.id || "";
+  const routing = useQuery("work_routing", { record_id: selected }, { enabled: selected !== "" });
+
+  if (announced.length === 0) {
+    return (
+      <Empty
+        inline
+        icon="bell"
+        title="Nothing here announced anything"
+        hint="Every change to this item was quiet — a field edit, or part of a bulk call. A quiet commit still writes a history row, which is how you can tell it from nothing having happened."
+      />
+    );
+  }
+
+  return (
+    <div className="split" style={{ paddingTop: "var(--space-2)" }}>
+      <div className="list">
+        {announced.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            className={`thread-entry as-row${entry.id === selected ? " selected" : ""}`}
+            onClick={() => onPick(entry.id)}
+          >
+            <span className="row gap-1">
+              <Icon name="bell" size="xs" />
+              <span className="truncate t-cell" style={{ flex: 1 }}>
+                <strong>
+                  {entry.actor ? (chrome.seatName?.(entry.actor) ?? entry.actor) : "the engine"}
+                </strong>{" "}
+                {describeHistory(entry)}
+              </span>
+              <span className="t-caption faint" title={fmtDateTime(entry.at)}>
+                {relTime(entry.at, now)}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <QueryState error={routing.error} loading={routing.loading}>
+        {routing.data && <Routing answer={routing.data} chrome={chrome} />}
+      </QueryState>
+    </div>
+  );
+}
+
+/** One change's recipients, or the reason there are none to show. */
+function Routing({ answer, chrome }: { answer: WorkRoutingAnswer; chrome: RowChrome }) {
+  if (answer.recipients.length === 0) {
+    return <NobodyWoken answer={answer} />;
+  }
+  // THE EXCERPT IS USUALLY ONE SENTENCE FOR EVERYBODY, so it is shown once
+  // above the list rather than repeated under every name. It CAN differ per
+  // recipient — a mention's excerpt is the sentence naming them — and a row
+  // that differs still carries its own, which is the only case where the
+  // repetition was ever information.
+  const shared =
+    answer.recipients.length > 0 &&
+    answer.recipients.every((r) => r.excerpt === answer.recipients[0]?.excerpt)
+      ? (answer.recipients[0]?.excerpt ?? "")
+      : "";
+  return (
+    <div className="col gap-2">
+      <div className="row gap-1 wrap">
+        <Badge outline>
+          {answer.recipients.length} {answer.recipients.length === 1 ? "person" : "people"}
+        </Badge>
+        {answer.addressed > 0 && (
+          <Badge tone="accent" title="asked something, rather than merely informed">
+            {answer.addressed} asked
+          </Badge>
+        )}
+        {answer.fallback > 0 && (
+          <Badge outline title="reached only because nobody better was found">
+            {answer.fallback} by fallback
+          </Badge>
+        )}
+      </div>
+      {shared && <p className="t-caption faint">{shared}</p>}
+      <div className="list">
+        {answer.recipients.map((r) => (
+          <div key={r.handle} className="thread-entry">
+            <div className="row gap-1">
+              <SeatChip name={chrome.seatName?.(r.handle) ?? r.handle} handle={r.handle} />
+              <span className="spacer" />
+              {/* THE REASON IS THE ROW'S POINT, so it is a badge rather
+                  than a caption: it is the one of twenty that found them.
+                  IN THE THIRD PERSON — this list is about colleagues, and
+                  `reasonPhrase`'s "assigned to you" beside somebody else's
+                  name is a sentence about the wrong person. */}
+              <Badge tone={r.addressed ? "accent" : undefined} outline={!r.addressed}>
+                {reasonAbout(r.reason)}
+              </Badge>
+              {r.fallback && (
+                <Badge outline title="nobody better was found">
+                  substitute{r.fallback_rank ? ` #${r.fallback_rank}` : ""}
+                </Badge>
+              )}
+            </div>
+            {!shared && r.excerpt && <p className="t-caption faint">{r.excerpt}</p>}
+          </div>
+        ))}
+      </div>
+      {answer.truncated && (
+        <p className="t-caption faint">
+          The list was cut. A change this engine wrote cannot name this many people, so a peer on a
+          different build wrote a larger recipient set.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The three empty answers, each with its own remedy. */
+function NobodyWoken({ answer }: { answer: WorkRoutingAnswer }) {
+  if (!answer.held) {
+    return (
+      <Empty
+        inline
+        icon="help"
+        title="No such change here"
+        hint="A record id this node holds no history row for — a link from before a purge, or a reanchor that has not replayed this far."
+      />
+    );
+  }
+  if (answer.delivery === "swept") {
+    return (
+      <Empty
+        inline
+        icon="clock"
+        title="Beyond the retention window"
+        hint={`This change announced something, and it is older than ${
+          answer.retained_from ? fmtDateTime(answer.retained_from) : "the inbox horizon"
+        } — so whether anybody was reached is a fact this node no longer holds. The history it points at is untouched.`}
+      />
+    );
+  }
+  if (answer.delivery === "unknown") {
+    return (
+      <Empty
+        inline
+        icon="help"
+        title="Cannot say"
+        hint="This change announced something and no recipients remain, and this node was not told how long an inbox is kept — so an absent set cannot be dated."
+      />
+    );
+  }
+  return (
+    <Empty
+      inline
+      icon="users"
+      title="It announced, and reached nobody"
+      hint="Every candidate was the person making the change, or has left the company. The notification was formed and had nowhere to go — which is a different fact from a quiet commit, and the only place it is visible."
+    />
   );
 }
 
