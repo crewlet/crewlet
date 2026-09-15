@@ -26,7 +26,7 @@ import {
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Badge, Segmented } from "~/ui/primitives.tsx";
+import { Segmented } from "~/ui/primitives.tsx";
 import {
   useAgents,
   useClient,
@@ -455,4 +455,3 @@ export function ScreenHead({
   );
 }
 
-export { Badge };
