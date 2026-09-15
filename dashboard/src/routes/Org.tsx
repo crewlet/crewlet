@@ -75,7 +75,10 @@ export function OrgScreen() {
           one, and the chart that has not moved would read as a save that did
           nothing. */}
       {lens !== "builder" && <PreviousRevisionNote />}
-      <TabPanel id={panel} value={lens}>
+      {/* NAMED BY THE SCREEN, because one lens has a layout of its own: the
+          builder's chart fills the window, and the stylesheet that says so
+          needs a handle on the panel between the shell and the builder. */}
+      <TabPanel id={panel} value={lens} className="org-lens">
         {lens === "chart" && <Chart index={index} />}
         {lens === "directory" && <Directory index={index} />}
         {lens === "charter" && <Charter org={org ?? {}} index={index} />}

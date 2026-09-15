@@ -14,10 +14,11 @@ import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { Router } from "./router.tsx";
 import { Shell } from "./Shell.tsx";
+import { useFillScreen } from "./fill.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store, requestToken } from "~/protocol/index.ts";
-import { Modal } from "@crewlethq/ui";
-import { installMedia } from "~/testing.tsx";
+import { AppShell, Modal } from "@crewlethq/ui";
+import { installMedia, isDrawnAs } from "~/testing.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -499,4 +500,46 @@ test("a bare slash inside a list of choices belongs to the list", () => {
   (document.activeElement as HTMLElement).blur();
   fireEvent.keyDown(window, { key: "/" });
   expect(screen.getByRole("dialog", { name: "Search" })).toBeDefined();
+});
+
+/**
+ * A screen that draws to the bottom of the window gets it, and gives it back.
+ *
+ * The shell used to answer this with a rule in the org builder's own
+ * stylesheet, reaching up at a wrapper the shell drew
+ * (`.screen-inner:has(.org-builder-body.fill)`). The design system's shell
+ * draws no such wrapper, so the rule stopped matching, the builder's canvas
+ * had no definite height left anywhere above it, and the chart lens collapsed
+ * to nothing. A request is what replaces it: the screen asks, the shell
+ * answers, and neither has to know a class name the other writes.
+ */
+function FillingScreen({ on }: { on: boolean }) {
+  useFillScreen(on);
+  return <p>the canvas lens</p>;
+}
+
+/**
+ * The element the design system marks, found without naming its class: the
+ * shell is the outermost thing this render put on the page.
+ */
+function shellRoot(): HTMLElement {
+  let el = document.querySelector("main");
+  while (el?.parentElement?.getAttribute("class") !== null) el = el!.parentElement;
+  if (!(el instanceof HTMLElement)) throw new Error("no shell root");
+  return el;
+}
+
+/** Whether the shell is drawing the layout a filling screen asked for. */
+function fillsTheWindow(): boolean {
+  return isDrawnAs(shellRoot(), AppShell, { fill: true, children: null }, { children: null });
+}
+
+test("a screen that asks for the window's height is drawn with it", () => {
+  mount(<FillingScreen on />);
+  expect(fillsTheWindow()).toBe(true);
+});
+
+test("a screen that does not ask leaves the shell its scroller", () => {
+  mount(<FillingScreen on={false} />);
+  expect(fillsTheWindow()).toBe(false);
 });

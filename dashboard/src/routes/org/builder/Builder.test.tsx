@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { clearToken, storeToken, type OrgProjection } from "~/protocol/index.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
 import { menuEntryLabel } from "~/testing.tsx";
+import { FillRequest } from "~/app/fill.tsx";
 import {
   company,
   Engine,
@@ -540,5 +541,46 @@ describe("a token change mid-edit", () => {
     );
     // The seats are still drawn from the draft, not replaced by a refusal.
     expect(within(screen.getByRole("list", { name: "Seats" })).getByText("CEO")).toBeDefined();
+  });
+});
+
+/**
+ * THE CHART LENS TAKES THE WINDOW, and gives it back.
+ *
+ * A canvas fills the box its screen gives it and clips, so the application
+ * frame's scroller has to stop being one while the chart is on. The shell
+ * used to work that out for itself, from a rule in this package's stylesheet
+ * that reached up at a wrapper the shell drew; the design system's shell
+ * draws no such wrapper, which left the canvas with no definite height
+ * anywhere above it. The lens says so now, and this is what says it still
+ * does, and still stops saying it on the outline.
+ */
+describe("the lens that fills the window", () => {
+  function asked(hash: string): boolean[] {
+    const calls: boolean[] = [];
+    mountBuilder({
+      engine: new Engine(company()),
+      hash,
+      wrap: (tree) => (
+        <FillRequest.Provider value={(on) => calls.push(on)}>{tree}</FillRequest.Provider>
+      ),
+    });
+    return calls;
+  }
+
+  test("the chart lens asks the frame for the window's height", async () => {
+    const calls = asked("#/org?lens=builder&view=canvas");
+    // Not before the engine has answered: until then the lens draws a posture
+    // screen, which is an ordinary column and scrolls like one.
+    expect(calls).not.toContain(true);
+    await waitFor(() => expect(calls).toContain(true));
+  });
+
+  test("the outline lens asks for nothing and leaves the scroller alone", async () => {
+    const calls = asked("#/org?lens=builder&view=outline");
+    // The toolbar is what both lenses draw once the engine has answered, so
+    // waiting for it is waiting for the same moment the case above measures.
+    await screen.findByRole("toolbar", { name: "Organization builder" });
+    expect(calls).not.toContain(true);
   });
 });

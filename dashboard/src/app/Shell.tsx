@@ -9,7 +9,8 @@
  * which surfaces the chrome can raise.
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { FillRequest } from "./fill.tsx";
 import { NAV, activeNavKey, titleFor } from "./nav.ts";
 import { href, useRoute } from "./router.tsx";
 import {
@@ -94,6 +95,17 @@ export function Shell({ children }: { children: ReactNode }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [enginePanel, setEnginePanel] = useState(false);
   const [tokenOpen, setTokenOpen] = useState(false);
+
+  /*
+   * A SCREEN THAT DRAWS TO THE BOTTOM OF THE WINDOW asks for it, and the
+   * design system's shell answers: the scroller stops scrolling and the
+   * content column takes the height that is left. The org builder's chart
+   * lens is the one caller, because a canvas fills its box rather than
+   * growing the page. Stable identity, so the effect that raises the request
+   * runs when the answer changes and not on every render of this frame.
+   */
+  const [fill, setFill] = useState(false);
+  const requestFill = useCallback((on: boolean) => setFill(on), []);
 
   // ONE READ OF THE ENGINE'S HEALTH, shared with the panel. The rail polled at
   // 15 seconds and the panel at 5, so for as long as ten seconds after a
@@ -293,8 +305,9 @@ export function Shell({ children }: { children: ReactNode }) {
           />
         }
         banner={banner}
+        fill={fill}
       >
-        {children}
+        <FillRequest.Provider value={requestFill}>{children}</FillRequest.Provider>
       </AppShell>
 
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}

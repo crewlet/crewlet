@@ -121,19 +121,21 @@
   --crewlet-tree-canvas-card-width: 15rem;
 }
 
-/* THE CANVAS VIEW FILLS THE SCREEN, and `.screen` has nothing to scroll. The
-   screen's own column, the lens panel and the builder become flex columns
-   with a definite height, so the canvas takes what is left under the toolbar
-   instead of growing the page: a wheel turned over a page that scrolls would
-   otherwise land in a canvas half off screen. Matched on the builder's own
-   class rather than set by the shell, which knows nothing about lenses. */
+/* THE CANVAS VIEW FILLS THE SCREEN, and the shell's scroller has nothing to
+   scroll. The lens panel and the builder become flex columns with a definite
+   height, so the canvas takes what is left under the toolbar instead of
+   growing the page: a wheel turned over a page that scrolls would otherwise
+   land in a canvas half off screen.
 
-.screen-inner:has(.org-builder-body.fill) {
-  height: 100%;
-  padding-bottom: var(--spacing-5);
-}
+   THE HEIGHT ITSELF COMES FROM THE SHELL, which the screen ASKS rather than
+   reaches into: `useFillScreen` raises the design system's own `fill`, and
+   the content column it draws is what these two are measured against. The
+   rules below used to begin at `.screen-inner`, the shell's own wrapper,
+   which the design system's shell does not draw, so every one of them stopped
+   matching and the canvas collapsed to nothing. Nothing here names a class
+   the package draws: the chain starts at the panel the screen labels. */
 
-.screen-inner:has(.org-builder-body.fill) > .tab-panel,
+.org-lens:has(.org-builder-body.fill),
 .org-builder:has(> .org-builder-body.fill) {
   display: flex;
   flex-direction: column;
@@ -149,13 +151,6 @@
 }
 
 .org-builder-body.fill {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-.org-builder-body.fill .tab-panel {
-  display: flex;
-  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
 }

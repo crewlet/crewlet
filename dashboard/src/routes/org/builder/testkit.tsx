@@ -15,6 +15,7 @@
 
 import { render } from "@testing-library/react";
 import { vi } from "vitest";
+import type { ReactNode } from "react";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import {
@@ -347,6 +348,7 @@ export function mountBuilder({
   storage,
   keys,
   query = () => null,
+  wrap = (tree) => tree,
 }: {
   engine: Engine;
   org?: OrgProjection | null;
@@ -358,6 +360,8 @@ export function mountBuilder({
   keys?: KeySource;
   /** What the socket's query channel answers, by name. */
   query?: (what: string) => unknown;
+  /** A provider the lens reads from, which the application frame supplies. */
+  wrap?: (tree: ReactNode) => ReactNode;
 }) {
   Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
   location.hash = hash;
@@ -371,7 +375,7 @@ export function mountBuilder({
   const view = render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
-        <Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />
+        {wrap(<Builder surfaces={surfaces} storage={storage} {...(keys ? { keys } : {})} />)}
       </Router>
     </ClientContext.Provider>,
   );

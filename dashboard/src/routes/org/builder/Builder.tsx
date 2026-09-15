@@ -49,6 +49,7 @@ import {
   type RefObject,
 } from "react";
 import { href, useLeaveGuard, useNavigator, useParam, useUnloadGuard } from "~/app/router.tsx";
+import { useFillScreen } from "~/app/fill.tsx";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
@@ -521,6 +522,17 @@ function Lens({
   const stateRef = useRef(state);
   stateRef.current = state;
   const [loaded, setLoaded] = useState(false);
+
+  /* THE CHART LENS TAKES THE WINDOW. A canvas fills the box its screen gives
+     it and clips, so the application frame's scroller has to stop being one
+     while this lens is on: a wheel turned over a page that scrolls otherwise
+     lands in a canvas half off screen. The outline lens is an ordinary column
+     and gives the scroller straight back, and so does the posture screen this
+     lens draws instead of either until the engine has answered.
+
+     ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
+     and not others. */
+  useFillScreen(loaded && view === "canvas");
   const live = useLiveRegion();
   const { announce } = live;
 
