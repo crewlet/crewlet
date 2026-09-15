@@ -25,7 +25,6 @@ import {
 } from "./CommandPalette.tsx";
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
-import { Kbd } from "~/ui/Kbd.tsx";
 import {
   useAgents,
   useClient,
@@ -41,6 +40,7 @@ import {
   Button,
   ButtonLink,
   IconButton,
+  Kbd,
   SegmentedControl,
   cx,
   focusables,

@@ -197,12 +197,15 @@ test("the shortcut hints name the keys the reader's own keyboard prints, in word
 
   fireEvent.click(search);
   const palette = screen.getByRole("dialog", { name: "Search" });
-  // The sentence each hint reads: a glyph such as "↵" or "esc" is hidden from
-  // assistive technology, which hears the key's name instead.
-  const spoken = [...palette.querySelectorAll(".kbd-combo .sr-only")].map((s) => s.textContent);
-  expect(spoken).toEqual(["Up arrow", "Down arrow", "Enter", "Escape"]);
+  // The sentence each hint reads: a glyph such as the return arrow or "esc" is
+  // hidden from assistive technology, which hears the key's name instead.
+  const hints = [...palette.querySelectorAll("kbd")].map(
+    (cap) => cap.closest("[aria-hidden]")?.nextElementSibling?.textContent,
+  );
+  expect(hints).toEqual(["Up arrow", "Down arrow", "Enter", "Escape"]);
+  // Every drawn cap is hidden from it: read as glyphs, the row says nothing.
   expect(
-    [...palette.querySelectorAll(".kbd-keys")].every((k) => k.getAttribute("aria-hidden")),
+    [...palette.querySelectorAll("kbd")].every((cap) => cap.closest("[aria-hidden]") !== null),
   ).toBe(true);
 });
 

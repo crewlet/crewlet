@@ -246,3 +246,47 @@ test("the decoration-step scan reads rules, and recognises what it polices", () 
   expect(TEXT_COLOUR.test(`  background-${decoration};`)).toBe(false);
   expect(TEXT_COLOUR.test(`  border-${decoration};`)).toBe(false);
 });
+
+/**
+ * A recipe the design system owns is spelled nowhere else.
+ *
+ * Neither of these has an owner in this tree any more: the `.btn` class list
+ * was `ui/primitives.tsx` and the `<kbd>` element was `ui/Kbd.tsx`, and both
+ * are the design system's. Each used to be written by hand beside its
+ * primitive as well: a menu trigger and a list's Move buttons spelled
+ * `btn ghost sm icon` themselves, three links spelled `btn primary`, and the
+ * shell drew a bare `<kbd>` that told every reader not on a Mac to press a key
+ * they do not have.
+ */
+
+/** A string literal holding the `btn` class as a whole word. */
+const BUTTON_CLASS = /(["\'`])(?:[^"\'`\n]*\s)?btn(?:\s[^"\'`\n]*)?\1/;
+/** A `<kbd>` element written by hand. */
+const KBD_ELEMENT = /<kbd[\s>]/;
+
+test("the recipe scan recognises the markup it polices", () => {
+  // A pattern that matched nothing would pass the two tests below for ever.
+  expect(BUTTON_CLASS.test('<a className="btn sm primary" href="#/">')).toBe(true);
+  expect(BUTTON_CLASS.test('cx("btn", "ghost")')).toBe(true);
+  expect(BUTTON_CLASS.test("className={`btn ${tone}`}")).toBe(true);
+  expect(BUTTON_CLASS.test('className="btn-group"')).toBe(false);
+  expect(BUTTON_CLASS.test('className="subtn"')).toBe(false);
+  expect(KBD_ELEMENT.test("<kbd>Command K</kbd>")).toBe(true);
+  expect(KBD_ELEMENT.test('querySelectorAll("kbd")')).toBe(false);
+});
+
+test("nothing spells the button class list, which has no owner here", () => {
+  const offenders = files(/\.tsx?$/)
+    .filter(({ name }) => !/\.test\.tsx?$/.test(name))
+    .filter(({ text }) => BUTTON_CLASS.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+test("nothing draws a keycap by hand, which has no owner here either", () => {
+  const offenders = files(/\.tsx?$/)
+    .filter(({ name }) => !/\.test\.tsx?$/.test(name))
+    .filter(({ text }) => KBD_ELEMENT.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});

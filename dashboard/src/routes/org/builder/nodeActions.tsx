@@ -20,7 +20,6 @@
  */
 
 import type { KeyboardEvent } from "react";
-import { Kbd, isApplePlatform } from "~/ui/Kbd.tsx";
 import { seatPath } from "~/lib/seats.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, SeatView, Structure, UnitView } from "./chartModel.ts";
@@ -36,7 +35,7 @@ import {
   PersonGlyph,
   SmartToyGlyph,
 } from "@crewlethq/icons/glyphs";
-import { type MenuEntry } from "@crewlethq/ui";
+import { Kbd, isApplePlatform, type MenuEntry } from "@crewlethq/ui";
 
 /** Where "Open seat" goes: the seat's own screen. */
 export type OpenScreen = (path: string[]) => void;

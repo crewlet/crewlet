@@ -53,7 +53,6 @@ import { fmtDateTime, plural } from "~/lib/format.ts";
 import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
-import { Kbd } from "~/ui/Kbd.tsx";
 import type { Tone } from "@crewlethq/ui";
 import {
   BuilderContext,
@@ -133,6 +132,7 @@ import {
   Callout,
   EmptyState,
   IconButton,
+  Kbd,
   LayerHost,
   Menu,
   Modal,

@@ -38,7 +38,7 @@ import {
   Tag,
   tabId,
 } from "@crewlethq/ui";
-import { Checkbox } from "@crewlethq/ui";
+import { Checkbox, Kbd, keyGlyph } from "@crewlethq/ui";
 import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
@@ -461,4 +461,28 @@ test("a disabled checkbox cannot be ticked from its row either", () => {
   fireEvent.click(screen.getByText("Also remove the accounts Crewlet created"));
   expect(box.checked).toBe(false);
   expect(box.disabled).toBe(true);
+});
+
+// A hint that says Ctrl+Z to somebody on a Mac names a key they do not press,
+// and one that draws the glyphs alone is read aloud as "place of interest sign
+// Z". The builder's toolbar and menus are built on both halves.
+test("Mod is Command on Apple platforms and Control everywhere else", () => {
+  expect(keyGlyph("Mod", true)).toEqual({ glyph: "\u2318", spoken: "Command" });
+  expect(keyGlyph("Mod", false)).toEqual({ glyph: "Ctrl", spoken: "Control" });
+  expect(keyGlyph("Alt", true).spoken).toBe("Option");
+  expect(keyGlyph("Backspace", true)).toEqual({ glyph: "\u232b", spoken: "Delete" });
+  // A letter is printed in capitals, and an unknown key as itself.
+  expect(keyGlyph("z", false)).toEqual({ glyph: "Z", spoken: "Z" });
+  expect(keyGlyph("F10", false)).toEqual({ glyph: "F10", spoken: "F10" });
+});
+
+test("a shortcut's caps are hidden, and one sentence is read instead", () => {
+  const { container } = render(<Kbd keys={["Mod", "Shift", "z"]} apple />);
+  const drawn = container.querySelector("[aria-hidden='true']")!;
+  expect([...drawn.querySelectorAll("kbd")].map((cap) => cap.textContent)).toEqual([
+    "\u2318",
+    "\u21e7",
+    "Z",
+  ]);
+  expect(container.textContent).toContain("Command plus Shift plus Z");
 });

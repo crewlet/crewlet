@@ -670,25 +670,6 @@ code.inline {
   font-variant-ligatures: none;
 }
 
-kbd {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-  background: var(--color-surface-inset);
-  border: 1px solid var(--color-border-default);
-  border-bottom-width: 2px;
-  border-radius: var(--radius-xs);
-  padding: 1px 5px;
-  color: var(--color-text-tertiary);
-}
-/* A shortcut of several keys (`ui/Kbd.tsx`): the keys side by side, and the
-   sentence a screen reader reads instead beside them. */
-.kbd-combo,
-.kbd-keys {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-}
-
 /* The rise a surface enters on. The shell's engine panel is what animates
    with it; every other surface that did is the design system's now. */
 @keyframes rise {

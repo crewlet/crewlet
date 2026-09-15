@@ -37,7 +37,6 @@ import { ALL_NAV } from "./nav.ts";
 import { useNavigator } from "./router.tsx";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
-import { Kbd } from "~/ui/Kbd.tsx";
 import {
   type GlyphProps,
   AccountTreeGlyph,
@@ -50,7 +49,7 @@ import {
   SmartToyGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Modal, useListbox } from "@crewlethq/ui";
+import { Kbd, Modal, useListbox } from "@crewlethq/ui";
 
 interface Hit {
   id: string;
