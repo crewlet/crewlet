@@ -26,6 +26,7 @@
  */
 
 import { useMemo } from "react";
+import { renderMarkdown } from "~/lib/markdown.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Coverage, RowList, type RowChrome } from "~/components/work.tsx";
@@ -357,7 +358,7 @@ export function Asks({
               />
               <span className="muted">{relTime(ask.asked_at, now)}</span>
             </div>
-            <div className="prose">{ask.body}</div>
+            <div className="prose md">{renderMarkdown(ask.body)}</div>
           </div>
         ))}
       </div>
