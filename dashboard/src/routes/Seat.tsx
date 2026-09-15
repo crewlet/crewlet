@@ -47,11 +47,11 @@ import {
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
-import type { EventRecord } from "~/protocol/index.ts";
+import type { ConversationEntry, CounterpartyProfile, EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
-type Tab = "overview" | "model" | "memory" | "cost" | "access";
+type Tab = "overview" | "model" | "threads" | "memory" | "cost" | "access";
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
@@ -81,6 +81,10 @@ export function SeatScreen({ handle }: { handle: string }) {
   const tokens = useTokens();
   const now = useNow();
   const [tab, setTab] = useParam("tab", "overview", "section");
+  // WHICH THREAD IS OPEN, as a filter rather than a section: opening one
+  // replaces the history entry, so Back leaves the seat rather than walking
+  // every thread the reader glanced at.
+  const [thread, setThread] = useParam("conversation", "", "filter");
 
   const phaseEvents = usePhaseEvents();
 
@@ -108,6 +112,19 @@ export function SeatScreen({ handle }: { handle: string }) {
     { enabled: tab === "overview" || tab === "model" },
   );
   const memory = useQuery("agent_memory", { id: handle }, { enabled: tab === "memory" });
+  // WHAT THIS SEAT HAS SAID ON A SURFACE THE ENGINE DOES NOT OWN. The ledger
+  // is what stops it replying twice in one chat thread, and it has been
+  // written since the runtime landed with nothing on any screen reading it.
+  //
+  // SCOPED, so a seat's threads are readable by that seat's own person and by
+  // an operator — the same rule every other per-seat question follows. The
+  // handle is sent explicitly because this screen is about somebody else's
+  // seat as often as the reader's own.
+  const threads = useQuery(
+    "conversations",
+    { handle, ...(thread ? { conversation: thread } : {}) },
+    { enabled: tab === "threads" },
+  );
   // A PERSON RECORD IS A HUMAN'S. A seat has a MAILBOX — the durable
   // subscription the engine attaches when it acquires the seat — and nothing
   // on a person's record describes one, so this is read only for a human.
@@ -278,6 +295,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             : [
                 { value: "overview" as const, label: "Overview", icon: "user" as const },
                 { value: "model" as const, label: "Model activity", icon: "brain" as const },
+                { value: "threads" as const, label: "Conversations", icon: "message" as const },
                 { value: "memory" as const, label: "Memory", icon: "database" as const },
                 { value: "cost" as const, label: "Cost", icon: "coin" as const },
                 { value: "access" as const, label: "Access", icon: "key" as const },
@@ -625,6 +643,85 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
+        {shown === "threads" && (
+          <>
+            <PageNote>
+              Every thread this seat holds a record in, and what it said there. The ledger is what
+              stops it replying twice in one conversation — it is the engine&rsquo;s only account of
+              what a seat said on a surface it does not own, and until now nothing read it.
+            </PageNote>
+            <QueryState error={threads.error} loading={threads.loading}>
+              <div className="split">
+                <Panel
+                  title="Threads"
+                  icon="message"
+                  count={threads.data?.conversations?.length ?? 0}
+                  padding="none"
+                >
+                  {threads.data?.conversations?.length ? (
+                    <div className="list">
+                      {threads.data.conversations.map((row) => (
+                        <button
+                          key={row.key}
+                          type="button"
+                          className={`thread-entry as-row${row.key === thread ? " selected" : ""}`}
+                          onClick={() => setThread(row.key === thread ? "" : row.key)}
+                        >
+                          <span className="row gap-1">
+                            <span className="mono truncate t-cell" style={{ flex: 1 }}>
+                              {row.key}
+                            </span>
+                            <Badge outline>
+                              {row.turns} {row.turns === 1 ? "turn" : "turns"}
+                            </Badge>
+                            <span className="t-caption faint">{fmtDateTime(row.last_at)}</span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <Empty
+                      inline
+                      icon="message"
+                      title="No conversations recorded"
+                      hint="A seat writes one entry per turn that took part in a thread — a chat message, an issue comment, a page discussion."
+                    />
+                  )}
+                </Panel>
+
+                <Panel
+                  title={thread ? "In this thread" : "Pick a thread"}
+                  icon="clock"
+                  count={threads.data?.entries?.length ?? 0}
+                  padding="none"
+                >
+                  {!thread ? (
+                    <Empty
+                      inline
+                      icon="clock"
+                      title="Nothing selected"
+                      hint="Choose a thread to see the turns this seat recorded in it."
+                    />
+                  ) : threads.data?.entries?.length ? (
+                    <div className="list">
+                      {threads.data.entries.map((entry, i) => (
+                        <ThreadTurn key={entry.turn_id || i} entry={entry} />
+                      ))}
+                    </div>
+                  ) : (
+                    <Empty
+                      inline
+                      icon="clock"
+                      title="No turns in this thread"
+                      hint="The ledger is trimmed per conversation, so an old thread can list a count it no longer carries the turns for."
+                    />
+                  )}
+                </Panel>
+              </div>
+            </QueryState>
+          </>
+        )}
+
         {shown === "memory" && (
           <>
             {memory.loading && <Skeleton rows={5} />}
@@ -783,14 +880,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   {memory.data?.counterparties?.length ? (
                     <div className="list">
                       {memory.data.counterparties.map((c, i) => (
-                        <div key={`${c.subject}-${i}`} className="thread-entry">
-                          <div className="row gap-1">
-                            <strong className="t-cell">{c.subject}</strong>
-                            <span className="spacer" />
-                            <span className="t-caption">{fmtDateTime(c.updated_at)}</span>
-                          </div>
-                          <p className="t-caption">{c.summary}</p>
-                        </div>
+                        <CounterpartyRow key={`${counterpartyKey(c)}-${i}`} profile={c} />
                       ))}
                     </div>
                   ) : (
@@ -798,7 +888,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       inline
                       icon="users"
                       title="No counterparty profiles"
-                      hint="Built up from observed interactions."
+                      hint="Built up from observed interactions. Nothing read these until now — the key was on the answer and the store behind it was never asked."
                     />
                   )}
                 </Panel>
@@ -1014,5 +1104,136 @@ export function SeatScreen({ handle }: { handle: string }) {
         )}
       </Tabs>
     </>
+  );
+}
+
+/** A counterparty's stable identity, for a key and for a link.
+ *
+ *  THE NAME IS NOT IT. A profile's identity is the seat handle, or the
+ *  platform and external id for somebody this company has not mapped —
+ *  the display name is deliberately excluded, because a person renaming
+ *  themselves on a chat surface must not look like a different colleague.
+ */
+export function counterpartyKey(profile: CounterpartyProfile): string {
+  const { handle, platform, external_id } = profile.subject;
+  return handle || `${platform ?? "?"}:${external_id ?? "?"}`;
+}
+
+/** One colleague this seat has learned about.
+ *
+ *  # The two instants are both here, and that is the point
+ *
+ *  `last_updated_at` moves on every interaction; `last_corroborated_at` only
+ *  when the traits actually changed. A colleague seen daily whose profile has
+ *  not moved in months is one this seat has STOPPED learning about, and the
+ *  Plan phase's own prefetch demotes stale traits on exactly that gap — so a
+ *  panel carrying one number would disagree with the prompt the agent reads.
+ *
+ *  # The traits are a bag, not a schema
+ *
+ *  The model invents the keys. Rendering them as a fixed set of fields would
+ *  show whichever three this company happened to produce first and silently
+ *  drop the rest, so they are listed as they come.
+ */
+export function CounterpartyRow({ profile }: { profile: CounterpartyProfile }) {
+  const traits = Object.entries(profile.traits ?? {});
+  // THE GAP IS DERIVED, not rendered as two dates a reader has to subtract.
+  const stale =
+    profile.last_corroborated_at &&
+    profile.last_updated_at &&
+    new Date(profile.last_updated_at).getTime() - new Date(profile.last_corroborated_at).getTime() >
+      STALE_TRAIT_MS;
+  return (
+    <div className="thread-entry">
+      <div className="row gap-1">
+        {profile.subject.handle ? (
+          <a className="t-cell" href={href(["company", "people", profile.subject.handle])}>
+            <strong>{profile.subject.name || profile.subject.handle}</strong>
+          </a>
+        ) : (
+          <strong className="t-cell">{profile.subject.name || counterpartyKey(profile)}</strong>
+        )}
+        {!profile.resolved && (
+          <Badge outline title="not mapped to a seat in this company">
+            {profile.subject.platform || "external"}
+          </Badge>
+        )}
+        <span className="spacer" />
+        <span className="t-caption">
+          {profile.interactions} {profile.interactions === 1 ? "interaction" : "interactions"}
+        </span>
+        <span className="t-caption faint">{fmtDateTime(profile.last_updated_at)}</span>
+      </div>
+      {traits.length > 0 ? (
+        <div className="row gap-1 wrap">
+          {traits.map(([key, value]) => (
+            <Badge key={key} outline title={key}>
+              {key}: {typeof value === "string" ? value : JSON.stringify(value)}
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <p className="t-caption faint">Seen, and nothing believed about them yet.</p>
+      )}
+      {stale && (
+        <p className="t-caption faint">
+          Last corroborated {fmtDateTime(profile.last_corroborated_at)} — this seat is still working
+          with them and has stopped learning about them.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** How far `last_updated_at` may run ahead of `last_corroborated_at` before
+ *  the profile is called stale.
+ *
+ *  THIRTY DAYS, which is the shortest inbox retention this engine allows and
+ *  therefore the shortest span over which "still working together" is a fact
+ *  the company still holds evidence for. Shorter and every colleague seen
+ *  twice in a week reads as stale; longer and a profile nobody has corroborated
+ *  since last quarter looks current. */
+const STALE_TRAIT_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** One recorded turn in one conversation.
+ *
+ *  # `reply` and `unsent` are NOT the same field rendered twice
+ *
+ *  Both carry the turn's final artifact, and which one holds it is the whole
+ *  record of whether anybody received it. A turn can end with real work done
+ *  and no way to say so — the round budget ran out, the loop broke, the
+ *  reviewer closed it — and a panel that rendered the two alike would show
+ *  work announced to nobody as announced. That is not a cosmetic difference:
+ *  it is the exact confusion that made a seat answer a follow-up against a
+ *  message it had never sent.
+ */
+export function ThreadTurn({ entry }: { entry: ConversationEntry }) {
+  return (
+    <div className="thread-entry">
+      <div className="row gap-1">
+        {entry.trigger && <Badge outline>{entry.trigger}</Badge>}
+        {entry.decision && <Badge outline>{entry.decision}</Badge>}
+        <span className="spacer" />
+        {entry.turn_id && (
+          <a className="t-link mono t-caption" href={href(["activity", "turns", entry.turn_id])}>
+            turn
+          </a>
+        )}
+        <span className="t-caption faint">{entry.at ? fmtDateTime(entry.at) : ""}</span>
+      </div>
+      {entry.intent && <p className="t-body">{entry.intent}</p>}
+      {entry.reply && <p className="t-caption">{entry.reply}</p>}
+      {entry.unsent && (
+        // THE ONE THAT REACHED NOBODY, marked. See the doc above.
+        <div className="banner caution">
+          <Icon name="alert" size="sm" />
+          <span>
+            <strong>Nothing was delivered.</strong> {entry.unsent}
+          </span>
+        </div>
+      )}
+      {entry.completed_work && <p className="t-caption faint">{entry.completed_work}</p>}
+      {entry.tool_calls && <pre className="code">{entry.tool_calls}</pre>}
+    </div>
   );
 }

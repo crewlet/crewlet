@@ -37,6 +37,7 @@ import { Runs } from "~/routes/Runs.tsx";
 import { Work } from "~/routes/Work.tsx";
 import { WorkItem } from "~/routes/WorkItem.tsx";
 import { SavedViews } from "~/routes/SavedViews.tsx";
+import { WorkSearch } from "~/routes/WorkSearch.tsx";
 import { Sprints } from "~/routes/Sprints.tsx";
 import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
@@ -63,6 +64,7 @@ function WorkRoutes({ rest }: { rest: string[] }) {
   const [first, second, third] = rest;
   if (!first) return <Work />;
   if (first === "views") return second ? <SavedViews key={second} id={second} /> : <SavedViews />;
+  if (first === "search") return <WorkSearch />;
   // A PROJECT, ITS SPRINTS, OR AN ITEM — decided by the SHAPE of the key
   // rather than by a lookup, so the route resolves before any answer arrives.
   if (PROJECT_KEY.test(first)) {

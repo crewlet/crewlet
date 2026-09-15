@@ -939,12 +939,38 @@ export interface SynthesizedSkill {
   uses?: number;
 }
 
+/** Who a counterparty IS, which is two identities and not one string.
+ *
+ *  A profile's subject is either a seat in this company or an unmapped person
+ *  on some surface — a chat account, an issue reporter — and the name is
+ *  DISPLAY ONLY: somebody renaming themselves on Slack must not orphan what
+ *  this seat learned about them. */
+export interface CounterpartySubject {
+  handle?: string;
+  external_id?: string;
+  platform?: string;
+  name: string;
+}
+
+/** What one seat has learned about one colleague.
+ *
+ *  THE TWO INSTANTS MEASURE DIFFERENT CADENCES and both are carried, because
+ *  the difference is the interesting one: `last_updated_at` moves on every
+ *  interaction and `last_corroborated_at` only when the traits actually
+ *  changed. A colleague seen daily whose profile has not moved in months is
+ *  one this seat has stopped learning about — which is the state the Plan
+ *  phase's own prefetch demotes on, so a screen showing one number would
+ *  disagree with the prompt. */
 export interface CounterpartyProfile {
-  observer_handle: string;
-  subject: string;
-  summary: string;
-  updated_at: string;
-  observations?: number;
+  subject: CounterpartySubject;
+  /** Whether the subject resolved to a seat in this company. */
+  resolved: boolean;
+  /** A bag whose keys the model invents — never a fixed schema. */
+  traits: Record<string, unknown>;
+  interactions: number;
+  first_seen_at: string;
+  last_updated_at: string;
+  last_corroborated_at: string;
 }
 
 export interface AgentMemoryAnswer {
@@ -967,18 +993,28 @@ export interface AgentMemoryAnswer {
 /** One recorded turn in one conversation, from the conversation ledger. */
 export interface ConversationEntry {
   turn_id?: string;
-  conversation_key: string;
-  work_key?: string;
-  summary?: string;
-  outcome?: string;
-  created_at: string;
-  [key: string]: unknown;
+  at?: string;
+  trigger?: string;
+  /** What the turn set out to do, in the seat's own words. */
+  intent?: string;
+  /** PRE-RENDERED tool-call lines, fixed at write time so a later reader
+   *  cannot restate history against a surface that has since changed. */
+  tool_calls?: string;
+  /** `reply` is set ONLY when something actually reached the waiting party,
+   *  and `unsent` carries the same artifact when nothing did. Which of the
+   *  two holds it is the whole record of whether anybody received it — a
+   *  screen that rendered them alike would show work announced to nobody as
+   *  announced. */
+  reply?: string;
+  unsent?: string;
+  decision?: string;
+  completed_work?: string;
 }
 
 export interface ConversationRow {
+  /** The surface-scoped conversation identity — a thread, an issue, a
+   *  channel. OPAQUE: the notification layer owns its grammar. */
   key: string;
-  source?: string;
-  local?: string;
   turns: number;
   last_at: string;
 }
@@ -2543,6 +2579,96 @@ export interface WorkInboxAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** One ranked hit from the company's own lexical item search. */
+export interface WorkRanked {
+  id: string;
+  key: string;
+  title: string;
+  project: string;
+  type: string;
+  status: string;
+  assignee?: string;
+  /** A PLACE, 1-based, and deliberately NOT a score. The arithmetic that
+   *  ordered these — score within a method, reciprocal rank fusion across
+   *  methods, per slice of the corpus — is finished before a coordinator sees
+   *  them, so a score field here could only ever have carried zero. */
+  rank: number;
+  /** The index's own excerpt, which is what makes a ranked answer readable
+   *  without opening every hit. */
+  snippet?: string;
+}
+
+/** The ranked search, and the one refusal that is not a failure.
+ *
+ *  `available: false` with `reason: "building"` means this node joined
+ *  recently and is still indexing — items that exist are simply not findable
+ *  from here yet. It is reported rather than returned as an error because
+ *  nothing is wrong, and a screen that drew "nothing matches" would have a
+ *  reader file the duplicate. */
+export interface WorkSearchAnswer {
+  hits: WorkRanked[];
+  available: boolean;
+  reason?: string;
+  note?: string;
+}
+
+/** One person a change reached, and why.
+ *
+ *  `reason` is the ONE of twenty that named them — the resolution is ordered
+ *  and a handle appears once — and `addressed` is whether the notice ASKS
+ *  something of them rather than informing them. */
+export interface RoutingRecipient {
+  handle: string;
+  reason: string;
+  addressed: boolean;
+  fallback?: boolean;
+  fallback_rank?: number;
+  excerpt?: string;
+}
+
+/** What this node can say about who one change reached.
+ *
+ *  THE THREE EMPTY STATES ARE THREE ANSWERS and each sends a reader somewhere
+ *  different: `nobody` at who has left the company, `swept` at the retention
+ *  horizon, `unknown` at neither. `quiet` is the commit that announced nothing
+ *  at all, which is most of them. */
+export type Delivery = "quiet" | "reached" | "nobody" | "swept" | "unknown";
+
+/** Who one change woke, and under which reason. */
+export interface WorkRoutingAnswer {
+  record_id: string;
+  /** False when no change with that id exists here — a dead link, or a
+   *  reanchor that has not replayed this far. NOT the same as a change that
+   *  woke nobody. */
+  held: boolean;
+  kind?: string;
+  subject_id?: string;
+  subject_key?: string;
+  actor?: string;
+  actor_kind?: string;
+  at?: string;
+  /** Whether the commit CARRIED a notification. It does not mean somebody was
+   *  woken: the applier deliberately does not hold the roster that would
+   *  need, so an announced change can still reach nobody. */
+  notified: boolean;
+  recipients: RoutingRecipient[];
+  delivery: Delivery;
+  /** The instant the stated retention horizon falls on — what `delivery` was
+   *  decided against. */
+  retained_from?: string;
+  /** The list was cut. It cannot happen for a change this engine wrote, so
+   *  it means a peer wrote a larger recipient set. */
+  truncated?: boolean;
+  addressed: number;
+  fallback: number;
+  read_level?: ReadLevel;
+  log_seq?: number;
+  applied_through?: number;
+  log_lag?: number;
+  complete?: boolean;
+  incomplete?: WorkIncomplete;
+}
+
 /** Who the presented credential belongs to — see `lib/viewer.ts`. */
 export interface Viewer {
   /** The operator id the token resolves to, or "" for an anonymous caller. */
@@ -2586,6 +2712,8 @@ export interface QueryMap {
   work_goals: WorkGoalsAnswer;
   work_catalogue: WorkCatalogueAnswer;
   work_person: WorkPersonState;
+  work_search: WorkSearchAnswer;
+  work_routing: WorkRoutingAnswer;
   pages: PagesAnswer;
   page: PageDetail;
   containers: { containers: PageContainer[] };

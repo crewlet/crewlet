@@ -169,6 +169,7 @@ export function railRow(key: Workspace | ""): RailRow | undefined {
  */
 export const RESERVED_SEGMENTS: string[] = [
   "views",
+  "search",
   "sprints",
   "people",
   "units",
@@ -234,6 +235,14 @@ export const DESTINATIONS: Destination[] = [
     icon: "check",
     path: ["work"],
     hint: "Every item in the company, in one list",
+  },
+  {
+    key: "work-search",
+    workspace: "work",
+    label: "Search",
+    icon: "search",
+    path: ["work", "search"],
+    hint: "Rank the company's work against a phrase, the way an agent does",
   },
   {
     key: "work-views",
