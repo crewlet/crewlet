@@ -397,3 +397,24 @@ test("the sections drawer closes when the layout it belongs to ends", () => {
     wide.remove();
   }
 });
+
+// EB16. The density row draws one letter per choice because that is what fits
+// in the rail, and a screen reader was told "S", "M" and "L": three names that
+// say nothing about what pressing one does. The theme row beside it was
+// already right, because its options draw no label at all and fall back to
+// their tooltip.
+test("the rail's settings are announced by what they are, not by the letter drawn", () => {
+  mount(<p>a screen</p>);
+  const density = screen.getByRole("radiogroup", { name: "Density" });
+  expect(
+    within(density)
+      .getAllByRole("radio")
+      .map((radio) => radio.getAttribute("aria-label")),
+  ).toEqual(["Compact", "Normal", "Comfortable"]);
+  const theme = screen.getByRole("radiogroup", { name: "Theme" });
+  expect(
+    within(theme)
+      .getAllByRole("radio")
+      .map((radio) => radio.getAttribute("aria-label")),
+  ).toEqual(["Light", "Follow the system", "Dark"]);
+});

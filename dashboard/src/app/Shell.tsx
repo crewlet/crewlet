@@ -258,9 +258,12 @@ export function Shell({ children }: { children: ReactNode }) {
               value={density}
               onValueChange={setDensity}
               options={[
-                { value: "compact", label: "S", title: "Compact" },
-                { value: "normal", label: "M", title: "Normal" },
-                { value: "comfortable", label: "L", title: "Comfortable" },
+                // The letter is what fits in the rail; the WORD is what the
+                // choice is called, and a reader who cannot see three pills
+                // of different heights is told "Compact" rather than "S".
+                { value: "compact", label: "S", srLabel: "Compact", title: "Compact" },
+                { value: "normal", label: "M", srLabel: "Normal", title: "Normal" },
+                { value: "comfortable", label: "L", srLabel: "Comfortable", title: "Comfortable" },
               ]}
             />
           </div>
