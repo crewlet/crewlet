@@ -1257,17 +1257,18 @@ type Coordination struct {
 // its coordination traffic to whoever answers on that address. A private CA
 // is one file and is the actual answer.
 type NATSTLS struct {
-	// CA is a PEM bundle to verify the server's certificate against.
-	// Empty uses the host's root pool, which is right for a public CA and
-	// wrong for the self-signed certificate most internal NATS estates
-	// use.
-	CA string `yaml:"ca,omitempty" json:"ca,omitempty" desc:"PEM CA bundle for the server certificate; empty uses the host roots."`
+	// CA is the PATH to a PEM bundle to verify the server's certificate
+	// against — the file itself, never its contents. Empty uses the host's
+	// root pool, which is right for a public CA and wrong for the
+	// self-signed certificate most internal NATS estates use.
+	CA string `yaml:"ca,omitempty" json:"ca,omitempty" desc:"Path to a PEM CA bundle for the server certificate; empty uses the host roots."`
 
-	// Cert and Key are the CLIENT certificate, for a server that requires
-	// mutual TLS. Both or neither: half a keypair is a config that dials
-	// and is refused by the broker with an error naming neither file.
-	Cert string `yaml:"cert,omitempty" json:"cert,omitempty" desc:"Client certificate PEM, for a server requiring mutual TLS. Needs key."`
-	Key  string `yaml:"key,omitempty" json:"key,omitempty" desc:"Client private key PEM. Needs cert."`
+	// Cert and Key are the PATHS to the CLIENT certificate and its private
+	// key, for a server that requires mutual TLS — the files, never their
+	// contents. Both or neither: half a keypair is a config that dials and
+	// is refused by the broker with an error naming neither file.
+	Cert string `yaml:"cert,omitempty" json:"cert,omitempty" desc:"Path to the client certificate PEM, for a server requiring mutual TLS. Needs key."`
+	Key  string `yaml:"key,omitempty" json:"key,omitempty" desc:"Path to the client private key PEM. Needs cert."`
 }
 
 // IsZero lets an unset TLS block drop out of a JSON round trip.

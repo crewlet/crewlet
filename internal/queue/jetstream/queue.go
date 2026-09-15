@@ -198,11 +198,13 @@ type Config struct {
 // carries every event this company publishes to whoever answers on that
 // address.
 type TLS struct {
-	// CA is a PEM bundle to verify the server against. Empty uses the
+	// CA is the PATH to a PEM bundle to verify the server against — the
+	// file, never its contents; it is opened by name. Empty uses the
 	// host's root pool.
 	CA string
 
-	// Cert and Key are the client certificate. Both or neither.
+	// Cert and Key are the PATHS to the client certificate and its private
+	// key. Both or neither.
 	Cert string
 	Key  string
 }
