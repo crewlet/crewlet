@@ -323,6 +323,72 @@ test("no source reaches for a component library of the dashboard's own", () => {
 });
 
 /**
+ * A table a screen draws is a table with its frame.
+ *
+ * Every panel table here was handed to [DataTable] with its pagination, its
+ * resizing and its settings cog switched off, and every list screen drew the
+ * cog over a frame that had no page size in it because nothing paged. That is
+ * now one decision rather than nineteen: a panel draws [RecordTable] and a
+ * list screen hands [DataView] what `useTableChoices` holds, so the cog, the
+ * pages, the column list and the URL the reader's choices live in arrive
+ * together. A screen reaching past both for the table itself, or a list view
+ * drawn without those choices, silently takes the frame away again on that
+ * one screen, which is the shape this whole change was undoing.
+ */
+const RAW_TABLE = /<DataTable[\s/<>]/;
+const LIST_VIEW = /<DataView[\s/<>]/;
+
+/**
+ * The choices a screen holds for its table, and where they are handed over.
+ *
+ * Two halves, because the identifier alone is not the claim: an import left
+ * behind by a screen that stopped calling the hook still spells the name, and
+ * a screen that calls it and never spreads the result draws the same frameless
+ * table it drew before. So the scan reads what the call was assigned to, and
+ * then looks for that name being spread into the view.
+ */
+const CHOICES_HELD = /const\s+(\w+)\s*=\s*useTableChoices\(/g;
+const spreadOf = (name: string) => new RegExp(`\\{\\s*\\.\\.\\.${name}\\s*\\}`);
+
+/** Which screens draw a list view without handing it the reader's choices. */
+function unchosen(): string[] {
+  return files(/\.tsx$/)
+    .filter(({ text }) => LIST_VIEW.test(code(text)))
+    .filter(({ text }) => {
+      const source = code(text);
+      const held = [...source.matchAll(CHOICES_HELD)].map((match) => match[1] as string);
+      return !held.some((name) => spreadOf(name).test(source));
+    })
+    .map(({ name }) => name);
+}
+
+test("the table scans recognise what they police", () => {
+  expect(RAW_TABLE.test("<DataTable {...recordTable(rows, columns)} />")).toBe(true);
+  expect(RAW_TABLE.test("<DataTable<Row> data={rows} />")).toBe(true);
+  expect(RAW_TABLE.test('<RecordTable screen="fleet" table="nodes" />')).toBe(false);
+  expect(LIST_VIEW.test("<DataView<FeedRow>")).toBe(true);
+  expect(LIST_VIEW.test("<DataView framed columns={columns} />")).toBe(true);
+  // The toolbar and the footer are parts of a list view, not one.
+  expect(LIST_VIEW.test("<DataViewToolbar />")).toBe(false);
+  // And the choices are read from the assignment, then looked for at the view.
+  const held = [
+    ...code('const choices = useTableChoices({ screen: "tools" });').matchAll(CHOICES_HELD),
+  ];
+  expect(held.map((match) => match[1])).toEqual(["choices"]);
+  expect(spreadOf("choices").test("<DataView framed {...choices} rows={rows} />")).toBe(true);
+  expect(spreadOf("choices").test("<DataView framed {...others} rows={rows} />")).toBe(false);
+});
+
+test("a screen draws its table through the frame, never around it", () => {
+  const raw = files(/\.tsx$/)
+    .filter(({ name }) => name !== "components/common.tsx")
+    .filter(({ text }) => RAW_TABLE.test(code(text)))
+    .map(({ name }) => name);
+  expect(raw).toEqual([]);
+  expect(unchosen()).toEqual([]);
+});
+
+/**
  * A class the design system draws is never named by the engine.
  *
  * It is not the engine's to name: it changes on a bump, it is invisible to a

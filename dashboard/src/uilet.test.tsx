@@ -30,7 +30,6 @@ import {
   Button,
   ButtonLink,
   CodeBlock,
-  DataTable,
   CopyButton,
   IconButton,
   SegmentedControl,
