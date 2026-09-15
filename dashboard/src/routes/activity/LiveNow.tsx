@@ -243,7 +243,7 @@ export function LiveNow() {
           icon="users"
           count={live.length}
           actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["people"])}>
+            <Button size="sm" variant="ghost" onClick={() => nav.to(["company", "people"])}>
               All seats
             </Button>
           }
@@ -313,7 +313,7 @@ export function LiveNow() {
           icon="coin"
           subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
           actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
+            <Button size="sm" variant="ghost" onClick={() => nav.to(["cost"])}>
               Spend
             </Button>
           }

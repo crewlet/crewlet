@@ -103,6 +103,41 @@ describe("routing", () => {
     }
   });
 
+  // THE OTHER HALF OF `source.test.ts`'s link gate. That one proves every
+  // link names a segment a workspace OWNS; this one proves the object routes
+  // those links actually build resolve to a screen. A workspace can own
+  // `activity` while `#/activity/traces/{id}` still falls through to Not
+  // Found, which is exactly what shipped: `traces` had a screen, four buttons
+  // pointing at it, and no case in the switch.
+  test("every object route a link builds resolves to a screen", () => {
+    const routes = [
+      ["activity", "turns", "11111111-1111-4111-8111-111111111111"],
+      ["activity", "traces", "22222222-2222-4222-8222-222222222222"],
+      ["activity", "runs", "33333333-3333-4333-8333-333333333333"],
+      ["activity", "events", "44444444-4444-4444-8444-444444444444"],
+      ["activity", "a2a", "55555555-5555-4555-8555-555555555555"],
+      ["activity", "schedules", "role", "ceo", "standup"],
+      ["company", "people", "ada"],
+      ["company", "units", "platform"],
+      ["work", "ENG-42"],
+      ["goals", "66666666-6666-4666-8666-666666666666"],
+      ["knowledge", "ENG", "Deploy runbook"],
+      ["admin", "fleet", "node-a"],
+      ["admin", "integrations", "slack"],
+      ["admin", "credentials", "SLACK_SIGNING_SECRET"],
+      ["admin", "config", "revisions", "77777777-7777-4777-8777-777777777777"],
+    ];
+    for (const path of routes) {
+      const hash = buildHash(path);
+      location.hash = hash;
+      const { view } = mount();
+      expect(view.container.textContent, hash).not.toMatch(
+        /there is no such screen|under (Activity|Company|Admin)/,
+      );
+      view.unmount();
+    }
+  });
+
   test("an unknown screen says so instead of rendering nothing", () => {
     location.hash = "#/nonsense";
     mount();

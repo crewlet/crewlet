@@ -726,7 +726,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         {
           <>
             {role && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["seats", role])}>
+              <Button size="sm" icon="user" onClick={() => nav.to(["company", "people", role])}>
                 The seat
               </Button>
             )}
@@ -740,7 +740,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     key={id}
                     size="sm"
                     icon="gitBranch"
-                    onClick={() => nav.to(["traces", id])}
+                    onClick={() => nav.to(["activity", "traces", id])}
                     title={`trace ${id}`}
                   >
                     Trace {i + 1} of {traceIds.length}
@@ -749,7 +749,11 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               </span>
             ) : (
               traceId && (
-                <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", traceId])}>
+                <Button
+                  size="sm"
+                  icon="gitBranch"
+                  onClick={() => nav.to(["activity", "traces", traceId])}
+                >
                   Trace
                 </Button>
               )

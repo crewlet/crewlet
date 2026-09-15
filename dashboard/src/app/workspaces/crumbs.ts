@@ -163,6 +163,18 @@ function knowledgeCrumbs(rest: string[], labels: Labels): Crumb[] {
 
 function activityCrumbs(rest: string[], labels: Labels): Crumb[] {
   const [first = "", ...tail] = rest;
+  // A TRACE HAS NO LIST OF ITS OWN — nothing enumerates traces, and every way
+  // in is a link from an event, a turn or a coding run that already holds the
+  // id. So its parent crumb is the turns list rather than a `traces` landing
+  // page that does not exist: the reader who clicks up lands where the traces
+  // actually are instead of on a segment named after a route.
+  if (first === "traces") {
+    const id = tail.join("/");
+    return [
+      { label: "Turns", path: ["activity", "turns"] },
+      { label: labels[id] ?? id, mono: !labels[id] },
+    ];
+  }
   const known = destinationLabel("activity", first) ?? first;
   if (tail.length === 0) return [{ label: known }];
   // A SCHEDULE IS THREE SEGMENTS and everything else is one id, so the tail is

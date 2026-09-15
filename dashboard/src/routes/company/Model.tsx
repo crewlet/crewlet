@@ -159,7 +159,7 @@ export function ModelActivity() {
   // A row goes to the seat, because that is where a transcript is readable:
   // one turn in focus instead of seven competing for the page.
   const openSeat = useCallback(
-    (r: PhaseRecord) => nav.to(["seats", r.role], { tab: "model" }),
+    (r: PhaseRecord) => nav.to(["company", "people", r.role], { tab: "model" }),
     [nav],
   );
 

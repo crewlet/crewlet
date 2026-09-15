@@ -261,11 +261,11 @@ export function Runs({ runId }: { runId?: string }) {
           actions={
             <>
               {detail.trace_id && (
-                <Button size="sm" onClick={() => nav.to(["traces", detail.trace_id])}>
+                <Button size="sm" onClick={() => nav.to(["activity", "traces", detail.trace_id])}>
                   Trace
                 </Button>
               )}
-              <Button size="sm" onClick={() => nav.to(["turns", detail.turn_id])}>
+              <Button size="sm" onClick={() => nav.to(["activity", "turns", detail.turn_id])}>
                 Turn
               </Button>
               <Button

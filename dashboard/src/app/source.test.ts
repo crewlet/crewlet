@@ -92,16 +92,26 @@ test("no JSX guard is a bare number", () => {
  * switches on: a literal that names a segment no workspace owns cannot reach
  * a screen whatever follows it.
  *
- * TWO SPELLINGS AND BOTH EXTENSIONS. A link is written either as `href([...])`
- * or as a bare `path: [...]` on a value some other component turns into one,
- * and the second lives in plain `.ts` — which is how the ENTIRE attention
+ * EVERY SPELLING AND BOTH EXTENSIONS. A link is written as `href([...])`, as
+ * `nav.to([...])` for one a control performs rather than one a reader points
+ * at, or as a bare `path: [...]` on a value some other component turns into
+ * one — and the last lives in plain `.ts`, which is how the ENTIRE attention
  * queue kept pointing at `spend`, `fleet`, `runs`, `config` and `seats` after
  * every one of those moved. That is the Inbox's "needs a person" band: ten
  * rows, all of them dead, in a file this gate was not reading.
+ *
+ * THEN THE SAME THING HAPPENED AGAIN THROUGH THE SPELLING THIS GATE DID NOT
+ * READ. `nav.to` was outside the pattern, so the workspace move left eighteen
+ * of them behind — every "Trace" button in the product, every "the turn" from
+ * an event, a run and a seat's own list, "Its seat" from a turn and a phase,
+ * "the run" from a seat, "spend" from Live now and "back to people" from two
+ * screens. Each rendered normally and each landed on Not Found, because the
+ * failure of a moved route is a screen that says nothing is there rather than
+ * a build that says the link is wrong.
  */
-test("every href names a segment a workspace owns", () => {
+test("every link names a segment a workspace owns", () => {
   const owned = new Set(RAIL.flatMap((r) => r.owns));
-  const literal = /(?:href\(|\bpath:\s*)\[\s*"([a-z0-9_-]+)"/g;
+  const literal = /(?:href\(|nav\.to\(|\bpath:\s*)\[\s*"([a-z0-9_-]+)"/g;
   const dead: string[] = [];
   for (const { path, text } of sources([".tsx", ".ts"])) {
     const lines = text.split("\n");

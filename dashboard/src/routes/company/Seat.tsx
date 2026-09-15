@@ -191,7 +191,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           title={`No seat called “${handle}”`}
           hint="Seats are addressed by handle. If a company revision was just applied, this seat may have been renamed or removed."
           action={
-            <Button variant="primary" onClick={() => nav.to(["people"])}>
+            <Button variant="primary" onClick={() => nav.to(["company", "people"])}>
               All seats
             </Button>
           }
@@ -266,7 +266,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           <span>
             A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
           </span>
-          <Button size="sm" onClick={() => nav.to(["runs"], { run: sandbox.turn_id })}>
+          <Button size="sm" onClick={() => nav.to(["activity", "runs", sandbox.turn_id])}>
             The run
           </Button>
         </div>
@@ -644,7 +644,12 @@ export function SeatScreen({ handle }: { handle: string }) {
                     Showing the most recent phases the engine holds for this seat.
                   </span>
                   <span className="spacer" />
-                  <Button size="sm" onClick={() => nav.to(["model"], { role: seat.name })}>
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      nav.to(["activity", "turns"], { view: "phases", role: seat.name })
+                    }
+                  >
                     All model activity for {seat.name}
                   </Button>
                 </div>
@@ -1012,7 +1017,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={spend.data?.by_turn ?? []}
                   rowKey={(t) => t.turn_id}
                   defaultSort="-started"
-                  onRowActivate={(t) => nav.to(["turns", t.turn_id])}
+                  onRowActivate={(t) => nav.to(["activity", "turns", t.turn_id])}
                   empty={{ title: "No turns in the window" }}
                   columns={[
                     {

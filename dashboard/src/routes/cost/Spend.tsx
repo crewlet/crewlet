@@ -374,7 +374,7 @@ export function Spend() {
           rows={tokens?.by_agent ?? []}
           rowKey={(a) => a.agent_id || a.role}
           defaultSort="-total"
-          onRowActivate={(a) => nav.to(["seats", a.handle || a.role], { tab: "cost" })}
+          onRowActivate={(a) => nav.to(["company", "people", a.handle || a.role], { tab: "cost" })}
           empty={{ title: "No seat has spent tokens in this window" }}
           columns={[
             {
@@ -433,7 +433,7 @@ export function Spend() {
           rows={tokens?.by_turn ?? []}
           rowKey={(t) => t.turn_id}
           defaultSort="-started"
-          onRowActivate={(t) => nav.to(["turns", t.turn_id])}
+          onRowActivate={(t) => nav.to(["activity", "turns", t.turn_id])}
           empty={{ title: "No turns in this window" }}
           columns={[
             {

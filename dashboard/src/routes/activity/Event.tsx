@@ -38,7 +38,11 @@ export function EventScreen({ eventId }: { eventId: string }) {
         {
           <>
             {data?.trace_id && (
-              <Button size="sm" icon="gitBranch" onClick={() => nav.to(["traces", data.trace_id])}>
+              <Button
+                size="sm"
+                icon="gitBranch"
+                onClick={() => nav.to(["activity", "traces", data.trace_id])}
+              >
                 Trace
               </Button>
             )}
@@ -46,13 +50,17 @@ export function EventScreen({ eventId }: { eventId: string }) {
               <Button
                 size="sm"
                 icon="layers"
-                onClick={() => nav.to(["turns", String(data.payload!.turn_id)])}
+                onClick={() => nav.to(["activity", "turns", String(data.payload!.turn_id)])}
               >
                 Turn
               </Button>
             )}
             {data?.actor && (
-              <Button size="sm" icon="user" onClick={() => nav.to(["seats", data.actor])}>
+              <Button
+                size="sm"
+                icon="user"
+                onClick={() => nav.to(["company", "people", data.actor])}
+              >
                 {data.actor}
               </Button>
             )}

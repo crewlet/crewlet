@@ -43,7 +43,6 @@ import { Pages, PageView } from "~/routes/knowledge/Pages.tsx";
 import { Conversations } from "~/routes/activity/Conversations.tsx";
 import { Turns } from "~/routes/activity/Turns.tsx";
 import { Schedules } from "~/routes/activity/Schedules.tsx";
-import { ModelActivity } from "~/routes/company/Model.tsx";
 import { LiveNow } from "~/routes/activity/LiveNow.tsx";
 import { Activity } from "~/routes/activity/Activity.tsx";
 import { Knowledge } from "~/routes/knowledge/Knowledge.tsx";
@@ -56,6 +55,7 @@ import { ConfigScreen } from "~/routes/admin/Config.tsx";
 import { Secrets } from "~/routes/admin/Secrets.tsx";
 import { EventScreen } from "~/routes/activity/Event.tsx";
 import { TurnScreen } from "~/routes/activity/Turn.tsx";
+import { TraceScreen } from "~/routes/activity/Trace.tsx";
 import { NotFound } from "~/routes/NotFound.tsx";
 
 /** A project key is uppercase; an item key is `KEY-n`; an id is a uuid. */
@@ -97,6 +97,12 @@ function ActivityRoutes({ rest }: { rest: string[] }) {
   switch (first) {
     case "turns":
       return id ? <TurnScreen key={id} turnId={id} /> : <Turns />;
+    // A TRACE HAS NO LIST, only a page: nothing enumerates traces, and every
+    // way in is a link from an event, a turn or a coding run that already
+    // holds the id. A bare `#/activity/traces` is therefore the turns list,
+    // which is the nearest thing to "the traces" this product has.
+    case "traces":
+      return id ? <TraceScreen key={id} traceId={id} /> : <Turns />;
     case "runs":
       return <Runs key={id ?? ""} runId={id} />;
     case "schedules":
