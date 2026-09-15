@@ -153,12 +153,23 @@ export function fmtStamp(ts: string | null | undefined): string {
 export function fmtDateCompact(ts: string | null | undefined, now: number): string {
   const d = parseUTC(ts);
   if (!d) return "—";
-  const thisYear = new Date(now).getFullYear();
+  // BOTH YEARS READ IN THE VIEWER'S ZONE, and the date rendered in it. This
+  // read the browser's calendar on both counts while every other formatter in
+  // this file rendered in the chosen one, so a reader in `Pacific/Auckland`
+  // whose browser sat in `UTC` saw a due date one day earlier here than in the
+  // tooltip beside it — and, for thirteen hours a year, a year earlier.
+  const thisYear = calendarYear(new Date(now));
   return d.toLocaleDateString(undefined, {
     month: "short",
     day: "2-digit",
-    ...(d.getFullYear() === thisYear ? {} : { year: "numeric" }),
+    timeZone: zone(),
+    ...(calendarYear(d) === thisYear ? {} : { year: "numeric" }),
   });
+}
+
+/** Which calendar year an instant falls in, IN THE VIEWER'S ZONE. */
+function calendarYear(at: Date): string {
+  return at.toLocaleDateString("en-US", { year: "numeric", timeZone: zone() });
 }
 
 /**
