@@ -32,16 +32,51 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 
-const LENSES = ["active", "audit", "diff"] as const;
+const LENSES = ["active", "entities", "audit", "diff"] as const;
 type Lens = (typeof LENSES)[number];
+
+/**
+ * The addressable collections of the active revision, as `configapi` names
+ * them.
+ *
+ * FOUR NAMES THE ENGINE OWNS, held against `configapi.EntityKinds()` by
+ * `internal/api/configapi/entities_client_test.go` — a kind this list spells
+ * differently asks for a collection that does not exist, and the answer is a
+ * bad-params refusal rather than anything a reader could act on.
+ */
+const ENTITY_KINDS = [
+  { kind: "roles", label: "Seats" },
+  { kind: "units", label: "Units" },
+  { kind: "llm-providers", label: "LLM providers" },
+  { kind: "mcp-servers", label: "MCP servers" },
+] as const;
 
 export function ConfigScreen({ revision: revisionPath }: { revision?: string }) {
   const now = useNow();
   const [lens, setLens] = useTab("lens", LENSES);
   const [revision, setRevision] = useParam("revision", "");
 
+  const [kind, setKind] = useParam("kind", ENTITY_KINDS[0].kind);
+  const [entity, setEntity] = useParam("entity", "");
+
   const active = useQuery("config", undefined, { enabled: lens === "active" });
-  const audit = useQuery("config_audit", { limit: 100 }, { enabled: lens !== "active" });
+  // ONE COLLECTION AT A TIME, which is what makes this different from the
+  // Active lens rather than a second copy of it: the whole document is one
+  // unreadable block of JSON, and the question a reader actually has is
+  // "what does THIS seat's configuration say".
+  const ids = useQuery("config_entities", { kind }, { enabled: lens === "entities" });
+  const one = useQuery(
+    "config_entities",
+    { kind, id: entity },
+    { enabled: lens === "entities" && entity !== "" },
+  );
+  const audit = useQuery(
+    "config_audit",
+    { limit: 100 },
+    {
+      enabled: lens === "audit" || lens === "diff",
+    },
+  );
   const diff = useQuery(
     "config_diff",
     { revision_id: revision, against: "active" },
@@ -63,6 +98,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             onChange={setLens}
             options={[
               { value: "active", label: "Active", icon: "file" },
+              { value: "entities", label: "Entities", icon: "layers" },
               { value: "audit", label: "History", icon: "clock" },
               { value: "diff", label: "Diff", icon: "gitBranch" },
             ]}
@@ -105,7 +141,89 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
         </>
       )}
 
-      {lens !== "active" && (
+      {lens === "entities" && (
+        <>
+          <Segmented<string>
+            ariaLabel="Which collection"
+            value={kind}
+            onChange={(next) => {
+              setKind(next);
+              // AN ID BELONGS TO ONE COLLECTION. Carrying it across would ask
+              // for a seat's handle out of the MCP servers and render the
+              // refusal that comes back.
+              setEntity("");
+            }}
+            options={ENTITY_KINDS.map((k) => ({ value: k.kind, label: k.label }))}
+          />
+          {ids.loading && !ids.data && <Skeleton rows={4} />}
+          <QueryState
+            error={ids.error}
+            loading={ids.loading}
+            empty={
+              (ids.data?.ids ?? []).length
+                ? undefined
+                : {
+                    title: "Nothing in this collection",
+                    hint: "The active revision declares none of these.",
+                  }
+            }
+          >
+            <div className="row gap-3 wrap" style={{ alignItems: "flex-start" }}>
+              <Panel
+                title={ENTITY_KINDS.find((k) => k.kind === kind)?.label ?? kind}
+                icon="layers"
+                count={(ids.data?.ids ?? []).length}
+                padding="none"
+              >
+                <div className="col">
+                  {(ids.data?.ids ?? []).map((id) => (
+                    <Button
+                      key={id}
+                      variant={id === entity ? "primary" : "ghost"}
+                      size="sm"
+                      onClick={() => setEntity(id === entity ? "" : id)}
+                    >
+                      <code className="inline">{id}</code>
+                    </Button>
+                  ))}
+                </div>
+              </Panel>
+              <Panel
+                title={entity || "Pick one"}
+                icon="file"
+                subtitle="as the active revision declares it"
+                actions={
+                  one.data?.entity ? (
+                    <CopyButton
+                      text={JSON.stringify(one.data.entity, null, 2)}
+                      title={`${entity}, as JSON`}
+                    />
+                  ) : undefined
+                }
+              >
+                {!entity ? (
+                  <Empty
+                    inline
+                    icon="layers"
+                    title="Pick one from the list"
+                    hint="Its own slice of the active document is shown here, rather than the whole thing."
+                  />
+                ) : one.loading && !one.data ? (
+                  <Skeleton rows={6} />
+                ) : (
+                  <QueryState error={one.error} loading={one.loading}>
+                    <Code plain selectable label={`${entity}, as JSON`}>
+                      {JSON.stringify(one.data?.entity ?? null, null, 2)}
+                    </Code>
+                  </QueryState>
+                )}
+              </Panel>
+            </div>
+          </QueryState>
+        </>
+      )}
+
+      {(lens === "audit" || lens === "diff") && (
         <>
           {audit.loading && <Skeleton rows={5} />}
           <QueryState

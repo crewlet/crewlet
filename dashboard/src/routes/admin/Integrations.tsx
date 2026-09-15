@@ -29,7 +29,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
-import { Icon, type IconName } from "~/ui/Icon.tsx";
+import { Icon } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,37 +48,6 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
-/**
- * What agents need in order to work, in the order the console asks about
- * them. Each tool answers exactly one capability.
- */
-const CAPABILITIES: { id: string; title: string; icon: IconName; description: string }[] = [
-  {
-    id: "messaging",
-    title: "Messaging",
-    icon: "message",
-    description: "Where agents talk with you and with each other.",
-  },
-  {
-    id: "tasks",
-    title: "Task management",
-    icon: "target",
-    description: "Where work is planned, assigned and tracked.",
-  },
-  {
-    id: "code",
-    title: "Code",
-    icon: "gitBranch",
-    description: "Where agents commit, review and ship.",
-  },
-  {
-    id: "observability",
-    title: "Observability",
-    icon: "activity",
-    description: "Where agents watch production and respond.",
-  },
-];
-
 /** One engine surface behind a tool: the key the API row carries, named. */
 export interface Surface {
   key: string;
@@ -87,7 +56,6 @@ export interface Surface {
 
 export interface Entry {
   key: string;
-  capability: string;
   name: string;
   description: string;
   vendor: Vendor;
@@ -103,7 +71,6 @@ export interface Entry {
 export const CATALOG: Entry[] = [
   {
     key: "slack",
-    capability: "messaging",
     name: "Slack",
     description: "Team communication",
     vendor: "slack",
@@ -111,7 +78,6 @@ export const CATALOG: Entry[] = [
   },
   {
     key: "mattermost",
-    capability: "messaging",
     name: "Mattermost",
     description: "Self-hosted team chat",
     vendor: "mattermost",
@@ -119,7 +85,6 @@ export const CATALOG: Entry[] = [
   },
   {
     key: "atlassian",
-    capability: "tasks",
     name: "Atlassian",
     description: "Issue tracking and documentation",
     vendor: "atlassian",
@@ -140,7 +105,6 @@ export const CATALOG: Entry[] = [
   },
   {
     key: "github",
-    capability: "code",
     name: "GitHub",
     description: "Code and pull requests",
     vendor: "github",
@@ -148,7 +112,6 @@ export const CATALOG: Entry[] = [
   },
   {
     key: "gitlab",
-    capability: "code",
     name: "GitLab",
     description: "Code and merge requests",
     vendor: "gitlab",
@@ -156,7 +119,6 @@ export const CATALOG: Entry[] = [
   },
   {
     key: "datadog",
-    capability: "observability",
     name: "Datadog",
     description: "Monitoring and observability",
     vendor: "datadog",

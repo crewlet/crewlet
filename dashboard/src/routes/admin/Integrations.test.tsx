@@ -1695,7 +1695,6 @@ test("the disconnect roster lists each agent once", () => {
   };
   const entry: Entry = {
     key: "github",
-    capability: "code",
     name: "GitHub",
     description: "Code and pull requests",
     vendor: "github",
