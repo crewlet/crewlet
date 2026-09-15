@@ -27,7 +27,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, ButtonLink, Empty, Skeleton } from "~/ui/primitives.tsx";
 import { useRecheck } from "./recheck.ts";
-import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
+import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRest } from "~/lib/useRest.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
@@ -1281,7 +1281,7 @@ export function EntryRow({
     return (
       <div className="int-card int-card-absent">
         <span className="int-brand" aria-hidden>
-          <VendorMark vendor={entry.vendor} />
+          <VendorMark vendor={entry.vendor} size="lg" />
         </span>
         <span className="int-heading">
           <span className="int-name">{entry.name}</span>
@@ -1306,7 +1306,7 @@ export function EntryRow({
           onClick={() => setOpen((was) => !was)}
         >
           <span className="int-brand" aria-hidden>
-            <VendorMark vendor={entry.vendor} />
+            <VendorMark vendor={entry.vendor} size="lg" />
           </span>
           <span className="int-heading">
             <span className="int-name">{entry.name}</span>

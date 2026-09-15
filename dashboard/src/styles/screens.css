@@ -1292,11 +1292,6 @@
   background: var(--color-surface-subtle);
   color: var(--color-text-primary);
 }
-.vendor-mark {
-  display: block;
-  width: var(--font-size-xl);
-  height: var(--font-size-xl);
-}
 
 .int-heading {
   display: flex;
