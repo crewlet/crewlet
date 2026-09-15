@@ -1489,6 +1489,8 @@ that renders `read_level` and swallows `complete` looks confidently right.
 | `pages` | `{container, parent, status, label, watcher, title, skills, onboarding, limit, offset}` | `GET /pages`. `skills` is three-stated: only the tool-skill pages, everything but them, or everything |
 | `page` | `{id}` | `GET /pages/{id}` — id or `CONTAINER/Title` |
 | `containers` | — | `GET /containers`. A separate question from `pages` rather than a facet of it: a browser draws the container list once and the page list on every navigation |
+| `page_activity` | `{page, container, kinds, since, cursor, limit}` | What happened to a page, or to everything in a container — the wiki's own change log, mirroring `work_activity`. `kinds` is a CSV of the ten change kinds. `since` bounds the window and `cursor` pages it: the same unit, two parameters, because the cursor moves with every page and the bound does not |
+| `page_revision` | `{page, version}` | One revision's own body, message and author. Revision N is the body AT version N — including the newest — so a reader comparing two versions asks for both rather than for one and the head |
 | `stream` | — | Facts about **this** socket — `{ client_id, dropped, queued, capacity, connected_at, clients }`. The only query with no REST twin, because there is no connection to describe outside one. |
 | `config` | — | `GET /config` *(operator token required)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(operator token required)* |

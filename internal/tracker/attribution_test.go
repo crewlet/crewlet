@@ -1,28 +1,13 @@
 package tracker_test
 
 import (
-	"os"
-	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/tracker"
 )
-
-// dashboardTree is the client source this gate reads — the SOURCE, never the
-// built bundle, which is minified and carries no declaration to find.
-//
-// The list itself is found by its DECLARATION rather than by a path, for the reason
-// `internal/api/queries/rooms_test.go` gives at length: a gate that hard-codes
-// where a constant lives breaks when a file moves and reports a drift between
-// two lists neither of which changed. The two failures that matter are the
-// ones this names — nothing declares it, which is a gate certifying nothing,
-// and two files declare it, which is two copies that can drift.
-const dashboardTree = "../../dashboard/src"
-
-var attributionDecl = regexp.MustCompile(`(?s)export const CHANGE_FIELDS = \[(.*?)\] as const`)
 
 // TestAttributionFieldsAreTheEngines holds the dashboard's field-name list
 // against the names [tracker.TaskDeltas] actually writes.
@@ -40,7 +25,17 @@ var attributionDecl = regexp.MustCompile(`(?s)export const CHANGE_FIELDS = \[(.*
 // writes, plus a named report of the ones it has not taken up.
 func TestAttributionFieldsAreTheEngines(t *testing.T) {
 	engine := deltaFields(t)
-	client := clientFields(t)
+
+	body, err := clientsource.Declaration(clientsource.Tree,
+		`(?s)export const CHANGE_FIELDS = \[(.*?)\] as const`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := clientsource.Strings(body)
+	slices.Sort(client)
+	if len(client) == 0 {
+		t.Fatal("the dashboard attributes no fields, so this gate certifies nothing")
+	}
 
 	for _, name := range client {
 		if !slices.Contains(engine, name) {
@@ -77,62 +72,6 @@ func deltaFields(t *testing.T) []string {
 	}
 	slices.Sort(names)
 	return names
-}
-
-// clientFields reads the one declaration in the dashboard tree.
-func clientFields(t *testing.T) []string {
-	t.Helper()
-	var found []string
-	err := walkClient(dashboardTree, func(source string) {
-		if m := attributionDecl.FindStringSubmatch(source); m != nil {
-			found = append(found, m[1])
-		}
-	})
-	if err != nil {
-		t.Fatalf("the dashboard tree at %s could not be walked, so this gate "+
-			"certifies nothing: %v", dashboardTree, err)
-	}
-	if len(found) != 1 {
-		t.Fatalf("%d files under %s declare CHANGE_FIELDS, want exactly one — "+
-			"none is a gate certifying nothing, and two are two copies that can "+
-			"drift from each other as well as from the engine", len(found), dashboardTree)
-	}
-	var names []string
-	for _, part := range strings.Split(found[0], ",") {
-		if name := strings.Trim(strings.TrimSpace(part), `"`); name != "" {
-			names = append(names, name)
-		}
-	}
-	slices.Sort(names)
-	return names
-}
-
-func walkClient(root string, each func(source string)) error {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		path := root + "/" + entry.Name()
-		if entry.IsDir() {
-			if err := walkClient(path, each); err != nil {
-				return err
-			}
-			continue
-		}
-		if !strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx") {
-			continue
-		}
-		if strings.Contains(entry.Name(), ".test.") {
-			continue
-		}
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		each(string(source))
-	}
-	return nil
 }
 
 // twoDifferentTasks is one task and another differing in every field
