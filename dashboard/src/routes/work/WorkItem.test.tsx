@@ -283,3 +283,62 @@ test("a refused poll says so even when children were listed before", () => {
   expect(document.querySelector(".banner")).toBeTruthy();
   expect(screen.queryByText("A child")).toBeNull();
 });
+
+// WHO SET IT, WHICH IS THE THING THIS PRODUCT CAN SAY AND A TRACKER CANNOT.
+// Every write here is attributed and carries its turn, so a property row can
+// name the change that put the value there. The field was declared on
+// `Property`, the markup was written, the class was in the stylesheet — and
+// nothing ever passed one, so the line rendered on zero rows.
+test("a property names the change that set it", () => {
+  render(
+    <ItemProps
+      detail={detail({
+        task: task({ assignee: "ada" }),
+        history: [
+          {
+            id: "h-2",
+            kind: "assignee",
+            actor: "bo",
+            actor_kind: "human",
+            turn_id: "turn-7",
+            at: "2031-04-16T09:00:00Z",
+            log_seq: 2,
+            fields: { assignee: { from: "", to: "ada" } },
+          },
+        ],
+      })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  expect(screen.getByText(/bo/)).toBeTruthy();
+});
+
+// A PROPERTY THE VISIBLE HISTORY DOES NOT NAME CARRIES NOTHING. `history` is
+// the newest fifty changes, so a value last moved before that window is a fact
+// about the page size — and borrowing the oldest entry still visible would
+// read as a confident sentence about something nobody can see.
+test("a property no visible change names carries no attribution", () => {
+  const { container } = render(
+    <ItemProps
+      detail={detail({
+        task: task({ points: 3 }),
+        history: [
+          {
+            id: "h-1",
+            kind: "status",
+            actor: "ada",
+            at: "2031-04-16T09:00:00Z",
+            log_seq: 1,
+            fields: { status: { to: "in_progress" } },
+          },
+        ],
+      })}
+      chrome={{}}
+      project={project()}
+    />,
+  );
+  // One line, for the one property a change names — never a dash-shaped one
+  // under every other row.
+  expect(container.querySelectorAll(".props-setby").length).toBe(1);
+});

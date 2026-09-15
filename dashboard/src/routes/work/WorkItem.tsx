@@ -51,6 +51,8 @@ import { ToolCallBlock } from "~/components/ToolCall.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import type { PropertyGroup } from "~/app/frame/PropertiesRail.tsx";
+import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
+import { attribution, type ChangeField } from "~/lib/attribution.ts";
 import type {
   WorkChange,
   WorkComment,
@@ -736,6 +738,17 @@ export function ItemProps({
   const seatName = chrome.seatName ?? ((h: string) => h);
   const spend = item.spend;
 
+  // WHO SET EACH OF THESE, from the change log the page already holds. See
+  // [attribution]: the keys are the tracker's own field names, and a property
+  // whose last change fell outside the history window carries no line rather
+  // than borrowing the oldest one still visible.
+  const now = useNow();
+  const setBy = useMemo(() => attribution(detail.history), [detail.history]);
+  const by = (field: ChangeField): SetBy | undefined => {
+    const who = setBy.get(field);
+    return who ? { ...who, ago: who.at ? relTime(who.at, now) : undefined } : undefined;
+  };
+
   // EVERY ROW SAYS WHICH KIND OF ABSENCE IT HAS. A property left out of the
   // list does not exist on this object; one with no `value` exists and holds
   // nothing, and renders the dash; one whose empty state means something says
@@ -744,13 +757,18 @@ export function ItemProps({
     {
       name: "State",
       properties: [
-        { label: "Status", value: <StatusBadge status={item.status} defs={chrome.statuses} /> },
+        {
+          label: "Status",
+          value: <StatusBadge status={item.status} defs={chrome.statuses} />,
+          setBy: by("status"),
+        },
         {
           label: "Priority",
           value:
             item.priority && item.priority !== "none" ? (
               <PriorityMark priority={item.priority} word />
             ) : undefined,
+          setBy: by("priority"),
         },
         {
           label: "Type",
@@ -760,6 +778,7 @@ export function ItemProps({
               {typeName(item.type, chrome.types)}
             </span>
           ) : undefined,
+          setBy: by("type"),
         },
       ],
     },
@@ -773,6 +792,7 @@ export function ItemProps({
           ) : (
             <span className="muted">Unassigned</span>
           ),
+          setBy: by("assignee"),
         },
         {
           label: "Reporter",
@@ -833,8 +853,13 @@ export function ItemProps({
               <span className="muted">Backlog</span>
             ),
           path: item.sprint !== undefined ? ["work", item.project, "sprints"] : undefined,
+          setBy: by("sprint"),
         },
-        { label: "Start", value: item.start_at ? fmtDate(item.start_at) : undefined },
+        {
+          label: "Start",
+          value: item.start_at ? fmtDate(item.start_at) : undefined,
+          setBy: by("start"),
+        },
         {
           label: "Due",
           value: item.due_at ? (
@@ -843,12 +868,14 @@ export function ItemProps({
               {item.due_all_day && <span className="faint">all day</span>}
             </span>
           ) : undefined,
+          setBy: by("due"),
         },
         {
           label: "Estimate",
           value: item.estimate_minutes ? fmtMinutes(item.estimate_minutes) : undefined,
+          setBy: by("estimate"),
         },
-        { label: "Points", value: item.points ? item.points : undefined },
+        { label: "Points", value: item.points ? item.points : undefined, setBy: by("points") },
         ...((item.tags ?? []).length > 0
           ? [
               {
@@ -862,6 +889,7 @@ export function ItemProps({
                     ))}
                   </span>
                 ),
+                setBy: by("tags"),
               },
             ]
           : []),
