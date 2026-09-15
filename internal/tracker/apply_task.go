@@ -44,7 +44,8 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// and its own guard makes THAT idempotent.
 		// NO DELTAS: this record changed no document, so there is
 		// nothing for the history row to say moved.
-		return a.writeHistory(ctx, tx, c, current.Project, nil)
+		return a.writeHistory(ctx, tx, c,
+			subjectKeys{Project: current.Project, Key: current.Key}, nil)
 	}
 
 	next, err := mergeTask(current, held, c)
@@ -113,7 +114,8 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		before = Task{}
 	}
 	applied := TaskDeltas(before, next)
-	history, err := a.writeHistory(ctx, tx, c, next.Project, applied)
+	history, err := a.writeHistory(ctx, tx, c,
+		subjectKeys{Project: next.Project, Key: next.Key}, applied)
 	if err != nil {
 		return 0, err
 	}
@@ -1165,7 +1167,8 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	}
 	// A PURGE MOVES NO FIELD — the row is gone, and a delta naming what
 	// it used to hold would be the content the purge exists to destroy.
-	history, err := a.writeHistory(ctx, tx, c, task.Project, nil)
+	history, err := a.writeHistory(ctx, tx, c,
+		subjectKeys{Project: task.Project, Key: task.Key}, nil)
 	if err != nil {
 		return 0, err
 	}

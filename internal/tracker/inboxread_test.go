@@ -402,3 +402,51 @@ func TestReasonsFilterRatherThanClassify(t *testing.T) {
 			"refuses everything rather than narrowing")
 	}
 }
+
+// A CREATION'S NOTICE CARRIES THE ITEM'S KEY, and nothing but the applier
+// could have put it there.
+//
+// The key is MINTED BY THE WRITE — `ENG-1` comes from the project's own
+// counter — so a record's notification snapshot cannot state it, and for as
+// long as the inbox row took that snapshot every creation in every company
+// wrote a notice whose subject was a uuid. `SubjectKey`'s own doc says what
+// that costs: "an inbox of uuids is an inbox nobody reads."
+//
+// The existing cases could not see it, because the harness states the key on
+// the snapshot itself. This one deliberately does not.
+func TestACreationsNoticeCarriesTheKeyTheWriteMinted(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	task := newTask("t-key")
+	task.Assignee = "bob"
+	task.Title = "work for bob"
+	if _, err := r.writer.CreateTask(t.Context(), "op-t-key", task, &tracker.Notify{
+		Kind: tracker.ChangeCreated,
+		// NO Snapshot.Key — which is what a real create looks like, since
+		// the key does not exist until the write assigns it.
+		Snapshot: tracker.Snapshot{Project: "ENG", Title: task.Title, Assignee: "bob"},
+		Excerpt:  task.Title,
+	}); err != nil {
+
+		t.Fatalf("create t-key: %v", err)
+	}
+	r.drain()
+
+	// WHAT THE ITEM IS ACTUALLY CALLED, read back rather than asserted as
+	// a literal: the key comes from the project's counter, so a literal
+	// here would be this suite's own bookkeeping rather than the rule.
+	detail := r.task(t, "t-key")
+	if detail.Task.Key == "" {
+		t.Fatal("the write minted no key at all")
+	}
+	got := r.inbox(tracker.InboxQuery{Handle: "bob"})
+	if len(got.Notices) == 0 {
+		t.Fatal("bob was assigned work and his inbox is empty")
+	}
+	if got.Notices[0].SubjectKey != detail.Task.Key {
+		t.Fatalf("the notice names %q and the item is %q — the key is minted "+
+			"by the write, so only the row the applier read can supply it",
+			got.Notices[0].SubjectKey, detail.Task.Key)
+	}
+}
