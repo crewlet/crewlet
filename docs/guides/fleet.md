@@ -75,9 +75,11 @@ it provisions anything — measured at about eight seconds on a quiet
 three-member cluster, and given up to sixty — because creating a replicated
 stream against a leaderless group blocks rather than failing. If the other
 members have not arrived yet the stream cannot be placed, and the node says
-so (`jetstream_stream_awaiting_peers`) while it retries inside a
-thirty-second provisioning deadline, rather than hanging with nothing to
-read.
+so (`jetstream_stream_awaiting_peers`) while it retries inside the per-create
+provisioning deadline — **two minutes** on a member with peers, against thirty
+seconds on a solo node, because the two creates are not the same call
+underneath — rather than hanging with nothing to read. See
+[Deployment](deployment.md#a-clustered-node-is-given-longer-to-create-them).
 
 **Credentials go through a node that is running.** The
 [secret store](../concepts/secret-store.md#which-store-the-cli-writes) is on

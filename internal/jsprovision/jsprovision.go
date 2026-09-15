@@ -42,7 +42,8 @@
 // # And why the sequence is bounded separately
 //
 // Each budget below bounds ONE create, and a boot makes many of them in a row
-// — fifteen coordination buckets, and the engine's own streams beside them.
+// — thirteen coordination buckets from [internal/coord/kv]'s OpenFleet, two
+// more from its Open, and the engine's own streams beside them.
 // Nothing bounded the sequence, so the real worst case was already the product
 // rather than the term, and raising the term alone would have multiplied it.
 // [SequenceBudget] is the wall-clock ceiling over a whole bring-up; a caller
@@ -237,9 +238,10 @@ const SlowAfter = 10 * time.Second
 // # Why a provisioning call needs this at all
 //
 // Because a stalled one is COMPLETELY SILENT, and that is what made a failed
-// boot undiagnosable. A node opens fifteen buckets and several streams in a
-// row; if one of them hangs, nothing is logged between the line before it and
-// the failure a budget later — so the log cannot say which object it was on,
+// boot undiagnosable. A node opens fifteen buckets across its two coordination
+// stores, and several streams, in a row; if one of them hangs, nothing is
+// logged between the line before it and the failure a budget later — so the
+// log cannot say which object it was on,
 // how many it had already done, or whether it was moving slowly or not moving
 // at all. In one CI run a member emitted nothing whatsoever for 28 seconds and
 // then failed, and the only way to learn which bucket it died on was the error
