@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/static"
 )
 
@@ -41,6 +42,15 @@ type App struct {
 	nodeID       string
 	startedAt    string
 	queueBackend string
+
+	// events is the node's own log, for the ONE thing this package does
+	// with it outside the read registry: seeding the live spend window at
+	// boot. Nil on a process with no store, which simply starts empty.
+	events *store.EventLog
+
+	// now is the clock, shared with the stream service so a hydration
+	// window and a health tick cannot disagree about what time it is.
+	now func() time.Time
 
 	// queries is the read surface both transports answer from.
 	queries *queries.Registry
@@ -226,6 +236,8 @@ func New(opts Options) *App {
 		nodeID:       nodeIDOf(opts.Bootstrap),
 		startedAt:    nowISO(now()),
 		queueBackend: opts.QueueBackend,
+		events:       opts.Sources.Events,
+		now:          now,
 	}
 	// DERIVED FROM THE SOURCE THAT ALREADY EXISTS, rather than a second
 	// field an embedder could set inconsistently with it: Sources.Company
@@ -478,8 +490,47 @@ func (a *App) Configured() bool {
 // it would only reject.
 func (a *App) SetConfigured(v bool) { a.configured.Store(v) }
 
-// Start brings up the shared health tick.
-func (a *App) Start(ctx context.Context) { a.stream.StartHealthTicks(ctx) }
+// Start brings up the shared health tick and seeds the live spend window.
+//
+// THE HYDRATION IS NOT OPTIONAL POLISH. The projection is fed by one ephemeral
+// subscription, so without this a restarted node reports a day of zeroes in a
+// window it labels a full day — beside a chart drawn from the store that shows
+// the real spend. See [livestate.LiveState.HydrateSpend], which is deduped by
+// event id precisely so that this racing the subscription is a non-question.
+//
+// BEST EFFORT, and loudly so: a store that cannot be read leaves the window to
+// fill from the stream as it always did, which is the pre-existing behaviour
+// rather than a new failure — but a screen quietly showing less than it should
+// is exactly what this exists to stop, so it is logged rather than swallowed.
+func (a *App) Start(ctx context.Context) {
+	a.stream.StartHealthTicks(ctx)
+	a.hydrateSpend(ctx)
+}
+
+// hydrateSpend seeds the live window from the event store.
+func (a *App) hydrateSpend(ctx context.Context) {
+	if a.events == nil {
+		return
+	}
+	records, err := a.events.PhaseTokens(ctx, store.PhaseTokenQuery{
+		// THE PROJECTION'S OWN WINDOW, asked for as instants rather than
+		// as a day count: the two are not the same window whenever the
+		// live window is not a whole number of days, and seeding more
+		// than the projection retains would be pruned on the next event
+		// anyway.
+		Since: a.now().Add(-livestate.LiveSpendWindow),
+	})
+	if err != nil {
+		log.WarnContext(ctx, "spend_hydration_failed", "error", err,
+			"hint", "the live spend window will fill from the stream instead, "+
+				"so figures read low until it does")
+		return
+	}
+	if landed := a.state.HydrateSpend(records); landed > 0 {
+		log.InfoContext(ctx, "spend_hydrated", "records", landed,
+			"window", livestate.LiveSpendWindow.String())
+	}
+}
 
 // Stop ends the tick and disconnects every client.
 func (a *App) Stop() { a.stream.Stop() }
