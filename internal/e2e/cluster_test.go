@@ -196,6 +196,13 @@ const clusterStartAttempts = 3
 // what a fleet is: n machines, each with its own disk. Sharing either would
 // make this one node wearing three hats, and every fleet mechanism under it
 // would pass for the wrong reason.
+// clusterHost is the interface every member of a test mesh binds its route
+// listener on. LOOPBACK, because the mesh's own route URLs are loopback and a
+// member listening wider would be reachable from outside the harness — and
+// because the pre-bind probe asks about one address, which cannot answer for a
+// wildcard bind.
+const clusterHost = "127.0.0.1"
+
 func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	*node, []func(), error) {
 
@@ -230,7 +237,10 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	// port lost inside that window: together they turn a member that comes
 	// up, serves clients and silently never routes into an immediate,
 	// named retry.
-	if !jetstreamtest.PortFree(t.Context(), port) {
+	//
+	// THE SAME HOST THE MEMBER BINDS, set below — a probe against a
+	// different address answers about a port the server never asks for.
+	if !jetstreamtest.PortFree(t.Context(), clusterHost, port) {
 		return fail(fmt.Errorf("route port %d was taken between this mesh "+
 			"reserving it and member %d starting", port, i))
 	}
@@ -244,7 +254,7 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	// LOOPBACK, because the relays dial 127.0.0.1: a member listening on
 	// every interface would be reachable on a port a partition does not
 	// cut, and the partition would cut nothing.
-	boot.Stream.Cluster.Host = "127.0.0.1"
+	boot.Stream.Cluster.Host = clusterHost
 	if advertise != "" {
 		boot.Stream.Cluster.Advertise = advertise
 	}

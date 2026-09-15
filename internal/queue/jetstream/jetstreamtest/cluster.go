@@ -250,6 +250,14 @@ func memberConfig(base js.Config, i, n, clusterPort int, routes []string) js.Con
 	cfg.ClusterName = "crewlet-test"
 	cfg.ClusterPort = clusterPort
 	cfg.ClusterURLs = routes
+	// LOOPBACK, because that is what the routes name: hostPort builds
+	// 127.0.0.1, so a member listening on every interface is reachable
+	// from outside the harness on a port nothing here controls — and the
+	// pre-bind probe, which asks about one address, cannot answer for a
+	// wildcard bind at all. The relay path has always set this; the direct
+	// one did not, so its probe could pass on 127.0.0.1 while the bind
+	// lost :port to something holding another local interface.
+	cfg.ClusterHost = "127.0.0.1"
 	if cfg.Replicas == 0 {
 		cfg.Replicas = n
 	}
@@ -274,7 +282,7 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	// can, short of never letting the port go — but it shortens the window
 	// from seconds to microseconds, and it turns the loss from a
 	// two-minute readiness timeout into an immediate retry.
-	if !PortFree(t.Context(), cfg.ClusterPort) {
+	if !PortFree(t.Context(), cfg.ClusterHost, cfg.ClusterPort) {
 		return fmt.Errorf("cluster member %d: route port %d was taken between "+
 			"this harness reserving it and the member starting", i, cfg.ClusterPort)
 	}
@@ -312,12 +320,15 @@ func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 // so the harness that stands one up cannot call [Cluster.start] and would
 // otherwise have no way to make the same check — which is exactly the gap it
 // had.
-func PortFree(ctx context.Context, port int) bool {
+// THE HOST IS AN ARGUMENT, because a probe that assumes one is a probe that
+// can answer about an address the server never binds — which is exactly what a
+// hardcoded 127.0.0.1 did for a member left to listen on every interface.
+func PortFree(ctx context.Context, host string, port int) bool {
 	// THE ENGINE'S OWN PROBE, not a second one: [js.PortAvailable] is what
 	// a clustered member runs against its configured route port before it
 	// starts, and a harness asking the same question a different way is how
 	// one answer stops matching the other.
-	free, err := js.PortAvailable(ctx, "127.0.0.1", port)
+	free, err := js.PortAvailable(ctx, host, port)
 	return free && err == nil
 }
 

@@ -47,6 +47,29 @@ func StartRelays(t *testing.T, n int) *Relays {
 		t.Fatalf("StartRelays(%d): a partition needs at least two members, or "+
 			"there is no pair to cut", n)
 	}
+	// RETRIED WITH FRESH PORTS, which is [withFreshPorts]'s argument
+	// applied to the other half of the harness: a lost port is not fixed
+	// by asking for the same number again, and this reserves three sets at
+	// once so it is the likelier half to lose one.
+	var last error
+	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
+		r, err := startRelaysOnce(t, n)
+		if err == nil {
+			return r
+		}
+		last = err
+		t.Logf("relay mesh attempt %d/%d lost a port race: %v",
+			attempt, clusterStartAttempts, err)
+	}
+	t.Fatalf("no relay mesh came up in %d attempts: %v — every one lost a "+
+		"listener to another process between reserving its port and binding "+
+		"it", clusterStartAttempts, last)
+	return nil
+}
+
+// startRelaysOnce is one attempt, which is the unit the retry above works in.
+func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
+	t.Helper()
 	ports := freePorts(t, n+n*(n-1)+n)
 	routePorts, relayPorts, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
@@ -70,11 +93,18 @@ func StartRelays(t *testing.T, n int) *Relays {
 	for _, f := range c.forwarders {
 		if err := f.start(t.Context()); err != nil {
 			c.shutdown()
-			t.Fatalf("start forwarder %d->%d: %v", f.from, f.to, err)
+			// RETURNED, NOT FATAL. A relay listener loses its port to
+			// the same race a member's does — this reserves n(n-1)+2n
+			// of them, so it loses MORE often — and the caller above
+			// retries with a fresh set. t.Fatalf ends the test binary's
+			// goroutine instead, so the retry that exists for exactly
+			// this never runs: the cluster harness learned the same
+			// lesson when StartCluster discarded its partial cluster.
+			return nil, fmt.Errorf("start forwarder %d->%d: %w", f.from, f.to, err)
 		}
 	}
 	t.Cleanup(c.shutdown)
-	return &Relays{c: c, ports: routePorts, dead: dead}
+	return &Relays{c: c, ports: routePorts, dead: dead}, nil
 }
 
 // StartDirectMesh reserves an n-member mesh with NO relays: members are given
