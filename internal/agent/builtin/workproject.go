@@ -237,7 +237,13 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so a call that
 	// holds both facets cannot land the tag half and then be refused the
 	// policy half on a different answer to the same question.
+	// EITHER AUTHORITY IS ENOUGH, and the operator half is why the lookup
+	// below is not the whole answer: it resolves the lead from the ORG
+	// CHART by handle, and an operator token carries its own name rather
+	// than a seat's — so for the founder's own surface it always answers
+	// false. See [tracker.ProjectAuthority].
 	lead := t.leads != nil && t.leads(ctx, actor.Handle, key)
+	person := actor.Kind.Person()
 	writer := t.deps.ProjectWriter(actor)
 	out := map[string]any{"project": key}
 
@@ -246,7 +252,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// as a mistake. Two writes, never one — two objects on two subjects.
 	if !tagEdit.Empty() {
 		result, err := writer.WriteTags(ctx, "tags-"+uuid.NewString(), key,
-			tagEdit, tracker.TagAuthority{Lead: lead})
+			tagEdit, tracker.TagAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
 		}
@@ -261,7 +267,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if !edit.Empty() {
 		result, err := writer.WriteProject(ctx, "policy-"+uuid.NewString(), key,
-			edit, tracker.ProjectAuthority{Lead: lead, Operator: actor.Kind == tracker.AuthorOperator})
+			edit, tracker.ProjectAuthority{Lead: lead, Operator: person})
 		if err != nil {
 			return failed(writeFailure(tracker.WriteProjectTool, err)), nil
 		}

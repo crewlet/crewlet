@@ -134,10 +134,20 @@ func (t *manageSprint) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// which holds no chart. A surface that wired no lookup refuses, which
 	// is the safe direction: a sprint decision belongs to whoever plans
 	// the team's fortnight, and "everybody with a token" is not that.
-	if t.leads == nil || !t.leads(ctx, actor.Handle, project) {
-		return failed(fmt.Sprintf("Only %s's lead manages its sprints — "+
-			"starting one changes what the whole team is expected to work on, "+
-			"and closing one decides what counted.", project)), nil
+	//
+	// OR A PERSON'S OWN CREDENTIAL, which the chart lookup can never
+	// answer for: an operator is not a seat, so `leads` is asked about a
+	// token's name and says no. The same pair `write_project` takes — see
+	// [tracker.ProjectAuthority] — and for the same reason: the founder
+	// running the company through their own assistant is the one actor
+	// this surface exists for, and a lead-only gate refused them every
+	// sprint their company has.
+	if !actor.Kind.Person() &&
+		(t.leads == nil || !t.leads(ctx, actor.Handle, project)) {
+		return failed(fmt.Sprintf("Only %s's lead or a person's own "+
+			"credential manages its sprints — starting one changes what the "+
+			"whole team is expected to work on, and closing one decides what "+
+			"counted.", project)), nil
 	}
 
 	writer := t.deps.SprintWriter(actor)

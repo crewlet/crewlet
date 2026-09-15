@@ -80,6 +80,14 @@ type TagAuthority struct {
 	// Resolved by the caller from the org chart, because this package has
 	// no chart.
 	Lead bool
+
+	// Operator reports whether the actor is acting through a person's own
+	// credential rather than as a seat, and is authority here in its own
+	// right — [ProjectAuthority] carries the same pair for the same
+	// reason. An operator is not a seat, so the chart lookup that resolves
+	// `Lead` answers false for one, and a gate on the lead alone refused
+	// every rename and archive the founder's own surface asked for.
+	Operator bool
 }
 
 // WriteTags applies one edit to a project's tag set.
@@ -98,14 +106,15 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	case edit.Empty():
 		return WriteResult{}, fmt.Errorf("tracker: a tag edit of %s adds, "+
 			"renames and archives nothing", project)
-	case !authority.Lead && (len(edit.Rename) > 0 || len(edit.Archive) > 0):
+	case !authority.Lead && !authority.Operator &&
+		(len(edit.Rename) > 0 || len(edit.Archive) > 0):
 		// THE REFUSAL NAMES WHO CAN, because a seat that hit it was
 		// tidying up and the answer is "ask the lead" rather than
 		// "you cannot".
 		return WriteResult{}, fmt.Errorf("tracker: renaming or archiving a tag "+
-			"of %s is the project lead's — it changes the word on every task "+
-			"already filed under it, and takes a filter off everybody's board. "+
-			"Adding a tag is open to every seat", project)
+			"of %s is the project lead's, or a person's own — it changes the "+
+			"word on every task already filed under it, and takes a filter "+
+			"off everybody's board. Adding a tag is open to every seat", project)
 	}
 	subject := TagsSubject(project)
 	scope := ScopeSet{Subject: true, Container: project}
