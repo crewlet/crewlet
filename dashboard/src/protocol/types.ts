@@ -2513,10 +2513,23 @@ export interface SetupRun {
 export interface SetupListing {
   tools: SetupToolState[];
   public_base_url: {
+    /** The RESOLVED address, empty when the reference resolves to nothing. */
     value: string;
     present: boolean;
+    /**
+     * Whether the configured value resolves to something. THREE-VALUED:
+     * `null` means this node cannot say, which is not the same as `false`.
+     * `present` alone is what a banner read once, so a `${VAR}` nobody
+     * exported rendered as "reach this engine at" and then nothing.
+     */
     resolved?: boolean | null;
     config_path: string;
+    /**
+     * The variable the setting points at, empty for a literal. What makes
+     * an unresolved address actionable: "set it" is advice, "export
+     * PUBLIC_BASE_URL" is an instruction.
+     */
+    reference?: string;
   };
 }
 
