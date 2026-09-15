@@ -632,43 +632,6 @@ fieldset.field {
   color: var(--color-brand-accent);
 }
 
-/* Filter chips. Neutral until ON, when they take the accent: the one thing
-   that is currently narrowing the list is exactly the "current selection" the
-   accent is reserved for. */
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  height: var(--size-control-sm);
-  padding: 0 var(--spacing-2);
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--color-border-default);
-  background: transparent;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-  white-space: nowrap;
-  transition:
-    background var(--motion-duration-fast) var(--motion-easing-default),
-    color var(--motion-duration-fast) var(--motion-easing-default),
-    border-color var(--motion-duration-fast) var(--motion-easing-default);
-}
-.chip:hover {
-  color: var(--color-text-primary);
-  border-color: var(--color-border-hover);
-}
-.chip[aria-pressed="true"] {
-  background: var(--color-brand-accent-soft);
-  border-color: var(--color-brand-accent-soft-strong);
-  color: var(--color-brand-accent-ink);
-}
-.chip .chip-count {
-  font-variant-numeric: tabular-nums;
-  color: var(--color-text-tertiary);
-}
-.chip[aria-pressed="true"] .chip-count {
-  color: inherit;
-}
-
 /* ---- Meter --------------------------------------------------------------
    What is left of the meter after the design system took it: the TRACK, which
    the chart's own bars are drawn in. A track is always drawn, because a bar

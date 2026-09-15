@@ -24,12 +24,11 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Chip, SearchInput } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
-import { CloseGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
+import { CloseGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { Button, Card, FilterChip, FilterChipGroup, Input, Skeleton, Tag } from "@crewlethq/ui";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -159,48 +158,55 @@ export function Activity() {
       />
 
       <div className="toolbar">
-        <div style={{ maxWidth: 300, flex: 1 }}>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            ariaLabel="Search events"
-            placeholder="Search summary, type or source"
-          />
-        </div>
-        <div style={{ maxWidth: 180 }}>
-          <SearchInput
-            value={actor}
-            onChange={setActor}
-            ariaLabel="Filter by actor"
-            placeholder="Actor"
-          />
-        </div>
-        <Chip on={!!onlyFailed} onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}>
+        <Input
+          type="search"
+          width="md"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          onClear={() => setQ("")}
+          aria-label="Search events"
+          placeholder="Search summary, type or source"
+          leading={<SearchGlyph size="sm" />}
+        />
+        <Input
+          type="search"
+          width="sm"
+          value={actor}
+          onChange={(event) => setActor(event.target.value)}
+          onClear={() => setActor("")}
+          aria-label="Filter by actor"
+          placeholder="Actor"
+          leading={<SearchGlyph size="sm" />}
+        />
+        <FilterChip pressed={!!onlyFailed} onPressedChange={(on) => setOnlyFailed(on ? "1" : "")}>
           Failures only
-        </Chip>
+        </FilterChip>
         <span className="spacer" />
       </div>
 
-      <div className="row wrap gap-1">
-        <Chip on={!category} onClick={() => setCategory("")}>
-          All
-        </Chip>
+      <FilterChipGroup
+        label="Event category"
+        hideLabel
+        semantics="radio"
+        value={category}
+        onValueChange={(next) => setCategory(next ?? "")}
+      >
+        <FilterChip value="">All</FilterChip>
         {CATEGORIES.map((c) => (
-          <Chip
+          <FilterChip
             key={c}
-            on={category === c}
+            value={c}
             count={counts.get(c) ?? 0}
-            onClick={() => setCategory(category === c ? "" : c)}
             title={
               counts.get(c)
                 ? undefined
-                : "No events of this category are in the loaded window — the category still exists."
+                : "No events of this category are in the loaded window. The category still exists."
             }
           >
             {c}
-          </Chip>
+          </FilterChip>
         ))}
-      </div>
+      </FilterChipGroup>
 
       <Card padding="none">
         {rows.length ? (

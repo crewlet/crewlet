@@ -17,12 +17,11 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { SearchInput } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
-import { GroupGlyph } from "@crewlethq/icons/glyphs";
-import { EmptyState, SegmentedControl, TabPanel, Tag } from "@crewlethq/ui";
+import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { EmptyState, Input, SegmentedControl, TabPanel, Tag } from "@crewlethq/ui";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -116,14 +115,16 @@ export function People() {
       />
 
       <div className="toolbar">
-        <div style={{ maxWidth: 320, flex: 1 }}>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            ariaLabel="Filter seats"
-            placeholder="Filter by name, handle, goal or unit"
-          />
-        </div>
+        <Input
+          type="search"
+          width="md"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          onClear={() => setQ("")}
+          aria-label="Filter seats"
+          placeholder="Filter by name, handle, goal or unit"
+          leading={<SearchGlyph size="sm" />}
+        />
         <span className="spacer" />
         <SegmentedControl<Grouping>
           label="Grouping"

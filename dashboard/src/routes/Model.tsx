@@ -22,7 +22,6 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Chip, Select } from "~/ui/primitives.tsx";
 import { PhaseTag } from "~/components/PhaseTag.tsx";
 import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
@@ -39,7 +38,17 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
-import { Button, EmptyState, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import {
+  Button,
+  EmptyState,
+  FilterChip,
+  FilterChipGroup,
+  RelativeTime,
+  Select,
+  Skeleton,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
@@ -291,17 +300,30 @@ export function ModelActivity() {
       <div className="toolbar">
         <Select
           value={role}
-          onChange={setRole}
-          options={roles}
+          onChange={(next) => setRole(String(next))}
+          options={[
+            { value: "", label: "Any seat" },
+            ...roles.map((seat) => ({ value: seat, label: seat })),
+          ]}
           ariaLabel="Filter by seat"
-          anyLabel="Any seat"
+          active={!!role}
+          searchable={roles.length > 8}
         />
         <span className="spacer" />
-        {PHASES.map((p) => (
-          <Chip key={p} on={phase === p} onClick={() => setPhase(phase === p ? "" : p)}>
-            {p}
-          </Chip>
-        ))}
+        <FilterChipGroup
+          label="Phase"
+          hideLabel
+          semantics="radio"
+          allowNone
+          value={phase || null}
+          onValueChange={(next) => setPhase(next ?? "")}
+        >
+          {PHASES.map((p) => (
+            <FilterChip key={p} value={p}>
+              {p}
+            </FilterChip>
+          ))}
+        </FilterChipGroup>
         {filtering && (
           <Button
             variant="secondary"

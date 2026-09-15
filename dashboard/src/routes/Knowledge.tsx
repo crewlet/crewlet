@@ -17,7 +17,6 @@ import { useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { SearchInput } from "~/ui/primitives.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -32,7 +31,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Input, Skeleton, Tag } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -60,14 +59,16 @@ export function Knowledge() {
           setQ(draft.trim());
         }}
       >
-        <div style={{ flex: 1, maxWidth: 520 }}>
-          <SearchInput
-            value={draft}
-            onChange={setDraft}
-            ariaLabel="Search the knowledge base"
-            placeholder="Search the knowledge base — plain text, not a query language"
-          />
-        </div>
+        <Input
+          type="search"
+          width="lg"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onClear={() => setDraft("")}
+          aria-label="Search the knowledge base"
+          placeholder="Search the knowledge base in plain text, not a query language"
+          leading={<SearchGlyph size="sm" />}
+        />
         <Button variant="primary" type="submit" leadingIcon={<SearchGlyph />}>
           Search
         </Button>

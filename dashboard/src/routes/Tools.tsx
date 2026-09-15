@@ -11,12 +11,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
-import { Chip, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
-import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
-import { Card, EmptyState, Tag } from "@crewlethq/ui";
+import { BuildGlyph, CableGlyph, Package2Glyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { Card, EmptyState, FilterChip, FilterChipGroup, Input, Tag } from "@crewlethq/ui";
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -77,28 +77,31 @@ export function Tools() {
       </Card>
 
       <div className="toolbar">
-        <div style={{ maxWidth: 340, flex: 1 }}>
-          <SearchInput
-            value={q}
-            onChange={setQ}
-            ariaLabel="Search tools"
-            placeholder="Search by name or description"
-          />
-        </div>
+        <Input
+          type="search"
+          width="md"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          onClear={() => setQ("")}
+          aria-label="Search tools"
+          placeholder="Search by name or description"
+          leading={<SearchGlyph size="sm" />}
+        />
         <span className="spacer" />
-        <Chip on={!origin} onClick={() => setOrigin("")}>
-          All
-        </Chip>
-        {origins.map(([source, count]) => (
-          <Chip
-            key={source}
-            on={origin === source}
-            count={count}
-            onClick={() => setOrigin(origin === source ? "" : source)}
-          >
-            {source}
-          </Chip>
-        ))}
+        <FilterChipGroup
+          label="Tool origin"
+          hideLabel
+          semantics="radio"
+          value={origin}
+          onValueChange={(next) => setOrigin(next ?? "")}
+        >
+          <FilterChip value="">All</FilterChip>
+          {origins.map(([source, count]) => (
+            <FilterChip key={source} value={source} count={count}>
+              {source}
+            </FilterChip>
+          ))}
+        </FilterChipGroup>
       </div>
 
       {!tools.length ? (
