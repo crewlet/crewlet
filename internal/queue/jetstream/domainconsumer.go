@@ -147,16 +147,20 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// below must not inherit a deadline this create may have spent.
 	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancel()
-	// STOPPED WHERE THE CREATE ENDS rather than where this function does,
-	// because the line NAMES the create: left armed across the read-back
-	// and the alignment below it, a slow Info or UpdateConsumer reports a
-	// consumer "still being created" after the create has finished, and
-	// sends whoever is diagnosing a clustered boot at the wrong call.
+	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
+	// the create ends rather than where this function does.
+	//
+	// Both halves were wrong in the same way, at opposite ends: armed
+	// before the lookup while saying "created", and left armed across the
+	// read-back and the alignment after it. Either way the line names a
+	// step this member is not on, which is the one thing it exists to get
+	// right.
 	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", name, "waited", after,
-			"detail", "this state-log consumer is still being created; on a "+
-				"fleet that is a metadata group that has not settled")
+			"detail", "this state-log consumer is still being provisioned — "+
+				"looked up, and created if it was absent; on a fleet that is "+
+				"a metadata group that has not settled")
 	})
 
 	cons, err := q.js.Consumer(createCtx, stream, name)
