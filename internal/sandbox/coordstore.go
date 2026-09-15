@@ -338,6 +338,25 @@ func (s *CoordStore) ListActive(ctx context.Context) ([]PendingRun, error) {
 	return s.list(ctx, func(r PendingRun) bool { return slices.Contains(Active, r.Status) })
 }
 
+// ListWithStatus returns the runs whose status is in `want`, or every run this
+// store still holds when `want` is empty.
+//
+// FOR THE READ SURFACE, and it exists because [CoordStore.ListActive] is the
+// wrong question there: a run's record OUTLIVES its run — the store keeps a
+// finished one so a reviewer can read what it did — and a listing that only
+// ever showed the active set meant the retained record was never served to
+// anybody. "What did the coding runs do today" had no answer, and a run that
+// failed disappeared from the board at the moment somebody would look for it.
+//
+// The recovery paths deliberately keep [CoordStore.ListActive]: they are about
+// state that must be reclaimed, and widening their set would have boot walk
+// rows that own nothing.
+func (s *CoordStore) ListWithStatus(ctx context.Context, want []string) ([]PendingRun, error) {
+	return s.list(ctx, func(r PendingRun) bool {
+		return len(want) == 0 || slices.Contains(want, r.Status)
+	})
+}
+
 // ListActiveForSeat returns one seat's unfinished runs.
 //
 // The read a seat's new owner makes inside on_acquire, and the whole reason
