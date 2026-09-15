@@ -329,7 +329,14 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
       {state.kind === "loading" && (
         <Skeleton label="Loading the saved revision" variant="text" rows={4} />
       )}
-      {state.kind === "failed" && <Callout variant="danger">{state.detail}</Callout>}
+      {/* It replaces the placeholder AFTER the dialog was read out, so a
+          reader who has already heard "Loading the saved revision" hears
+          nothing more unless this says so. */}
+      {state.kind === "failed" && (
+        <Callout variant="danger" role="alert">
+          {state.detail}
+        </Callout>
+      )}
       {state.kind === "text" && (
         <>
           {state.revision !== null && state.revision !== savedRevision && (

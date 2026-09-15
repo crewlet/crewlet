@@ -175,7 +175,14 @@ export function CreateCompany({
           </div>
         )}
 
-        {error && <Callout variant="danger">{error}</Callout>}
+        {/* Why Start the company did nothing, announced: the form does not
+            move, so a reader who cannot see the paragraph appear is left with
+            a button that looks unpressed. */}
+        {error && (
+          <Callout variant="danger" role="alert">
+            {error}
+          </Callout>
+        )}
         <div className="row gap-1">
           <Button variant="primary" onClick={start} disabled={disabled}>
             Start the company

@@ -345,10 +345,23 @@ export function StaysUntilDecommissioned({ entries }: { entries: readonly LeftBe
   );
 }
 
-/** Why the reducer refused an operation, kept on screen beside what caused it. */
+/**
+ * Why the reducer refused an operation, kept on screen beside what caused it.
+ *
+ * ANNOUNCED, because nothing else says it. The dialog asks `recordIntent`
+ * before it dispatches, so a refusal never reaches the reducer and the
+ * builder's own polite region, which speaks for a recorded operation, never
+ * hears about this one. Without the role a reader presses the dialog's one
+ * button, the dialog stays open, and the only report is a paragraph they were
+ * not looking at.
+ */
 export function Refusal({ message }: { message: string | null }) {
   if (!message) return null;
-  return <Callout variant="danger">{message}</Callout>;
+  return (
+    <Callout variant="danger" role="alert">
+      {message}
+    </Callout>
+  );
 }
 
 /**

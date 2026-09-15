@@ -143,6 +143,24 @@ test("a refusal keeps the dialog open and adds nothing", () => {
   expect(view.onClose).not.toHaveBeenCalled();
 });
 
+// AND IT IS SPOKEN, NOT ONLY DRAWN. The dialog asks the reducer whether it
+// would take the operation before it dispatches, so a refusal never reaches
+// the reducer's state and never reaches the builder's own live region, which
+// speaks for a recorded operation. This paragraph is the whole report: without
+// the role a reader presses the one button, the dialog does not move, and
+// nothing tells them why.
+test("a refusal is announced", () => {
+  const loaded = builderReducer(INITIAL_BUILDER, {
+    type: "load",
+    mode: "edit",
+    document: fixtureCompany(),
+    revision: "rev-1",
+  });
+  open(loaded, null);
+  fireEvent.click(screen.getByRole("button", { name: "Add agent seat" }));
+  expect(screen.getByRole("alert").textContent).toMatch(/has not described this company yet/);
+});
+
 // A disabled button is not a reason: without the note the operator fills the
 // dialog in and nothing on screen says the builder is what is in the way.
 test("a read-only builder adds nothing, and says why the button is unavailable", () => {

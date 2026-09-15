@@ -237,7 +237,14 @@ export function ReviewSaveDialog({
         </>
       }
     >
-      {phase.kind === "refused" && <Callout variant="danger">{phase.message}</Callout>}
+      {/* The engine's answer to the save this reader just asked for, so it is
+          announced. The rest of this dialog describes what a save WOULD do and
+          is read when the dialog opens. */}
+      {phase.kind === "refused" && (
+        <Callout variant="danger" role="alert">
+          {phase.message}
+        </Callout>
+      )}
       {phase.kind === "retry" && <Callout variant="warning">{phase.message}</Callout>}
       {phase.kind === "settling" && (
         <Callout variant="warning" icon={<RefreshGlyph />}>
