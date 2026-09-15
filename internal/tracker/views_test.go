@@ -2,6 +2,7 @@ package tracker_test
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -295,10 +296,16 @@ func TestAContainerHasItsViewsBeforeAnybodySavesOne(t *testing.T) {
 
 // EVERY IMPLICIT VIEW'S OWN PARAMETERS PARSE.
 //
-// The five are rendered from this package rather than saved, so [checkView]
-// never sees them — which is exactly why they need their own case: a tab that
-// opens on a parse error is the failure the save-time parse exists to prevent,
-// and the implicit ones are the tabs every company meets first.
+// They are rendered from this package rather than saved, so [checkView] never
+// sees them — which is exactly why they need their own case: a tab that opens
+// on a parse error is the failure the save-time parse exists to prevent, and
+// the implicit ones are the tabs every company meets first.
+//
+// THE SET RATHER THAN THE COUNT, because a count says nothing about WHICH: a
+// view renamed, dropped and replaced by another passes a count check, and a
+// view added is a failure whose message names a number rather than a tab. This
+// was a count, and adding the timeline turned it into "has 6 views, want 5" —
+// a red build whose message named nothing anybody could act on.
 func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -314,8 +321,12 @@ func TestEveryImplicitViewsQueryParses(t *testing.T) {
 	r.drain()
 
 	strip := r.strip(tracker.Container{Kind: tracker.ContainerProject, ID: "ENG"}, "")
-	if len(strip.Views) != 5 {
-		t.Fatalf("a sprinting project has %d views, want 5", len(strip.Views))
+	want := []string{
+		tracker.ViewKeyList, tracker.ViewKeyBoard, tracker.ViewKeyCalendar,
+		tracker.ViewKeyTimeline, tracker.ViewKeySprint, tracker.ViewKeyBacklog,
+	}
+	if got := stripKeys(strip); !slices.Equal(got, want) {
+		t.Fatalf("a sprinting project offers %v, want %v", got, want)
 	}
 	for _, row := range strip.Views {
 		params := make(tracker.MapParams, len(row.Params)+1)
