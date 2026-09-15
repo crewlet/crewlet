@@ -23,7 +23,17 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { Avatar, Button, RelativeTime, Tag, cx, formatRelative, useNow } from "@crewlethq/ui";
+import {
+  Avatar,
+  Button,
+  RelativeTime,
+  Tag,
+  cx,
+  formatRelative,
+  tableColumns,
+  useNow,
+} from "@crewlethq/ui";
+import type { DataViewColumn } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   ErrorGlyph,
@@ -43,6 +53,34 @@ import {
  * them at nine hundred lines pushes everything under it off the screen.
  */
 export const RECORD_MAX_HEIGHT = 460;
+
+/**
+ * What every record table in this dashboard is, as props.
+ *
+ * A panel table here shows a whole answer the engine already sliced, so it
+ * PAGES NOWHERE: the caller holds the rows and the footer of the screen holds
+ * whatever fetches more. It RESIZES NOTHING and STORES NOTHING either, because
+ * every choice a reader makes on one of these screens lives in the URL, where
+ * it can be shared and gone back to, rather than in this browser's own storage
+ * where the next reader inherits it invisibly.
+ *
+ * It is a bundle of props rather than a component: the design system draws the
+ * table, and what the engine has to say about one is only this. The rows come
+ * in with the columns so that one call names the row type for both, which is
+ * what lets a column's own accessors stay untyped at the call site.
+ */
+export function recordTable<T>(rows: readonly T[], columns: readonly DataViewColumn<T>[]) {
+  const { columns: byKey, order } = tableColumns(columns);
+  return {
+    data: [...rows],
+    columns: byKey,
+    defaultColumnOrder: order,
+    variant: "compact" as const,
+    paginated: false,
+    resizable: false,
+    showSettings: false,
+  };
+}
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({

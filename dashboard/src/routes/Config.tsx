@@ -23,8 +23,7 @@
 import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { QueryState, RECORD_MAX_HEIGHT, recordTable } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
@@ -33,6 +32,7 @@ import {
   Card,
   CodeBlock,
   CopyButton,
+  DataTable,
   EmptyState,
   EmptyValue,
   RelativeTime,
@@ -177,10 +177,9 @@ export function ConfigScreen() {
                 >
                   <Card.Title>Revisions</Card.Title>
                 </Card.Header>
-                <DataTable<RevisionMeta>
-                  rows={audit.data ?? []}
-                  rowKey={(r) => r.revision_id}
-                  defaultSort={{ key: "at", dir: "desc" }}
+                <DataTable
+                  getRowKey={(r) => r.revision_id}
+                  defaultSort={{ key: "at", direction: "desc" }}
                   onRowClick={(r) => {
                     // A picked row is compared with the active revision, so
                     // the revision a link compared against is dropped with it.
@@ -188,20 +187,22 @@ export function ConfigScreen() {
                     setLens("diff");
                   }}
                   isSelected={(r) => r.revision_id === revision}
-                  columns={[
+                  {...recordTable(audit.data ?? [], [
                     {
                       key: "at",
                       header: "When",
                       shrink: true,
+                      sortable: true,
+                      firstDirection: "desc",
                       sortValue: (r) => tsKey(r.created_at),
-                      cell: (r) => (
+                      render: (r) => (
                         <RelativeTime className="t-caption" value={r.created_at} now={now} />
                       ),
                     },
                     {
                       key: "id",
                       header: "Revision",
-                      cell: (r) => (
+                      render: (r) => (
                         <span className="row gap-1">
                           <code className="inline">{r.revision_id.slice(0, 10)}</code>
                           {r.is_active && <Tag variant="success">active</Tag>}
@@ -211,8 +212,9 @@ export function ConfigScreen() {
                     {
                       key: "summary",
                       header: "Summary",
+                      sortable: true,
                       sortValue: (r) => r.summary,
-                      cell: (r) => (
+                      render: (r) => (
                         <span className="truncate">
                           {r.summary || <EmptyValue label="No summary" />}
                         </span>
@@ -222,10 +224,11 @@ export function ConfigScreen() {
                       key: "author",
                       header: "By",
                       shrink: true,
+                      sortable: true,
                       sortValue: (r) => r.created_by,
-                      cell: (r) => r.created_by || <EmptyValue label="Not recorded" />,
+                      render: (r) => r.created_by || <EmptyValue label="Not recorded" />,
                     },
-                  ]}
+                  ])}
                 />
               </Card>
             </QueryState>

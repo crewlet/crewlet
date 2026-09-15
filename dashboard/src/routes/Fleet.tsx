@@ -8,13 +8,13 @@
  */
 
 import { ScreenHead } from "~/app/Shell.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
 import {
   Card,
+  DataTable,
   EmptyState,
   EmptyValue,
   RelativeTime,
@@ -139,17 +139,17 @@ export function Fleet() {
           >
             <Card.Title>Nodes</Card.Title>
           </Card.Header>
-          <DataTable<FleetNode>
-            rows={nodes}
-            rowKey={(n) => n.id}
-            defaultSort={{ key: "id", dir: "asc" }}
-            isFailed={(n) => n.config_status === "error"}
-            columns={[
+          <DataTable
+            getRowKey={(n) => n.id}
+            defaultSort={{ key: "id", direction: "asc" }}
+            rowTone={(n) => (n.config_status === "error" ? "danger" : null)}
+            {...recordTable(nodes, [
               {
                 key: "id",
                 header: "Node",
+                sortable: true,
                 sortValue: (n) => n.id,
-                cell: (n) => (
+                render: (n) => (
                   <span className="row gap-1">
                     <code className="inline">{n.id}</code>
                     {n.id === data?.this_node && <Tag variant="brand">this one</Tag>}
@@ -160,8 +160,9 @@ export function Fleet() {
               {
                 key: "roles",
                 header: "Duties",
+                sortable: true,
                 sortValue: (n) => n.roles.join(","),
-                cell: (n) => (
+                render: (n) => (
                   <span className="row wrap gap-1">
                     {n.roles.map((r) => (
                       <Tag key={r} appearance="outline">
@@ -175,24 +176,29 @@ export function Fleet() {
                 key: "seats",
                 header: "Seats",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (n) => n.seats,
                 // A COUNT on the node row; WHICH seats is the placement table
                 // below, which is the one that can name them.
-                cell: (n) => n.seats,
+                render: (n) => n.seats,
               },
               {
                 key: "inflight",
                 header: "In flight",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (n) => n.in_flight ?? 0,
-                cell: (n) => n.in_flight ?? 0,
+                render: (n) => n.in_flight ?? 0,
               },
               {
                 key: "posture",
                 header: "Posture",
                 shrink: true,
+                sortable: true,
                 sortValue: (n) => n.posture ?? "",
-                cell: (n) =>
+                render: (n) =>
                   n.posture ? (
                     <Tag variant={n.posture === "serve" ? "success" : "warning"}>{n.posture}</Tag>
                   ) : (
@@ -203,8 +209,9 @@ export function Fleet() {
                 key: "config",
                 header: "Config",
                 shrink: true,
+                sortable: true,
                 sortValue: (n) => n.config_status ?? "",
-                cell: (n) => (
+                render: (n) => (
                   <span className="row gap-1">
                     <Tag variant={STATUS_TONE[n.config_status ?? ""] ?? "neutral"}>
                       {n.config_status || "unknown"}
@@ -224,8 +231,9 @@ export function Fleet() {
                 key: "lease",
                 header: "Lease",
                 shrink: true,
+                sortable: true,
                 sortValue: (n) => n.expires_in ?? 0,
-                cell: (n) =>
+                render: (n) =>
                   n.expires_in != null ? (
                     <span className="t-num t-caption" title="time until this node's lease expires">
                       {fmtDuration(n.expires_in * 1000)}
@@ -238,15 +246,16 @@ export function Fleet() {
                 key: "up",
                 header: "Up since",
                 shrink: true,
+                sortable: true,
                 sortValue: (n) => n.started_at ?? "",
-                cell: (n) =>
+                render: (n) =>
                   n.started_at ? (
                     <RelativeTime className="t-caption" value={n.started_at} now={now} />
                   ) : (
                     <EmptyValue label="Not reported" />
                   ),
               },
-            ]}
+            ])}
           />
         </Card>
 
@@ -281,41 +290,50 @@ export function Fleet() {
               <Card.Title>Seat placement</Card.Title>
             </Card.Header>
             <DataTable
-              rows={data?.seats ?? []}
-              rowKey={(s) => s.handle}
-              defaultSort={{ key: "handle", dir: "asc" }}
-              empty={{ title: "No seats are leased" }}
-              columns={[
+              getRowKey={(s) => s.handle}
+              defaultSort={{ key: "handle", direction: "asc" }}
+              emptyMessage={
+                <EmptyState
+                  size="compact"
+                  title="No seats are leased"
+                  description="A node claims a seat's lease before it runs the seat, so an engine with no company applied has none to claim."
+                />
+              }
+              {...recordTable(data?.seats ?? [], [
                 {
                   key: "handle",
                   header: "Seat",
+                  sortable: true,
                   sortValue: (s) => s.handle,
-                  cell: (s) => <SeatChip name={s.handle} handle={s.handle} />,
+                  render: (s) => <SeatChip name={s.handle} handle={s.handle} />,
                 },
                 {
                   key: "node",
                   header: "Held by",
+                  sortable: true,
                   sortValue: (s) => s.node,
                   // The NODE, not the lease's `owner` — that is the fencing
                   // token (a node id plus a per-process suffix), and showing
                   // it here would make one node look like several across a
                   // restart.
-                  cell: (s) => <code className="inline">{s.node}</code>,
+                  render: (s) => <code className="inline">{s.node}</code>,
                 },
                 {
                   key: "ttl",
                   header: "Lease",
                   align: "right",
+                  firstDirection: "desc",
                   shrink: true,
+                  sortable: true,
                   sortValue: (s) => s.expires_in ?? 0,
-                  cell: (s) =>
+                  render: (s) =>
                     s.expires_in != null ? (
                       fmtDuration(s.expires_in * 1000)
                     ) : (
                       <EmptyValue label="Not reported" />
                     ),
                 },
-              ]}
+              ])}
             />
           </Card>
 
@@ -329,35 +347,46 @@ export function Fleet() {
               <Card.Title>Company-wide duties</Card.Title>
             </Card.Header>
             <DataTable
-              rows={data?.duties ?? []}
-              rowKey={(d) => d.duty}
-              defaultSort={{ key: "duty", dir: "asc" }}
-              empty={{
-                title: "No singleton duties are leased",
-                hint: "The retention sweep and the scheduler are fleet singletons — exactly one node runs each.",
-              }}
-              columns={[
-                { key: "name", header: "Duty", sortValue: (d) => d.duty, cell: (d) => d.duty },
+              getRowKey={(d) => d.duty}
+              defaultSort={{ key: "duty", direction: "asc" }}
+              emptyMessage={
+                <EmptyState
+                  size="compact"
+                  title="No singleton duties are leased"
+                  description="The retention sweep and the scheduler are fleet singletons, so exactly one node runs each."
+                />
+              }
+              {...recordTable(data?.duties ?? [], [
+                {
+                  key: "name",
+                  header: "Duty",
+                  sortable: true,
+                  sortValue: (d) => d.duty,
+                  render: (d) => d.duty,
+                },
                 {
                   key: "node",
                   header: "Held by",
+                  sortable: true,
                   sortValue: (d) => d.node,
-                  cell: (d) => <code className="inline">{d.node}</code>,
+                  render: (d) => <code className="inline">{d.node}</code>,
                 },
                 {
                   key: "ttl",
                   header: "Lease",
                   align: "right",
+                  firstDirection: "desc",
                   shrink: true,
+                  sortable: true,
                   sortValue: (d) => d.expires_in ?? 0,
-                  cell: (d) =>
+                  render: (d) =>
                     d.expires_in != null ? (
                       fmtDuration(d.expires_in * 1000)
                     ) : (
                       <EmptyValue label="Not reported" />
                     ),
                 },
-              ]}
+              ])}
             />
           </Card>
         </div>

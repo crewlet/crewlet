@@ -30,6 +30,7 @@ import {
   Button,
   ButtonLink,
   CodeBlock,
+  DataTable,
   CopyButton,
   IconButton,
   SegmentedControl,
@@ -39,6 +40,7 @@ import {
   tabId,
 } from "@crewlethq/ui";
 import { Announcer, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
+import { recordTable } from "./components/common.tsx";
 import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
@@ -537,4 +539,76 @@ test("a chip field over options refuses a value the options do not offer", () =>
   fireEvent.change(box, { target: { value: "SR" } });
   fireEvent.keyDown(box, { key: "Enter" });
   expect(screen.getByRole("button", { name: "Remove SRE" })).toBeDefined();
+});
+
+/*
+ * THE RECORD TABLE. `recordTable` is the one answer this dashboard gives about
+ * a table: the caller holds the rows, so the table pages nowhere, resizes
+ * nothing and stores nothing. The last of those is the one that fails
+ * silently: a `storageKey` would put a reader's column layout in this
+ * browser's own storage, where the next reader inherits it invisibly and no
+ * link can carry it.
+ */
+
+interface Row {
+  seat: string;
+  spent: number | null;
+}
+
+const ROWS: Row[] = [
+  { seat: "planner", spent: 900 },
+  { seat: "reviewer", spent: 0 },
+  { seat: "unmetered", spent: null },
+];
+
+const ROW_COLUMNS = [
+  { key: "seat", header: "Seat", sortable: true, sortValue: (row: Row) => row.seat },
+  {
+    key: "spent",
+    header: "Spent",
+    align: "right" as const,
+    firstDirection: "desc" as const,
+    sortable: true,
+    sortValue: (row: Row) => row.spent,
+    render: (row: Row) => (row.spent === null ? "Unmetered" : String(row.spent)),
+  },
+];
+
+function seatOrder(): string[] {
+  return screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => row.querySelector("td")?.textContent ?? "");
+}
+
+test("a record table offers no page control, no resize handle and no settings", () => {
+  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  expect(screen.queryByRole("button", { name: /next page/i })).toBeNull();
+  expect(screen.queryByRole("button", { name: /table settings/i })).toBeNull();
+  expect(screen.queryByRole("separator", { name: /resize/i })).toBeNull();
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+});
+
+test("a record table reads and writes no browser storage", () => {
+  // A throwing store is what a browser with site data blocked hands back, and
+  // it used to arrive from inside a state initialiser, which is a blank page
+  // rather than a missing preference. Nothing here asks for one at all.
+  const refuse = () => {
+    throw new Error("site data is blocked");
+  };
+  vi.stubGlobal("localStorage", { getItem: refuse, setItem: refuse, removeItem: refuse });
+  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  expect(screen.getAllByRole("row")).toHaveLength(4);
+});
+
+test("a column says which way its first press sorts, and an absent value sorts last", () => {
+  // A cost reads descending first and a name ascending, because the end a
+  // reader came for differs; one blanket direction for a whole table sorted
+  // every name from Z. An absent value is not a small one: a seat with no
+  // meter has not been measured, so it is last in BOTH directions.
+  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+  fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
+  expect(seatOrder()).toEqual(["reviewer", "planner", "unmetered"]);
 });

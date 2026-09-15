@@ -13,8 +13,7 @@
 import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
@@ -23,6 +22,8 @@ import {
   BarList,
   Card,
   dataColor,
+  DataTable,
+  EmptyState,
   EmptyValue,
   Legend,
   Meter,
@@ -262,30 +263,38 @@ export function Spend() {
             <Card.Title>By seat</Card.Title>
           </Card.Header>
           <DataTable
-            rows={tokens?.by_agent ?? []}
-            rowKey={(a) => a.agent_id || a.role}
-            defaultSort={{ key: "total", dir: "desc" }}
+            getRowKey={(a) => a.agent_id || a.role}
+            defaultSort={{ key: "total", direction: "desc" }}
             onRowClick={(a) => nav.to(["seats", a.handle || a.role], { tab: "cost" })}
-            empty={{ title: "No seat has spent tokens in this window" }}
-            columns={[
+            emptyMessage={
+              <EmptyState
+                size="compact"
+                title="No seat has spent tokens in this window"
+                description="Spend is recorded when a completion returns. Widen the window, or wait for a turn to run."
+              />
+            }
+            {...recordTable(tokens?.by_agent ?? [], [
               {
                 key: "seat",
                 header: "Seat",
+                sortable: true,
                 sortValue: (a) => a.role,
-                cell: (a) => <SeatChip name={a.role} handle={a.handle} />,
+                render: (a) => <SeatChip name={a.role} handle={a.handle} />,
               },
               {
                 key: "total",
                 header: "Tokens",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (a) => a.total_tokens,
-                cell: (a) => fmtExact(a.total_tokens),
+                render: (a) => fmtExact(a.total_tokens),
               },
               {
                 key: "share",
                 header: "Share",
                 width: "180px",
-                cell: (a) => (
+                render: (a) => (
                   <StackedBar
                     segments={phaseKeys.map((p) => ({
                       id: p,
@@ -300,17 +309,21 @@ export function Spend() {
                 key: "calls",
                 header: "Calls",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (a) => a.calls,
-                cell: (a) => fmtExact(a.calls),
+                render: (a) => fmtExact(a.calls),
               },
               {
                 key: "avg",
                 header: "Per call",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (a) => (a.calls ? a.total_tokens / a.calls : 0),
-                cell: (a) => (a.calls ? fmtCount(Math.round(a.total_tokens / a.calls)) : "—"),
+                render: (a) => (a.calls ? fmtCount(Math.round(a.total_tokens / a.calls)) : "—"),
               },
-            ]}
+            ])}
           />
           {phaseKeys.length > 0 && (
             <Card.Footer
@@ -332,46 +345,58 @@ export function Spend() {
             <Card.Title>Recent turns</Card.Title>
           </Card.Header>
           <DataTable
-            rows={tokens?.by_turn ?? []}
-            rowKey={(t) => t.turn_id}
-            defaultSort={{ key: "started", dir: "desc" }}
+            getRowKey={(t) => t.turn_id}
+            defaultSort={{ key: "started", direction: "desc" }}
             onRowClick={(t) => nav.to(["turns", t.turn_id])}
-            empty={{ title: "No turns in this window" }}
-            columns={[
+            emptyMessage={
+              <EmptyState
+                size="compact"
+                title="No turns in this window"
+                description="A turn is recorded when it completes. Widen the window to reach older ones."
+              />
+            }
+            {...recordTable(tokens?.by_turn ?? [], [
               {
                 key: "started",
                 header: "Started",
                 shrink: true,
+                sortable: true,
+                firstDirection: "desc",
                 sortValue: (t) => tsKey(t.started_at),
-                cell: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
+                render: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
               },
               {
                 key: "seat",
                 header: "Seat",
+                sortable: true,
                 sortValue: (t) => t.role,
-                cell: (t) => <SeatChip name={t.role} handle={t.handle} />,
+                render: (t) => <SeatChip name={t.role} handle={t.handle} />,
               },
               {
                 key: "total",
                 header: "Tokens",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (t) => t.total_tokens,
-                cell: (t) => fmtExact(t.total_tokens),
+                render: (t) => fmtExact(t.total_tokens),
               },
               {
                 key: "calls",
                 header: "Calls",
                 align: "right",
+                firstDirection: "desc",
+                sortable: true,
                 sortValue: (t) => t.calls,
-                cell: (t) => t.calls,
+                render: (t) => t.calls,
               },
               {
                 key: "turn",
                 header: "Turn",
                 shrink: true,
-                cell: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
+                render: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
               },
-            ]}
+            ])}
           />
         </Card>
 
@@ -398,41 +423,55 @@ export function Spend() {
           ) : (
             <QueryState error={budgets.error} loading={budgets.loading}>
               <DataTable
-                rows={budgets.data?.seats ?? []}
-                rowKey={(s) => s.agent_id || s.role}
-                defaultSort={{ key: "used", dir: "desc" }}
-                empty={{ title: "No per-seat budgets are configured" }}
-                columns={[
+                getRowKey={(s) => s.agent_id || s.role}
+                defaultSort={{ key: "used", direction: "desc" }}
+                emptyMessage={
+                  <EmptyState
+                    size="compact"
+                    title="No per-seat budgets are configured"
+                    description="A role takes one from the company configuration. Without its own cap it draws on the organization's."
+                  />
+                }
+                {...recordTable(budgets.data?.seats ?? [], [
                   {
                     key: "seat",
                     header: "Seat",
+                    sortable: true,
                     sortValue: (s) => s.role,
-                    cell: (s) => <SeatChip name={s.role} handle={s.handle} />,
+                    render: (s) => <SeatChip name={s.role} handle={s.handle} />,
                   },
                   {
                     key: "used",
                     header: "Durable used",
                     align: "right",
+                    firstDirection: "desc",
+                    sortable: true,
                     sortValue: (s) => s.durable_used,
-                    cell: (s) => fmtExact(s.durable_used),
+                    render: (s) => fmtExact(s.durable_used),
                   },
                   {
                     key: "live",
                     header: "This process",
                     align: "right",
+                    firstDirection: "desc",
                     // AN ABSENT METER SORTS BELOW EVERY MEASUREMENT, zero
-                    // included. Handed to the comparator as null it was
-                    // compared as the word "null", which put every seat this
-                    // node has no meter for above the largest spend.
-                    sortValue: (s) => s.live_used ?? -1,
-                    cell: (s) => fmtExact(s.live_used),
+                    // included, in BOTH directions: a seat this node holds no
+                    // meter for has not spent nothing, it has not been
+                    // measured. The table's own comparator keeps that rule for
+                    // an absent value, which is why null is the honest answer
+                    // here and the -1 that stood in for it is gone.
+                    sortable: true,
+                    sortValue: (s) => s.live_used ?? null,
+                    render: (s) => fmtExact(s.live_used),
                   },
                   {
                     key: "max",
                     header: "Budget",
                     align: "right",
+                    firstDirection: "desc",
+                    sortable: true,
                     sortValue: (s) => s.max_tokens,
-                    cell: (s) =>
+                    render: (s) =>
                       s.max_tokens ? (
                         fmtExact(s.max_tokens)
                       ) : (
@@ -443,7 +482,7 @@ export function Spend() {
                     key: "headroom",
                     header: "Headroom",
                     width: "160px",
-                    cell: (s) =>
+                    render: (s) =>
                       s.max_tokens ? (
                         <Meter
                           size="compact"
@@ -457,7 +496,7 @@ export function Spend() {
                         <EmptyValue label="No budget set" />
                       ),
                   },
-                ]}
+                ])}
               />
             </QueryState>
           )}

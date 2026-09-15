@@ -18,10 +18,9 @@
 import { useId, useMemo, useRef, type ReactNode } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
+import { QueryState, recordTable, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
@@ -59,6 +58,7 @@ import {
   BarList,
   Button,
   Card,
+  DataTable,
   DescriptionList,
   EmptyState,
   EmptyValue,
@@ -565,22 +565,27 @@ export function SeatScreen({ handle }: { handle: string }) {
                   <Card.Title>Recurring work</Card.Title>
                 </Card.Header>
                 <DataTable
-                  rows={configRole?.schedules ?? []}
-                  rowKey={(s) => s.name}
-                  columns={[
-                    { key: "name", header: "Name", cell: (s) => s.name, sortValue: (s) => s.name },
+                  getRowKey={(s) => s.name}
+                  {...recordTable(configRole?.schedules ?? [], [
+                    {
+                      key: "name",
+                      header: "Name",
+                      sortable: true,
+                      sortValue: (s) => s.name,
+                      render: (s) => s.name,
+                    },
                     {
                       key: "cron",
                       header: "Cron",
                       shrink: true,
-                      cell: (s) => <code className="inline">{s.cron}</code>,
+                      render: (s) => <code className="inline">{s.cron}</code>,
                     },
                     {
                       key: "task",
                       header: "Task",
-                      cell: (s) => <span className="truncate">{s.task}</span>,
+                      render: (s) => <span className="truncate">{s.task}</span>,
                     },
-                  ]}
+                  ])}
                 />
               </Card>
             )}
@@ -714,25 +719,31 @@ export function SeatScreen({ handle }: { handle: string }) {
                     <Card.Title>Past turns</Card.Title>
                   </Card.Header>
                   <DataTable
-                    rows={memory.data?.episodes ?? []}
-                    rowKey={(e) => e.id ?? e.turn_id ?? e.created_at}
-                    defaultSort={{ key: "at", dir: "desc" }}
-                    empty={{
-                      title: "No episodes recorded",
-                      hint: "An episode is written when a turn completes.",
-                    }}
-                    columns={[
+                    getRowKey={(e) => e.id ?? e.turn_id ?? e.created_at}
+                    defaultSort={{ key: "at", direction: "desc" }}
+                    emptyMessage={
+                      <EmptyState
+                        size="compact"
+                        title="No episodes recorded"
+                        description="An episode is written when a turn completes."
+                      />
+                    }
+                    {...recordTable(memory.data?.episodes ?? [], [
                       {
                         key: "at",
                         header: "When",
                         shrink: true,
+                        sortable: true,
+                        firstDirection: "desc",
                         sortValue: (e) => e.created_at,
-                        cell: (e) => <span className="t-caption">{fmtDateTime(e.created_at)}</span>,
+                        render: (e) => (
+                          <span className="t-caption">{fmtDateTime(e.created_at)}</span>
+                        ),
                       },
                       {
                         key: "task",
                         header: "What it did",
-                        cell: (e) => (
+                        render: (e) => (
                           <span className="truncate">{e.task_summary || e.content || "—"}</span>
                         ),
                       },
@@ -740,8 +751,9 @@ export function SeatScreen({ handle }: { handle: string }) {
                         key: "outcome",
                         header: "Outcome",
                         shrink: true,
+                        sortable: true,
                         sortValue: (e) => e.review_outcome ?? e.outcome ?? "",
-                        cell: (e) =>
+                        render: (e) =>
                           e.review_outcome || e.outcome ? (
                             <Tag
                               variant={
@@ -758,21 +770,23 @@ export function SeatScreen({ handle }: { handle: string }) {
                         key: "dur",
                         header: "Took",
                         align: "right",
+                        firstDirection: "desc",
                         shrink: true,
+                        sortable: true,
                         sortValue: (e) => e.duration_ms ?? 0,
-                        cell: (e) => fmtDuration(e.duration_ms ?? null),
+                        render: (e) => fmtDuration(e.duration_ms ?? null),
                       },
                       {
                         key: "conv",
                         header: "Conversation",
-                        cell: (e) =>
+                        render: (e) =>
                           e.conversation_key ? (
                             <span className="mono t-caption">{e.conversation_key}</span>
                           ) : (
                             <EmptyValue label="Not reported" />
                           ),
                       },
-                    ]}
+                    ])}
                   />
                 </Card>
 
@@ -979,39 +993,50 @@ export function SeatScreen({ handle }: { handle: string }) {
                   <Card.Title>Recent turns</Card.Title>
                 </Card.Header>
                 <DataTable
-                  rows={spend.data?.by_turn ?? []}
-                  rowKey={(t) => t.turn_id}
-                  defaultSort={{ key: "started", dir: "desc" }}
+                  getRowKey={(t) => t.turn_id}
+                  defaultSort={{ key: "started", direction: "desc" }}
                   onRowClick={(t) => nav.to(["turns", t.turn_id])}
-                  empty={{ title: "No turns in the window" }}
-                  columns={[
+                  emptyMessage={
+                    <EmptyState
+                      size="compact"
+                      title="No turns in the window"
+                      description="This seat has completed no turn in the window. Widen it, or wait for its next one."
+                    />
+                  }
+                  {...recordTable(spend.data?.by_turn ?? [], [
                     {
                       key: "started",
                       header: "Started",
                       shrink: true,
+                      sortable: true,
+                      firstDirection: "desc",
                       sortValue: (t) => t.started_at,
-                      cell: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
+                      render: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
                     },
                     {
                       key: "id",
                       header: "Turn",
-                      cell: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
+                      render: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
                     },
                     {
                       key: "tokens",
                       header: "Tokens",
                       align: "right",
+                      firstDirection: "desc",
+                      sortable: true,
                       sortValue: (t) => t.total_tokens,
-                      cell: (t) => fmtCount(t.total_tokens),
+                      render: (t) => fmtCount(t.total_tokens),
                     },
                     {
                       key: "calls",
                       header: "Calls",
                       align: "right",
+                      firstDirection: "desc",
+                      sortable: true,
                       sortValue: (t) => t.calls,
-                      cell: (t) => t.calls,
+                      render: (t) => t.calls,
                     },
-                  ]}
+                  ])}
                 />
               </Card>
             </QueryState>
