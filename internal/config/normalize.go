@@ -199,7 +199,6 @@ func mapEntries(v reflect.Value, path string, replace func(path, s string) strin
 	var pending []rewrite
 	var collisions []string
 
-	changed := false
 	iter := v.MapRange()
 	for iter.Next() {
 		entry := at(path, iter.Key().String())
@@ -217,7 +216,6 @@ func mapEntries(v reflect.Value, path string, replace func(path, s string) strin
 		if !keyChanged && !valChanged {
 			continue
 		}
-		changed = true
 		pending = append(pending, rewrite{old: iter.Key(), key: key, val: val})
 	}
 
@@ -232,6 +230,11 @@ func mapEntries(v reflect.Value, path string, replace func(path, s string) strin
 	// be an entry that is not itself pending, since a pending entry's own
 	// key is by definition one the trim CHANGED, and a target is already
 	// trimmed.
+	// THIS map's own collisions, kept apart from the ones a nested map
+	// reported through the loop above: a collision two levels down refuses
+	// the config either way, but it is not a reason to abandon a rewrite
+	// here that is perfectly well defined.
+	var own []string
 	taken := make(map[any]bool, len(pending))
 	for _, r := range pending {
 		target := r.key.Interface()
@@ -239,12 +242,15 @@ func mapEntries(v reflect.Value, path string, replace func(path, s string) strin
 			continue // the value moved, not the key
 		}
 		if taken[target] || v.MapIndex(r.key).IsValid() {
-			collisions = append(collisions, path)
+			own = append(own, path)
 		}
 		taken[target] = true
 	}
-	if len(collisions) > 0 {
-		return changed, collisions
+	if len(own) > 0 {
+		// NOTHING WAS WRITTEN, so nothing changed — the map is reported
+		// exactly as the operator wrote it, which is what the refusal
+		// above it describes.
+		return false, append(collisions, own...)
 	}
 
 	for _, r := range pending {
@@ -253,5 +259,5 @@ func mapEntries(v reflect.Value, path string, replace func(path, s string) strin
 		}
 		v.SetMapIndex(r.key, r.val)
 	}
-	return changed, collisions
+	return len(pending) > 0, collisions
 }
