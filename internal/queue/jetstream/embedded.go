@@ -492,8 +492,8 @@ func notReadyError(budget time.Duration, clustered bool,
 	return fmt.Errorf(
 		"embedded nats server did not become ready within %v (clustered: %v). "+
 			"A clustered member also waits for its routes to dial and for "+
-			"the metadata group to elect a leader, so check that its peers "+
-			"in stream.cluster.routes are reachable", budget, clustered)
+			"the metadata group to elect a leader, so check that the members "+
+			"named in stream.cluster.peers are reachable", budget, clustered)
 }
 
 // awaitClusterReady waits for this member to be able to serve the writes the

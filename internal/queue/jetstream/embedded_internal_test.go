@@ -108,7 +108,11 @@ func TestAReadinessFailureBlamesTheRouteListenerOnlyWhenItNeverBound(t *testing.
 	// THE LISTENER BOUND: the routes and the metadata group are what is
 	// left, and naming the port here is the wrong lead.
 	peers := notReadyError(budget, true, port, host, true)
-	if !strings.Contains(peers.Error(), "stream.cluster.routes") {
+	// THE FIELD IS stream.cluster.peers, which is the one an operator can
+	// grep their Tier A for. It read `stream.cluster.routes` — a key this
+	// config has never had, so the remedy sent them looking for something
+	// that does not exist.
+	if !strings.Contains(peers.Error(), "stream.cluster.peers") {
 		t.Errorf("a clustered member waiting on peers is not pointed at them: %v", peers)
 	}
 	if strings.Contains(peers.Error(), "no route listener") {
