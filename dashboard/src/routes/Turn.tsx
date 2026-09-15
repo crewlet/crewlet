@@ -51,7 +51,6 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Disclosure } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -96,6 +95,7 @@ import {
   CodeBlock,
   CopyButton,
   DescriptionList,
+  Disclosure,
   EmptyValue,
   Skeleton,
   StatCard,
@@ -814,7 +814,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                     without saying which. */}
                 {rec.summary && (
                   <Disclosure
-                    label="agent_turn_completed, the dashboard's summary"
+                    title="agent_turn_completed, the dashboard's summary"
                     actions={
                       <CopyButton text={summaryJSON} variant="tertiary" title="copy this record" />
                     }
@@ -831,7 +831,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                 )}
                 {rec.learning && (
                   <Disclosure
-                    label="turn_completed, the learning subsystem's record"
+                    title="turn_completed, the learning subsystem's record"
                     actions={
                       <CopyButton text={learningJSON} variant="tertiary" title="copy this record" />
                     }

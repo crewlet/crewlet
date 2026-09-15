@@ -302,18 +302,6 @@
   color: var(--color-text-secondary);
 }
 
-/* Thinking is an ASIDE, not content: it is what the model considered, not
-   what it decided. Marked by a rule down its edge so a reader can skip the
-   whole block by its shape rather than by reading it. */
-.disclosure.tone-reasoning .disclosure-body {
-  border-left: 2px solid var(--color-border-hover);
-  padding-left: var(--spacing-3);
-  margin-left: 2px;
-}
-.disclosure.tone-reasoning .disclosure-head {
-  color: var(--color-text-tertiary);
-}
-
 .tool-row {
   border-radius: var(--radius-xs);
   background: var(--color-surface-subtle);
@@ -321,49 +309,6 @@
 }
 .tool-row.failed {
   border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
-}
-
-.disclosure {
-  min-width: 0;
-}
-/* The toggle and the section's own controls are SIBLINGS. A copy button
-   nested inside the toggle would be a button inside a button — invalid, and
-   worse, clicking it would collapse the very thing it just copied.
-   `width: auto` on the head is load-bearing: it carries `width: 100%` for the
-   standalone case, which inside this row makes it claim the whole line and
-   push the controls onto one of their own. */
-.disclosure-bar {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.disclosure-bar > .disclosure-head {
-  flex: 1;
-  width: auto;
-  min-width: 0;
-}
-.disclosure-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  width: 100%;
-  padding: var(--spacing-1) var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  text-align: left;
-  min-width: 0;
-}
-.disclosure-head:hover {
-  color: var(--color-text-primary);
-  background: var(--color-surface-hover);
-  border-radius: var(--radius-xs);
-}
-.disclosure-body {
-  padding: var(--spacing-2);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
@@ -1140,16 +1085,6 @@
 .phase-head,
 .turn-head {
   padding-block: var(--spacing-2);
-}
-
-/* A failed tool's alert sat on its own line above the name: it was an inline
-   SVG inside a truncating single-line span, so it was the thing that wrapped.
-   The head is a row, and the mark is a non-shrinking item in it. */
-.disclosure-head > svg {
-  flex: none;
-}
-.tool-row .disclosure-head {
-  gap: var(--spacing-2);
 }
 
 /* A phase whose text is arriving right now. The ring is what the seat page

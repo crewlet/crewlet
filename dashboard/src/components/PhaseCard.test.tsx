@@ -10,7 +10,7 @@
  * grouped and the rendering did not say so.
  */
 
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 import { PhaseCard } from "./PhaseCard.tsx";
 import type { PhaseRecord } from "~/lib/phases.ts";
@@ -142,4 +142,25 @@ describe("a round is one block", () => {
     expect(blocks[0]!.textContent).toContain("read_file");
     expect(blocks[0]!.textContent).not.toContain("Done.");
   });
+});
+
+// A FAILED CALL SAYS SO IN WORDS. It was marked with a red glyph carrying no
+// name, so the row a reader most needs to find was announced exactly like the
+// one above it, and the hue was the only signal anybody got.
+test("a failed tool call is named as failed, not coloured as failed", () => {
+  render(
+    <PhaseCard
+      record={phase({
+        roundsUsed: 1,
+        narration: [{ round: 1, reasoning: "", content: "Trying." }],
+        tools: [
+          { name: "read_file", round: 1, args: "{}", result: "no such file", failed: true },
+          { name: "submit_work", round: 1, args: "{}", result: "ok", failed: false },
+        ],
+      })}
+      defaultOpen
+    />,
+  );
+  expect(screen.getByRole("button", { name: /read_file failed/ })).toBeDefined();
+  expect(screen.getByRole("button", { name: "submit_work" })).toBeDefined();
 });

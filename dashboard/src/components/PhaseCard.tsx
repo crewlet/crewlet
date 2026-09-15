@@ -42,7 +42,6 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Disclosure } from "~/ui/primitives.tsx";
 import { PhaseTag } from "./PhaseTag.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
@@ -54,7 +53,7 @@ import {
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-import { CodeBlock, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
+import { CodeBlock, Disclosure, RelativeTime, Tag, cx, useNow } from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import {
   ChevronRightGlyph,
@@ -80,15 +79,14 @@ function ToolRow({
     <div className={cx("tool-row", failed && "failed")}>
       <Disclosure
         mono
-        // A SIBLING of the name, not part of it. Inside the label it sat in
-        // a truncating single-line span and was the thing that wrapped, so a
-        // failed call showed its alert on its own line above the tool.
-        mark={
-          failed ? (
-            <ErrorGlyph size="xs" style={{ color: "var(--color-feedback-danger-ink)" }} />
-          ) : null
-        }
-        label={name}
+        title={name}
+        // THE WORD, not a red glyph. A failed call was marked with a glyph
+        // that carried no name at all, so a screen reader was told nothing
+        // about it, and the hue was the only signal a sighted reader got.
+        // Inside the title the mark also wrapped, putting the alert on its
+        // own line above the tool; the design system draws it after the name,
+        // as part of what the control is called.
+        meta={failed ? "failed" : undefined}
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
@@ -208,7 +206,7 @@ function RoundBlock({ round, live }: { round: Round; live: boolean }) {
               <p className="prose muted stream">{thinking}</p>
             </div>
           ) : (
-            <Disclosure label="Thinking" count={`${thinking.length} chars`} tone="reasoning">
+            <Disclosure title="Thinking" count={`${thinking.length} chars`} variant="aside">
               <p className="prose muted">{thinking}</p>
             </Disclosure>
           ))}
@@ -415,9 +413,9 @@ export function PhaseCard({
             <>
               {legacy.thinking && (
                 <Disclosure
-                  label="Thinking"
+                  title="Thinking"
                   count={`${legacy.thinking.length} chars`}
-                  tone="reasoning"
+                  variant="aside"
                 >
                   <p className="prose muted">{legacy.thinking}</p>
                 </Disclosure>
@@ -450,7 +448,7 @@ export function PhaseCard({
           )}
 
           {(record.systemPrompt || record.userPrompt) && (
-            <Disclosure label="Prompt" count={`${record.phase} phase`}>
+            <Disclosure title="Prompt" count={`${record.phase} phase`}>
               <div className="col gap-3">
                 {record.systemPrompt && (
                   <div className="col gap-1">
@@ -475,7 +473,7 @@ export function PhaseCard({
 
           {(record.toolsAvailable.length > 0 || record.toolCatalogue.length > 0) && (
             <Disclosure
-              label="Tool surface"
+              title="Tool surface"
               count={record.toolsAvailable.length + record.toolCatalogue.length}
             >
               <div className="col gap-2">
@@ -515,7 +513,7 @@ export function PhaseCard({
 
           {!!nested?.length && (
             <Disclosure
-              label="Delegated to"
+              title="Delegated to"
               count={`${nested.length} · ${fmtCount(
                 nested.reduce((n, r) => n + r.totalTokens, 0),
               )} tokens`}
