@@ -28,6 +28,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/colleague"
+	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -1436,6 +1437,21 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			// backend.
 			Work:  nativeWork(e),
 			Pages: nativePages(e),
+			// RANKED SEARCH, gated on its own index rather than on
+			// the tracker: the rows are the fleet's and the lexical
+			// index is this node's own, so a node still building one
+			// answers every board question and cannot rank a word.
+			// The accessor already returns an untyped nil in that
+			// case, which is what the registration check needs.
+			WorkSearch: nativeWorkSearch(e),
+			// The seat's own thread ledger, and its counterparty
+			// profiles. Both are per-node stores, both have been
+			// written since their subsystems landed, and neither
+			// reached a screen: the conversations panel drew an
+			// empty list for every seat and the memory answer
+			// carried a `counterparties` key that was always `[]`.
+			Conversations:  ledgerstore.NewConversations(e.Backends().Store),
+			Counterparties: learning.NewCounterparties(e.Backends().Store),
 			// WHAT THIS NODE CAN SAY ABOUT THE LOG'S OWN HISTORY —
 			// how far each domain may be trimmed, what is stopping
 			// it, and what this node costs to replace. Assembled per
@@ -2475,4 +2491,18 @@ func nativeRetention(ctx context.Context, e *engine.Engine) func(context.Context
 		report, _ := e.RetentionReport(ctx)
 		return report
 	}
+}
+
+// nativeWorkSearch is this node's ranked item search, as the read surface
+// wants it — converted for [nativeWork]'s reason.
+//
+// SEPARATE FROM [nativeWork], because the two are absent independently: a node
+// can hold the whole board and no lexical index at all, while it is building
+// one. Folding them into one seam would leave the board unregistered on a node
+// that can answer every question on it.
+func nativeWorkSearch(e *engine.Engine) queries.WorkSearcher {
+	if s := e.WorkSearch(); s != nil {
+		return s
+	}
+	return nil
 }

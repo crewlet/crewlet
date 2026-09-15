@@ -287,6 +287,11 @@ func (stubWorkReader) Inbox(context.Context, tracker.InboxQuery, time.Time) (
 	return tracker.InboxAnswer{}, nil
 }
 
+func (stubWorkReader) Routing(context.Context, tracker.RoutingQuery, time.Time) (
+	tracker.RoutingAnswer, error) {
+	return tracker.RoutingAnswer{}, nil
+}
+
 func (stubWorkReader) Tasks(context.Context, tracker.Query, time.Time) (tracker.Answer, error) {
 	return tracker.Answer{}, nil
 }

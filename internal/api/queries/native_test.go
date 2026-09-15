@@ -18,17 +18,22 @@ import (
 // almost entirely about turning a query string into a Filter, and a test that
 // only checked the rows would pass with every filter dropped.
 type stubWork struct {
-	inbox       tracker.InboxAnswer
-	inboxQuery  tracker.InboxQuery
-	query       tracker.Query
-	answer      tracker.Answer
-	detail      tracker.TaskDetail
-	views       tracker.ViewQuery
-	listing     tracker.ViewListing
-	goalQuery   tracker.GoalQuery
-	goals       tracker.GoalListing
-	personQuery tracker.PersonQuery
-	person      tracker.PersonState
+	inbox        tracker.InboxAnswer
+	inboxQuery   tracker.InboxQuery
+	routing      tracker.RoutingAnswer
+	routingQuery tracker.RoutingQuery
+	ranked       []tracker.Ranked
+	searchText   string
+	searchLimit  int
+	query        tracker.Query
+	answer       tracker.Answer
+	detail       tracker.TaskDetail
+	views        tracker.ViewQuery
+	listing      tracker.ViewListing
+	goalQuery    tracker.GoalQuery
+	goals        tracker.GoalListing
+	personQuery  tracker.PersonQuery
+	person       tracker.PersonState
 
 	projectQuery tracker.ProjectQuery
 	projects     tracker.ProjectListing
@@ -127,6 +132,22 @@ func (s *stubWork) Inbox(_ context.Context, q tracker.InboxQuery, _ time.Time) (
 	return s.inbox, s.err
 }
 
+func (s *stubWork) Routing(_ context.Context, q tracker.RoutingQuery, _ time.Time) (
+	tracker.RoutingAnswer, error) {
+
+	s.routingQuery = q
+	return s.routing, s.err
+}
+
+// Search is the stub's half of the SEPARATE search seam — see
+// [queries.WorkSearcher]. It is on this type for the harness's convenience
+// only; the surface takes the two independently, and a case that wants a node
+// with a board and no index leaves `WorkSearch` nil.
+func (s *stubWork) Search(_ context.Context, text string, limit int) ([]tracker.Ranked, error) {
+	s.searchText, s.searchLimit = text, limit
+	return s.ranked, s.err
+}
+
 func (s *stubWork) Tasks(_ context.Context, q tracker.Query, _ time.Time) (tracker.Answer, error) {
 	s.query = q
 	return s.answer, s.err
@@ -176,16 +197,17 @@ func (s *stubPages) Containers(_ context.Context,
 	return nil, s.err
 }
 
-// personalQuestions are the three scoped by the caller's own seat — see
+// personalQuestions are the four scoped by the caller's own seat — see
 // Sources.viewerHandle. They refuse an anonymous caller who names somebody
 // else, so a sweep that walks every native question has to present a
-// credential for these three. Named once rather than per sweep: the set grew
-// from one to three, and each sweep that spelled it as `== "work_my_work"`
-// silently stopped covering the other two.
+// credential for these four. Named once rather than per sweep: the set grew
+// from one to four, and each sweep that spelled it as `== "work_my_work"`
+// silently stopped covering the rest.
 var personalQuestions = map[string]bool{
-	"work_my_work": true,
-	"work_person":  true,
-	"work_inbox":   true,
+	"work_my_work":  true,
+	"work_person":   true,
+	"work_inbox":    true,
+	"conversations": true,
 }
 
 // askNative runs one question against a registry built from these sources,
@@ -634,6 +656,8 @@ func TestEveryNativeQuestionResolvesTheCallersOwnLevel(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.myWorkQuery.Level }},
 		{"work_inbox", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.inboxQuery.Level }},
+		{"work_routing", map[string]any{"record_id": "r-1"},
+			func(w *stubWork, _ *stubPages) statelog.ReadLevel { return w.routingQuery.Level }},
 		{"pages", map[string]any{},
 			func(_ *stubWork, p *stubPages) statelog.ReadLevel { return p.level }},
 		{"page", map[string]any{"id": "p1"},
@@ -798,6 +822,10 @@ func TestTheStalenessBoundsReachEveryQuestionThatCanHoldThem(t *testing.T) {
 			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
 				return bounds(w.activityQuery.MaxLag, w.activityQuery.MaxLagSeq)
 			}},
+		{"work_routing", map[string]any{"record_id": "r-1"},
+			func(w *stubWork, _ *stubPages) func(*testing.T, string) {
+				return bounds(w.routingQuery.MaxLag, w.routingQuery.MaxLagSeq)
+			}},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			t.Parallel()
@@ -872,6 +900,8 @@ func TestTheCallersFloorReachesEveryNativeQuestion(t *testing.T) {
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.myWorkQuery.MinPosition }},
 		{"work_inbox", map[string]any{"handle": "ana"},
 			func(w *stubWork, _ *stubPages) statelog.Position { return w.inboxQuery.MinPosition }},
+		{"work_routing", map[string]any{"record_id": "r-1"},
+			func(w *stubWork, _ *stubPages) statelog.Position { return w.routingQuery.MinPosition }},
 		{"pages", nil, func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
 		{"page", map[string]any{"id": "p1"},
 			func(_ *stubWork, p *stubPages) statelog.Position { return p.fresh.MinPosition }},
