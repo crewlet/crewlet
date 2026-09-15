@@ -280,6 +280,37 @@ export interface SandboxRun {
   started_at: string;
   updated_at: string;
   answerable_in_chat: boolean;
+
+  /**
+   * What this run called through the MCP bridge, in order.
+   *
+   * THE ONE TOOL LOG THAT HAS NOWHERE ELSE TO LIVE. A native tool loop keeps
+   * its calls in memory and the turn writes them when it ends; a bridged run's
+   * are made by a process outside the engine, minutes or hours apart and
+   * possibly across a restart. Absent on every run that is not bridged, which
+   * is every ordinary coding run.
+   */
+  bridge_calls?: BridgeCall[];
+
+  /**
+   * How many calls were dropped from the MIDDLE of that list.
+   *
+   * The engine bounds the log at 200 and drops the middle rather than the
+   * start — how a run began and how it ended are what explain it. Reported
+   * rather than hidden: a log that silently skips is a log that lies about
+   * what the run did.
+   */
+  bridge_calls_elided?: number;
+}
+
+/** One call a bridged run made. */
+export interface BridgeCall {
+  name: string;
+  /** What the caller passed, as JSON TEXT — never a decoded map. */
+  args?: string;
+  output?: string;
+  failed?: boolean;
+  at: string;
 }
 
 // ---------------------------------------------------------------------------
