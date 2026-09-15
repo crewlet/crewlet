@@ -8,16 +8,27 @@
  * right now, and `sandbox_runs` knows what the store remembers, including runs
  * whose box has already been reclaimed. The screen this replaces showed only
  * the first, so a run parked on a question with its box gone appeared NOWHERE.
+ *
+ * # The row, the rail and the page
+ *
+ * A plain click opens the run BESIDE the list rather than in place of it. This
+ * screen is read while something is in flight, and a reader comparing three
+ * parked runs loses the comparison the moment the list navigates away. The
+ * path `#/activity/runs/{turn_id}` is still the run's own page — it is what a
+ * ⌘-click and the rail's own `Open ↗` reach — and it is the only place the
+ * bridge log is drawn, because a log of two hundred tool calls is the one
+ * thing a 420 px rail is the wrong shape for.
  */
 
-import { useMemo } from "react";
-import { useNavigator, useParam } from "~/app/router.tsx";
+import { useCallback, useMemo } from "react";
+import { useNavigator } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
   Badge,
   Button,
   Code,
   Disclosure,
+  Empty,
   Panel,
   Skeleton,
   Stat,
@@ -25,12 +36,24 @@ import {
 } from "~/ui/primitives.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { Dash, DateCell, StatusCell, TextCell } from "~/app/frame/cells.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { peekHref, rowPeekHandler, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
-import { fmtDateTime, fmtDuration, fmtTime, plural, relTime, tsKey } from "~/lib/format.ts";
+import {
+  elapsedMs,
+  fmtDateTime,
+  fmtDuration,
+  fmtTime,
+  inTime,
+  plural,
+  tsKey,
+} from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import type { SandboxRun, SandboxStatus } from "~/protocol/index.ts";
+import type { SandboxEntry, SandboxRun, SandboxStatus } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -61,6 +84,314 @@ const STATUS_TONE: Record<SandboxStatus, "positive" | "caution" | "critical" | "
 /** The statuses that mean a person is being waited on — `sandbox.Awaiting`. */
 const AWAITING: SandboxStatus[] = ["awaiting_clarification", "reseed"];
 
+/** How long the durable record is polled for. A run's lifetime is minutes. */
+const POLL_MS = 20_000;
+
+/**
+ * A live projection entry as the run it is.
+ *
+ * The fields the projection has never held are left EMPTY rather than guessed:
+ * a placement of `""` is "this node has not written the row yet", and the
+ * durable row replaces the whole entry the moment the store catches up. A
+ * fabricated `direct` here would be a placement a reader plans against.
+ */
+function fromLiveBox(box: SandboxEntry): SandboxRun {
+  return {
+    turn_id: box.turn_id,
+    agent_handle: box.agent_handle,
+    role: box.role,
+    // The live projection types its status as a plain string because it
+    // mirrors whatever the run reported; it is the same vocabulary.
+    status: box.status as SandboxStatus,
+    coding_agent: box.coding_agent,
+    placement: "",
+    task_description: box.task,
+    question: box.question ?? "",
+    audience: box.audience ?? "",
+    branch: "",
+    trace_id: "",
+    owner: "",
+    box_exists: true,
+    paused_at: "",
+    pause_ttl_seconds: 0,
+    started_at: box.started_at,
+    updated_at: box.started_at,
+    answerable_in_chat: false,
+  };
+}
+
+/**
+ * The durable record and the live projection, as one list, newest first.
+ *
+ * ONE ROW PER TURN and the DURABLE row wins: it carries the placement, the
+ * branch, the owner and the pause deadline the projection never held, and it
+ * is the only one that survives the box being reclaimed. A live entry the
+ * store has not caught up with still belongs on screen, which is the other
+ * half — a run that started two seconds ago is exactly what somebody watching
+ * this screen is watching for.
+ *
+ * Exported because Live now draws the same rows from the same two sources:
+ * two screens folding "what is in a box" their own way is how they come to
+ * disagree about whether anything is.
+ */
+export function mergeRuns(durable: SandboxRun[], live: SandboxEntry[]): SandboxRun[] {
+  const byTurn = new Map<string, SandboxRun>();
+  for (const run of durable) byTurn.set(run.turn_id, run);
+  for (const box of live) {
+    if (byTurn.has(box.turn_id)) continue;
+    byTurn.set(box.turn_id, fromLiveBox(box));
+  }
+  return [...byTurn.values()].sort(
+    (a, b) => tsKey(b.updated_at || b.started_at) - tsKey(a.updated_at || a.started_at),
+  );
+}
+
+/**
+ * The facts a run is recognised by, in ONE order.
+ *
+ * The page and the rail read this same function, because a reader who peeks a
+ * run and then opens it must not have to re-learn where each fact sits. The
+ * STATUS is deliberately not among them: it is the header's own pill, where
+ * the tone carries it — spelled once in colour and again in a list, it reads
+ * as two different facts about one run.
+ */
+function runFacts(run: SandboxRun): Fact[] {
+  return [
+    {
+      label: "Seat",
+      value: <SeatChip name={run.role || run.agent_handle} handle={run.agent_handle} />,
+    },
+    { label: "Runs in", value: run.placement },
+    { label: "Coding agent", value: run.coding_agent },
+    { label: "Branch", value: run.branch ? <code className="inline">{run.branch}</code> : "" },
+    // NOT "up / reclaimed" as a plain word pair: whether the box still exists
+    // is the difference between a run somebody can answer and a run whose work
+    // is gone, and `FactLine` drops a fact whose value is empty — so this one
+    // is always present and always says which.
+    { label: "Box", value: run.box_exists ? "up" : "reclaimed" },
+  ];
+}
+
+/**
+ * The engine's own status word, toned.
+ *
+ * Exported for the same reason [mergeRuns] is: Live now draws these runs too,
+ * and a second spelling of one status is how one screen comes to call a
+ * `reseed` unremarkable while this one calls it a caution.
+ */
+export function RunStatus({ status }: { status: SandboxStatus }) {
+  return (
+    <Badge tone={STATUS_TONE[status] ?? "neutral"} dot>
+      {status.replace(/_/g, " ")}
+    </Badge>
+  );
+}
+
+/**
+ * When the hold on the box runs out, or null when nothing is holding it.
+ *
+ * BOTH HALVES OR NEITHER. A TTL with no `paused_at` names no instant, and a
+ * `paused_at` carrying a zero TTL is a run the engine parked with no hold at
+ * all rather than one held for no time — the zero is a missing setting, not a
+ * deadline in the past, and rendering it as one would tell a reader the box
+ * was reclaimed in 1970.
+ */
+function pauseDeadline(run: SandboxRun): string | null {
+  const paused = tsKey(run.paused_at);
+  if (!paused || run.pause_ttl_seconds <= 0) return null;
+  return new Date(paused + run.pause_ttl_seconds * 1000).toISOString();
+}
+
+/**
+ * What a parked run is waiting for, and from whom.
+ *
+ * ONE COPY for the page and the rail: the two sentences below are the whole of
+ * what a reader can DO about a paused run, and two spellings of them is how
+ * one of them comes to describe a chat reply path the run does not have.
+ */
+function AwaitingBanner({ run, now }: { run: SandboxRun; now: number }) {
+  const deadline = pauseDeadline(run);
+  const expired = deadline !== null && tsKey(deadline) <= now;
+  return (
+    <div className="banner caution">
+      <Icon name="help" size="sm" />
+      <span className="col" style={{ gap: 2 }}>
+        <strong>{run.question || "The run asked a question."}</strong>
+        <span className="t-caption">
+          {run.answerable_in_chat
+            ? `Answer it on ${run.audience || "the conversation this turn served"} — the next inbound message on that thread is taken as the reply.`
+            : "The run is paused. It resumes when the sandbox coordinator carries an answer back."}
+          {deadline && !expired
+            ? ` The box is held for ${fmtDuration(run.pause_ttl_seconds * 1000)} from ${fmtDateTime(run.paused_at)} — ${inTime(deadline, now)}.`
+            : ""}
+          {/* THE HOLD IS THE DEADLINE, and a passed one is the fact that
+              explains the rest of the screen: the box is reaped, the work in
+              it is gone, and answering now re-seeds the run from the question
+              alone. A deadline rendered as "in -3m" would bury that. */}
+          {expired
+            ? ` The hold expired at ${fmtDateTime(deadline)}: the box is reclaimed, so an answer now re-seeds the run rather than resuming it.`
+            : ""}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** What the run is doing, for a run nobody is being waited on by. */
+function doingLine(run: SandboxRun): string {
+  switch (run.status) {
+    case "launching":
+      return "The box is being provisioned. Nothing has run in it yet.";
+    case "running":
+      return "A box is up and the coding agent is working in it.";
+    case "resumed":
+      return "An answer came back and the suspended Execute phase is running again.";
+    case "done":
+      return "The run finished and the phase it suspended was resumed to completion.";
+    case "failed":
+      return "The run failed. The turn's own record says what the phase did with it.";
+    default:
+      return "The run is waiting on a person — see above.";
+  }
+}
+
+/**
+ * What a bridged run called, in one line.
+ *
+ * THE COUNT, NOT THE LOG. The rail answers "is this the one I meant, and what
+ * is it doing"; two hundred tool calls with their arguments and results is the
+ * page's job, and `Open ↗` is one click away.
+ */
+function BridgeSummary({ run }: { run: SandboxRun }) {
+  const calls = run.bridge_calls ?? [];
+  // ABSENT ON AN ORDINARY RUN rather than empty — see [BridgeLog]: a run that
+  // is not bridged made no calls through a bridge, which is not the same fact
+  // as a bridged one that made none.
+  if (calls.length === 0) return null;
+  const failures = calls.filter((c) => c.failed).length;
+  const last = calls[calls.length - 1];
+  return (
+    <section className="col gap-2">
+      <div className="t-label">Tool calls</div>
+      <div className="row gap-2 wrap">
+        <span className="t-cell">{plural(calls.length, "call")} through the MCP bridge</span>
+        {failures > 0 && <Badge tone="critical">{plural(failures, "failure")}</Badge>}
+      </div>
+      {last && (
+        <span className="t-caption">
+          Last: <code className="inline">{last.name}</code> · {fmtTime(last.at)}
+        </span>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One coding run, beside the list it was found in.
+ *
+ * # It asks for its own run
+ *
+ * From the durable record, merged with the live projection exactly as the list
+ * does — because a `peek=run:` arrives from a pasted URL as often as from a
+ * row, and the two sources answer different halves: the projection has the run
+ * that started a second ago, and the store has the one whose box is gone.
+ *
+ * # What it answers
+ *
+ * The question it is parked on, the box it is parked in, and who is being
+ * waited on — in that order, because a run nobody is waiting on is a run
+ * nobody needs to open, and a run parked on a question is the reason this
+ * screen exists at all.
+ */
+export function RunPeek({ turnId }: { turnId: string }) {
+  const now = useNow();
+  const live = useSandboxes();
+  const { data, loading, error } = useQuery("sandbox_runs", undefined, {
+    enabled: turnId !== "",
+    pollMs: POLL_MS,
+  });
+
+  const run = useMemo(
+    () => mergeRuns(data?.runs ?? [], live).find((r) => r.turn_id === turnId) ?? null,
+    [data, live, turnId],
+  );
+
+  return (
+    <>
+      {loading && !data && <Skeleton rows={6} />}
+      <QueryState error={error} loading={loading}>
+        {/* NOT AN EMPTY RAIL. A turn id that matches no run is a hand-edited
+            URL or a run swept past the retention horizon, and naming which
+            turn resolved to nothing is more use than a header over no run. */}
+        {data && !run && (
+          <Empty
+            inline
+            icon="terminal"
+            title="No coding run for this turn"
+            hint="A run is addressed by the turn that started it. This one is not in the durable record — it may have been swept, or the id may be wrong."
+          />
+        )}
+        {run && (
+          <>
+            <ObjectHeader
+              size="peek"
+              kind="Coding run"
+              icon="terminal"
+              identifier={run.turn_id.slice(0, 8)}
+              title={run.task_description || "No task was recorded"}
+              status={<RunStatus status={run.status} />}
+              facts={runFacts(run)}
+            />
+            <div className="col gap-3">
+              <section className="col gap-2">
+                <div className="t-label">
+                  {AWAITING.includes(run.status) ? "Waiting on a person" : "Doing now"}
+                </div>
+                {AWAITING.includes(run.status) ? (
+                  <AwaitingBanner run={run} now={now} />
+                ) : (
+                  <p className="t-body">{doingLine(run)}</p>
+                )}
+              </section>
+
+              <section className="col gap-2">
+                <div className="t-label">The box</div>
+                <PropertiesRail
+                  groups={[
+                    {
+                      properties: [
+                        {
+                          label: "Owner node",
+                          value: run.owner,
+                          title: "the node that holds this run's record",
+                        },
+                        { label: "Started", value: fmtDateTime(run.started_at) },
+                        { label: "Updated", value: fmtDateTime(run.updated_at) },
+                        {
+                          label: "Ran for",
+                          value: fmtDuration(elapsedMs(run.started_at, run.updated_at)),
+                          title: "between the first report and the last, not wall-clock since",
+                        },
+                        {
+                          label: "Turn",
+                          value: <code className="inline">{run.turn_id}</code>,
+                          path: ["activity", "turns", run.turn_id],
+                        },
+                      ],
+                    },
+                  ]}
+                />
+              </section>
+
+              <BridgeSummary run={run} />
+            </div>
+          </>
+        )}
+      </QueryState>
+    </>
+  );
+}
+
 export function Runs({ runId }: { runId?: string }) {
   const nav = useNavigator();
   const live = useSandboxes();
@@ -73,43 +404,41 @@ export function Runs({ runId }: { runId?: string }) {
   const setSelected = (id: string) => nav.to(id ? ["activity", "runs", id] : ["activity", "runs"]);
   // Durable runs have no push behind them, so this is the one place a poll is
   // correct — and it is slow, because a run's lifetime is minutes.
-  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: 20_000 });
+  const { data, loading, error } = useQuery("sandbox_runs", undefined, { pollMs: POLL_MS });
 
-  const rows = useMemo(() => {
-    const byTurn = new Map<string, SandboxRun>();
-    for (const run of data?.runs ?? []) byTurn.set(run.turn_id, run);
-    // A live entry the store has not caught up with still belongs on screen.
-    for (const box of live) {
-      if (byTurn.has(box.turn_id)) continue;
-      byTurn.set(box.turn_id, {
-        turn_id: box.turn_id,
-        agent_handle: box.agent_handle,
-        role: box.role,
-        // The live projection types its status as a plain string because it
-        // mirrors whatever the run reported; it is the same vocabulary.
-        status: box.status as SandboxStatus,
-        coding_agent: box.coding_agent,
-        // The live projection carries no placement; the durable row does,
-        // and it replaces this entry as soon as the store catches up.
-        placement: "",
-        task_description: box.task,
-        question: box.question ?? "",
-        audience: box.audience ?? "",
-        branch: "",
-        trace_id: "",
-        owner: "",
-        box_exists: true,
-        paused_at: "",
-        pause_ttl_seconds: 0,
-        started_at: box.started_at,
-        updated_at: box.started_at,
-        answerable_in_chat: false,
-      });
-    }
-    return [...byTurn.values()].sort(
-      (a, b) => tsKey(b.updated_at || b.started_at) - tsKey(a.updated_at || a.started_at),
-    );
-  }, [data, live]);
+  const rows = useMemo(() => mergeRuns(data?.runs ?? [], live), [data, live]);
+
+  // THE ORDER `[` AND `]` WALK is the one on screen, which is this list sorted
+  // as the reader left it. Published from the merged rows rather than from the
+  // query's own, so the stepper cannot walk past a live run the store has not
+  // written yet — the rail would open on a run this list does not show.
+  usePeekNeighbours(
+    useMemo(() => rows.map((r) => ({ kind: "run" as const, id: r.turn_id })), [rows]),
+  );
+
+  const { open: openPeek } = usePeekControls();
+  const peek = usePeek();
+  // WHICH ROW IS THE ONE IN FOCUS — the run in the rail, or the run this path
+  // names when the page was opened directly. Two sources for one highlight,
+  // because both are ways of having this run open.
+  const focused = peek?.kind === "run" ? peek.id : selected;
+
+  const openRun = useCallback(
+    (r: SandboxRun, e: React.MouseEvent | React.KeyboardEvent) => {
+      const go = () => openPeek({ kind: "run", id: r.turn_id });
+      // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one
+      // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,
+      // ctrl, shift, alt and the middle button belong to the browser, which is
+      // what keeps the row a real link to the run's page. The `enter` chord
+      // carries no button at all and is never "open elsewhere".
+      if (!("button" in e)) {
+        go();
+        return;
+      }
+      rowPeekHandler(go)?.(e);
+    },
+    [openPeek],
+  );
 
   const detail = rows.find((r) => r.turn_id === selected) ?? null;
   const waiting = rows.filter((r) => AWAITING.includes(r.status)).length;
@@ -172,8 +501,9 @@ export function Runs({ runId }: { runId?: string }) {
           <DataGrid<SandboxRun>
             rows={rows}
             rowKey={(r) => r.turn_id}
-            onRowActivate={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
-            isSelected={(r) => r.turn_id === selected}
+            onRowActivate={openRun}
+            rowHref={(r) => peekHref({ kind: "run", id: r.turn_id })}
+            isSelected={(r) => r.turn_id === focused}
             isFailed={(r) => r.status === "failed"}
             defaultSort="-updated"
             columns={[
@@ -182,72 +512,93 @@ export function Runs({ runId }: { runId?: string }) {
                 header: "Status",
                 shrink: true,
                 sortValue: (r) => r.status,
-                cell: (r) => (
-                  <Badge tone={STATUS_TONE[r.status] ?? "neutral"} dot>
-                    {r.status.replace(/_/g, " ")}
-                  </Badge>
-                ),
+                // A BADGE, NOT `StatusCell`: the engine's seven words are a
+                // vocabulary rather than two lifecycle states, and this is the
+                // pill the Inbox and Live now draw for the same run — a third
+                // rendering of one status is a third thing to keep in step.
+                cell: (r) => <RunStatus status={r.status} />,
               },
               {
                 key: "seat",
                 header: "Seat",
                 sortValue: (r) => r.role || r.agent_handle,
-                cell: (r) => <SeatChip name={r.role || r.agent_handle} handle={r.agent_handle} />,
+                // NOT `SeatCell` or `SeatChip`: both are anchors and every row
+                // here is one, and an anchor inside an anchor is markup no
+                // browser agrees about. The seat is one ⌘-click away from the
+                // run's own page, where it is a link again.
+                cell: (r) =>
+                  r.role || r.agent_handle ? (
+                    <TextCell icon="cpu">{r.role || r.agent_handle}</TextCell>
+                  ) : (
+                    <Dash title="no seat" />
+                  ),
               },
               {
                 key: "task",
                 header: "Task",
-                cell: (r) => <span className="truncate">{r.task_description || "—"}</span>,
+                cell: (r) =>
+                  r.task_description ? (
+                    <TextCell>{r.task_description}</TextCell>
+                  ) : (
+                    <Dash title="no task recorded" />
+                  ),
               },
               {
                 key: "agent",
                 header: "Coding agent",
                 shrink: true,
                 sortValue: (r) => r.coding_agent,
-                cell: (r) => (
-                  <Badge outline mono>
-                    {r.coding_agent || "—"}
-                  </Badge>
-                ),
+                cell: (r) =>
+                  r.coding_agent ? (
+                    <Badge outline mono>
+                      {r.coding_agent}
+                    </Badge>
+                  ) : (
+                    <Dash title="not recorded" />
+                  ),
               },
               {
                 key: "where",
                 header: "Runs in",
                 shrink: true,
                 sortValue: (r) => r.placement,
-                cell: (r) => (
-                  <Badge outline mono>
-                    {r.placement || "—"}
-                  </Badge>
-                ),
+                cell: (r) =>
+                  r.placement ? (
+                    <Badge outline mono>
+                      {r.placement}
+                    </Badge>
+                  ) : (
+                    // NOT "—" FOR A LIVE ROW'S SAKE: the projection carries no
+                    // placement, so this is genuinely "the store has not
+                    // written this run yet" rather than a run with nowhere to
+                    // run, and the dash says the first on hover.
+                    <Dash title="the durable row has not been written yet" />
+                  ),
               },
               {
                 key: "box",
                 header: "Box",
                 shrink: true,
                 sortValue: (r) => (r.box_exists ? 1 : 0),
-                cell: (r) =>
-                  r.box_exists ? (
-                    <span className="t-caption">up</span>
-                  ) : (
-                    <span
-                      className="t-caption faint"
-                      title="the sandbox has been reclaimed; the run's record remains"
-                    >
-                      reclaimed
-                    </span>
-                  ),
+                cell: (r) => (
+                  <StatusCell
+                    glyph={r.box_exists ? "●" : "○"}
+                    label={r.box_exists ? "up" : "reclaimed"}
+                    tone={r.box_exists ? "info" : "neutral"}
+                    title={
+                      r.box_exists
+                        ? "the sandbox is still there"
+                        : "the sandbox has been reclaimed; the run's record remains"
+                    }
+                  />
+                ),
               },
               {
                 key: "updated",
                 header: "Updated",
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => (
-                  <span className="t-caption" title={fmtDateTime(r.updated_at || r.started_at)}>
-                    {relTime(r.updated_at || r.started_at, now)}
-                  </span>
-                ),
+                cell: (r) => <DateCell at={r.updated_at || r.started_at} now={now} />,
               },
             ]}
           />
@@ -255,84 +606,62 @@ export function Runs({ runId }: { runId?: string }) {
       </QueryState>
 
       {detail && (
-        <Panel
-          title={`Run ${detail.turn_id.slice(0, 8)}`}
-          icon="terminal"
-          actions={
-            <>
-              {detail.trace_id && (
-                <Button size="sm" onClick={() => nav.to(["activity", "traces", detail.trace_id])}>
-                  Trace
+        <>
+          <ObjectHeader
+            kind="Coding run"
+            icon="terminal"
+            identifier={detail.turn_id.slice(0, 8)}
+            title={detail.task_description || "No task was recorded"}
+            status={<RunStatus status={detail.status} />}
+            facts={runFacts(detail)}
+            actions={
+              <>
+                {detail.trace_id && (
+                  <Button size="sm" onClick={() => nav.to(["activity", "traces", detail.trace_id])}>
+                    Trace
+                  </Button>
+                )}
+                <Button size="sm" onClick={() => nav.to(["activity", "turns", detail.turn_id])}>
+                  Turn
                 </Button>
-              )}
-              <Button size="sm" onClick={() => nav.to(["activity", "turns", detail.turn_id])}>
-                Turn
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                icon="x"
-                onClick={() => setSelected("")}
-                title="Close"
-              />
-            </>
-          }
-        >
-          {AWAITING.includes(detail.status) && (
-            <div className="banner caution" style={{ marginBottom: "var(--space-3)" }}>
-              <Icon name="help" size="sm" />
-              <span className="col" style={{ gap: 2 }}>
-                <strong>{detail.question || "The run asked a question."}</strong>
-                <span className="t-caption">
-                  {detail.answerable_in_chat
-                    ? `Answer it on ${detail.audience || "the conversation this turn served"} — the next inbound message on that thread is taken as the reply.`
-                    : "The run is paused. It resumes when the sandbox coordinator carries an answer back."}
-                  {detail.pause_ttl_seconds > 0 && detail.paused_at
-                    ? ` The box is held for ${fmtDuration(detail.pause_ttl_seconds * 1000)} from ${fmtDateTime(detail.paused_at)}.`
-                    : ""}
-                </span>
-              </span>
-            </div>
-          )}
-          <PropertiesRail
-            groups={[
-              {
-                properties: [
-                  { label: "Task", value: detail.task_description },
-                  {
-                    label: "Seat",
-                    value: (
-                      <SeatChip
-                        name={detail.role || detail.agent_handle}
-                        handle={detail.agent_handle}
-                      />
-                    ),
-                  },
-                  { label: "Coding agent", value: detail.coding_agent },
-                  { label: "Runs in", value: detail.placement },
-                  {
-                    label: "Branch",
-                    value: detail.branch ? (
-                      <code className="inline">{detail.branch}</code>
-                    ) : undefined,
-                  },
-                  { label: "Owner node", value: detail.owner },
-                  { label: "Started", value: fmtDateTime(detail.started_at) },
-                  { label: "Updated", value: fmtDateTime(detail.updated_at) },
-                  {
-                    label: "Ran for",
-                    value: fmtDuration(tsKey(detail.updated_at) - tsKey(detail.started_at)),
-                  },
-                  {
-                    label: "Turn",
-                    value: <code className="inline">{detail.turn_id}</code>,
-                    path: ["activity", "turns", detail.turn_id],
-                  },
-                ],
-              },
-            ]}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon="x"
+                  onClick={() => setSelected("")}
+                  title="Close"
+                />
+              </>
+            }
           />
-        </Panel>
+          <Panel>
+            {AWAITING.includes(detail.status) && (
+              <div style={{ marginBottom: "var(--space-3)" }}>
+                <AwaitingBanner run={detail} now={now} />
+              </div>
+            )}
+            <PropertiesRail
+              groups={[
+                {
+                  properties: [
+                    { label: "Owner node", value: detail.owner },
+                    { label: "Started", value: fmtDateTime(detail.started_at) },
+                    { label: "Updated", value: fmtDateTime(detail.updated_at) },
+                    {
+                      label: "Ran for",
+                      value: fmtDuration(elapsedMs(detail.started_at, detail.updated_at)),
+                    },
+                    {
+                      label: "Turn",
+                      value: <code className="inline">{detail.turn_id}</code>,
+                      path: ["activity", "turns", detail.turn_id],
+                    },
+                  ],
+                },
+              ]}
+            />
+          </Panel>
+        </>
       )}
 
       {detail && <BridgeLog run={detail} />}

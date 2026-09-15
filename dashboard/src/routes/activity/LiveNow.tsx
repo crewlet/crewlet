@@ -9,12 +9,19 @@
  * one column to three as tiles came and went, and on disconnect the whole
  * record card collapsed to a paragraph.
  *
- * This one answers the three questions an operator actually arrives with, in
+ * This one answers the two questions an operator actually arrives with, in
  * that order:
  *
- *   1. Is anything waiting on me?          → the attention queue, first
- *   2. What is my company doing right now?  → live seats, and what each is on
- *   3. What has it been doing?              → throughput, spend, the feed
+ *   1. What is my company doing right now?  → live seats, what is in a box
+ *   2. What has it been doing?              → throughput, spend, the feed
+ *
+ * The third — "is anything waiting on me" — used to be here as an attention
+ * band, and it is the Inbox's now: a condition waiting on somebody is a claim
+ * on them rather than a statistic about the company, and two screens owning
+ * one queue is two screens to keep agreeing about it. The band went; the
+ * QUEUE ITSELF was left behind computing on every clock tick with nothing
+ * rendering it, and with it a `stream` poll and a connection subscription
+ * whose only reader was that dead memo.
  *
  * The layout is FIXED. Every section is always present, in the same place, in
  * the same size, whether or not it has anything in it — an empty one says so.
@@ -24,9 +31,11 @@
 
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
+import { EventRow, SeatCard, Section } from "~/components/common.tsx";
 import { Badge, Button, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
+import { peekHref, rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { mergeRuns, RunStatus } from "./Runs.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import {
   useAgents,
@@ -35,12 +44,10 @@ import {
   useOrgBudget,
   useSandboxes,
   useTokens,
-  useConnection,
 } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { attentionQueue } from "~/lib/attention.ts";
 import { awaitingPerson, indexOrg, runState } from "~/lib/seats.ts";
-import { fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { fmtCount, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
 import { cutInto, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
@@ -71,6 +78,19 @@ const STRIP_OFFER: Offer = { ranges: ["15m", "1h", "6h"], custom: false, fallbac
  */
 const STRIP_CELLS = 60;
 
+/**
+ * How many coding runs the "In a box" panel draws before it says how many more.
+ *
+ * EIGHT, which is the feed's seven beside it plus a row: both lists are on a
+ * landing screen read at a glance, and a row is `--row-h` tall, so eight is a
+ * screenful rather than a scroll. The set is NOT bounded by the seat count the
+ * way the live tiles are — a run parked on a question that nobody ever answers
+ * stays in the record until the retention sweep takes it, so a company can
+ * accumulate more of these than it has seats. The full list is one click away
+ * and the panel says how much of it is not here.
+ */
+const IN_BOX_ROWS = 8;
+
 export function LiveNow() {
   const nav = useNavigator();
   const agents = useAgents();
@@ -79,9 +99,7 @@ export function LiveNow() {
   const org = useOrg();
   const tokens = useTokens();
   const budget = useOrgBudget();
-  const { connected, authRejected } = useConnection();
   const now = useNow();
-  const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
   // THE DURABLE CODING RUNS, the same source the Inbox reads for the same
   // reason: the live projection sweeps a parked run after twelve hours, and
   // two screens computing one queue from two sources would disagree about
@@ -92,21 +110,6 @@ export function LiveNow() {
   const range = useTimeRange(now, STRIP_OFFER, false);
 
   const index = useMemo(() => indexOrg(org), [org]);
-  const attention = useMemo(
-    () =>
-      attentionQueue({
-        agents,
-        sandboxes,
-        runs: runs?.runs ?? [],
-        budget,
-        engine: engine ?? null,
-        seats: index.seats,
-        connected,
-        authRejected,
-        now,
-      }),
-    [agents, sandboxes, runs, budget, engine, index.seats, connected, authRejected, now],
-  );
 
   const live = useMemo(
     () =>
@@ -119,6 +122,28 @@ export function LiveNow() {
         }),
     [index.seats, agents, sandboxes],
   );
+
+  /**
+   * WHAT IS IN A BOX RIGHT NOW — the durable rows and the live projection
+   * folded by the Runs screen's own function, then cut to the runs that have
+   * not finished.
+   *
+   * Both sources, because neither alone is "right now": the projection sweeps
+   * a parked run after twelve hours and has no row for one whose box was
+   * reclaimed, and the store is a poll behind a box that came up two seconds
+   * ago. Counting only the projection is what made the tile below disagree
+   * with the Inbox about whether anything was waiting.
+   */
+  const inFlight = useMemo(
+    () =>
+      mergeRuns(runs?.runs ?? [], sandboxes).filter(
+        (r) => r.status !== "done" && r.status !== "failed",
+      ),
+    [runs, sandboxes],
+  );
+  const parked = inFlight.filter((r) => awaitingPerson(r.status)).length;
+
+  const { open: openPeek } = usePeekControls();
 
   // The activity strip is keyed by the BUCKET, never by index: keying the cells
   // `p0..p59` over a window recomputed from the clock shifts every cell's
@@ -174,7 +199,10 @@ export function LiveNow() {
           display: fmtCount(a.total_tokens),
           href: href(["company", "people", a.handle || a.role]),
         })),
-    [tokens, nav],
+    // `href` is a pure function of its arguments, not the navigator: listing
+    // `nav` here made this recompute on every route change and named a
+    // dependency the body does not read.
+    [tokens],
   );
 
   return (
@@ -213,10 +241,10 @@ export function LiveNow() {
           <Stat
             icon="terminal"
             label="Coding runs"
-            value={sandboxes.length}
+            value={inFlight.length}
             sub={
-              sandboxes.filter((s) => awaitingPerson(s.status)).length
-                ? `${plural(sandboxes.filter((s) => awaitingPerson(s.status)).length, "run")} paused on a question`
+              parked > 0
+                ? `${plural(parked, "run")} paused on a question`
                 : "detached sandbox runs in flight"
             }
           />
@@ -257,7 +285,21 @@ export function LiveNow() {
           {live.length ? (
             <div className="seat-grid">
               {live.map(({ seat, agent }) => (
-                <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
+                // THE TILE IS ALREADY AN ANCHOR to the seat's page, so the
+                // peek is opened from a wrapper that generates NO BOX of its
+                // own: `display: contents` leaves the card itself the grid
+                // item, where a wrapping div would become one and the cards in
+                // a row would stop matching heights. The click still bubbles —
+                // `display: contents` removes the box, not the node — and
+                // `rowPeekHandler` is the frame's one copy of which clicks
+                // mean elsewhere, so ⌘-click still opens the seat's page.
+                <div
+                  key={seat.handle}
+                  style={{ display: "contents" }}
+                  onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
+                >
+                  <SeatCard seat={seat} agent={agent} sandboxes={sandboxes} />
+                </div>
               ))}
             </div>
           ) : (
@@ -312,6 +354,69 @@ export function LiveNow() {
           </div>
         </Panel>
       </div>
+
+      {/* WHAT IS IN A BOX, as rows rather than as one integer.
+          The tile above has always counted these and the screen's own note
+          promises "what is running in a box", and a count is the one shape
+          that cannot answer which run or whose. Always drawn, empty included,
+          for the reason every other section here is: a dashboard whose
+          sections come and go with the data cannot be read at a glance. */}
+      <Panel
+        title="In a box"
+        icon="terminal"
+        count={inFlight.length}
+        subtitle="detached coding runs that have not finished"
+        padding="none"
+        actions={
+          <Button size="sm" variant="ghost" onClick={() => nav.to(["activity", "runs"])}>
+            All runs
+          </Button>
+        }
+      >
+        {inFlight.length > 0 ? (
+          <div className="list">
+            {inFlight.slice(0, IN_BOX_ROWS).map((run) => (
+              // A REAL LINK to the run's page, peeking on a plain click — the
+              // same rule every row in the product follows, written once in
+              // `rowPeekHandler`.
+              <a
+                key={run.turn_id}
+                className="list-row clickable"
+                href={peekHref({ kind: "run", id: run.turn_id })}
+                onClick={rowPeekHandler(() => openPeek({ kind: "run", id: run.turn_id }))}
+              >
+                <RunStatus status={run.status} />
+                <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
+                  <span className="truncate t-cell">
+                    {run.task_description || "No task was recorded"}
+                  </span>
+                  <span className="truncate t-caption">
+                    {run.role || run.agent_handle}
+                    {run.coding_agent ? ` · ${run.coding_agent}` : ""}
+                  </span>
+                </span>
+                <span className="t-caption nowrap">{relTime(run.started_at, now)}</span>
+              </a>
+            ))}
+            {/* WHAT IS NOT SHOWN, said rather than left to be inferred: a list
+                cut at eight with no note reads as a company with eight runs. */}
+            {inFlight.length > IN_BOX_ROWS && (
+              <a className="list-row clickable" href={href(["activity", "runs"])}>
+                <span className="t-caption">
+                  {plural(inFlight.length - IN_BOX_ROWS, "more run")} in a box — all runs ↗
+                </span>
+              </a>
+            )}
+          </div>
+        ) : (
+          <Empty
+            inline
+            icon="terminal"
+            title="Nothing is running in a box"
+            hint="A coding run starts when a seat calls the sandbox tool. Every finished one is still in the record under Runs."
+          />
+        )}
+      </Panel>
 
       <div className="grid grid-auto-lg">
         <Panel

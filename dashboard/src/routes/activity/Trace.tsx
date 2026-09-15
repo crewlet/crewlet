@@ -17,7 +17,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
 interface Node {
   event: EventRecord;
@@ -83,6 +83,23 @@ export function TraceScreen({ traceId }: { traceId: string }) {
   // wire; it is what the feed's own red rows are drawn from.
   const failed = events.filter((e) => e.failed === true).length;
 
+  // WHAT THE TRACE IS ABOUT, off the span it begins at. A trace id is a
+  // hexadecimal string and nothing else; the earliest ROOT is the work that
+  // opened it, and its own summary is the only name this object has. Roots
+  // come first out of [flatten], so `rows[0]` is that span — and where the
+  // whole trace begins mid-flight, it is still the earliest thing present.
+  const opening = rows[0]?.event;
+  // ABSENT RATHER THAN ZERO until the answer lands. `FactLine` drops an empty
+  // value, and "0 spans · 0 failures" over a trace still loading is a claim
+  // that the trace is empty — which is the one thing a reader must not
+  // conclude from a read that has not finished.
+  const known = events.length > 0;
+  const facts: Fact[] = [
+    { label: "Spans", value: known ? events.length : "" },
+    { label: "Elapsed", value: to > from ? fmtDuration(to - from) : "" },
+    { label: "Failures", value: known ? failed : "" },
+  ];
+
   return (
     <>
       <PageActions>
@@ -98,9 +115,21 @@ export function TraceScreen({ traceId }: { traceId: string }) {
           </Button>
         }
       </PageActions>
-      <PageNote>{<code className="inline">{traceId}</code>}</PageNote>
-
       {loading && <Skeleton rows={6} />}
+
+      {/* THE OBJECT'S OWN HEADER, and the trace id with it. The id used to be
+          a lone `PageNote` under the page bar — the hand-rolled half of what
+          `ObjectHeader` draws as an eyebrow — and the three facts beside it
+          are the strip's own, in the strip's own order, so a reader who
+          arrives from a turn's "Trace" button lands on the same three
+          numbers wherever they meet this trace again. */}
+      <ObjectHeader
+        kind="Trace"
+        icon="gitBranch"
+        identifier={traceId}
+        title={opening?.summary || opening?.type || "Trace"}
+        facts={facts}
+      />
       <QueryState
         error={error}
         loading={loading}
@@ -113,6 +142,12 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               }
         }
       >
+        {/* THE SAME THREE NUMBERS THE FACT LINE ABOVE STATES, and kept: the
+            header states them in the order every frame states them, and each
+            tile here says what its number is OVER — which events share the
+            trace, the wall clock the elapsed time spans, and whether anything
+            in it failed. That is the half a fact line has no room for, and it
+            is what a reader chasing a number they distrust actually reads. */}
         <Panel padding="none">
           <StatRow cols={3}>
             <Stat

@@ -144,7 +144,12 @@ test("a cut view still reports the outcome, off the recovered record", async () 
       }),
     ],
   });
-  expect(await screen.findByText("done")).toBeTruthy();
+  // BOTH FRAMES REPORT IT — the header's fact line, which the peek renders
+  // from the same builder, and the outcome tile, whose `sub` says WHERE the
+  // word came from. This case is about the tile: a cut view recovers the
+  // turn's ending from the record rather than from the rows it holds, and
+  // `delivered the work` is that recovery being read.
+  expect((await screen.findAllByText("done")).length).toBeGreaterThan(0);
   expect(screen.getByText("delivered the work")).toBeTruthy();
 });
 

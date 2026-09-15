@@ -58,6 +58,7 @@ import {
   CopyButton,
   Disclosure,
   DownloadButton,
+  Empty,
   Panel,
   PhaseTag,
   Skeleton,
@@ -77,10 +78,12 @@ import {
   tsKey,
 } from "~/lib/format.ts";
 import {
+  decisionLabel,
   fromLiveCall,
   fromPhaseEvent,
   groupTurns,
   mergePhases,
+  phaseDuration,
   phaseStart,
   streamedPhases,
   type PhaseRecord,
@@ -97,8 +100,8 @@ import {
 import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -231,61 +234,306 @@ export function turnSpan(
   return { from: Math.min(...starts), to: Math.max(...ends) };
 }
 
+// ---------------------------------------------------------------------------
+// One turn, as both frames read it
+// ---------------------------------------------------------------------------
+
 /**
- * What woke this turn, and what it set out to do.
+ * Everything the page and the rail know about one turn.
  *
- * Neither was on this screen at all. The trigger rides on EVERY phase event
- * and on the summary, and the feed's own turn card leads with it — here the
- * only way to learn it was to read the raw `trigger` object out of the JSON
- * dump at the bottom. `plan_summary` is the agent's own account of what the
- * turn was for, written by the executor or by the reviewer describing what
- * landed, and nothing read it either.
+ * THE PAGE AND THE PEEK ARE ONE DEFINITION of what a turn shows — the rule
+ * `routes/work/WorkItem.tsx` states for a task, and the same drift is
+ * available here. Written twice, the rail is the one somebody reads forty
+ * times a day, so it would be the one that kept its fields while the page
+ * quietly fell behind, and a reader who clicked through from the rail to
+ * "see the whole thing" would find less than they started with.
+ *
+ * EVERY FIELD COMES FROM THE SAME THREE SOURCES: the `turn` query, the phases
+ * that have landed on the stream since it answered, and whichever phase is
+ * running now. The query is answered ONCE, at mount, so a turn deep-linked
+ * while it runs answers with nothing — and that is precisely the turn both
+ * frames exist for.
  */
-function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["trigger"] }) {
-  const woke = trigger?.summary || str(rec.summary, "prompt") || trigger?.type || "";
-  const said = str(rec.learning, "plan_summary");
+export interface TurnView {
+  turnId: string;
+  loading: boolean;
+  error: string | null;
+  /** Oldest first: a turn is read forwards. */
+  events: EventRecord[];
+  /** The store stopped at its per-turn cap, so what is missing is the MIDDLE. */
+  cut: boolean;
+  /** Every phase record in hand, the workers a delegate spawned included. */
+  phases: PhaseRecord[];
+  /** The turn's OWN phases, without those workers. */
+  own: PhaseRecord[];
+  /** The workers, filed under the phase that spawned each. */
+  nested: Map<string, PhaseRecord[]>;
+  rec: TurnRecord;
+  role: string;
+  trigger: PhaseRecord["trigger"] | null;
+  outcome: ReturnType<typeof outcomeOf>;
+  running: boolean;
+  /** The engine's own wall clock, or null where no record carries one. */
+  durationMs: number | null;
+  /** The window everything this frame holds falls inside — see [turnSpan]. */
+  span: { from: number; to: number };
+  /** The turn's own token bill, without the workers — see the Tokens tile. */
+  tokens: number;
+  toolCalls: number;
+  workerTokens: number;
+  workerCount: number;
+  /** The highest self-iterate round its own phases reached. */
+  rounds: number;
+}
+
+export function useTurnView(turnId: string): TurnView {
+  // GUARDED ON THE ID. A rail is opened from a pasted `peek=turn:` as often as
+  // from a row, and an empty one would ask the engine for a turn with no id
+  // and be refused on the way in.
+  const { data, loading, error } = useQuery(
+    "turn",
+    { turn_id: turnId },
+    { enabled: turnId !== "" },
+  );
+
+  const agents = useAgents();
+  const phaseEvents = usePhaseEvents();
+
+  const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
+  // THE STORE STOPPED AT ITS CAP, not at the end of the turn. The answer
+  // recovers the turn's ENDING beside its opening — that is where the two
+  // records the header reads its outcome, its clock and its plan summary off
+  // live, and without them a cut turn was indistinguishable from one that
+  // died — so what is missing is the MIDDLE. Every claim made over the whole
+  // turn rather than over a record has to be weakened anyway: a guard breach
+  // in the gap is one neither frame can see.
+  const cut = Boolean(data?.truncated);
+
+  // The phases the `turn` query knew about, plus the ones that have landed on
+  // the stream since it was answered, plus whichever phase is running now.
+  //
+  // The query is answered ONCE, at mount, so on a turn opened WHILE IT RUNS —
+  // the deep link out of a running turn card — it used to be the whole page:
+  // the phases that finished afterwards never arrived, the phase in flight was
+  // never on the page at all, and a turn deep-linked the moment it started
+  // answered with nothing and stayed that way.
+  const phases = useMemo<PhaseRecord[]>(() => {
+    const answered = events
+      .filter((e) => e.type === "agent_phase_completed")
+      .map((e) => fromPhaseEvent(e))
+      .filter((r): r is PhaseRecord => r !== null);
+    const streamed = streamedPhases(phaseEvents, (r) => r.turnId === turnId);
+    const live = agents
+      .filter((a) => a.live_call && a.live_call.turn_id === turnId)
+      .map((a) => fromLiveCall(a.live_call!, a.role));
+    // Within a turn, oldest first: a turn is read forwards. `mergePhases`
+    // orders newest first, which is right for a feed and wrong here.
+    return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
+  }, [events, phaseEvents, agents, turnId]);
+
+  // A NESTED call belongs UNDER the phase that made it. `host_phase` and
+  // `host_iteration` have always been on the wire, `groupTurns` has always
+  // done the split and `PhaseCard` has always had the prop — and this screen
+  // used none of it, so a delegate fan-out of eight rendered as eight
+  // siblings of the turn's own two phases and the reader had to work out
+  // which round each belonged to. It also made the "N phases" badge and the
+  // token total disagree with the feed's card for the same turn.
+  const group = useMemo(
+    () => groupTurns(phases).find((g) => g.turnId === turnId),
+    [phases, turnId],
+  );
+  const own = group?.phases ?? phases;
+  const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
+  const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
+  const workerCount = phases.filter((p) => p.hostPhase).length;
+
+  const running = phases.some((p) => p.live);
+  const rec: TurnRecord = useMemo(
+    () => ({
+      summary: events.find((e) => e.type === "agent_turn_completed"),
+      learning: events.find((e) => e.type === "turn_completed"),
+    }),
+    [events],
+  );
+
+  // THE ENGINE'S OWN WALL CLOCK, off the record that actually carries it.
+  // `agent_turn_completed` has no `duration_ms` — that field is on
+  // `turn_completed`, published in the same breath — so reading it off the
+  // summary made this an unreachable branch and the span below the only answer
+  // the tile ever gave, under a caption claiming otherwise.
+  const measured = field(rec.learning, "duration_ms");
+
+  return {
+    turnId,
+    loading,
+    error,
+    events,
+    cut,
+    phases,
+    own,
+    nested,
+    rec,
+    role: phases[0]?.role ?? (rec.summary?.actor || ""),
+    trigger: phases.find((p) => p.trigger)?.trigger ?? null,
+    outcome: outcomeOf(rec),
+    running,
+    durationMs: typeof measured === "number" ? measured : null,
+    span: turnSpan(events, phases),
+    tokens: own.reduce((n, p) => n + p.totalTokens, 0),
+    toolCalls: own.reduce((n, p) => n + p.tools.length, 0),
+    workerTokens,
+    workerCount,
+    // THE HIGHEST ITERATION ITS OWN PHASES REACHED, which is what a reader
+    // means by "how many rounds did this take" and what the turns list counts
+    // (`MAX(iteration)`, in `store.Turns`) — a self-iterate round, not a tool
+    // round. Over the turn's own phases only: a worker's iteration belongs to
+    // the delegate call that spawned it rather than to this turn.
+    rounds: own.reduce((n, p) => Math.max(n, p.iteration), 0),
+  };
+}
+
+/**
+ * The sentence that says what woke this turn, in the order the engine can
+ * supply one: the trigger's own summary, the prompt the turn record kept, and
+ * the bare trigger type for a wake nothing wrote a sentence about.
+ */
+function wokeBy(view: TurnView): string {
+  return view.trigger?.summary || str(view.rec.summary, "prompt") || view.trigger?.type || "";
+}
+
+/**
+ * What to call one turn.
+ *
+ * A TURN HAS NO NAME, so the title is the nearest thing it has to one: the
+ * plan summary the executor or the reviewer wrote about what this turn was
+ * for. That is also what the turns list puts in its "What it did" column —
+ * `Turn.Summary` at the store IS `plan_summary` — so a reader who opened a
+ * rail from a row is headed by the sentence they clicked on.
+ *
+ * It falls back to what WOKE the turn, because a turn that has not finished
+ * has no plan summary yet and "Turn" over a turn is the eyebrow twice. The
+ * panel below drops whichever sentence the title took — see [TurnBrief].
+ */
+export function turnTitle(view: TurnView): string {
+  return str(view.rec.learning, "plan_summary") || wokeBy(view) || "Turn";
+}
+
+/**
+ * The six facts a turn wears, in the one order.
+ *
+ * ONE BUILDER FOR THE PAGE AND THE RAIL, which is `ObjectHeader`'s own rule
+ * and the reason it exists: a reader who scans "seat, outcome, took" in the
+ * rail must find them in that order on the page behind it.
+ *
+ * THE THREE COUNTS ARE ABSENT RATHER THAN ZERO until a phase record is in
+ * hand. `FactLine` drops an empty value, and "0 phases · 0 rounds · 0 tokens"
+ * is a claim that this turn did nothing — which is exactly what a turn still
+ * loading, or one whose events fell out of the store's window, has NOT been
+ * shown to have done.
+ */
+export function turnFacts(view: TurnView): Fact[] {
+  const counted = view.own.length > 0;
+  const { from, to } = view.span;
+  return [
+    {
+      label: "Seat",
+      // The chip is its own link, so the fact carries no `path`: an anchor
+      // inside the fact's own anchor is markup no browser agrees about.
+      value: view.role ? <SeatChip name={view.role} handle={view.role} /> : "the engine",
+    },
+    // A RUNNING TURN HAS NO OUTCOME, and `outcomeOf` says so with an em dash
+    // for a caller that has a tile to fill. A fact line has no tile: the
+    // fact is dropped and the status beside the title says "running".
+    { label: "Outcome", value: view.outcome.word === "—" ? "" : view.outcome.word },
+    {
+      label: "Took",
+      // THE ENGINE'S OWN MEASUREMENT where a record carries one, and the
+      // window over everything this frame holds otherwise — the same two
+      // terms in the same order the page's tile names underneath.
+      value:
+        view.durationMs != null
+          ? fmtDuration(view.durationMs)
+          : to > from
+            ? fmtDuration(to - from)
+            : "",
+    },
+    { label: "Phases", value: counted ? view.own.length : "" },
+    { label: "Rounds", value: counted ? view.rounds : "" },
+    { label: "Tokens", value: counted ? fmtCount(view.tokens) : "" },
+  ];
+}
+
+/**
+ * The one state a turn's facts cannot state.
+ *
+ * Everything in the fact line is settled when the turn ends — an outcome, a
+ * duration, a bill — so a turn still in flight reads as a turn that recorded
+ * none of them. The badge is the difference, and it is the only thing in this
+ * header that carries a tone, because running is a STATE and a seat, an id and
+ * a token count are identity.
+ */
+function turnStatus(view: TurnView): ReactNode {
+  if (!view.running) return undefined;
+  return (
+    <Badge tone="info" dot>
+      running
+    </Badge>
+  );
+}
+
+/**
+ * What woke this turn.
+ *
+ * It was not on this screen at all. The trigger rides on EVERY phase event and
+ * on the summary, and the feed's own turn card leads with it — here the only
+ * way to learn it was to read the raw `trigger` object out of the JSON dump at
+ * the bottom of the page.
+ *
+ * WHAT IT SET OUT TO DO IS THE TITLE NOW. `plan_summary` used to be the second
+ * half of this panel, under "It set out to"; it is the nearest thing a turn
+ * has to a name, so it heads the page, the rail and the row in the turns list,
+ * and repeating it directly under that header was one sentence twice in the
+ * space of two lines. The same guard covers the fallback: where a turn has no
+ * plan summary the title takes THIS sentence, and the prose here is dropped
+ * rather than printed again — while the source and the way out to the trigger
+ * stay, because they are the half a title cannot carry.
+ */
+function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
+  const trigger = view.trigger;
+  const woke = wokeBy(view);
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
-  if (!woke && !said) return null;
+  const repeated = woke !== "" && woke === omit;
+  if (!woke || (repeated && !trigger?.integration && !triggerId)) return null;
   return (
     <Panel padding="normal">
-      <div className="col gap-3">
-        {woke && (
-          <div className="col gap-1">
-            <div className="row gap-2">
-              <span className="t-label">Woken by</span>
-              {/* The SOURCE, and not the sender. The trigger's summary is
-                  built by the vendor's own summariser and already opens with
-                  who wrote it — "Message from founder: …" — so a `founder`
-                  chip beside that sentence was the same fact twice, and two
-                  chips plus a link after one line of prose is a hedge, not a
-                  header. The integration is the one thing the sentence does
-                  not reliably carry. */}
-              {trigger?.integration && (
-                <Badge outline mono title="where this turn's trigger came from">
-                  {trigger.integration}
-                </Badge>
-              )}
-              <span className="spacer" />
-              {triggerId && (
-                <a className="t-link" href={href(["activity", "events", triggerId])}>
-                  the trigger →
-                </a>
-              )}
-            </div>
-            {/* LABEL ABOVE, PROSE BELOW, full width. As a KeyValue this was a
-                two-track grid sized to the longest label, so one short line of
-                prose sat in a narrow band with the rest of the panel empty
-                beside it — the shape for a metadata list, and these are
-                sentences. */}
-            <p className="t-body measure">{woke}</p>
-          </div>
-        )}
-        {said && (
-          <div className="col gap-1">
-            <div className="t-label">It set out to</div>
-            <p className="t-body measure">{said}</p>
-          </div>
-        )}
+      <div className="col gap-1">
+        <div className="row gap-2">
+          <span className="t-label">Woken by</span>
+          {/* The SOURCE, and not the sender. The trigger's summary is built
+              by the vendor's own summariser and already opens with who wrote
+              it — "Message from founder: …" — so a `founder` chip beside that
+              sentence was the same fact twice, and two chips plus a link
+              after one line of prose is a hedge, not a header. The
+              integration is the one thing the sentence does not reliably
+              carry. */}
+          {trigger?.integration && (
+            <Badge outline mono title="where this turn's trigger came from">
+              {trigger.integration}
+            </Badge>
+          )}
+          <span className="spacer" />
+          {triggerId && (
+            <a className="t-link" href={href(["activity", "events", triggerId])}>
+              the trigger →
+            </a>
+          )}
+        </div>
+        {/* LABEL ABOVE, PROSE BELOW, full width. As a KeyValue this was a
+            two-track grid sized to the longest label, so one short line of
+            prose sat in a narrow band with the rest of the panel empty
+            beside it — the shape for a metadata list, and these are
+            sentences. */}
+        {!repeated && <p className="t-body measure">{woke}</p>}
       </div>
     </Panel>
   );
@@ -513,67 +761,15 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
 
 export function TurnScreen({ turnId }: { turnId: string }) {
   const nav = useNavigator();
-  const { data, loading, error } = useQuery("turn", { turn_id: turnId });
-
-  const agents = useAgents();
+  // ONE DERIVATION FOR THE PAGE AND THE RAIL — see [useTurnView]. What stays
+  // here is what only a page has room for: the story bands, the prompt
+  // weights, every trace the turn touched, and the JSON somebody attaches to
+  // a bug report.
+  const view = useTurnView(turnId);
+  const { loading, error, events, cut, phases, own, nested, rec, role, trigger } = view;
+  const { outcome, running, durationMs, workerTokens, workerCount } = view;
   const phaseEvents = usePhaseEvents();
 
-  const events = useMemo(() => [...(data?.events ?? [])].sort(oldestFirst), [data]);
-  // THE STORE STOPPED AT ITS CAP, not at the end of the turn. The answer
-  // recovers the turn's ENDING beside its opening — that is where the two
-  // records this header reads its outcome, its clock and its plan summary off
-  // live, and without them a cut turn was indistinguishable from one that
-  // died — so what is missing is the MIDDLE. Every claim below that is made
-  // over the whole turn rather than over a record has to be weakened anyway:
-  // a guard breach in the gap is one this page cannot see.
-  const cut = Boolean(data?.truncated);
-
-  // The phases the `turn` query knew about, plus the ones that have landed on
-  // the stream since it was answered, plus whichever phase is running now.
-  //
-  // The query is answered ONCE, at mount, so on a turn opened WHILE IT RUNS —
-  // the deep link out of a running turn card — it used to be the whole page:
-  // the phases that finished afterwards never arrived, the phase in flight was
-  // never on the page at all, and a turn deep-linked the moment it started
-  // answered with nothing and stayed that way.
-  const phases = useMemo<PhaseRecord[]>(() => {
-    const answered = events
-      .filter((e) => e.type === "agent_phase_completed")
-      .map((e) => fromPhaseEvent(e))
-      .filter((r): r is PhaseRecord => r !== null);
-    const streamed = streamedPhases(phaseEvents, (r) => r.turnId === turnId);
-    const live = agents
-      .filter((a) => a.live_call && a.live_call.turn_id === turnId)
-      .map((a) => fromLiveCall(a.live_call!, a.role));
-    // Within a turn, oldest first: a turn is read forwards. `mergePhases`
-    // orders newest first, which is right for a feed and wrong here.
-    return mergePhases([...streamed, ...answered], live).sort((a, b) => tsKey(a.at) - tsKey(b.at));
-  }, [events, phaseEvents, agents, turnId]);
-
-  // A NESTED call belongs UNDER the phase that made it. `host_phase` and
-  // `host_iteration` have always been on the wire, `groupTurns` has always
-  // done the split and `PhaseCard` has always had the prop — and this screen
-  // used none of it, so a delegate fan-out of eight rendered as eight
-  // siblings of the turn's own two phases and the reader had to work out
-  // which round each belonged to. It also made the "N phases" badge and the
-  // token total disagree with the feed's card for the same turn.
-  const group = useMemo(
-    () => groupTurns(phases).find((g) => g.turnId === turnId),
-    [phases, turnId],
-  );
-  const own = group?.phases ?? phases;
-  const nested = group?.nested ?? new Map<string, PhaseRecord[]>();
-  const workerTokens = phases.reduce((n, p) => n + (p.hostPhase ? p.totalTokens : 0), 0);
-  const workerCount = phases.filter((p) => p.hostPhase).length;
-
-  const running = phases.some((p) => p.live);
-  const rec: TurnRecord = useMemo(
-    () => ({
-      summary: events.find((e) => e.type === "agent_turn_completed"),
-      learning: events.find((e) => e.type === "turn_completed"),
-    }),
-    [events],
-  );
   const story = useMemo(() => tellStory(events), [events]);
   const prefetch = useMemo(
     () => prefetchBlocks(story.given.find((e) => e.type === "prefetch_summary")),
@@ -582,9 +778,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // The other half of the `given` band, and until now the half nothing read.
   const weights = useMemo(() => promptWeights(story.given), [story]);
 
-  const role = phases[0]?.role ?? (rec.summary?.actor || "");
-  const trigger = phases.find((p) => p.trigger)?.trigger ?? null;
-  const outcome = outcomeOf(rec);
+  const title = turnTitle(view);
   const trouble = problemCount(story.wentWrong, field(rec.summary, "failed") === true);
   // Only claimable on a FINISHED turn with a record to claim it from, and
   // over the WHOLE turn. A running turn has not been asked about since it
@@ -594,14 +788,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
   // "nothing was read" and "not everything was read" must not render alike.
   const clean = trouble === 0 && !running && !cut && Boolean(rec.summary || rec.learning);
 
-  const { from, to } = turnSpan(events, phases);
-  // THE ENGINE'S OWN WALL CLOCK, off the record that actually carries it.
-  // `agent_turn_completed` has no `duration_ms` — that field is on
-  // `turn_completed`, published in the same breath — so reading it off the
-  // summary made this an unreachable branch and the span below the only answer
-  // this tile ever gave, under a caption claiming otherwise.
-  const measured = field(rec.learning, "duration_ms");
-  const durationMs = typeof measured === "number" ? measured : null;
+  const { from, to } = view.span;
   // EVERY TRACE THIS TURN TOUCHED, not the first one to arrive.
   //
   // `events[0].trace_id` is the trace of whichever event happened to sort
@@ -777,9 +964,21 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </>
         }
       </PageActions>
-      <PageNote>{<code className="inline">{turnId}</code>}</PageNote>
-
       {loading && <Skeleton rows={6} />}
+
+      {/* THE OBJECT'S OWN HEADER, and the turn id with it. The id used to be
+          a lone `PageNote` under the page bar — a hand-rolled identity line,
+          which is exactly the eyebrow `ObjectHeader` draws — and the facts
+          beside it come out of the same builder the rail uses, so the six
+          things a reader scans are in one order wherever a turn appears. */}
+      <ObjectHeader
+        kind="Turn"
+        icon="layers"
+        identifier={turnId}
+        title={title}
+        status={turnStatus(view)}
+        facts={turnFacts(view)}
+      />
       <QueryState
         error={error}
         loading={loading}
@@ -817,6 +1016,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </div>
         )}
 
+        {/* THE SAME FOUR NUMBERS THE FACT LINE ABOVE STATES, and deliberately
+            so: the header states them in the order every frame states them,
+            and this strip says WHERE EACH ONE CAME FROM — whether "Took" is
+            the engine's own measurement or the span of what this page holds,
+            whether an outcome is the reviewer's word or the executor's, how
+            much of the bill was fan-out. A fact line has no room for that,
+            and a reader who thinks a number looks wrong needs exactly it. */}
         <Panel padding="none">
           <StatRow cols={4}>
             <Stat
@@ -897,7 +1103,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </StatRow>
         </Panel>
 
-        <TurnBrief rec={rec} trigger={trigger} />
+        <TurnBrief view={view} omit={title} />
 
         {/* ABOVE the phases, because a turn that fell over is not something a
             reader should have to scroll past three panels to discover. Absent
@@ -1040,6 +1246,151 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           </Panel>
         )}
       </QueryState>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The peek
+// ---------------------------------------------------------------------------
+
+/**
+ * Which phases ran, one line each.
+ *
+ * NOT `PhaseCard`. That is the page's, and it is a transcript — a model's
+ * reasoning, its arguments and its results — which in a rail 420 px wide is a
+ * page in a narrow column, and the reason the rail exists is that the list
+ * behind it stays on screen. What a reader wants HERE is the shape of the
+ * turn: which phases it ran, what each decided, and what each cost. The
+ * reading happens through `Open ↗`.
+ *
+ * THE WORKERS ARE NOT IN IT, for the reason the Tokens tile gives: a delegate
+ * fan-out of eight would be eight lines of somebody else's phases under a
+ * heading that counts two.
+ */
+function PhaseStrip({ phases }: { phases: PhaseRecord[] }) {
+  return (
+    <Panel title="Phases" icon="brain" count={phases.length} padding="tight">
+      <div className="col gap-2">
+        {phases.map((p) => {
+          const ms = phaseDuration(p);
+          const decided = decisionLabel(p.phase, p.decision);
+          return (
+            <div key={p.key} className="col gap-1">
+              <div className="row gap-2">
+                <PhaseTag phase={p.phase} />
+                {p.iteration > 1 && (
+                  <span className="t-caption" title="self-iterate round">
+                    iter {p.iteration}
+                  </span>
+                )}
+                {p.live && (
+                  <Badge tone="info" dot>
+                    running
+                  </Badge>
+                )}
+                {p.failed && <Badge tone="critical">{p.errorKind || "failed"}</Badge>}
+                <span className="spacer" />
+                <span className="phase-meta" title="tokens this phase spent">
+                  {fmtCount(p.totalTokens)}
+                </span>
+                {/* WHAT THE ENGINE MEASURED, and nothing where it measured
+                    nothing: a live phase has no duration yet, and rendering
+                    its zero would make the phase still running look like the
+                    cheapest one in the turn. */}
+                {ms != null && (
+                  <span className="phase-meta" title="what the engine measured">
+                    {fmtDuration(ms)}
+                  </span>
+                )}
+              </div>
+              {/* WHAT IT DECIDED, under the row rather than beside it. A
+                  decision is a sentence — "nothing to do — ended silently" —
+                  and a sentence in the metadata cluster of a 420 px rail is
+                  the thing that wraps. */}
+              {decided && <span className="t-caption truncate">{decided}</span>}
+            </div>
+          );
+        })}
+        {phases.length === 0 && (
+          <span className="t-caption">
+            No phase completed in this turn — it may have died before its first phase published.
+          </span>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+/**
+ * One turn, beside the list it was found in.
+ *
+ * WHAT A ROW CANNOT SAY. A turns row carries a seat, a sentence and four
+ * numbers; the question a reader has in front of a list of them is "which turn
+ * is this, and what did it do" — which is the phases it ran and the thing that
+ * woke it, and neither fits in a column.
+ *
+ * IT ASKS THE SAME QUESTION THE PAGE ASKS, through [useTurnView], rather than
+ * rendering the row it was opened from: a peek is opened from a pasted URL as
+ * often as from a grid, and a peek built out of a row would show a different
+ * set of facts depending on which list it came from.
+ */
+export function TurnPeek({ turnId }: { turnId: string }) {
+  const view = useTurnView(turnId);
+  // NOTHING HAS BEEN READ, which is three states and only one of them is an
+  // empty rail: an answer that has not landed is a skeleton, a refusal is the
+  // engine's own words, and a turn no event names is said plainly. A header
+  // over six absent facts would be none of the three.
+  const nothing = view.events.length === 0 && view.phases.length === 0;
+  if (nothing) {
+    if (view.loading) return <Skeleton rows={6} />;
+    if (view.error) return <QueryState error={view.error} loading={false} />;
+    return (
+      <Empty
+        inline
+        icon="layers"
+        title="No events carry this turn id"
+        hint="A turn is assembled from the events that name its id. If it ran outside the store's 30-day window there is nothing to assemble."
+      />
+    );
+  }
+
+  const title = turnTitle(view);
+  return (
+    <>
+      <ObjectHeader
+        size="peek"
+        kind="Turn"
+        icon="layers"
+        identifier={turnId}
+        title={title}
+        status={turnStatus(view)}
+        facts={turnFacts(view)}
+      />
+      <div className="col gap-3">
+        {/* LOADING IS SETTLED ABOVE. The rail draws only once it holds
+            something — a query answer, or a phase off the stream — so passing
+            the in-flight flag here would blank a running turn's rail every
+            time the query it does not need re-ran on a reconnect. */}
+        <QueryState error={view.error} loading={false}>
+          {/* THE SAME WARNING THE PAGE CARRIES, because every count in the
+              header above is made from these rows: a cut turn holds its
+              opening and its ending and not its middle, and a rail that said
+              nothing would report a long turn as a short one. */}
+          {view.cut && (
+            <div className="banner caution">
+              <Icon name="alert" size="sm" />
+              <span>
+                The store stopped at its per-turn cap. This is the turn&rsquo;s opening and its
+                ending — the phases from its middle are not here, and neither is anything that went
+                wrong in them.
+              </span>
+            </div>
+          )}
+          <PhaseStrip phases={view.own} />
+          <TurnBrief view={view} omit={title} />
+        </QueryState>
+      </div>
     </>
   );
 }

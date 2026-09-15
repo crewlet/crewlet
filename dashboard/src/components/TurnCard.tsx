@@ -85,9 +85,24 @@ export function TurnCard({
           </Badge>
         )}
         {group.failed && <Badge tone="critical">failed</Badge>}
-        <span className="phase-meta t-num" title="tokens across every phase of this turn">
-          {group.totalTokens ? fmtCount(group.totalTokens) : "—"}
-        </span>
+        {/* ZERO IS A NUMBER, AND ONLY A LIVE TURN'S ZERO IS AN ABSENCE. This
+            read `totalTokens ? … : "—"`, so a turn that genuinely spent
+            nothing — every phase on a subscription CLI, which reports no
+            usage at all, or a turn the engine stopped before its first call
+            came back — rendered as "not recorded". That is the confusion
+            `app/frame/cells.tsx` exists to end: absent and zero are different
+            facts and a dash claims the first about the second. The dash stays
+            for the one case where the zero really is an absence — a turn
+            still running, whose phases have not reported their usage yet. */}
+        {group.live && group.totalTokens === 0 ? (
+          <span className="phase-meta" title="no phase has reported its usage yet">
+            —
+          </span>
+        ) : (
+          <span className="phase-meta t-num" title="tokens across every phase of this turn">
+            {fmtCount(group.totalTokens)}
+          </span>
+        )}
         {span != null && (
           <span className="phase-meta t-num" title="from the first phase to the last">
             {fmtDuration(span)}

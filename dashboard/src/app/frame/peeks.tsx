@@ -37,6 +37,9 @@ import type { ObjectKind, ObjectRef } from "./objects.ts";
 import { ItemPeek } from "~/routes/work/WorkItem.tsx";
 import { SeatPeek } from "~/routes/company/Seat.tsx";
 import { UnitPeek } from "~/routes/company/Company.tsx";
+import { TurnPeek } from "~/routes/activity/Turn.tsx";
+import { RunPeek } from "~/routes/activity/Runs.tsx";
+import { ChannelPeek } from "~/routes/activity/Conversations.tsx";
 
 /**
  * What every peek is handed.
@@ -61,6 +64,9 @@ export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.React
   item: ({ id }) => <ItemPeek itemKey={id} chrome={{}} />,
   seat: ({ id }) => <SeatPeek handle={id} />,
   unit: ({ id }) => <UnitPeek id={id} />,
+  turn: ({ id }) => <TurnPeek turnId={id} />,
+  run: ({ id }) => <RunPeek turnId={id} />,
+  channel: ({ id }) => <ChannelPeek id={id} />,
 };
 
 /** Whether this kind can be peeked at all. */
