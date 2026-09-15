@@ -94,6 +94,24 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 			truncated = total > len(records)
 		}
 	}
+	// EVERY TRACE THIS TURN TOUCHED, asked rather than derived.
+	//
+	// A turn RESUMED on another node after a restart spans more than one
+	// trace, and that is exactly the turn somebody opens this page to
+	// understand. The client derived the set from the rows it was handed,
+	// which loses any trace whose events fell in the middle a capped read
+	// dropped — so one button labelled "trace" led to half the story with
+	// nothing saying a second half existed, on precisely the turns where it
+	// did.
+	//
+	// DEGRADES LIKE THE RECOVERY ABOVE, for the same reason: the rows are
+	// what the reader came for, and discarding a good read because a cheap
+	// follow-up seek failed turns the largest turns into `query_failed`.
+	traces, err := s.Events.TurnTraces(ctx, id)
+	if err != nil {
+		log.WarnContext(ctx, "turn_traces_unavailable", "turn", id, "error", err)
+		traces = []string{}
+	}
 	return map[string]any{
 		"turn_id": id,
 		"events":  records,
@@ -102,6 +120,7 @@ func (s Sources) turn(ctx context.Context, p Params) (any, error) {
 		// can say the gap is the middle rather than warning that the page
 		// cannot answer its own headline question.
 		"truncated": truncated,
+		"trace_ids": traces,
 	}, nil
 }
 
