@@ -460,8 +460,15 @@ func (h *Host) NoteDeliveryDeferred(handle string) {
 	}
 }
 
-// TTL is the lease TTL THIS host is running, which is the configured one
-// where a deployment set one and [SeatLeaseTTL] otherwise.
+// TTL is the lease TTL THIS host is running — the EFFECTIVE one, which is
+// whatever [New] resolved: a value adopted from a lease bucket a peer created,
+// the deployment's own configuration, or [SeatLeaseTTL] when it set none.
+//
+// THE ADOPTED CASE IS THE ONE THIS EXISTS FOR, so it is the one the sentence
+// has to cover. Described as "the configured value", a caller would reasonably
+// assume the timing it derives follows the local file — which is exactly false
+// on the fleet mismatch this method was added to serve, and the assumption
+// that put three budgets on the shipped constant in the first place.
 //
 // Exported because every budget that races a lease has to be derived from the
 // lease it is racing, and the callers that derive one live in other packages:
