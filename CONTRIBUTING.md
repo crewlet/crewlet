@@ -355,6 +355,7 @@ pull request when any of them has a newer release:
 |---|---|---|
 | `.github/workflows/*.yml` | `github-actions` | the actions CI and releases run on |
 | `go.mod` | `gomod` | the engine's own Go dependencies |
+| `dashboard/package.json` | `npm` | the dashboard's build and runtime dependencies |
 | `Dockerfile` | `docker` | the base image a release ships |
 | `docker-compose.yml` | `docker-compose` | the images the local dev stack runs |
 
@@ -369,9 +370,54 @@ a comment at the pin, as the Compose stack's Postgres image already does.
 
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, plus the commit prefix that surface's
-bumps carry. CI runs on each pull request, and — as below — CI is what decides
-whether it lands. Three things are worth knowing:
+bumps carry, plus two grouping rules on the npm entry. CI runs on each pull
+request, and — as below — CI is what decides whether it lands. Seven things are
+worth knowing:
 
+- **The React family is grouped.** `react`, `react-dom`, `@types/react` and
+  `@types/react-dom` arrive in a single pull request, because **react-dom checks at runtime that `react` and `react-dom`
+  have the exact same version** — not a compatible one. No version range can
+  say that, so npm's resolver never enforces it and a permissive caret is no
+  protection. React 19.3.0 arrived ungrouped as two pull requests and both were
+  red, each in a different phase: the `react-dom` half never installed
+  (`ERESOLVE` in about a second, on `@types/react-dom@19.3.0` peering
+  `@types/react: ^19.3.0` against 19.2.18 — plus a second unsatisfied edge,
+  `react-dom@19.3.0` peering `react: ^19.3.0` against 19.2.8, that `npm ci`
+  did not get far enough to print), while the `react` half installed cleanly
+  and then failed 19 of 36 test suites on the exact-version check. Neither
+  ordering helped; each needed versions that were in the other pull request.
+  `@testing-library/react` is deliberately outside the group — its react peers
+  are `^18.0.0 || ^19.0.0`, which do ride a React minor — and
+  `@vitejs/plugin-react` is outside it because it declares no react peer at
+  all, only `vite: ^8.0.0`. Its name is the only React-shaped thing about it.
+- **`vite`, `vitest` and `@vitejs/plugin-react` are grouped for the same
+  reason, one major out.** `vite` is a *required* peer of the other two —
+  `^8.0.0` from the plugin, `^6.4.0 || ^7.0.0 || ^8.0.0` from vitest — so a
+  lone `vite` 9 bump breaks both ceilings at once and fails to resolve exactly
+  as the react-dom half did. Minors were never the problem (8.2.2 → 8.3.0
+  landed on its own), so the group buys nothing until the major and then it
+  buys all of it. It costs something in the meantime, and the cost is real: a
+  `vitest`-only bump now arrives titled for the group, with the packages it
+  actually moved in the body rather than the subject.
+- **Nothing else is grouped, and that is the rule rather than today's state.**
+  The only other *required* edges a bump there could split are
+  `@testing-library/react`'s — on react and react-dom at `^18.0.0 || ^19.0.0`,
+  which ride a minor, and on `@testing-library/dom`, a transitive it brings
+  itself and Dependabot therefore moves with it. Every remaining vite peer
+  (`@vitest/mocker`'s, vite's own on `@types/node` and the bundlers) is
+  optional, and npm does not fail on an unsatisfied optional peer. A group
+  raises whichever
+  members have an update together, under a title naming the group rather than
+  any package in it — so it costs a vaguer subject on every bump, and it puts
+  one member's bad release in front of the rest. Pay that where a split bump is
+  genuinely broken — not for neatness, and not to batch unrelated noise.
+- **A dashboard runtime bump needs a rebuilt bundle, so it will not auto-merge.**
+  `static/dashboard` is committed and the `dashboard` job rebuilds and diffs it,
+  but Dependabot edits only `package.json` and the lockfile — it cannot run a
+  bundler. A bump that changes the emitted bytes therefore sits red on that gate
+  until someone runs `make dashboard` and commits the output with it. Bumps that
+  do not touch the output — `@types/*`, `prettier`, a build tool whose result is
+  byte-identical — pass it untouched and land on their own.
 - **A Compose image can be held back on purpose**, with the reason in a
   comment beside the pin — `mattermost-db` holds its Postgres major because an
   existing `mattermost-pgdata` volume will not open under a newer one without a
