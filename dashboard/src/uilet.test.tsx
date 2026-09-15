@@ -38,6 +38,7 @@ import {
   Tag,
   tabId,
 } from "@crewlethq/ui";
+import { Checkbox } from "@crewlethq/ui";
 import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
@@ -417,4 +418,47 @@ test("a setting is a radio group whose arrows select as they move", () => {
   expect(onValueChange).toHaveBeenLastCalledWith("dark");
   fireEvent.keyDown(radios[2]!, { key: "ArrowUp" });
   expect(onValueChange).toHaveBeenLastCalledWith("system");
+});
+
+// A checkbox is named by its label, described by its consequence, and toggled
+// from anywhere on its row. All three were hand-rolled twice in this dashboard
+// before, and the row that says what ticking a box DELETES is the one that has
+// to be read aloud after the name rather than as part of it.
+test("a checkbox is named by its label alone, and its consequence describes it", () => {
+  render(
+    <Checkbox
+      framed
+      tone="danger"
+      checked={false}
+      onCheckedChange={() => {}}
+      label="Also remove the accounts Crewlet created"
+      description="Each agent's account at the vendor is deleted."
+    />,
+  );
+  const box = screen.getByRole("checkbox", { name: "Also remove the accounts Crewlet created" });
+  const described = document.getElementById(box.getAttribute("aria-describedby") ?? "");
+  expect(described?.textContent).toBe("Each agent's account at the vendor is deleted.");
+});
+
+test("a press anywhere on a checkbox row toggles it, and reports the new state", () => {
+  const onCheckedChange = vi.fn();
+  render(<Checkbox label="Clear lead" checked={false} onCheckedChange={onCheckedChange} />);
+  fireEvent.click(screen.getByText("Clear lead"));
+  expect(onCheckedChange).toHaveBeenCalledWith(true);
+});
+
+test("a disabled checkbox cannot be ticked from its row either", () => {
+  render(
+    <Checkbox
+      disabled
+      checked={false}
+      onCheckedChange={() => {}}
+      label="Also remove the accounts Crewlet created"
+      description="Each agent's account at the vendor is deleted."
+    />,
+  );
+  const box = screen.getByRole("checkbox") as HTMLInputElement;
+  fireEvent.click(screen.getByText("Also remove the accounts Crewlet created"));
+  expect(box.checked).toBe(false);
+  expect(box.disabled).toBe(true);
 });

@@ -47,7 +47,6 @@ import { useState, type ReactNode } from "react";
 import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { ListField } from "~/ui/ListField.tsx";
 import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
@@ -113,7 +112,7 @@ import {
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, EmptyState, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, EmptyState, Modal } from "@crewlethq/ui";
 
 export function NodeEditor({
   nodeKey,
@@ -347,7 +346,7 @@ function ScheduleToggles({
             label={`Enabled: ${s.name}`}
             description={`${s.cron}${s.timezone ? ` (${s.timezone})` : ""}${runner}. ${s.task}`}
             checked={values[s.name] ?? scheduleRuns(s)}
-            onChange={(checked) => onChange(s.name, checked)}
+            onCheckedChange={(checked) => onChange(s.name, checked)}
             disabled={disabled}
           />
         );
@@ -497,11 +496,11 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
       {renaming && (
         <Checkbox
           framed
-          tone="critical"
+          tone="danger"
           label="I understand what renaming the company does"
           description={ACKNOWLEDGEMENT_TEXT.company_rename}
           checked={acknowledged}
-          onChange={setAcknowledged}
+          onCheckedChange={setAcknowledged}
           disabled={disabled}
         />
       )}

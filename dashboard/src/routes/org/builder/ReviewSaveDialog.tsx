@@ -21,7 +21,6 @@
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
@@ -31,7 +30,7 @@ import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Modal } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -335,11 +334,11 @@ export function ReviewSaveDialog({
         <Checkbox
           key={a}
           framed
-          tone="critical"
+          tone="danger"
           label={ACKNOWLEDGEMENT_TEXT[a]}
           checked={acknowledged.has(a)}
           disabled={busy}
-          onChange={(checked) =>
+          onCheckedChange={(checked) =>
             setAcknowledged((current) => {
               const next = new Set(current);
               if (checked) next.add(a);

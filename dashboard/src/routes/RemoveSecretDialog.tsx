@@ -22,10 +22,9 @@
  */
 
 import { useState } from "react";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CheckGlyph, ErrorGlyph, KeyGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { Button, Checkbox, Modal } from "@crewlethq/ui";
 
 export function RemoveSecretDialog({
   name,
@@ -145,10 +144,10 @@ export function RemoveSecretDialog({
       {needsAcknowledgement && (
         <Checkbox
           framed
-          tone="critical"
+          tone="danger"
           checked={acknowledged}
           disabled={busy}
-          onChange={setAcknowledged}
+          onCheckedChange={setAcknowledged}
           label={
             referenced
               ? "Remove it anyway, and leave those fields pointing at nothing"

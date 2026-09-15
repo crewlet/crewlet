@@ -22,14 +22,21 @@
 
 import { useState } from "react";
 import { href } from "~/app/router.tsx";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
-import { Button, ButtonLink, Callout, Card, CodeBlock, SegmentedControl } from "@crewlethq/ui";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  Card,
+  Checkbox,
+  CodeBlock,
+  SegmentedControl,
+} from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /** What each starting point gives the operator, in one line. */
@@ -148,7 +155,7 @@ export function CreateCompany({
           label="Add a seat for yourself"
           description="A human seat at the top of the organization, so agents can reach you and escalate to you."
           checked={ownSeat}
-          onChange={setOwnSeat}
+          onCheckedChange={setOwnSeat}
           disabled={disabled}
         />
         {ownSeat && (

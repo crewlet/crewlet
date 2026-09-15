@@ -32,7 +32,6 @@
 
 import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
@@ -55,7 +54,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { DeleteGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Modal, SegmentedControl } from "@crewlethq/ui";
+import { Button, Callout, Checkbox, Modal, SegmentedControl } from "@crewlethq/ui";
 
 type PlacedChoice = "keep" | "remove";
 
@@ -226,11 +225,11 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       {mass && (
         <Checkbox
           framed
-          tone="critical"
+          tone="danger"
           label={`Delete ${mass.removed} of the ${plural(mass.total, "seat")} the company has`}
           description="More than half of the saved company's seats would go. Confirm this is the change you mean."
           checked={acknowledged}
-          onChange={setAcknowledged}
+          onCheckedChange={setAcknowledged}
         />
       )}
     </Modal>

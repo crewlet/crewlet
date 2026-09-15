@@ -17,11 +17,10 @@
  */
 
 import { useState } from "react";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
-import { Avatar, Button, Modal } from "@crewlethq/ui";
+import { Avatar, Button, Checkbox, Modal } from "@crewlethq/ui";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -299,10 +298,10 @@ export function DisconnectDialog({
 
         <Checkbox
           framed
-          tone="critical"
+          tone="danger"
           checked={removeSeats}
           disabled={busy}
-          onChange={setRemoveSeats}
+          onCheckedChange={setRemoveSeats}
           label="Also remove the accounts Crewlet created"
           description="Each agent's account at the vendor is deleted. What those accounts wrote stays, but they can do nothing more. Leave this off to keep them."
         />

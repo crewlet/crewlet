@@ -23,7 +23,6 @@
 
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
-import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
@@ -41,7 +40,7 @@ import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { MoveItemGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { Button, Checkbox, Modal } from "@crewlethq/ui";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -192,7 +191,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
             label="Clear lead"
             description={`Removes ${name} as the lead of ${led.map((u) => u.data.name).join(", ")}.`}
             checked={clearLead}
-            onChange={setClearLead}
+            onCheckedChange={setClearLead}
           />
         </EditorSection>
       )}

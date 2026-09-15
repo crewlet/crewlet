@@ -446,53 +446,6 @@ a.brand:hover {
   color: var(--color-text-tertiary);
 }
 
-/* A checkbox with its sentence (`ui/Checkbox.tsx`). The label and the box are
-   one click target; a framed one is the bordered choice row a dialog uses. */
-.checkbox {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-.checkbox.framed {
-  gap: var(--spacing-3);
-  padding: var(--spacing-3);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-}
-.checkbox.framed:hover:not(.disabled) {
-  border-color: var(--color-border-default);
-}
-.checkbox.disabled {
-  cursor: default;
-}
-/* Nudged down by the difference between a line of body text and the box, so
-   the box sits on the label's first line rather than above it. */
-.checkbox > input {
-  flex: none;
-  margin: calc((var(--font-line-height-normal) * 1em - 1em) / 2) 0 0;
-  accent-color: var(--color-brand-accent);
-  cursor: inherit;
-}
-/* Ticking it destroys something, and the box itself says so. */
-.checkbox.critical > input {
-  accent-color: var(--color-feedback-danger);
-}
-.checkbox-text {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.checkbox-label {
-  color: var(--color-text-primary);
-}
-.checkbox-description {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
 /* An ordered list field (`ui/ListField.tsx`): a fieldset whose legend wears
    the field label's register, so a list reads as one field among the others. */
 fieldset.field {
