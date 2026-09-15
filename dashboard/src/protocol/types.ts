@@ -508,11 +508,50 @@ export interface ScheduleSpec {
   timezone?: string;
 }
 
+/**
+ * One tool's behavioural hints, as the engine recorded them AT REGISTRATION.
+ *
+ * EVERY HINT IS A WORD, never a bool, and the third word is the point: "the
+ * server did not advertise this" and "the server said no" are different facts,
+ * and an absent hint arriving as `false` would read as a positive denial — so
+ * a fresh MCP server's unannotated tools would look like proven reads on the
+ * one screen an operator audits them on. All three values are truthy, so a
+ * careless `if (!ann.read_only)` cannot mean "not read-only" either.
+ *
+ * A hint this build does not know renders as ITSELF, for the reason the event
+ * registry gives: a rolling upgrade puts a newer node's value on an older
+ * node's screen.
+ */
+export type ToolHint = "yes" | "no" | "unknown";
+
+export interface ToolAnnotations {
+  read_only: ToolHint;
+  destructive: ToolHint;
+  idempotent: ToolHint;
+  open_world: ToolHint;
+}
+
 export interface ToolRow {
   name: string;
   description: string;
   /** `builtin` / `mcp:<server>` / `a2a` — the two-value origin grammar. */
   source: string;
+  /** A human-readable name the server advertised, when it advertised one. */
+  title?: string;
+  annotations: ToolAnnotations;
+  /**
+   * WHERE calling this puts something in front of somebody outside the turn,
+   * empty for a tool that reaches nobody. The registry's own predicate — not
+   * "was this served by MCP": a proven read-only MCP tool delivers nowhere,
+   * and the native tracker's comment tool delivers although it is a builtin.
+   */
+  delivers: string;
+  /**
+   * The JSON Schema the model is offered, ABSENT when the tool takes no
+   * arguments. Absent and `{}` are different: only the first means this build
+   * did not send one.
+   */
+  input_schema?: Record<string, unknown>;
 }
 
 /** One declared schedule, as `schedule.Row` serialises it.

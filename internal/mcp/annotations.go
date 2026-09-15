@@ -41,6 +41,16 @@ func (h Hint) String() string {
 	}
 }
 
+// Hints is the closed set, in the order String renders them.
+//
+// Exported because the hint now CROSSES THE WIRE — the tool catalogue carries
+// it to the dashboard — and a value off the wire has to be checkable against
+// the set rather than trusted.
+var Hints = []Hint{Unknown, Yes, No}
+
+// Valid reports whether h is one this build knows.
+func (h Hint) Valid() bool { return h <= No }
+
 // known reports whether the hint carries an assertion either way.
 func (h Hint) known() bool { return h == Yes || h == No }
 

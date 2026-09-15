@@ -74,7 +74,7 @@ A body that does not arrive inside its deadline fails the read like any other tr
 | `GET` | `/agents/{id}` | Single agent — `role`, the live overlay (incl. `live_call`), and `llm_history`: the seat's finished phases newest first, capped at 50. `{id}` is the seat's **handle**, which is what every roster row carries as its `id`; a role name is accepted too |
 | `GET` | `/agents/{id}/memory` | Durable memories (personal, episodic, counterparty, synthesized skills). Same `{id}` — the handle resolves to the derived agent id the diary is keyed by |
 | `GET` | `/org` | The company's identity and its full tree: `name`, `mission`, `vision`, `policies`, then `units` and `roles` (including human seats with `"kind": "human"`). The four identity fields are the founder-authored half of a company and are plain prose — no credentials, no `${VAR}` references; providers, MCP servers and integrations stay behind the operator-gated `/config` |
-| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) |
+| `GET` | `/tools` | Registered tools, each tagged with the `source` that registered it — `builtin` or `mcp:<server>` (see [Where a tool comes from](../guides/tools-and-mcp.md#where-a-tool-comes-from)) — plus its behavioural `annotations`, where it `delivers`, and its `input_schema` (see [below](#the-tool-catalogue)) |
 | `GET` | `/events` | Recent engine events from the event store (`limit` caps at 400; keyset-paged, see below) |
 | `GET` | `/events/{event_id}` | Single event incl. payload |
 | `GET` | `/events/trace/{trace_id}` | All events in one trace, oldest first, capped at 500 |
@@ -1143,7 +1143,7 @@ upgrade to a WebSocket (corporate proxies, etc.).
   "events":    [ { /* recent event row, newest first — payload-free, plus
                       a `failed` boolean */ }, ... ],
   "sandboxes": [ { /* in-flight detached coding run */ }, ... ],
-  "tools":     [ { "name": "...", "description": "...", "source": "..." } ],
+  "tools":     [ { /* one catalogue entry — see The Tool Catalogue below */ } ],
   "org":       { /* /org payload */ },
   "tokens":    { /* the spend rollup — same shape as /tokens/breakdown */ },
   "budget":    { /* the live org-wide token meter, or {} — see below */ },
@@ -2543,6 +2543,49 @@ Notes:
   reports `since` as what it drew: a cost explorer is read from its
   right-hand edge, and dropping the oldest silently would put a year's
   heading over a month of bars.
+
+---
+
+## The Tool Catalogue
+
+Carried by `GET /tools`, by the `tools` push, and inside the socket snapshot.
+One row per registered tool:
+
+```json
+{
+  "name": "post_message",
+  "description": "Post a message to a channel",
+  "source": "slack",
+  "title": "Post message",
+  "annotations": {
+    "read_only": "no",
+    "destructive": "no",
+    "idempotent": "unknown",
+    "open_world": "yes"
+  },
+  "delivers": "slack",
+  "input_schema": { "type": "object", "properties": { "…": {} }, "required": ["…"] }
+}
+```
+
+- **Every hint is a WORD, never a bool**, and the third word is the point:
+  `unknown` means the server did not advertise the hint, which is a different
+  fact from `no`. A bool cannot hold the difference — an absent hint would
+  arrive as `false` and read as a positive denial, so a fresh MCP server's
+  unannotated tools would look like proven reads on the one screen an
+  operator audits them on. The engine's own delivery fence has always read
+  them this way (see [`Registry.KnownReads`](../guides/tools-and-mcp.md)): an
+  unannotated tool is **not** a known read.
+- `delivers` names **where** calling this tool puts something in front of
+  somebody outside the turn, and is empty for a tool that reaches nobody. It
+  is the registry's own predicate, not "was this served by MCP": a proven
+  read-only MCP tool delivers nowhere, and the native tracker's comment tool
+  delivers although it is a builtin.
+- `title` is the human-readable name a server advertised, omitted when it
+  advertised none.
+- `input_schema` is the JSON Schema the model is offered, verbatim. It is
+  **absent** when the tool takes no arguments, which is not the same as `{}`:
+  only the first means this build did not send one.
 
 ---
 
