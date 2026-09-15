@@ -390,7 +390,13 @@ export function Fleet() {
           </Card>
         </div>
 
-        {(data?.unplaceable?.length || data?.unmanned_roles?.length) && (
+        {/* COMPARED, NOT COERCED. `{n && <X/>}` renders the NUMBER when n is
+            0, and React draws a bare "0" where the panel would have been: a
+            fleet with both lists present and empty, which is every healthy
+            fleet, printed a stray zero under its panels. `undefined` is
+            skipped, so the bug only showed once the engine answered with the
+            arrays it always answers with. */}
+        {((data?.unplaceable?.length ?? 0) > 0 || (data?.unmanned_roles?.length ?? 0) > 0) && (
           <Card as="section">
             <Card.Header icon={<WarningGlyph size="sm" />}>
               <Card.Title>Not running anywhere</Card.Title>
