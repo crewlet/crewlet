@@ -328,8 +328,14 @@ export interface Bucket {
    *
    * TWO NUMBERS, because only a subscription coding CLI reports a price. A
    * `cost_usd` of 0 over `priced_calls: 0` means nobody said what this cost;
-   * over 2 it means two runs were billed nothing. Rendering the first as
-   * "$0.00" states a price nobody quoted — see `fmtSpend`.
+   * over 2 it means two runs were billed nothing.
+   *
+   * NOT RENDERED. The dashboard measures spend in TOKENS — a currency shown
+   * for the minority of calls that quote one, beside a token count covering
+   * all of them, reads as the company's spend and is a fraction of it. The
+   * field stays on the wire and in the store, so putting a price back on a
+   * screen is a rendering change rather than a migration. `priced_calls` IS
+   * read: it says how much of a window has accounting of its own.
    */
   cost_usd: number;
   priced_calls: number;

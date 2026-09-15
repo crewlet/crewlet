@@ -4,10 +4,22 @@
  * Two different facts share this screen and the previous one let them blur:
  *
  *  - the **spend rollup** is a WINDOW (24 hours by default, up to 30 days) over
- *    what was actually billed;
+ *    what the company's model calls consumed;
  *  - a **meter** is PROCESS-LIFETIME — it resets when the engine restarts.
  *
  * They are never comparable, and every number here says which it is.
+ *
+ * # The unit is TOKENS, and there is no money on this screen
+ *
+ * The engine records a price where one is reported — a subscription coding CLI
+ * quotes `total_cost_usd` and nothing else does — and that figure is still on
+ * the wire and still in the store. It is simply not RENDERED: a currency shown
+ * for the small minority of calls that quote one, beside a token count covering
+ * all of them, reads as the company's spend and is a fraction of it. Tokens are
+ * the one unit every call here is measured in, so tokens are what this says.
+ *
+ * Nothing about that is irreversible: the field is untouched, so putting a
+ * price back is a rendering change rather than a migration.
  */
 
 import { useMemo } from "react";
@@ -30,16 +42,7 @@ import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import {
-  fmtCount,
-  fmtDate,
-  fmtDateTime,
-  fmtExact,
-  fmtPct,
-  fmtSpend,
-  relTime,
-  tsKey,
-} from "~/lib/format.ts";
+import { fmtCount, fmtDate, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -176,10 +179,15 @@ function SpendOverTime({ range }: { range: TimeRange }) {
               </p>
             )}
             {data.totals.priced_calls > 0 && (
+              // WHAT THE CALLS COST IS NOT SHOWN, deliberately — see the note
+              // at the head of this file. What survives is the fact the price
+              // was standing in for: how much of the window ANY figure here
+              // can account for, since only a subscription coding CLI reports
+              // per-call detail and the rest quote none.
               <p className="t-caption">
-                {fmtSpend(data.totals.cost_usd, data.totals.priced_calls)} billed over{" "}
-                {fmtExact(data.totals.priced_calls)} of {fmtExact(data.totals.calls)} calls — only a
-                subscription coding CLI reports a price, so the rest quote none.
+                {fmtExact(data.totals.priced_calls)} of {fmtExact(data.totals.calls)} calls came
+                back with their own accounting — only a subscription coding CLI reports it, so the
+                rest are counted by tokens alone.
               </p>
             )}
           </div>
@@ -262,8 +270,10 @@ export function Spend() {
 
       <Panel padding="none">
         <StatRow cols={4}>
+          {/* A COIN LABELS MONEY, and this counts tokens — the only glyph on
+              the screen that claimed a unit the figure beside it is not in. */}
           <Stat
-            icon="coin"
+            icon="layers"
             label="Tokens"
             value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
             sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
