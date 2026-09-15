@@ -36,8 +36,9 @@ node, a tool origin — is **neutral**, and its identity is carried by its name,
 its icon and its position. Those are stable, legible, and do not run out at
 eight.
 
-The one exception is a **third-party app's own mark** on the Integrations screen
-(`ui/VendorMark.tsx`): Slack's four colours, Atlassian's blue, GitLab's orange,
+The one exception is a **third-party app's own mark** on the Integrations
+screen (`VendorMark`, from `@crewlethq/icons`): Slack's four colours,
+Atlassian's blue, GitLab's orange,
 Datadog's violet, drawn as the third-party app draws them. A mark is identity by
 definition, and a recoloured Slack mark is not Slack's. The exception is held
 to exactly that: a mark is drawn only beside the third-party app's name,
@@ -63,35 +64,54 @@ a seat that fell over have both stopped, and only one of them is a failure.
 
 ## The palette is measured, not asserted
 
-`dashboard/src/styles/tokens.css` is the one source of colour, type, space and
-motion. Every claim it makes is recomputed from the shipped file by
-`dashboard/src/styles/palette.test.ts`, in **both themes**, over **every
-composited surface a token can land on** — including a hovered row inside a
-nested panel, which is where a ramp anchored to the panel fill quietly falls
-under its floor.
+`@crewlethq/tokens` is the one source of colour, type, space and motion. The
+dashboard declares none of its own: it imports the palette, the themes, the
+density scale, the faces and the document baseline, in that order, above every
+other import in `dashboard/src/main.tsx`. Above, because an import is
+evaluated in source order and the components carry their own stylesheets, and
+the baseline has to be the thing a component rule outranks rather than the
+other way round.
+
+The rule table and the colour maths are the package's own,
+`@crewlethq/tokens/test/palette`, so the design system and this application
+cannot come to disagree about what a floor is.
+`dashboard/src/styles/palette.test.ts` runs them over the INSTALLED
+stylesheets in that same import order, in **every theme state** (light, dark
+by media query, dark by attribute) and over **every composited surface a token
+can land on**, including a hovered row inside a nested panel, which is where a
+ramp anchored to the panel fill quietly falls under its floor. The engine
+measures as well as the package because a tokens release that lowered a ratio
+would otherwise arrive here through an auto-merged bump with nothing in `make
+check` measuring one.
 
 What is measured, and the floor each clears:
 
 | Claim | Floor |
 |---|---|
-| `--text`, `--heading` on every surface | 7:1 |
-| `--text-secondary`, `--text-muted` on every surface | 4.5:1 |
-| `--text-faint` on a panel | **between 2.8 and 4.5** — it is decoration, and a step that crept up to 4.5 would invite itself into a table cell |
-| every `-ink` step as TEXT on every surface | 4.5:1 |
+| `--color-text-primary` on every surface | 7:1 |
+| `--color-text-secondary`, `--color-text-tertiary` on every surface | 4.5:1 |
+| `--color-text-muted` on a panel | **between 2.8 and 4.5**, because it is decoration, and a step that crept up to 4.5 would invite itself into a table cell |
+| every `-ink` step as TEXT on every surface, and on its own `-soft` tint | 4.5:1 |
 | every fill step as a MARK on the page surfaces it sits on | 3:1 |
-| `--text-on-fill` on `--accent` | 4.5:1 |
+| `--color-text-on-accent` on the accent, and white on danger | 4.5:1 |
+| the focus ring against every surface | 3:1 |
 | the three phase hues, pairwise, under normal / protan / deutan vision | ΔE 10 |
+| the four status hues, pairwise, under all three | ΔE 10 |
 | adjacent data hues, in series order, under all three | ΔE 9 |
-| every data hue against the reserved `--critical` | ΔE 14 |
+| every data hue against the reserved danger hue | ΔE 14 |
+| every other hue against the accent, under all three | ΔE 10 normal, 8 dichromat |
 | the neutral ramp's chroma | ≤ 2.2 |
-| the accent's chroma against every other hue | the highest |
 
-**A measured token is only as good as where it is spent.** `--text-faint`
-clears its floor as decoration, and the shell once spent it on words a reader
-has to read: the search footer's instructions, each result's hint, the group
-headings and the rail's live count. Those take `--text-muted` now, and
-`dashboard/src/styles/shell.test.ts` fails when a rule in the shell's
-stylesheet gives `--text-faint` to anything but an icon.
+**A measured token is only as good as where it is spent.**
+`--color-text-muted` clears its floor as decoration, and the dashboard spent it
+on words a reader has to read: "(optional)", "not set", "none", "not reported
+by this engine", a seat's goal, an event's category, the placeholder in every
+text box. Those take `--color-text-tertiary` now, and
+`dashboard/src/designSystem.test.ts` fails when a rule in ANY of the
+dashboard's stylesheets gives the decoration step to anything but a glyph. The
+same file fails on a `var()` naming a token the engine used to declare for
+itself, because an undeclared custom property does not fall back to what it
+used to be: it takes its whole declaration with it.
 
 **The fill/ink split is enforced by that measurement, not by convention.** An
 `-ink` step is text; a fill step is a mark or a background. Mixing them is how
@@ -125,8 +145,8 @@ three families fetched from a CDN, which was the tree's ONLY external runtime
 reference: on an air-gapped engine — a supported deployment — every face fell
 back to a system font the design was never measured against.
 
-Nine sizes, `--fs-3xs` … `--fs-3xl`, and **they are the only sizes in the
-product**. The system this replaces had 194 `font-size` declarations across 14
+Nine sizes, `--font-size-2xs` … `--font-size-3xl`, and **they are the only
+sizes in the product**. The system this replaces had 194 `font-size` declarations across 14
 literal pixel values, eight of them off any ramp, so its scale was fiction —
 and so was its density control, which resized three of those steps and left the
 rest.
@@ -145,9 +165,10 @@ its top edge, because a shadow is invisible against near-black; on light the
 shadow does the work. One recipe, two grounds, no second component.
 
 The sidebar's inset is the one place that scale is split in two, because a rail
-row has two edges that want different things. `--nav-gutter` insets the rail —
-it is where a row's own background, hover and active tint begin, so it decides
-how much of the rail's width the click target covers. `--nav-row-pad` insets
+row has two edges that want different things. `--size-nav-gutter` insets the
+rail, and it is where a row's own background, hover and active tint begin, so
+it decides how much of the rail's width the click target covers.
+`--size-nav-row-pad` insets
 the content inside that row. Every glyph in the rail therefore lands on the sum
 of the two, and anything with no row of its own — the brand lockup, the group
 labels — adds them rather than carrying a literal. That is what lets the rows
@@ -471,7 +492,7 @@ accent ring rather than only by finding a badge.
 The Model screen collected eighteen controls in one sticky row — a segmented
 control, a free-text box, a chip per seat, a chip per phase and a failures
 chip — fifteen of them near-identical pills in two different active idioms.
-Above them sat four `--fs-2xl` numerals, a step LARGER than the screen title,
+Above them sat four `--font-size-2xl` numerals, a step LARGER than the screen title,
 so the loudest thing on a transcript page was a token count. Below the list
 sat a copy of Spend's own panel, which every "load older" click pushed
 another sixty cards further down a single scroller.
@@ -912,17 +933,21 @@ rendered idle from the first phase to the last.
 - **One clock.** Every relative time on screen advances together and none of
   them is baked at render.
 
-### The component library stands alone
+### The components come from the design system
 
-- **`src/ui/` imports nothing outside itself.** A primitive names a package or
-  another file in `ui/`, and never `~/protocol`, `~/lib`, `~/routes` or any
-  other directory of this application. Engine data reaches a primitive as a
-  prop. That is what lets the library move into a shared design system without
-  an edit, and `ui/boundary.test.ts` fails the build on the first import that
-  would weld a screen's data model into it.
-- **One stack decides which surface a key belongs to.** Dialogs, drawers,
-  menus and listbox popups register on the stack in `ui/useModal.ts`, in the
-  order they opened, and so do the shell's own token dialog, search, engine
+- **`@crewlethq/ui` draws it, and the engine composes it.** The palette, the
+  glyphs, the overlays, the layer stack and the primitives are the design
+  system's, shared with the console and the documentation site, so a control
+  looks and behaves the same wherever somebody meets it. What is left in
+  `src/ui/` is the part of that move not yet made, and it imports nothing
+  outside itself: a primitive names a package or another file in `ui/`, and
+  never `~/protocol`, `~/lib`, `~/routes` or any other directory of this
+  application. Engine data reaches a primitive as a prop, which is what lets
+  the rest of it follow, and `ui/boundary.test.ts` fails the build on the
+  first import that would weld a screen's data model into it.
+- **One stack decides which surface a key belongs to.** Dialogs, sheets,
+  menus and listbox popups register on the design system's layer stack
+  (`useModalLayer`, `usePopupLayer`), in the order they opened, and so do the shell's own token dialog, search, engine
   panel and the narrow layout's sections drawer: no modal hand-rolls its veil
   or listens for Escape beside the stack. The sections drawer is the rail
   itself, a dialog only while it is open; closed, the stylesheet hides it
@@ -972,7 +997,7 @@ rendered idle from the first phase to the last.
 - **A key an input method is composing with belongs to the input method.**
   Somebody typing Japanese, Chinese or Korean walks candidates with the
   arrows, accepts a word with Enter and abandons it with Escape, and every one
-  of those presses still reaches the page. `ui/keys.ts` decides once whether a
+  of those presses still reaches the page. `isComposing` decides once whether a
   press is part of a composition, reading both the `isComposing` flag and the
   key code Safari leaves on the Enter that ends one, and the layer stack, the
   listbox keys, the multi-select and the list field all leave such a press
@@ -986,28 +1011,30 @@ rendered idle from the first phase to the last.
   gives the finger back; two fingers pinch at any time. `+`, `-` and `0` zoom
   and fit only while the viewport element itself holds focus, so an item's
   own keys are never taken. The view fits once, on the first measured layout,
-  and after that moves only when the operator moves it. Menus and pickers
-  opened from an item render in the canvas's untransformed overlay layer, so
-  the zoom neither scales nor clips them. Fullscreen belongs to the screen,
+  and after that moves only when the operator moves it. The canvas is a
+  `LayerHost`, so a menu or picker opened from an item renders in an
+  untransformed layer over it rather than inside the transform, and the zoom
+  neither scales nor clips them; the canvas tells that layer whenever the
+  content beneath it moves, so an open surface follows what it is anchored to. Fullscreen belongs to the screen,
   which must take its dialogs and toasts into the fullscreen element with it.
 - **There is one hand-built listbox, and it is for choosing many.** A single
   choice stays a native `<select>` (`Field kind="choice"`) for the reasons in
   "Controls that mean what they look like". `ui/MultiPicker.tsx` exists
   because a multiple select cannot be searched and loses its selection to a
-  stray click, and its keys are `ui/useListbox.ts`, the same ones the secret
-  completion in `Field` uses, so the two lists cannot drift apart. Search's
+  stray click, and its keys are the design system's `useListbox`, the same ones
+  the secret completion in `Field` uses, so the two lists cannot drift apart. Search's
   results take those keys too: its input is a combobox naming the highlighted
   result, and the list is the modal's whole body rather than a popup over it
   (`popup: false`), so Escape and the veil stay the modal's. The one single
   choice that is not a `<select>` is a value picked IN PLACE from a menu an
   item already opens, such as a unit's lead chosen from its chart card: a
   select there would be a second control inside the item and a second click
-  after the first. Its answers are `menuitemradio` entries (`checked` on a
-  `ui/Menu.tsx` item) that say which one is current, nested in one `group`
+  after the first. Its answers are `menuitemradio` entries (a `checked` item of
+  the design system's `Menu`) that say which one is current, nested in one `group`
   apart from the menu's actions so a screen reader counts them among
   themselves, and the form that edits the same value still uses the select.
 - **The layout is measured, never assumed.** A chart card's width is the
-  `--org-card-w` token; its height is measured in the browser
+  `--crewlet-tree-canvas-card-width` knob, declared on the builder's own root; its height is measured in the browser
   (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout
   (`ui/tidytree.ts`), because density and the reader's font size change every
   card's height. Nothing is shown before the first measurement, and a relayout
@@ -1251,7 +1278,7 @@ to.
 
 1. **Colour is state, never identity.** No hash-to-hue, no per-agent tint, no
    per-category chip colour. If you need to tell two things apart, use their
-   names. The third-party app marks in `ui/VendorMark.tsx` are the one, bounded
+   names. The third-party app marks in `@crewlethq/icons` are the one, bounded
    exception (see "The one rule" above); nothing else is.
 2. **No new colour, size, radius or spacing literal.** If a component needs
    one, the TOKEN is what gets added.

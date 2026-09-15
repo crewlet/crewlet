@@ -1516,11 +1516,12 @@ shell; `/static/{path}` serves its assets.  The build output is
 COMMITTED, so `go build ./...` needs no Node.
 
 `/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
-license text of every npm package the bundle contains, written by Vite's
-`build.license`, followed by the SIL Open Font License of the embedded Inter
-and JetBrains Mono faces and the MIT license of Feather Icons, whose paths the
-dashboard's icon set adapts. The release archives and the container image carry
-the same file, beside the notices for the Go modules the binary links.
+license text of every npm package the bundle contains, the design system's
+three among them, written by Vite's `build.license`, followed by the SIL Open
+Font License of the embedded Inter and JetBrains Mono faces and the Apache
+License and notice of the Material Symbols drawings every glyph is one of. The
+release archives and the container image carry the same file, beside the
+notices for the Go modules the binary links.
 
 A second build target, `/static/dashboard/protocol.js`, is the wire
 protocol alone as plain ESM: `internal/e2e` replays a real company's
