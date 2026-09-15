@@ -13,9 +13,10 @@
  * routing context being the price of drawing one.
  */
 
-import type { MouseEvent, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Avatar, Badge, cx, type Tone } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
+import { rowPeekHandler } from "~/app/frame/DetailRail.tsx";
 import { fmtDateCompact, fmtDateTime, relTime } from "~/lib/format.ts";
 import { fmtMinutes, statusLabel, STATUS_TONE, typeIcon, typeName } from "~/lib/work.ts";
 import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
@@ -148,26 +149,6 @@ export function SizeMark({ points, minutes }: { points?: number; minutes?: numbe
 }
 
 /**
- * Open a task without leaving the screen — unless the reader asked to.
- *
- * A CARD IS A REAL ANCHOR, so middle-click and ⌘-click open the item's own
- * page in a tab, which is what anybody with a tracker open expects. A plain
- * click is intercepted and opens the peek instead, because the board is the
- * place the reader is and sending them away from it to read one title is the
- * navigation every tracker learned not to make.
- */
-function openHandler(onOpen?: () => void) {
-  if (!onOpen) return undefined;
-  return (event: MouseEvent) => {
-    if (event.defaultPrevented) return;
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    if (event.button !== 0) return;
-    event.preventDefault();
-    onOpen();
-  };
-}
-
-/**
  * One task as a board card.
  *
  * The three rows are fixed — identity, title, facts — so a column of cards
@@ -196,7 +177,7 @@ export function BoardCard({
       className={cx("work-card", selected && "selected")}
       data-blocked={row.blocked ? "true" : undefined}
       href={href}
-      onClick={openHandler(onOpen)}
+      onClick={rowPeekHandler(onOpen)}
     >
       <div className="work-card-top">
         <TypeIcon type={row.type} types={chrome.types} />
@@ -245,7 +226,11 @@ export function WorkRow({
   chrome?: RowChrome;
 }) {
   return (
-    <a className={cx("work-row", selected && "selected")} href={href} onClick={openHandler(onOpen)}>
+    <a
+      className={cx("work-row", selected && "selected")}
+      href={href}
+      onClick={rowPeekHandler(onOpen)}
+    >
       <TypeIcon type={row.type} types={chrome.types} />
       <span className="work-key mono">{row.key}</span>
       <span className="work-row-title truncate">

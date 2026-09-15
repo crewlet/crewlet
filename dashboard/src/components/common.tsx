@@ -16,7 +16,7 @@ import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { requestToken } from "~/protocol/index.ts";
 import { runState, seatTone, stateLabel, statusLine, toneOf, type Seat } from "~/lib/seats.ts";
-import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
+import type { AgentRow, FeedRow, QueryErrorCode, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
@@ -231,6 +231,110 @@ export function Section({
 }
 
 /**
+ * What each refusal MEANS, in the reader's terms.
+ *
+ * A TABLE OVER THE TYPE, not a chain of string comparisons, and the type is
+ * the point: `QueryErrorCode` names the nine codes the engine can send and was
+ * declared, documented and never used to type anything — so a branch comparing
+ * against `"unavaliable"` compiled cleanly and quietly rendered the generic
+ * failure for a projection that was merely catching up. Two of the nine had no
+ * branch at all for the same reason: `closed` told the reader "the engine
+ * refused this query", which it did not — the socket went away.
+ *
+ * `Record<QueryErrorCode, …>` is what makes that checkable: a code added to
+ * the type without a sentence here is a compile error.
+ */
+const REFUSALS: Record<QueryErrorCode, ReactNode> = {
+  unauthorized: (
+    <div className="banner caution">
+      <Icon name="key" size="sm" />
+      <span>
+        This answer is auth-gated. It needs an API token matching one of your{" "}
+        <code className="inline">api.auth.tokens</code> entries.
+      </span>
+      <span className="spacer" />
+      {/* The banner used to say "set a token" and offer nothing that could.
+          With anonymous reads allowed the socket is never refused, so the
+          dialog's only other doors — a socket refusal, and the palette — both
+          stay shut on exactly the screen that needs it. */}
+      <Button size="sm" icon="key" onClick={requestToken}>
+        Set token
+      </Button>
+    </div>
+  ),
+  no_event_store: (
+    <div className="banner neutral">
+      <Icon name="database" size="sm" />
+      <span>
+        This node keeps no event log, so there is no history to read. Set{" "}
+        <code className="inline">store.path</code> in <code className="inline">crewlet.yaml</code>{" "}
+        to make it durable.
+      </span>
+    </div>
+  ),
+  unknown_query: (
+    <div className="banner neutral">
+      <Icon name="info" size="sm" />
+      <span>
+        The engine does not serve this answer — the subsystem behind it is not running on this node.
+      </span>
+    </div>
+  ),
+  bad_params: (
+    <div className="banner caution">
+      <Icon name="alert" size="sm" />
+      <span>
+        The engine refused this request: something it needs was missing or not a value it accepts.
+        Retrying sends the same request — this is the screen&rsquo;s bug to fix, not a fault on the
+        node.
+      </span>
+    </div>
+  ),
+  unavailable: (
+    <div className="banner neutral">
+      <Icon name="clock" size="sm" />
+      <span>
+        This node has not finished reading the company&rsquo;s own records yet — its projection is
+        still catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
+        <strong> This is not an empty company.</strong>
+      </span>
+    </div>
+  ),
+  not_found: (
+    <div className="banner neutral">
+      <Icon name="info" size="sm" />
+      <span>There is no such record. The link may point at something that was removed.</span>
+    </div>
+  ),
+  timeout: (
+    <div className="banner caution">
+      <Icon name="clock" size="sm" />
+      <span>The engine did not answer within 10 seconds. It may be under load.</span>
+    </div>
+  ),
+  // THE TWO THAT HAD NO SENTENCE. Both used to render "the engine refused
+  // this query", which is wrong about each of them in a different way.
+  query_failed: (
+    <div className="banner critical">
+      <Icon name="alert" size="sm" />
+      <span>
+        The engine tried to answer and failed. This is a fault on the node rather than a refusal —
+        its log says what went wrong.
+      </span>
+    </div>
+  ),
+  closed: (
+    <div className="banner neutral">
+      <Icon name="plug" size="sm" />
+      <span>
+        The connection went away before this answered. Nothing refused it; the screen reads again
+        once the socket is back.
+      </span>
+    </div>
+  ),
+};
+
+/**
  * What an empty or failed answer means, said precisely.
  *
  * `no_event_store` and "nothing has happened yet" are the same empty list and
@@ -249,93 +353,15 @@ export function QueryState({
   empty?: { title: ReactNode; hint?: ReactNode };
   children?: ReactNode;
 }) {
-  if (error === "unauthorized") {
-    return (
-      <div className="banner caution">
-        <Icon name="key" size="sm" />
-        <span>
-          This answer is auth-gated. It needs an API token matching one of your{" "}
-          <code className="inline">api.auth.tokens</code> entries.
-        </span>
-        <span className="spacer" />
-        {/* The banner used to say "set a token" and offer nothing that could.
-            With anonymous reads allowed the socket is never refused, so the
-            dialog's only other doors — a socket refusal, and the palette — both
-            stay shut on exactly the screen that needs it. */}
-        <Button size="sm" icon="key" onClick={requestToken}>
-          Set token
-        </Button>
-      </div>
-    );
-  }
-  if (error === "no_event_store") {
-    return (
-      <div className="banner neutral">
-        <Icon name="database" size="sm" />
-        <span>
-          This node keeps no event log, so there is no history to read. Set{" "}
-          <code className="inline">store.path</code> in <code className="inline">crewlet.yaml</code>{" "}
-          to make it durable.
-        </span>
-      </div>
-    );
-  }
-  if (error === "unknown_query") {
-    return (
-      <div className="banner neutral">
-        <Icon name="info" size="sm" />
-        <span>
-          The engine does not serve this answer — the subsystem behind it is not running on this
-          node.
-        </span>
-      </div>
-    );
-  }
-  if (error === "bad_params") {
-    return (
-      <div className="banner caution">
-        <Icon name="alert" size="sm" />
-        <span>
-          The engine refused this request: something it needs was missing or not a value it accepts.
-          Retrying sends the same request — this is the screen's bug to fix, not a fault on the
-          node.
-        </span>
-      </div>
-    );
-  }
-  if (error === "unavailable") {
-    return (
-      <div className="banner neutral">
-        <Icon name="clock" size="sm" />
-        <span>
-          This node has not finished reading the company's own records yet — its projection is still
-          catching up. Nothing is wrong and nothing is lost; the screen fills in on its own.
-          <strong> This is not an empty company.</strong>
-        </span>
-      </div>
-    );
-  }
-  if (error === "not_found") {
-    return (
-      <div className="banner neutral">
-        <Icon name="info" size="sm" />
-        <span>There is no such record. The link may point at something that was removed.</span>
-      </div>
-    );
-  }
-  if (error === "timeout") {
-    return (
-      <div className="banner caution">
-        <Icon name="clock" size="sm" />
-        <span>The engine did not answer within 10 seconds. It may be under load.</span>
-      </div>
-    );
-  }
+  const refusal = error ? REFUSALS[error as QueryErrorCode] : undefined;
+  if (refusal) return <>{refusal}</>;
+  // A CODE THIS BUILD DOES NOT KNOW. A newer node may send one — the wire
+  // evolves additively — and naming it is more use than calling it a refusal.
   if (error) {
     return (
       <div className="banner critical">
         <Icon name="alert" size="sm" />
-        <span>The engine refused this query ({error}).</span>
+        <span>The engine answered with a code this build does not know ({error}).</span>
       </div>
     );
   }

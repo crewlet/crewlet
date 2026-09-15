@@ -112,23 +112,6 @@ export function usePageCoverage(coverage: CoverageFacts | null | undefined): voi
   }, [level, complete, applied, seq, setCoverage]);
 }
 
-/**
- * Publish this page's own actions and badges into the page bar.
- *
- * They belong to the OBJECT rather than to the chrome, and they used to be
- * drawn by each screen's own header — which is how five screens came to have
- * their controls in five different places on the page.
- */
-export function usePageActions(actions: ReactNode): void {
-  const { setActions } = usePageContext();
-  useEffect(() => {
-    setActions(actions);
-    // CLEARED ON THE WAY OUT, or the last screen's controls sit in the bar of
-    // the next one — pointing at an object the reader has left.
-    return () => setActions(null);
-  }, [actions, setActions]);
-}
-
 /** Which sidebar a workspace has, or none for the two full-bleed screens. */
 function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
   // EVERY HOOK RUNS, whatever the workspace. React's rules are not a style

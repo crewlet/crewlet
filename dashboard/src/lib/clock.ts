@@ -68,8 +68,3 @@ export function useNow(): number {
     () => now,
   );
 }
-
-/** The current instant without subscribing — for event handlers and effects. */
-export function currentNow(): number {
-  return now;
-}

@@ -146,20 +146,6 @@ export function fmtMinute(ts: string | null | undefined): string {
 }
 
 /**
- * A timestamp's full identity, for a `title` on anything that shows a short
- * one.
- *
- * NAMES THE ZONE, which is the whole point: a reader comparing a screenshot
- * with a colleague's, or reading a log beside this screen, has no way to know
- * which zone a bare `14:32` is in — and the answer differs per reader, which
- * is exactly why it cannot be left implicit.
- */
-export function fmtStamp(ts: string | null | undefined): string {
-  const full = fmtDateTime(ts);
-  return full === "—" ? full : `${full} (${zone()})`;
-}
-
-/**
  * A date with the year dropped when it is the reader's OWN year.
  *
  * For a column of dates — a list of due dates, a calendar's own cells — the

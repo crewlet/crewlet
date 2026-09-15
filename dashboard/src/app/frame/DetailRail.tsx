@@ -83,15 +83,26 @@ export function peekHref(ref: ObjectRef): string {
 }
 
 /**
- * The href that OPENS the peek, for a row that is an anchor.
+ * A row's click, for a row that is an anchor.
  *
- * A row is a real link either way: its `href` is the object's page so
- * middle-click and ⌘-click work, and the plain click is intercepted to peek.
+ * A ROW IS A REAL LINK EITHER WAY: its `href` is the object's page, so
+ * middle-click and ⌘-click open a tab and the status bar says where it goes;
+ * a plain left click is intercepted and peeks instead, because the list is
+ * where the reader is and sending them away to read one title is the
+ * navigation every tracker learned not to make.
+ *
+ * ONE COPY. This rule was written twice — here, where nothing called it, and
+ * again in `components/work.tsx` as `openHandler`, where the whole tracker
+ * did. Two spellings of "which clicks mean elsewhere" is how one of them
+ * comes to forget the middle button, and the dead copy is the one that would
+ * have been corrected last.
+ *
+ * It takes a plain callback rather than an object reference: a caller that
+ * has a ref closes over it, and a caller that opens something else entirely —
+ * a board card, a calendar chip — needs no ref at all.
  */
-export function rowPeekHandler(
-  ref: ObjectRef,
-  open: (ref: ObjectRef) => void,
-): (e: React.MouseEvent) => void {
+export function rowPeekHandler(open?: () => void): ((e: React.MouseEvent) => void) | undefined {
+  if (!open) return undefined;
   return (e) => {
     // EVERY WAY A READER OPENS A TAB. A plain left click peeks; anything the
     // browser would treat as "open elsewhere" is left alone.
@@ -99,7 +110,7 @@ export function rowPeekHandler(
       return;
     }
     e.preventDefault();
-    open(ref);
+    open();
   };
 }
 
@@ -194,13 +205,4 @@ export function DetailRail({
       </aside>
     </>
   );
-}
-
-/** The current hash with a different peek, for a link that moves the rail. */
-export function hashWithPeek(ref: ObjectRef | null): string {
-  const current = parseHash(location.hash);
-  const query = new URLSearchParams(current.query);
-  if (ref) query.set("peek", refToken(ref));
-  else query.delete("peek");
-  return buildHash(current.path, query);
 }

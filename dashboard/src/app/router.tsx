@@ -70,11 +70,6 @@ export function useRoute(): Route {
   return route;
 }
 
-/** The current screen's first segment, or "" for the overview. */
-export function useScreen(): string {
-  return useRoute().path[0] ?? "";
-}
-
 /**
  * Whether a path is the page the reader is already on.
  *

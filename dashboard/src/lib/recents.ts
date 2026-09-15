@@ -122,11 +122,6 @@ export function useRecents(): Recent[] {
   return useSyncExternalStore(subscribe, read, () => []);
 }
 
-/** `remember`, as a stable callback for an effect's dependency list. */
-export function useRemember(): (entry: Omit<Recent, "at">) => void {
-  return useCallback(remember, []);
-}
-
 /** Test seam: drop the in-process cache so a fresh read hits storage. */
 export function resetForTest(): void {
   cache = null;

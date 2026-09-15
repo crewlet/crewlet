@@ -83,19 +83,6 @@ export function statusLabel(status: string, defs?: WorkStatusDef[]): string {
 
 export const PRIORITIES = ["none", "low", "normal", "high", "urgent"] as const;
 
-export const PRIORITY_TONE: Record<string, Tone> = {
-  none: "neutral",
-  low: "neutral",
-  normal: "neutral",
-  high: "caution",
-  urgent: "critical",
-};
-
-/** The scale's own order, `none` lowest. -1 for a value off the scale. */
-export function priorityRank(priority: string | undefined): number {
-  return PRIORITIES.indexOf((priority ?? "") as (typeof PRIORITIES)[number]);
-}
-
 /**
  * The icon a task type is drawn with.
  *
@@ -349,15 +336,6 @@ export function defaultView(views: WorkView[]): string {
 /** A view's saved query, or an empty set of defaults. */
 export function viewParams(viewKey: string, views: WorkView[]): Record<string, string> {
   return views.find((v) => v.key === viewKey)?.params ?? {};
-}
-
-/** Whose a saved view is, which is the one thing its name cannot say. */
-export function viewTitle(view: WorkView): string {
-  const parts: string[] = [];
-  if (view.owner) parts.push(`${view.owner}'s`);
-  parts.push(view.type);
-  if (view.protected) parts.push("— only its owner may change it");
-  return parts.join(" ");
 }
 
 // ---------------------------------------------------------------------------
