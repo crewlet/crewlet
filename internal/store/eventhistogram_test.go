@@ -294,3 +294,43 @@ func TestFacetCountsLiftTheirOwnFilterAndKeepTheRest(t *testing.T) {
 		t.Errorf("by_category for one actor = %v, want no system key at all", got)
 	}
 }
+
+// A FACET COUNTS WHAT THE LISTING WILL SHOW, not what the bars cover.
+//
+// The bars snap their edges outward to whole buckets; the listing takes the
+// caller's own. Counted over the snapped window a chip would include up to two
+// buckets the list never shows — thousands of rows on a busy hour — and the
+// chip's whole job is to say how many rows choosing it would give.
+func TestFacetCountsCoverTheWindowAskedFor(t *testing.T) {
+	t.Parallel()
+	log := open(t).Events()
+	hour := time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)
+	// One row inside the window the caller names, and one in the part of the
+	// hour the SNAP pulls in but the caller did not ask for.
+	seedEvent(t, log, "asked", hour.Add(20*time.Minute), "system", "node-0")
+	seedEvent(t, log, "snapped-in", hour.Add(5*time.Minute), "system", "node-0")
+
+	asked := store.ListQuery{Since: hour.Add(10 * time.Minute), Until: hour.Add(30 * time.Minute)}
+	got, err := log.Histogram(t.Context(), store.HistogramQuery{
+		ListQuery: asked, Bucket: store.BucketHour,
+	})
+	if err != nil {
+		t.Fatalf("histogram: %v", err)
+	}
+	// The BAR covers the whole hour and therefore counts both.
+	if got.Total != 2 {
+		t.Errorf("total = %d, want both rows — the bar is a whole hour", got.Total)
+	}
+	// The CHIP counts only what choosing it would show.
+	if got.ByCategory["system"] != 1 {
+		t.Errorf("by_category = %v, want 1 — the row outside the asked window is "+
+			"on the bar but not in the list", got.ByCategory)
+	}
+	rows, err := log.List(t.Context(), asked)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != got.ByCategory["system"] {
+		t.Errorf("the listing has %d rows and the chip claims %d", len(rows), got.ByCategory["system"])
+	}
+}
