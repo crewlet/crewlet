@@ -40,6 +40,7 @@ import {
   type HarnessProbe,
 } from "./viewTestkit.tsx";
 import { focusables } from "@crewlethq/ui";
+import { menuEntryLabel } from "~/testing.tsx";
 
 let restore: () => void;
 beforeEach(() => {
@@ -106,7 +107,7 @@ const pointerPress = (name: string) => {
 };
 const focused = () => document.activeElement?.getAttribute("data-tree-id");
 /** A menu item's label, without the shortcut hint beside it. */
-const label = (el: HTMLElement) => el.querySelector(".crewlet-menu__label")!.textContent;
+const label = menuEntryLabel;
 /** A treeitem's node name. */
 const nameOf = (el: HTMLElement) => el.querySelector(".bchart-name")!.textContent;
 
@@ -424,7 +425,8 @@ describe("keys", () => {
     dev.focus();
     press("ContextMenu");
     const menu = screen.getByRole("menu", { name: "Actions for Dev" });
-    expect(container.querySelector(".crewlet-layer-host")!.contains(menu)).toBe(true);
+    // Over the chart rather than in it, so the zoom neither scales nor clips it.
+    expect(canvasWorld(container).contains(menu)).toBe(false);
     expect(within(menu).getAllByRole("menuitem").map(label)).toEqual([
       "Edit",
       "Open seat",
@@ -456,10 +458,8 @@ describe("menus", () => {
   test("the Add menu of a unit and of the company asks for the right parent and kind", () => {
     const { spies, container } = mount();
     fireEvent.click(screen.getByRole("button", { name: "Add to Platform", hidden: true }));
-    // In the overlay layer, so the zoom neither scales nor clips it.
-    expect(container.querySelector(".crewlet-layer-host")!.contains(screen.getByRole("menu"))).toBe(
-      true,
-    );
+    // Over the chart rather than in it, so the zoom neither scales nor clips it.
+    expect(canvasWorld(container).contains(screen.getByRole("menu"))).toBe(false);
     fireEvent.click(screen.getByRole("menuitem", { name: "Add human seat" }));
     expect(spies.openAdd).toHaveBeenLastCalledWith(unitKey("Platform"), "human");
     fireEvent.click(screen.getByRole("button", { name: "Add to Acme", hidden: true }));

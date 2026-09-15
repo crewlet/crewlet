@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { clearToken, storeToken, type OrgProjection } from "~/protocol/index.ts";
 import { useBuilder, type BuilderViewHandle } from "./BuilderContext.tsx";
+import { menuEntryLabel } from "~/testing.tsx";
 import {
   company,
   Engine,
@@ -38,10 +39,7 @@ const named: OrgProjection = { name: "Acme", roles: [], units: [] };
 const liveRegion = () => document.querySelector(".org-builder-live")!;
 
 /** A menu's entries by their labels, without the key hints some of them carry. */
-const labels = (menu: HTMLElement) =>
-  within(menu)
-    .getAllByRole("menuitem")
-    .map((item) => item.querySelector(".crewlet-menu__label")!.textContent);
+const labels = (menu: HTMLElement) => within(menu).getAllByRole("menuitem").map(menuEntryLabel);
 
 describe("the posture table", () => {
   test("a served configuration opens edit mode", async () => {

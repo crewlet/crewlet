@@ -21,7 +21,7 @@ import {
   vendorLink,
 } from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
-import { pick } from "~/testing.tsx";
+import { pick, toastText } from "~/testing.tsx";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
   return {
@@ -1982,11 +1982,7 @@ test("saving a connected app does not say it connected", async () => {
 
   // Drawn and spoken: the toaster keeps a live region beside the visible
   // stack, so the sentence is in the document twice on purpose.
-  await vi.waitFor(() =>
-    expect(
-      screen.getByText(/Datadog settings saved/, { selector: ".crewlet-toast__message" }),
-    ).toBeTruthy(),
-  );
+  await vi.waitFor(() => expect(toastText()).toMatch(/Datadog settings saved/));
   expect(screen.queryByText(/Datadog connected/)).toBeNull();
 });
 

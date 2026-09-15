@@ -290,3 +290,265 @@ test("nothing draws a keycap by hand, which has no owner here either", () => {
     .map(({ name }) => name);
   expect(offenders).toEqual([]);
 });
+
+/**
+ * The dashboard has no component library of its own.
+ *
+ * `dashboard/src/ui` held one: a table, a chart kit, a canvas, a tree model
+ * and twenty primitives, every one of them a second drawing of something the
+ * design system ships. The directory is gone, and this is what stops it
+ * coming back one convenient file at a time.
+ */
+
+/** An import of a path inside the directory that no longer exists. */
+const UI_IMPORT = /from\s+["'](?:~\/ui\/|\.{1,2}(?:\/\.\.)*\/ui\/)/;
+
+test("the library-import scan recognises what it polices", () => {
+  expect(UI_IMPORT.test('import { DataTable } from "~/ui/DataTable.tsx";')).toBe(true);
+  expect(UI_IMPORT.test('import { Canvas } from "../ui/Canvas.tsx";')).toBe(true);
+  expect(UI_IMPORT.test('import { Canvas } from "../../ui/Canvas.tsx";')).toBe(true);
+  // A directory whose name merely ends in "ui" is not that one.
+  expect(UI_IMPORT.test('import { x } from "~/lib/gui/x.ts";')).toBe(false);
+  expect(UI_IMPORT.test('import { Button } from "@crewlethq/ui";')).toBe(false);
+});
+
+test("no source reaches for a component library of the dashboard's own", () => {
+  const offenders = files(/\.tsx?$/)
+    .filter(({ text }) => UI_IMPORT.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+  // And the directory itself is gone, which is the other half: an import scan
+  // over an empty tree passes for ever.
+  expect(readdirSync(SRC).map((entry) => entry.toString())).not.toContain("ui");
+});
+
+/**
+ * A class the design system draws is never named by the engine.
+ *
+ * It is not the engine's to name: it changes on a bump, it is invisible to a
+ * reader, and a suite that spells one is a test of the package rather than of
+ * the screen. `testing.tsx` is the seam for the cases that genuinely have to
+ * reach for an element uilet drew, and it asks uilet what it draws rather than
+ * asserting a name. A component VARIABLE is the exception and is not a class:
+ * a consumer is meant to set those, which is what they exist for.
+ */
+const PACKAGE_CLASS = /\.crewlet-[a-z]|contains\(\s*["'`]crewlet-/;
+
+test("the package-class scan recognises what it polices", () => {
+  expect(PACKAGE_CLASS.test('document.querySelector(".crewlet-modal-overlay")')).toBe(true);
+  expect(PACKAGE_CLASS.test('{ selector: ".crewlet-toast__message" }')).toBe(true);
+  expect(PACKAGE_CLASS.test('el.classList.contains("crewlet-callout--warning")')).toBe(true);
+  // A component variable is a value the engine sets, not a class it names.
+  expect(PACKAGE_CLASS.test("width: var(--crewlet-tree-canvas-card-width);")).toBe(false);
+  expect(PACKAGE_CLASS.test('<img src="/static/crewlet-icon.svg" />')).toBe(false);
+  expect(PACKAGE_CLASS.test('href="https://github.com/apps/crewlet-cto/"')).toBe(false);
+});
+
+test("nothing names a class the design system draws", () => {
+  const offenders = files(/\.(css|tsx?)$/)
+    .filter(({ text }) => PACKAGE_CLASS.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+/**
+ * A glyph is a component from the icons package, never markup and never a
+ * font ligature.
+ *
+ * A ligature renders the WORD until the font arrives, renders it for good on
+ * a closed network, and is read aloud as that word by a screen reader.
+ */
+const LIGATURE = /material-symbols/;
+/** An `<svg>` element written by hand. */
+const SVG_ELEMENT = /<svg[\s>]/;
+/**
+ * The one drawing in this tree, and the reason it is not a glyph: the
+ * builder's chart draws the connectors between its cards, which is data with
+ * a shape rather than an icon with a name.
+ */
+const DRAWINGS = ["routes/org/builder/CanvasView.tsx"];
+
+test("the glyph scans recognise what they police", () => {
+  expect(LIGATURE.test('<span className="material-symbols-outlined">add</span>')).toBe(true);
+  expect(SVG_ELEMENT.test('<svg viewBox="0 0 16 16">')).toBe(true);
+  expect(SVG_ELEMENT.test("<svg>")).toBe(true);
+  expect(SVG_ELEMENT.test('querySelector("svg path")')).toBe(false);
+});
+
+test("no source reaches for an icon font", () => {
+  const offenders = files(/\.(css|tsx?|html)$/)
+    .filter(({ text }) => LIGATURE.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+test("nothing draws an icon by hand, and the one real drawing says it is one", () => {
+  const offenders = files(/\.tsx$/)
+    .filter(({ name }) => !/\.test\.tsx$/.test(name))
+    .filter(({ text }) => SVG_ELEMENT.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual(DRAWINGS);
+});
+
+/**
+ * A control the design system draws is never restyled from outside it.
+ *
+ * These are the components whose look IS their contract: a variant, a tone, a
+ * size. A `className` on one is a second, invisible set of rules that the next
+ * package bump silently wins or silently loses against, and every one of them
+ * refuses the prop for that reason. The scan is what catches the attempt
+ * before the type error explains it, and it covers the tests too, because a
+ * suite that styled a control would be asserting its own CSS.
+ */
+const CONTROLS = [
+  "Avatar",
+  "Button",
+  "ButtonLink",
+  "Checkbox",
+  "Count",
+  "EmptyValue",
+  "FilterChip",
+  "IconButton",
+  "Input",
+  "Kbd",
+  "Meter",
+  "SegmentedControl",
+  "Select",
+  "StatCard",
+  "StatusDot",
+  "Tag",
+  "Textarea",
+];
+
+const STYLED_CONTROL = new RegExp(
+  `<(?:${CONTROLS.join("|")})(?=[\\s/>])(?:[^<>]|\\n)*?\\b(?:className|style)=`,
+);
+
+test("the styled-control scan recognises what it polices", () => {
+  expect(STYLED_CONTROL.test('<Tag className="mine">x</Tag>')).toBe(true);
+  expect(STYLED_CONTROL.test("<Button\n  variant='primary'\n  style={{ margin: 0 }}\n>")).toBe(
+    true,
+  );
+  // A component whose whole job is layout is not one of these.
+  expect(STYLED_CONTROL.test('<Card className="bchart">')).toBe(false);
+  // And a name that merely starts with one of theirs is a different component.
+  expect(STYLED_CONTROL.test('<ButtonRow className="row">')).toBe(false);
+});
+
+test("nothing restyles a control the design system draws", () => {
+  const offenders = files(/\.tsx$/)
+    .filter(({ text }) => STYLED_CONTROL.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+/**
+ * Colour comes from a token, never from a literal.
+ *
+ * A literal is measured by nothing: the palette suite reads the tokens, and a
+ * hex in a stylesheet or a style prop is outside every floor it holds. It is
+ * also theme-blind, which is how the dashboard came to draw a failure mark in
+ * a red that vanished on the dark ground.
+ */
+const COLOUR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(\s*\d|\bhsla?\(\s*\d/;
+
+test("the colour-literal scan recognises what it polices", () => {
+  expect(COLOUR_LITERAL.test("color: #ff0000;")).toBe(true);
+  expect(COLOUR_LITERAL.test("background: rgba(0, 0, 0, 0.4);")).toBe(true);
+  expect(COLOUR_LITERAL.test("border-color: hsl(210 10% 40%);")).toBe(true);
+  expect(COLOUR_LITERAL.test("color: var(--color-text-primary);")).toBe(false);
+  // A fragment identifier is not a colour, and neither is a hex in a word.
+  expect(COLOUR_LITERAL.test('href="#/seats/dev-a"')).toBe(false);
+});
+
+test("no stylesheet or style prop spells a colour", () => {
+  const offenders = files(/\.(css|tsx)$/)
+    .filter(({ text }) => COLOUR_LITERAL.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+/**
+ * Colour is never derived from an identity either.
+ *
+ * `colorSeed` hashed a name into a hue, which is the rule this design system
+ * exists to refuse: colour carries STATE, and a seat, a unit, an event
+ * category and a tool origin are all neutral. Their identity is carried by
+ * name, glyph and position.
+ */
+test("nothing hashes a name into a colour", () => {
+  const offenders = files(/\.(css|tsx?)$/)
+    .filter(({ text }) => /colorSeed/.test(code(text)))
+    .map(({ name }) => name);
+  expect(offenders).toEqual([]);
+});
+
+/**
+ * A negative assertion over a class nothing draws is a vacuous pass.
+ *
+ * `expect(container.querySelector(".badge")).toBeNull()` is trivially true the
+ * moment no element carries `.badge`, so a guard written against a primitive
+ * this adoption replaced goes on passing while asserting nothing at all, and
+ * nothing reports it. The rule is therefore not a list of the classes that
+ * went: every class a query names has to be one an engine stylesheet still
+ * declares or a piece of engine markup still writes, which is generated from
+ * the stylesheets and the sources themselves and cannot fall out of date.
+ */
+function drawnClassNames(): Set<string> {
+  const out = new Set<string>();
+  // Every class an engine stylesheet declares.
+  for (const { text } of files(/\.css$/)) {
+    for (const [, name] of code(text).matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)) out.add(name!);
+  }
+  /*
+   * And every class engine markup writes, because a class with no rule behind
+   * it is still a real one: the builder marks its live region with one so a
+   * suite can tell it from the notification host's, and nothing draws it.
+   */
+  for (const { text } of files(/\.tsx$/)) {
+    for (const [, spelling] of code(text).matchAll(/className=(\{[\s\S]*?\}|"[^"]*")/g)) {
+      for (const [, literal] of spelling!.matchAll(/["'`]([^"'`]*)["'`]/g)) {
+        for (const name of literal!.split(/\s+/)) if (name) out.add(name);
+      }
+    }
+  }
+  return out;
+}
+
+/** Every class named inside a `querySelector`, `querySelectorAll` or `closest`. */
+function queriedClasses(source: string): string[] {
+  const out: string[] = [];
+  for (const [, selector] of code(source).matchAll(
+    /(?:querySelector(?:All)?|closest)\(\s*["'`]([^"'`]*)["'`]/g,
+  )) {
+    for (const [, name] of selector!.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)) out.push(name!);
+  }
+  return out;
+}
+
+test("the vacuous-assertion scan reads selectors, and finds the stylesheets", () => {
+  expect(drawnClassNames().size).toBeGreaterThan(50);
+  // A class with no rule behind it is still drawn, so it still counts.
+  expect(drawnClassNames().has("org-builder-live")).toBe(true);
+  expect(queriedClasses('el.closest(".diff-line")')).toEqual(["diff-line"]);
+  // The singular form too: written `querySelectorAll?` it matched only the
+  // plural, and every `querySelector(".gone")` in the tree went unread.
+  expect(queriedClasses('root.querySelector(".turn-card")')).toEqual(["turn-card"]);
+  expect(queriedClasses('root.querySelectorAll("details.int-seat-form")')).toEqual([
+    "int-seat-form",
+  ]);
+  expect(queriedClasses('el.querySelector("svg path")')).toEqual([]);
+  expect(queriedClasses('el.closest("[data-row-id]")')).toEqual([]);
+});
+
+test("no query names a class no stylesheet draws", () => {
+  const drawn = drawnClassNames();
+  const offenders = files(/\.tsx?$/)
+    .flatMap(({ name, text }) =>
+      queriedClasses(text)
+        .filter((cls) => !drawn.has(cls))
+        .map((cls) => `${name}: .${cls}`),
+    )
+    .sort();
+  expect(offenders).toEqual([]);
+});

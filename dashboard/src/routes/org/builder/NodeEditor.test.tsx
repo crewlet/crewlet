@@ -30,6 +30,8 @@ import {
   recheck,
   warningAt,
 } from "./testState.ts";
+import { Callout } from "@crewlethq/ui";
+import { drawnClasses, isDrawnAs } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -785,8 +787,14 @@ describe("problems", () => {
     expect(lead.getAttribute("aria-invalid")).toBeNull();
     expect(errorOf(lead)).toBeNull();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
-    const caution = screen.getByText(/names no seat/).closest(".crewlet-callout") as HTMLElement;
-    expect(caution.classList.contains("crewlet-callout--warning")).toBe(true);
+    // In the caution tone, not the critical one: a warning is a thing to look
+    // at, and drawing it in the refusal colour makes every save look refused.
+    // The tone is asked of the design system rather than named by its class.
+    const said = screen.getByText(/names no seat/);
+    const caution = said.closest(`.${drawnClasses(Callout, { children: "" })[0]}`)!;
+    expect(
+      isDrawnAs(caution, Callout, { variant: "warning", children: "" }, { children: "" }),
+    ).toBe(true);
   });
 
   test("a problem sits beside the field it names, and the rest are listed at the top", () => {

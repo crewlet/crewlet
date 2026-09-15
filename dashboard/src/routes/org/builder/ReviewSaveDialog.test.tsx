@@ -9,6 +9,7 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DRAFT_STORAGE_KEY } from "./model/persistence.ts";
 import { company, Engine, json, mountBuilder, refusal, type SentRequest } from "./testkit.tsx";
+import { toastHost, toastText } from "~/testing.tsx";
 
 beforeEach(() => {
   localStorage.clear();
@@ -56,18 +57,14 @@ describe("the save", () => {
     expect(patch).toEqual({ roles: expected.roles });
     expect(_summary).toMatch(/^Edited 1 seat \(write [0-9a-f]{32}\)$/);
 
-    expect(
-      await screen.findByText("Saved. The engine is applying it.", {
-        selector: ".crewlet-toast__message",
-      }),
-    ).toBeDefined();
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     // Said once: the toast's host is a live region of its own, and the
     // Builder's region repeating it had a screen reader read it twice.
     await new Promise((r) => setTimeout(r, 150));
     // INSIDE THE BUILDER'S OWN LAYER HOST, not at the document root: a
     // fullscreen canvas renders only its own subtree, so a toast portalled
     // past it is a Save that reports nothing.
-    const toaster = document.querySelector(".crewlet-toaster")!;
+    const toaster = toastHost()!;
     expect(toaster.textContent).toContain("Saved.");
     expect(toaster.closest(".org-builder")).not.toBeNull();
     expect(document.querySelector(".org-builder-live")!.textContent).not.toContain("Saved.");
@@ -91,9 +88,7 @@ describe("the save", () => {
           })
         : null;
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await screen.findByText("Saved. The engine is applying it.", {
-      selector: ".crewlet-toast__message",
-    });
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     await screen.findByText("editable");
     fireEvent.click(screen.getByRole("button", { name: "Edit Designer" }));
     await waitFor(() =>
@@ -171,11 +166,7 @@ describe("a save whose answer never arrives", () => {
     };
     const dialog = await reviewEdit(engine);
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(
-      await screen.findByText("Saved. The engine is applying it.", {
-        selector: ".crewlet-toast__message",
-      }),
-    ).toBeDefined();
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     expect(engine.sent("GET", "/config/revisions/r-saved")).toHaveLength(1);
     expect(engine.requests.filter(isWrite)).toHaveLength(1);
     // Found by its parent, so what it changed is still that parent's diff.
@@ -202,11 +193,7 @@ describe("a save whose answer never arrives", () => {
       ),
     ).toBeDefined();
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    expect(
-      await screen.findByText("Saved. The engine is applying it.", {
-        selector: ".crewlet-toast__message",
-      }),
-    ).toBeDefined();
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     expect(engine.revisions.size).toBe(1);
   });
 
@@ -473,11 +460,7 @@ describe("a save whose answer never arrives", () => {
 
     history = true;
     fireEvent.click(within(dialog).getByRole("button", { name: "Save again" }));
-    expect(
-      await screen.findByText("Saved. The engine is applying it.", {
-        selector: ".crewlet-toast__message",
-      }),
-    ).toBeDefined();
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
     const writes = engine.requests.filter(isWrite);
     expect(writes).toHaveLength(2);
     // The same write id, which is how the 409 of the second press was

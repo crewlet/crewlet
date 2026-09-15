@@ -93,3 +93,72 @@ export function narrow(axis: string, answer: string | RegExp): void {
   fireEvent.click(screen.getByRole("menuitem", { name: axis }));
   fireEvent.mouseDown(screen.getByRole("option", { name: answer }));
 }
+
+/**
+ * The layer the notifications are drawn into, found through the live region
+ * every toast host keeps at the foot of its stack.
+ *
+ * THE REGION RATHER THAN A TOAST, because the host is always mounted and a
+ * toast is not: a suite asking "which layer did these get portalled into"
+ * has to be able to ask it of an empty host. A fullscreen surface renders
+ * only its own subtree, so a toast portalled past it is a report nobody sees.
+ *
+ * Where more than one host is mounted (the application's, and the one the
+ * builder nests inside its fullscreen container), the one holding a toast
+ * wins, because that is the one the caller is asking about.
+ */
+export function toastHost(): HTMLElement | null {
+  const hosts = screen
+    .queryAllByRole("status", { name: /notification/i })
+    .map((region) => region.parentElement?.parentElement ?? null)
+    .filter((host): host is HTMLElement => host !== null);
+  return hosts.find((host) => toastsIn(host).length > 0) ?? hosts[0] ?? null;
+}
+
+/**
+ * The notifications a host is showing: its children that carry a control,
+ * which is what tells a toast from the hidden live regions beside it.
+ */
+function toastsIn(host: HTMLElement): HTMLElement[] {
+  return [...host.children].filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && !!child.querySelector("button"),
+  );
+}
+
+export function toasts(): HTMLElement[] {
+  const host = toastHost();
+  return host ? toastsIn(host) : [];
+}
+
+/**
+ * What the notifications SAY, the hidden live regions excluded.
+ *
+ * The same sentence is in the document twice on purpose, drawn and spoken, so
+ * a query over the whole page cannot tell a screen that reported something
+ * once from one that reported it twice.
+ */
+export function toastText(): string {
+  return toasts()
+    .map((toast) => toast.textContent ?? "")
+    .join(" ");
+}
+
+/**
+ * A menu entry's own words, without the keyboard hint drawn beside it.
+ *
+ * The hint is part of the entry's accessible name, which is right: a reader
+ * who cannot see the caps is told the shortcut. A suite comparing two menus
+ * entry for entry is asking a different question, so it takes the words and
+ * leaves the hint, and it does that by finding the caps rather than by naming
+ * the class the design system wraps them in.
+ */
+export function menuEntryLabel(item: HTMLElement): string {
+  const clone = item.cloneNode(true) as HTMLElement;
+  for (const cap of [...clone.querySelectorAll("kbd")]) {
+    let part: HTMLElement | null = cap as HTMLElement;
+    while (part?.parentElement && part.parentElement !== clone) part = part.parentElement;
+    part?.remove();
+  }
+  return (clone.textContent ?? "").trim();
+}

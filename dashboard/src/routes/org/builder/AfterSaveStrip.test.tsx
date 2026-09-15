@@ -13,6 +13,7 @@ import { OrgScreen } from "~/routes/Org.tsx";
 import { applyState } from "./AfterSaveStrip.tsx";
 import { clearSavedRevision, recordSavedRevision } from "./savedRevision.ts";
 import { company, Engine, InertWebSocket, mountBuilder } from "./testkit.tsx";
+import { toastText } from "~/testing.tsx";
 
 beforeEach(() => {
   sessionStorage.clear();
@@ -154,9 +155,7 @@ describe("in the builder", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review and save" }));
     const dialog = await screen.findByRole("dialog", { name: "Review and save" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-    await screen.findByText("Saved. The engine is applying it.", {
-      selector: ".crewlet-toast__message",
-    });
+    await waitFor(() => expect(toastText()).toContain("Saved. The engine is applying it."));
   }
 
   test("the strip follows the saved revision and offers the diff", async () => {
