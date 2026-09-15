@@ -420,24 +420,58 @@ const CONTROLS = [
   "Textarea",
 ];
 
-const STYLED_CONTROL = new RegExp(
-  `<(?:${CONTROLS.join("|")})(?=[\\s/>])(?:[^<>]|\\n)*?\\b(?:className|style)=`,
-);
+const OPENS_CONTROL = new RegExp(`<(?:${CONTROLS.join("|")})(?=[\\s/>])`, "g");
+
+/**
+ * Every opening tag of one of those controls, whole.
+ *
+ * A BALANCED SCAN, for the same reason the class reader below is one: a
+ * pattern that stopped at the first `>` stopped inside `onClick={() => x}`,
+ * and every control whose handler came before its `className` walked straight
+ * through. Quotes are tracked too, so a `>` inside a string is not the end of
+ * the tag either.
+ */
+function styledControls(source: string): string[] {
+  const text = code(source);
+  const out: string[] = [];
+  for (const match of text.matchAll(OPENS_CONTROL)) {
+    let depth = 0;
+    let quote: string | null = null;
+    let i = match.index + match[0].length;
+    for (; i < text.length; i += 1) {
+      const c = text[i]!;
+      if (quote) {
+        if (c === quote && text[i - 1] !== "\\") quote = null;
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "{") depth += 1;
+      else if (c === "}") depth -= 1;
+      else if (c === ">" && depth === 0) break;
+    }
+    const tag = text.slice(match.index, i + 1);
+    if (/(?:^|\s)(?:className|style)=/.test(tag)) out.push(tag);
+  }
+  return out;
+}
 
 test("the styled-control scan recognises what it polices", () => {
-  expect(STYLED_CONTROL.test('<Tag className="mine">x</Tag>')).toBe(true);
-  expect(STYLED_CONTROL.test("<Button\n  variant='primary'\n  style={{ margin: 0 }}\n>")).toBe(
-    true,
+  expect(styledControls('<Tag className="mine">x</Tag>')).toHaveLength(1);
+  expect(styledControls("<Button\n  variant='primary'\n  style={{ margin: 0 }}\n>")).toHaveLength(
+    1,
   );
+  // A handler holds a `>` of its own, and used to end the scan early.
+  expect(styledControls('<Button onClick={() => go()} className="x">')).toHaveLength(1);
+  expect(styledControls('<Tag title="a > b" className="x">')).toHaveLength(1);
   // A component whose whole job is layout is not one of these.
-  expect(STYLED_CONTROL.test('<Card className="bchart">')).toBe(false);
+  expect(styledControls('<Card className="bchart">')).toHaveLength(0);
   // And a name that merely starts with one of theirs is a different component.
-  expect(STYLED_CONTROL.test('<ButtonRow className="row">')).toBe(false);
+  expect(styledControls('<ButtonRow className="row">')).toHaveLength(0);
+  // A control with no look of its own passed in is the ordinary case.
+  expect(styledControls('<Button variant="primary" onClick={() => go()}>')).toHaveLength(0);
 });
 
 test("nothing restyles a control the design system draws", () => {
   const offenders = files(/\.tsx$/)
-    .filter(({ text }) => STYLED_CONTROL.test(code(text)))
+    .filter(({ text }) => styledControls(text).length > 0)
     .map(({ name }) => name);
   expect(offenders).toEqual([]);
 });
@@ -462,7 +496,10 @@ test("the colour-literal scan recognises what it polices", () => {
 });
 
 test("no stylesheet or style prop spells a colour", () => {
-  const offenders = files(/\.(css|tsx)$/)
+  // `.ts` as well as `.tsx`: a hue chosen in a plain module and handed to a
+  // chart is as unmeasured as one written into a rule, and `lib/phases.ts` is
+  // exactly such a module.
+  const offenders = files(/\.(css|tsx?)$/)
     .filter(({ text }) => COLOUR_LITERAL.test(code(text)))
     .map(({ name }) => name);
   expect(offenders).toEqual([]);
@@ -505,12 +542,41 @@ function drawnClassNames(): Set<string> {
    * it is still a real one: the builder marks its live region with one so a
    * suite can tell it from the notification host's, and nothing draws it.
    */
-  for (const { text } of files(/\.tsx$/)) {
+  const written = writtenClassNames();
+  for (const name of written.names) out.add(name);
+  for (const stem of written.stems) out.add(stem);
+  return out;
+}
+
+/**
+ * Every class engine markup can put on an element.
+ *
+ * A NAME OR A STEM. A class built by interpolation
+ * (`` `tier tier--${row.tier}` ``) is only knowable up to the fixed part, so
+ * the fragment left where the interpolation was is recorded as a stem and
+ * anything beginning with it counts as written. Recording the stem as a whole
+ * name instead would make every selector under it unmatchable; ignoring it
+ * would make every one of them look dead.
+ */
+function writtenClassNames(): { names: Set<string>; stems: string[] } {
+  const names = new Set<string>();
+  const stems: string[] = [];
+  for (const { text } of files(/\.tsx?$/)) {
     for (const spelling of classAttributes(text)) {
-      for (const name of spelling.split(/\s+/)) if (name) out.add(name);
+      for (const name of spelling.split(/\s+/)) {
+        if (!name) continue;
+        if (name.endsWith("-")) stems.push(name);
+        else names.add(name);
+      }
+    }
+    // A class an element is given after it is drawn is written just as much.
+    for (const [, name] of code(text).matchAll(
+      /classList\.(?:add|remove|toggle)\(\s*["\'`]([^"\'`]+)/g,
+    )) {
+      names.add(name!);
     }
   }
-  return out;
+  return { names, stems };
 }
 
 /**
@@ -596,6 +662,62 @@ test("no query names a class no stylesheet draws", () => {
 });
 
 /**
+ * A rule no element can match is a rule that is already wrong.
+ *
+ * A STYLESHEET IS NOT SELF-CHECKING. Every other scan here is about what a
+ * source SPELLS, and a selector is the opposite: it names a class it hopes
+ * somebody else writes, so it goes on sitting in the file, formatted and
+ * commented and reviewed, long after the markup it was aimed at stopped
+ * existing. Nothing goes red. The screen simply loses the rule.
+ *
+ * That is not hypothetical here. The shell used to draw `.screen-inner`
+ * inside its scroller, and the org builder's chart lens took its height from
+ * a rule that began there; the design system's shell draws no such wrapper,
+ * so the rule stopped applying the day the shell was rebuilt and the canvas
+ * collapsed to nothing with every suite still green. Four more went the same
+ * way in the same swap: the tab panel's class, the dialog and drawer bodies'
+ * and the field's, each one a class a component used to draw and the package
+ * draws differently now.
+ *
+ * A CLASS THE PACKAGE DRAWS IS NOT AN ANSWER: the scan above refuses one of
+ * those in engine CSS outright, so every class selected here has to be the
+ * engine's own, and the engine's own are exactly the ones its markup writes.
+ */
+
+/** Every class name an engine stylesheet selects on. */
+function selectedClasses(source: string): string[] {
+  const out: string[] = [];
+  for (const [, selector] of code(source).matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+    if (selector!.trim().startsWith("@")) continue;
+    for (const [, name] of selector!.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)) out.push(name!);
+  }
+  return out;
+}
+
+test("the dead-rule scan reads selectors, and knows a stem from a name", () => {
+  expect(selectedClasses(".a .b > .c, .d:hover { color: red }")).toEqual(["a", "b", "c", "d"]);
+  // An at-rule's own prelude names no class; the rules inside it are read on
+  // their own pass, because the matcher takes the innermost braces.
+  expect(selectedClasses("@media (min-width: 40rem) { .e { gap: 0 } }")).toEqual(["e"]);
+  const written = writtenClassNames();
+  expect(written.names.size).toBeGreaterThan(50);
+  // A class built by interpolation is known only up to its fixed part.
+  expect(written.stems.some((stem) => stem.endsWith("-"))).toBe(true);
+});
+
+test("no stylesheet rule waits for a class nothing writes", () => {
+  const { names, stems } = writtenClassNames();
+  const offenders = files(/\.css$/)
+    .flatMap(({ name, text }) =>
+      selectedClasses(text)
+        .filter((cls) => !names.has(cls) && !stems.some((stem) => cls.startsWith(stem)))
+        .map((cls) => `${name}: .${cls}`),
+    )
+    .sort();
+  expect([...new Set(offenders)]).toEqual([]);
+});
+
+/**
  * Every stylesheet the dashboard ships, and how long it is allowed to be.
  *
  * A BUDGET RATHER THAN A SNAPSHOT. The point of this adoption is that the
@@ -613,12 +735,12 @@ test("no query names a class no stylesheet draws", () => {
  * it, and the names are who owns them.
  */
 const SHEET_BUDGET: Record<string, number> = {
-  "styles/base.css": 210,
+  "styles/base.css": 165,
   "styles/live.css": 160,
   "styles/records.css": 570,
   "styles/org.css": 610,
   "styles/configure.css": 75,
-  "styles/integrations.css": 760,
+  "styles/integrations.css": 740,
 };
 
 test("no stylesheet is longer than its budget, and none has appeared", () => {

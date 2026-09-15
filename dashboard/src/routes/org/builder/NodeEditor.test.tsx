@@ -705,6 +705,20 @@ describe("integrations", () => {
 });
 
 describe("problems", () => {
+  /**
+   * Whether any control on screen points at this alert as its description.
+   *
+   * That is what "attached to a field" MEANS: the design system's field gives
+   * its error an id and names it in the control's `aria-describedby`, so a
+   * reader on the control hears it. The question used to be asked as
+   * `closest(".field")`, the class the engine's own field drew, which has no
+   * owner in this tree any more: the answer became null for every alert and
+   * the two cases below passed while asserting nothing at all.
+   */
+  function describesAControl(alert: HTMLElement): boolean {
+    return alert.id !== "" && document.querySelector(`[aria-describedby~="${alert.id}"]`) !== null;
+  }
+
   // A problem about a field this form does not draw must not be attached to
   // one: it would be reported nowhere a reader can see it.
   test("a problem about a field the form does not draw is listed at the top", () => {
@@ -720,7 +734,7 @@ describe("problems", () => {
     const alerts = screen.getAllByRole("alert");
     expect(alerts).toHaveLength(1);
     expect(alerts[0]!.textContent).toContain("names no project");
-    expect(alerts[0]!.closest(".field")).toBeNull();
+    expect(describesAControl(alerts[0]!)).toBe(false);
     cleanup();
 
     // The same for a unit, whose Confluence field is not drawn either.
@@ -733,7 +747,7 @@ describe("problems", () => {
     edit(unit, "unit:Engineering");
     const unitAlerts = screen.getAllByRole("alert");
     expect(unitAlerts).toHaveLength(1);
-    expect(unitAlerts[0]!.closest(".field")).toBeNull();
+    expect(describesAControl(unitAlerts[0]!)).toBe(false);
   });
 
   test("a schedule problem is shown in the schedules panel, where the toggle that fixes it is", () => {
@@ -812,12 +826,12 @@ describe("problems", () => {
       .getAllByRole("alert")
       .find((alert) => alert.textContent?.includes("names no template"));
     expect(top).toBeDefined();
-    const controls = [...document.querySelectorAll("[aria-describedby]")];
-    expect(
-      controls.some((control) =>
-        (control.getAttribute("aria-describedby") ?? "").split(" ").includes(top!.id),
-      ),
-    ).toBe(false);
+    expect(describesAControl(top!)).toBe(false);
+    // And the one that DOES sit beside a field answers the other way, which is
+    // what stops the two cases above passing over an answer of "never".
+    const beside = errorOf(field("Goal"));
+    expect(beside).toBeDefined();
+    expect(describesAControl(beside!)).toBe(true);
   });
 });
 
