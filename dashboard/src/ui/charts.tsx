@@ -26,13 +26,13 @@ import { cx } from "./primitives.tsx";
 
 /** The five data hues plus the residual bucket, in their fixed order. */
 export const VIZ = [
-  "var(--viz-1)",
-  "var(--viz-2)",
-  "var(--viz-3)",
-  "var(--viz-4)",
-  "var(--viz-5)",
+  "var(--color-data-1)",
+  "var(--color-data-2)",
+  "var(--color-data-3)",
+  "var(--color-data-4)",
+  "var(--color-data-5)",
 ] as const;
-export const VIZ_OTHER = "var(--viz-other)";
+export const VIZ_OTHER = "var(--color-data-other)";
 
 /** The colour of series `i`, with everything past the fifth as the residual. */
 export function vizColor(i: number): string {
@@ -43,13 +43,13 @@ export function vizColor(i: number): string {
 export function phaseColor(phase: string): string {
   switch ((phase || "").toLowerCase()) {
     case "onboarding":
-      return "var(--phase-onboarding)";
+      return "var(--color-phase-onboarding)";
     case "execute":
-      return "var(--phase-execute)";
+      return "var(--color-phase-execute)";
     case "review":
-      return "var(--phase-review)";
+      return "var(--color-phase-review)";
     default:
-      return "var(--viz-other)";
+      return "var(--color-data-other)";
   }
 }
 
@@ -101,7 +101,7 @@ export function BarList({
   const top = max ?? Math.max(1, ...data.map((d) => d.value));
   if (!shown.length) return <div className="t-caption">{emptyLabel}</div>;
   return (
-    <div className="col" style={{ gap: "var(--space-2)" }}>
+    <div className="col" style={{ gap: "var(--spacing-2)" }}>
       {shown.map((d, i) => {
         const pct = top > 0 ? Math.max(1.5, (d.value / top) * 100) : 0;
         const Row = d.onClick ? "button" : "div";
@@ -117,11 +117,11 @@ export function BarList({
             }}
             onClick={d.onClick}
           >
-            <div className="row" style={{ gap: "var(--space-2)" }}>
+            <div className="row" style={{ gap: "var(--spacing-2)" }}>
               <span className="truncate t-cell" style={{ flex: 1 }}>
                 {d.label}
               </span>
-              <span className="t-cell t-num" style={{ color: "var(--text-secondary)" }}>
+              <span className="t-cell t-num" style={{ color: "var(--color-text-secondary)" }}>
                 {d.display ?? d.value.toLocaleString()}
               </span>
             </div>
@@ -131,7 +131,7 @@ export function BarList({
                   height: "100%",
                   width: `${pct}%`,
                   background: d.color ?? vizColor(i),
-                  borderRadius: "var(--r-full)",
+                  borderRadius: "var(--radius-pill)",
                 }}
               />
             </div>
@@ -272,7 +272,7 @@ export function TimeSeries({
 /** A shape beside a number. Never on its own — it has no scale of its own. */
 export function Sparkline({
   values,
-  color = "var(--accent)",
+  color = "var(--color-brand-accent)",
   height = 28,
 }: {
   values: number[];
@@ -319,7 +319,7 @@ export function Sparkline({
  */
 export function ActivityStrip({
   buckets,
-  color = "var(--accent)",
+  color = "var(--color-brand-accent)",
   height = 26,
   title,
 }: {
@@ -339,7 +339,7 @@ export function ActivityStrip({
             flex: 1,
             minWidth: 2,
             height: b.v > 0 ? `${Math.max(12, (b.v / peak) * 100)}%` : "2px",
-            background: b.v > 0 ? color : "var(--surface-inset)",
+            background: b.v > 0 ? color : "var(--color-surface-inset)",
             borderRadius: 1,
             opacity: b.v > 0 ? 0.35 + 0.65 * (b.v / peak) : 1,
           }}

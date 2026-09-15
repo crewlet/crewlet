@@ -67,7 +67,7 @@ export function EnginePanel({
       >
         <header className="dialog-head">
           <Icon name="power" size="sm" />
-          <strong style={{ fontSize: "var(--fs-sm)" }}>Engine</strong>
+          <strong style={{ fontSize: "var(--font-size-sm)" }}>Engine</strong>
           <span className="spacer" />
           <Button icon="x" variant="ghost" size="sm" onClick={onClose} title="Close" />
         </header>
@@ -126,7 +126,7 @@ export function EnginePanel({
               [
                 "Company config",
                 engine?.configured === false ? (
-                  <span style={{ color: "var(--critical-ink)" }}>
+                  <span style={{ color: "var(--color-feedback-danger-ink)" }}>
                     none active, so every inbound webhook is dropped
                   </span>
                 ) : (

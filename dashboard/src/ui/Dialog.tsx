@@ -56,7 +56,7 @@ export function Dialog({
       >
         <header className="dialog-head">
           {icon && <Icon name={icon} size="sm" />}
-          <strong style={{ fontSize: "var(--fs-sm)" }}>{title}</strong>
+          <strong style={{ fontSize: "var(--font-size-sm)" }}>{title}</strong>
         </header>
         <div className="dialog-body col gap-3">{children}</div>
         {footer && <footer className="dialog-foot">{footer}</footer>}

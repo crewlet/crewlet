@@ -136,7 +136,7 @@ function UnitBlock({ unit, live, selection }: { unit: Unit; live: Live; selectio
   return (
     <div id={unitElementId(unit)} className={cx("org-unit", selected && "selected")}>
       <div className="org-unit-head">
-        <Icon name="folder" size="sm" style={{ color: "var(--text-faint)" }} />
+        <Icon name="folder" size="sm" style={{ color: "var(--color-text-muted)" }} />
         <button
           type="button"
           className="org-unit-name t-body truncate"
@@ -166,7 +166,7 @@ function UnitBlock({ unit, live, selection }: { unit: Unit; live: Live; selectio
       </div>
       {unit.purpose && <div className="t-caption measure">{unit.purpose}</div>}
       {unit.seats.length > 0 && (
-        <div className="org-seats" style={{ marginTop: "var(--space-2)" }}>
+        <div className="org-seats" style={{ marginTop: "var(--spacing-2)" }}>
           {unit.seats.map((seat) => (
             <SeatNode key={seat.key} seat={seat} live={live} selected={selection.seat === seat} />
           ))}

@@ -242,7 +242,7 @@ export function Runs() {
           }
         >
           {detail.status === "awaiting_input" && (
-            <div className="banner caution" style={{ marginBottom: "var(--space-3)" }}>
+            <div className="banner caution" style={{ marginBottom: "var(--spacing-3)" }}>
               <Icon name="help" size="sm" />
               <span className="col" style={{ gap: 2 }}>
                 <strong>{detail.question || "The run asked a question."}</strong>

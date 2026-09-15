@@ -23,7 +23,9 @@ import { describeFailure, paletteStates, runPalette } from "@crewlethq/tokens/te
 
 const read = (name: string) =>
   readFileSync(
-    fileURLToPath(new URL(`../../node_modules/@crewlethq/tokens/dist/css/${name}`, import.meta.url)),
+    fileURLToPath(
+      new URL(`../../node_modules/@crewlethq/tokens/dist/css/${name}`, import.meta.url),
+    ),
     "utf8",
   );
 
@@ -43,7 +45,12 @@ describe("the palette the dashboard installed", () => {
     // A rule table that read an empty token map reports no failures for any
     // stylesheet at all, which is the one way this file can lie.
     const states = paletteStates(sources);
-    expect(Object.keys(states)).toEqual(["base", "light", "dark (media query)", "dark (attribute)"]);
+    expect(Object.keys(states)).toEqual([
+      "base",
+      "light",
+      "dark (media query)",
+      "dark (attribute)",
+    ]);
     for (const [name, values] of Object.entries(states)) {
       expect(values.size, `${name} resolved only ${values.size} tokens`).toBeGreaterThan(80);
     }

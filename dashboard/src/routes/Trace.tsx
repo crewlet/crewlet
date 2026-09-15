@@ -161,7 +161,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                         marginLeft: `${left}%`,
                         width: "6px",
                         minWidth: 6,
-                        background: "var(--accent)",
+                        background: "var(--color-brand-accent)",
                         borderRadius: 2,
                         opacity: 0.7,
                       }}

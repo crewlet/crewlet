@@ -8,71 +8,71 @@
    nobody can read while it is running. */
 
 .turn-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
   overflow: hidden;
 }
 .turn-card.live {
-  border-color: var(--info-soft);
-  box-shadow: inset 2px 0 0 var(--info);
+  border-color: var(--color-feedback-info-soft);
+  box-shadow: inset 2px 0 0 var(--color-feedback-info);
 }
 .turn-card.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .turn-head,
 .phase-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--spacing-2) var(--spacing-3);
   cursor: pointer;
   text-align: left;
   min-width: 0;
 }
 .turn-head:hover,
 .phase-head:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .turn-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: 0 var(--space-3) var(--space-3);
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-3) var(--spacing-3);
 }
 
 .phase-card {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
   overflow: hidden;
 }
 .phase-card.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .phase-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
 }
 /* The header's trailing facts sit in a fixed order at a fixed size, so a live
    phase and a finished one are the same shape and the row does not change
    height the moment it completes. */
 .phase-meta {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .phase-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
   min-width: 0;
 }
 
@@ -112,16 +112,16 @@
 .round {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2) var(--space-3) 0;
-  border-radius: var(--r-sm);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-2) var(--spacing-3) 0;
+  border-radius: var(--radius-md);
 }
 /* Two steps, alternating — enough to separate adjacent blocks, not enough to
    claim a meaning. Mixed against the accent rather than taken from a grey
    ramp so the band survives dark mode, where two adjacent surface steps are
    nearly the same colour. */
 .round:nth-child(even) {
-  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  background: color-mix(in srgb, var(--color-brand-accent) 4%, transparent);
 }
 .round-rail {
   position: relative;
@@ -136,12 +136,12 @@
   width: 18px;
   flex: none;
   margin-top: 2px;
-  border-radius: var(--r-full);
-  background: var(--surface-inset);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-inset);
+  border: 1px solid var(--color-border-default);
+  color: var(--color-text-tertiary);
   font-size: 10px;
-  font-weight: var(--fw-medium);
+  font-weight: var(--font-weight-medium);
   position: relative;
 }
 /* Drawn from under the node to the bottom of THIS round's own content, on
@@ -169,12 +169,12 @@
   /* `--border`, not `--border-subtle`. This line is now the thing that says
      which blocks are one round, and the subtle step is 0.06 alpha in dark
      mode — a rule a reader has to look for is not doing that job. */
-  background: var(--border);
+  background: var(--color-border-default);
 }
 .round-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 /* ONE LEFT EDGE for everything a round holds. A disclosure head carries its
@@ -186,7 +186,7 @@
 .round-body > .prose,
 .round-body > .abandoned,
 .round-body > .round-thinking {
-  margin-inline: var(--space-2);
+  margin-inline: var(--spacing-2);
 }
 .round-tools {
   display: flex;
@@ -201,25 +201,25 @@
    previously a small icon inside a collapsed row. Three node states in total
    — normal, failed, live — not one per round. */
 .round.errored .round-node {
-  border-color: color-mix(in srgb, var(--critical) 55%, transparent);
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  border-color: color-mix(in srgb, var(--color-feedback-danger) 55%, transparent);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 
 /* The round in flight. The accent is doing real work here — it is the one
    place a reader looks to answer "where is it now". */
 .round.live .round-node {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--color-brand-accent);
+  color: var(--color-brand-accent);
+  background: var(--color-brand-accent-soft);
 }
 .round.live .round-node::before {
   content: "";
   position: absolute;
   height: 18px;
   width: 18px;
-  border-radius: var(--r-full);
-  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-brand-accent);
   animation: round-pulse 1.8s ease-out infinite;
 }
 @keyframes round-pulse {
@@ -236,8 +236,8 @@
   width: 6px;
   height: 6px;
   flex: none;
-  border-radius: var(--r-full);
-  background: var(--accent);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand-accent);
   animation: waiting-fade 1.6s ease-in-out infinite;
 }
 /* A live indicator that will not stop is exactly the thing this setting is
@@ -270,9 +270,9 @@
    reshaping at exactly the instant it became complete, which is the defect
    rule 5 of this card forbids for its header and is no better here. */
 .tail-scroll {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-1) var(--spacing-2);
 }
 /* Tailing. A running phase's ledger is bounded and scrolls itself; a finished
    one is a document and simply flows, because there is nothing to follow. */
@@ -290,37 +290,37 @@
    paragraph breaks, which are load-bearing in a long answer. */
 .prose {
   margin: 0;
-  font-family: var(--font-sans);
-  font-size: var(--fs-xs);
-  line-height: var(--lh-relaxed);
-  color: var(--text);
+  font-family: var(--font-family-sans);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-relaxed);
+  color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-width: 78ch;
 }
 .prose.muted {
-  color: var(--text-secondary);
+  color: var(--color-text-secondary);
 }
 
 /* Thinking is an ASIDE, not content: it is what the model considered, not
    what it decided. Marked by a rule down its edge so a reader can skip the
    whole block by its shape rather than by reading it. */
 .disclosure.tone-reasoning .disclosure-body {
-  border-left: 2px solid var(--border-strong);
-  padding-left: var(--space-3);
+  border-left: 2px solid var(--color-border-hover);
+  padding-left: var(--spacing-3);
   margin-left: 2px;
 }
 .disclosure.tone-reasoning .disclosure-head {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 .tool-row {
-  border-radius: var(--r-xs);
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
 }
 .tool-row.failed {
-  border-color: color-mix(in srgb, var(--critical) 40%, transparent);
+  border-color: color-mix(in srgb, var(--color-feedback-danger) 40%, transparent);
 }
 
 .disclosure {
@@ -335,7 +335,7 @@
 .disclosure-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   min-width: 0;
 }
 .disclosure-bar > .disclosure-head {
@@ -346,24 +346,24 @@
 .disclosure-head {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   width: 100%;
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-secondary);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
   text-align: left;
   min-width: 0;
 }
 .disclosure-head:hover {
-  color: var(--text);
-  background: var(--surface-hover);
-  border-radius: var(--r-xs);
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-xs);
 }
 .disclosure-body {
-  padding: var(--space-2);
+  padding: var(--spacing-2);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* ---- Attention ---------------------------------------------------------- */
@@ -371,10 +371,10 @@
 .attention-row {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   width: 100%;
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
   min-width: 0;
 }
@@ -382,7 +382,7 @@
   border-bottom: none;
 }
 .attention-row.clickable:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .attention-row .attention-icon {
   display: flex;
@@ -390,21 +390,21 @@
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-md);
   flex: none;
 }
 .attention-row[data-severity="critical"] .attention-icon {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 .attention-row[data-severity="caution"] .attention-icon {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 .attention-row[data-severity="info"] .attention-icon,
 .attention-icon[data-severity="info"] {
-  background: var(--info-soft);
-  color: var(--info-ink);
+  background: var(--color-feedback-info-soft);
+  color: var(--color-feedback-info-ink);
 }
 
 /* ---- Seat cards --------------------------------------------------------- */
@@ -412,37 +412,37 @@
 .seat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 .seat-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-1);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
   text-align: left;
   min-width: 0;
-  transition: border-color var(--dur-fast) var(--ease);
+  transition: border-color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .seat-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--color-border-hover);
 }
 /* The tone is what the seat is DOING, never who it is. `quiet` takes no tint
    at all: an idle seat used to draw a glowing tile that read as activity. */
 .seat-card[data-tone="working"] {
-  box-shadow: inset 2px 0 0 var(--info);
+  box-shadow: inset 2px 0 0 var(--color-feedback-info);
 }
 .seat-card[data-tone="needs"] {
-  box-shadow: inset 2px 0 0 var(--caution);
+  box-shadow: inset 2px 0 0 var(--color-feedback-warning);
 }
 .seat-card[data-tone="broken"] {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .seat-line {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   min-height: 1.2em;
 }
 
@@ -451,51 +451,51 @@
 .org-tree {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   overflow-x: auto;
-  padding-bottom: var(--space-2);
+  padding-bottom: var(--spacing-2);
 }
 .org-unit {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  padding: var(--space-3);
-  background: var(--surface-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-3);
+  background: var(--color-surface-subtle);
   min-width: 0;
 }
 .org-unit-head {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-2);
   min-width: 0;
 }
 .org-children {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  padding-left: var(--space-4);
-  border-left: 1px solid var(--border-subtle);
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding-left: var(--spacing-4);
+  border-left: 1px solid var(--color-border-default);
 }
 .org-seats {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .org-node {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
-  background: var(--surface-1);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
   min-width: 190px;
   text-align: left;
 }
 .org-node:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-hover);
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
 }
 .org-node.human {
   border-style: dashed;
@@ -508,8 +508,8 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--text);
-  font-weight: var(--fw-semibold);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
   text-align: left;
   cursor: pointer;
 }
@@ -523,12 +523,12 @@
    no box. The scroll margin is what a reveal on arrival leaves above it. */
 .org-unit,
 .org-node {
-  scroll-margin-top: var(--space-4);
+  scroll-margin-top: var(--spacing-4);
 }
 .org-unit.selected,
 .org-node.selected {
-  border-color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
+  border-color: var(--color-brand-accent);
+  box-shadow: inset 0 0 0 1px var(--color-brand-accent);
 }
 
 /* ---- Org builder: the lens ------------------------------------------------ */
@@ -541,7 +541,7 @@
    class rather than set by the shell, which knows nothing about lenses. */
 .screen-inner:has(.org-builder-body.fill) {
   height: 100%;
-  padding-bottom: var(--space-5);
+  padding-bottom: var(--spacing-5);
 }
 .screen-inner:has(.org-builder-body.fill) > .tab-panel,
 .org-builder:has(> .org-builder-body.fill) {
@@ -553,7 +553,7 @@
 .org-builder-body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   min-width: 0;
 }
 .org-builder-body.fill {
@@ -571,14 +571,14 @@
 .org-builder:fullscreen {
   display: flex;
   flex-direction: column;
-  padding: var(--space-4);
-  background: var(--bg);
+  padding: var(--spacing-4);
+  background: var(--color-surface-background);
   overflow: auto;
 }
 .org-builder-toolbar {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -602,17 +602,17 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 /* A sentence that follows the one before it in a banner, on its own line. */
 .org-builder-note {
   display: block;
-  margin-top: var(--space-1);
+  margin-top: var(--spacing-1);
 }
 .org-builder-conflict {
-  padding: var(--space-3);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
 }
 
 /* ---- Org builder: canvas ------------------------------------------------
@@ -636,16 +636,16 @@
    chart beneath it. */
 .canvas-overlay > .bchart-note {
   position: absolute;
-  top: var(--space-2);
-  left: var(--space-2);
-  right: var(--space-2);
+  top: var(--spacing-2);
+  left: var(--spacing-2);
+  right: var(--spacing-2);
   margin: 0;
-  padding: var(--space-1) var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
-  background: var(--surface-glass);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-sm);
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-glass);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
   pointer-events: none;
 }
 .bchart-tree,
@@ -657,13 +657,13 @@
   left: 0;
 }
 .bchart-box {
-  width: var(--org-card-w);
+  width: var(--crewlet-tree-canvas-card-width);
 }
 /* The gaps between cards, as tokens: measured like a card, so density scales
    the space between cards with the space inside them. */
 .bchart-gap-probe {
-  width: var(--space-6);
-  height: var(--space-8);
+  width: var(--spacing-6);
+  height: var(--spacing-7);
   visibility: hidden;
   pointer-events: none;
 }
@@ -673,33 +673,33 @@
 }
 .bchart-links path {
   fill: none;
-  stroke: var(--border-strong);
+  stroke: var(--color-border-hover);
   stroke-width: 1;
 }
 .bchart-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
-  background: var(--surface-1);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-1);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
 }
 .bchart-card.human {
   border-style: dashed;
-  border-color: var(--border);
+  border-color: var(--color-border-default);
 }
 .bchart-card.group {
-  background: var(--surface-2);
+  background: var(--color-surface-subtle);
 }
 .bchart-head,
 .bchart-row-item {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--r-md);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-lg);
   cursor: default;
 }
 /* Inset, because the ring sits on the card's own edge. */
@@ -710,12 +710,12 @@
 /* The selection is where the reader is, so it takes the accent. */
 .bchart-head[aria-selected="true"],
 .bchart-row-item[aria-selected="true"] {
-  box-shadow: inset 0 0 0 1px var(--accent);
+  box-shadow: inset 0 0 0 1px var(--color-brand-accent);
 }
 .bchart-line {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
 }
 .bchart-text {
@@ -725,18 +725,18 @@
   min-width: 0;
 }
 .bchart-name {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-semibold);
-  color: var(--text);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
 }
 .bchart-meta {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 .bchart-marks {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 .bchart-marks:empty {
   display: none;
@@ -744,36 +744,36 @@
 .bchart-actions {
   display: flex;
   align-items: center;
-  padding: var(--space-1);
+  padding: var(--spacing-1);
 }
 .bchart-lead {
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   min-width: 0;
-  padding: 0 var(--space-3) var(--space-2);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: 0 var(--spacing-3) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 .bchart-rows {
   grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-1);
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-1);
+  padding: var(--spacing-1);
+  border-top: 1px solid var(--color-border-default);
 }
 .bchart-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   border: 1px solid transparent;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-md);
 }
 .bchart-row.human {
   border-style: dashed;
-  border-color: var(--border);
+  border-color: var(--color-border-default);
 }
 /* A LIVE STATE OR A CHECK NEVER RESIZES A CARD. The live state and the
    problem count each have a slot on the card's first line that does not
@@ -816,47 +816,47 @@
   overscroll-behavior-x: contain;
 }
 .boutline {
-  min-width: calc(3 * var(--org-card-w));
-  font-size: var(--fs-xs);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-1);
+  min-width: calc(3 * var(--crewlet-tree-canvas-card-width));
+  font-size: var(--font-size-compact);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 .boutline-row {
   display: grid;
   grid-template-columns:
     minmax(0, 3fr) minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 2fr) minmax(0, 1fr)
-    var(--control-h);
+    var(--size-control-md);
   align-items: center;
-  min-height: var(--row-h);
-  border-top: 1px solid var(--border-subtle);
+  min-height: var(--size-row-md);
+  border-top: 1px solid var(--color-border-default);
 }
 .boutline-head .boutline-row {
   border-top: 0;
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
 }
 .boutline-row > [role="columnheader"],
 .boutline-row > [role="gridcell"] {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   min-width: 0;
-  padding: 0 var(--space-2);
+  padding: 0 var(--spacing-2);
 }
 /* The indent is the row's level, set on the row as `--depth`. */
 .boutline-name,
 .boutline-row.add > [role="gridcell"]:first-child {
-  padding-inline-start: calc(var(--space-5) * var(--depth, 0));
+  padding-inline-start: calc(var(--spacing-5) * var(--depth, 0));
 }
 .boutline-row.add > [role="gridcell"]:first-child {
-  margin-inline-start: var(--control-h-sm);
+  margin-inline-start: var(--size-control-sm);
 }
 .boutline-toggle {
   display: inline-flex;
   flex: none;
-  width: var(--control-h-sm);
+  width: var(--size-control-sm);
 }
 .boutline-actions {
   justify-content: flex-end;
@@ -867,7 +867,7 @@
 }
 /* The selection is where the reader is, so it takes the accent. */
 .boutline-row[aria-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
 }
 
 /* ---- Feed --------------------------------------------------------------- */
@@ -879,13 +879,13 @@
 .feed-row {
   display: grid;
   grid-template-columns: 62px 132px minmax(0, 1fr) auto;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 /* A row on a page about ONE turn.
@@ -900,33 +900,33 @@
 .turn-row {
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr) auto;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   align-items: baseline;
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
   text-align: left;
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   min-width: 0;
 }
 .turn-row:last-child {
   border-bottom: none;
 }
 .turn-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .turn-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .turn-row > .what {
-  color: var(--text);
+  color: var(--color-text-primary);
   min-width: 0;
 }
 .feed-row:last-child {
   border-bottom: none;
 }
 .feed-row:hover {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 /* A ROW IS NOT AN INLINE LINK. `a:hover` underlines, which is right for a
    link inside a sentence and wrong for a whole row that happens to be an
@@ -942,28 +942,28 @@
   text-decoration: none;
 }
 .feed-row.failed {
-  box-shadow: inset 2px 0 0 var(--critical);
+  box-shadow: inset 2px 0 0 var(--color-feedback-danger);
 }
 .feed-time {
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  color: var(--text-faint);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
   font-variant-numeric: tabular-nums;
 }
 .feed-actor {
-  color: var(--text-secondary);
-  font-weight: var(--fw-medium);
+  color: var(--color-text-secondary);
+  font-weight: var(--font-weight-medium);
 }
 .feed-what {
-  color: var(--text);
+  color: var(--color-text-primary);
   min-width: 0;
 }
 .feed-tail {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--fs-3xs);
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-2xs);
   white-space: nowrap;
 }
 @media (max-width: 700px) {
@@ -983,7 +983,7 @@
 .split {
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   align-items: start;
 }
 @media (max-width: 860px) {
@@ -995,9 +995,9 @@
 .thread-entry {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
 .thread-entry:last-child {
@@ -1009,22 +1009,22 @@
 .hit {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
   min-width: 0;
 }
 .hit:last-child {
   border-bottom: none;
 }
 .hit-title {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--accent-ink);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-brand-accent-ink);
 }
 .hit-snippet {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 
 /* ---- Config ------------------------------------------------------------- */
@@ -1032,27 +1032,27 @@
 .diff-line {
   display: grid;
   grid-template-columns: 18px minmax(0, 200px) minmax(0, 1fr);
-  gap: var(--space-2);
-  padding: 2px var(--space-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-3xs);
-  border-radius: var(--r-xs);
+  gap: var(--spacing-2);
+  padding: 2px var(--spacing-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  border-radius: var(--radius-xs);
   align-items: baseline;
 }
 /* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
    These selectors read add / remove / replace, which no answer has ever
    carried, so every diff line rendered unstyled. */
 .diff-line[data-kind="added"] {
-  background: var(--positive-soft);
-  color: var(--positive-ink);
+  background: var(--color-feedback-success-soft);
+  color: var(--color-feedback-success-ink);
 }
 .diff-line[data-kind="removed"] {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 .diff-line[data-kind="changed"] {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 
 /* ---- A live screen that stays readable ---------------------------------- */
@@ -1062,13 +1062,13 @@
    doing real work: it is the visible promise that motion stops at this
    edge. */
 .live-region {
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-radius: var(--r-md);
-  background: color-mix(in srgb, var(--accent) 3%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-brand-accent) 28%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-brand-accent) 3%, transparent);
   /* Generous, and more above than below: the label sits at the top edge and
      small tracked caps read as crowded long before body text does. */
-  padding: var(--space-4) var(--space-4) var(--space-3);
-  gap: var(--space-3);
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
+  gap: var(--spacing-3);
 }
 
 /* The pill that holds finished rows back. Splicing them in at the top pushed
@@ -1079,32 +1079,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  font-size: var(--fs-2xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
   cursor: pointer;
   transition:
-    border-color var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    border-color var(--motion-duration-fast) var(--motion-easing-default),
+    color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .new-rows:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--color-brand-accent);
+  color: var(--color-brand-accent);
 }
 
 /* HEADER SPACING. A turn head, the phase head nested inside it and the
    "Rounds" label were stacked with nothing between them, so three rows of
    chrome read as one dense block. Each gets air above what it labels. */
 .turn-card > .turn-body {
-  padding-top: var(--space-2);
+  padding-top: var(--spacing-2);
 }
 .turn-body .phase-card + .phase-card {
-  margin-top: var(--space-2);
+  margin-top: var(--spacing-2);
 }
 
 /* The workers a phase delegated to, rendered INSIDE it.
@@ -1116,17 +1116,17 @@
 .phase-nest {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin-left: var(--space-3);
-  padding-left: var(--space-3);
-  border-left: 2px solid var(--border);
+  gap: var(--spacing-2);
+  margin-left: var(--spacing-3);
+  padding-left: var(--spacing-3);
+  border-left: 2px solid var(--color-border-default);
 }
 .phase-card > .phase-body {
-  padding-top: var(--space-2);
+  padding-top: var(--spacing-2);
 }
 .phase-head,
 .turn-head {
-  padding-block: var(--space-2);
+  padding-block: var(--spacing-2);
 }
 
 /* A failed tool's alert sat on its own line above the name: it was an inline
@@ -1136,25 +1136,25 @@
   flex: none;
 }
 .tool-row .disclosure-head {
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 
 /* A phase whose text is arriving right now. The ring is what the seat page
    needed: a running turn that looks different from a finished one at a
    glance, rather than only by reading its badge. */
 .phase-card.streaming {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+  border-color: color-mix(in srgb, var(--color-brand-accent) 45%, var(--color-border-default));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 9%, transparent);
 }
 .turn-card.live {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand-accent) 7%, transparent);
 }
 
 /* Text that is being written. The transition is on COLOR only — never on
    height: animating the height of a growing block makes every append a
    reflow the reader can feel, which is the opposite of the point. */
 .prose.stream {
-  transition: color var(--dur-slow) var(--ease);
+  transition: color var(--motion-duration-slow) var(--motion-easing-default);
 }
 .prose.stream::after {
   content: "";
@@ -1163,7 +1163,7 @@
   height: 1em;
   margin-left: 2px;
   vertical-align: text-bottom;
-  background: var(--accent);
+  background: var(--color-brand-accent);
   animation: caret 1.1s steps(1) infinite;
 }
 @keyframes caret {
@@ -1180,12 +1180,12 @@
 /* An attempt a provider gave up on. Dimmed and ruled off rather than deleted
    — a reader has already read it, and making it vanish reads as a glitch. */
 .abandoned {
-  border-left: 2px solid color-mix(in srgb, var(--critical) 45%, transparent);
-  padding-left: var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--color-feedback-danger) 45%, transparent);
+  padding-left: var(--spacing-3);
   opacity: 0.65;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1211,26 +1211,26 @@
 .int-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 
 .int-card {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
   overflow: hidden;
-  transition: border-color var(--dur) var(--ease-out);
+  transition: border-color var(--motion-duration-base) var(--motion-easing-emphasized);
 }
 .int-card:hover {
-  border-color: var(--border-strong);
+  border-color: var(--color-border-hover);
 }
 
 /* A tool nobody has connected: one row, no disclosure. */
 .int-card-absent {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding: var(--space-4) var(--space-6);
+  gap: var(--spacing-4);
+  padding: var(--spacing-4) var(--spacing-6);
 }
 /* NOT DIMMED. An unconfigured tool is the one a reader came here to set up,
    so it is the last thing that should look switched off: greying it reads as
@@ -1239,14 +1239,14 @@
    here carries STATE and never identity. The only difference from a connected
    card is that there is nothing yet to disclose. */
 .int-card-absent:hover {
-  border-color: var(--border);
+  border-color: var(--color-border-default);
 }
 
 .int-card-head {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding-right: var(--space-6);
+  gap: var(--spacing-3);
+  padding-right: var(--spacing-6);
 }
 
 /* The disclosure is the identity block rather than the whole header, so the
@@ -1255,10 +1255,10 @@
 .int-card-toggle {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--spacing-4);
   flex: 1;
   min-width: 0;
-  padding: var(--space-4) var(--space-2) var(--space-4) var(--space-6);
+  padding: var(--spacing-4) var(--spacing-2) var(--spacing-4) var(--spacing-6);
   background: none;
   border: none;
   cursor: pointer;
@@ -1271,10 +1271,10 @@
    they are about to press, and a highlight stopping halfway reads as a
    rendering fault. */
 .int-card-head:has(.int-card-toggle:hover) {
-  background: var(--surface-hover);
+  background: var(--color-surface-hover);
 }
 .int-card-toggle:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-brand-accent);
   outline-offset: -2px;
 }
 
@@ -1286,16 +1286,16 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  width: var(--row-h-lg);
-  height: var(--row-h-lg);
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  color: var(--text);
+  width: var(--size-row-lg);
+  height: var(--size-row-lg);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
 }
 .vendor-mark {
   display: block;
-  width: var(--fs-xl);
-  height: var(--fs-xl);
+  width: var(--font-size-xl);
+  height: var(--font-size-xl);
 }
 
 .int-heading {
@@ -1306,27 +1306,27 @@
   flex: 1;
 }
 .int-name {
-  font-size: var(--fs-sm);
+  font-size: var(--font-size-sm);
   font-weight: 600;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* The second line carries whatever the card most needs to say: what the tool
    is for when there is nothing wrong, and what is wrong when there is. */
 .int-desc {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  gap: var(--spacing-1);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 .int-desc.attention {
-  color: var(--caution-ink);
+  color: var(--color-feedback-warning-ink);
 }
 
 .int-card-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex: none;
 }
 
@@ -1336,25 +1336,25 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--row-h-sm);
-  height: var(--row-h-sm);
+  width: var(--size-row-sm);
+  height: var(--size-row-sm);
   padding: 0;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-md);
   background: none;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   cursor: pointer;
 }
 .int-chevron:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 .int-chevron:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-brand-accent);
   outline-offset: 2px;
 }
 .int-chevron svg {
-  transition: transform var(--dur) var(--ease-out);
+  transition: transform var(--motion-duration-base) var(--motion-easing-emphasized);
 }
 .int-chevron.is-open svg {
   transform: rotate(180deg);
@@ -1368,8 +1368,8 @@
 .int-card-body {
   display: flex;
   flex-direction: column;
-  padding: var(--space-1) var(--space-6) var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--spacing-1) var(--spacing-6) var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
 }
 
 /* ONE ROW PER THING THE CARD IS MADE OF, surfaces and seats alike, separated
@@ -1387,9 +1387,9 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--border-subtle);
+  gap: var(--spacing-3);
+  padding: var(--spacing-3) 0;
+  border-top: 1px solid var(--color-border-default);
 }
 .int-row:first-child {
   border-top: none;
@@ -1405,13 +1405,13 @@
   flex: 1;
 }
 .int-row-name {
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   font-weight: 600;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 .int-row-detail {
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   overflow-wrap: anywhere;
 }
 /* The counts and the inbound path, on the detail line rather than in a row of
@@ -1420,7 +1420,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 /* THE CONNECT FORM, laid out the way the console's is.
    The field spacing is deliberately wider than the dialog's default stack:
@@ -1429,14 +1429,14 @@
    it belongs to, which is the one ambiguity a form must not have. */
 .int-form-intro {
   margin: 0;
-  font-size: var(--fs-xs);
-  line-height: var(--lh-normal);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-secondary);
 }
 .int-form {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--spacing-5);
 }
 /* SENTENCE CASE, scoped to this form.
    The product's field label is an uppercase micro-label, which reads as a
@@ -1445,11 +1445,11 @@
    in sentence case. Scoped rather than changed globally, because every other
    form in the dashboard is a settings table where the micro-label belongs. */
 .int-form .field > label {
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-normal);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-normal);
   text-transform: none;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 /* AN AGENT'S ROW IN A CARD'S ROSTER.
@@ -1461,7 +1461,7 @@
  */
 .int-seat-row {
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
 }
 .int-seat-row .int-row-identity {
   gap: 2px;
@@ -1487,30 +1487,30 @@
    rather than by a tenth type size, because a step nothing else uses is a
    scale of ten pretending to be a scale of nine. */
 .int-seat-tier {
-  margin-left: var(--space-2);
-  padding: 0 var(--space-1);
-  border-radius: var(--r-xs);
-  font-size: var(--fs-3xs);
+  margin-left: var(--spacing-2);
+  padding: 0 var(--spacing-1);
+  border-radius: var(--radius-xs);
+  font-size: var(--font-size-2xs);
   font-weight: 600;
   line-height: 1.3;
-  letter-spacing: var(--track-wide);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
   white-space: nowrap;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-border-default);
   /* MUTED, NEVER FAINT. --text-faint is decoration only, and the tier is a
      fact about what this agent may do to a repository. */
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* Weight follows trust: full access carries the accent, review a lighter
    share of it, read-only stays neutral. */
 .int-seat-tier--full_access {
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  color: color-mix(in srgb, var(--accent) 65%, var(--text));
+  border-color: color-mix(in srgb, var(--color-brand-accent) 40%, transparent);
+  color: color-mix(in srgb, var(--color-brand-accent) 65%, var(--color-text-primary));
 }
 .int-seat-tier--review {
-  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: color-mix(in srgb, var(--accent) 35%, var(--text-secondary));
+  border-color: color-mix(in srgb, var(--color-brand-accent) 22%, transparent);
+  color: color-mix(in srgb, var(--color-brand-accent) 35%, var(--color-text-secondary));
 }
 
 /* What configures the connection, folded away from what makes it.
@@ -1530,17 +1530,17 @@
   margin: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-3xs);
-  line-height: var(--lh-normal);
-  color: var(--text-faint);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-2xs);
+  line-height: var(--font-line-height-normal);
+  color: var(--color-text-muted);
 }
 .int-form-note a {
   color: inherit;
   text-decoration: underline;
 }
 .int-form-note a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* The icon is the handle for the tooltip, so it takes a cursor that says
    there is something to hover and does not shrink out of reach. */
@@ -1555,18 +1555,18 @@
      than sitting in the field flow with a hairline through the middle. The
      parent's own gap already separates it from the last field; a margin on
      top of that put the rule closer to the fold than to the form it ends. */
-  border-top: 1px solid var(--border-subtle);
-  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-default);
+  padding-top: var(--spacing-5);
 }
 /* The disclosure is a control, so it reads as one: the same weight as a
    field's label, with a marker that says which way it opens. */
 .int-form-more > summary {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
-  color: var(--text-secondary);
+  gap: var(--spacing-2);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
 }
 .int-form-more > summary::before {
   content: "";
@@ -1581,15 +1581,15 @@
   transform: rotate(90deg);
 }
 .int-form-more > summary:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 /* The fields inside carry the form's own rhythm, so opening the fold does
    not change the spacing of the questions below it. */
 .int-form-more-fields {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding-top: var(--space-5);
+  gap: var(--spacing-5);
+  padding-top: var(--spacing-5);
 }
 
 /* ONE AGENT'S OWN BLOCK in the setup dialog, for an app whose credentials
@@ -1597,21 +1597,21 @@
    agent: a ten-agent company opened twenty inputs in one scroll with no way
    to see how many were left, and the dialog now opens as the roster it is. */
 .int-seat-form {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  background: var(--surface-1);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
 }
 .int-seat-form + .int-seat-form {
-  margin-top: calc(var(--space-3) - var(--space-5));
+  margin-top: calc(var(--spacing-3) - var(--spacing-5));
 }
 .int-seat-summary {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--spacing-2);
+  padding: var(--spacing-3) var(--spacing-4);
   cursor: pointer;
   list-style: none;
-  border-radius: var(--r-md);
+  border-radius: var(--radius-lg);
 }
 .int-seat-summary::-webkit-details-marker {
   display: none;
@@ -1626,23 +1626,23 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   transition: transform 120ms ease;
 }
 .int-seat-form[open] > .int-seat-summary::before {
   transform: rotate(90deg);
 }
 .int-seat-summary:hover {
-  background: var(--surface-2);
+  background: var(--color-surface-subtle);
 }
 /* The badge sits at the far end, so a column of blocks reads down its right
    edge as a list of what is left to do. */
 .int-seat-name {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-medium);
-  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1650,17 +1650,17 @@
 .int-seat-fields {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: 0 var(--space-4) var(--space-4);
+  gap: var(--spacing-5);
+  padding: 0 var(--spacing-4) var(--spacing-4);
 }
 
 /* THE APP DEFINITION AN OPERATOR PASTES, inside the agent's own block.
    FOLDED, because it is forty lines of JSON and the two boxes under it are
    what the form is for: it is opened once per agent, at the start. */
 .int-manifest {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-  padding: var(--space-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-3);
 }
 /* The label, the aside, and the Copy button on one line: copying is what an
    operator does with this, and a button below the fold is one they have to
@@ -1668,7 +1668,7 @@
 .int-manifest-summary {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: auto;
 }
 /* THE SAME MARKER THE OTHER DISCLOSURES DRAW, because a fold that gives no
@@ -1681,7 +1681,7 @@
   border-left: 4px solid currentColor;
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   transition: transform 120ms ease;
 }
 .int-manifest[open] > .int-manifest-summary::before {
@@ -1694,7 +1694,7 @@
   white-space: nowrap;
 }
 .int-manifest > .int-manifest-text {
-  margin-top: var(--space-3);
+  margin-top: var(--spacing-3);
 }
 /* IT SCROLLS RATHER THAN WRAPS. A wrapped manifest is not one a person can
    read against the app they already have, and a dialog that grew to forty
@@ -1704,12 +1704,12 @@
   max-height: 260px;
   margin: 0;
   overflow: auto;
-  padding: var(--space-3);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
+  padding: var(--spacing-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-compact);
   line-height: 1.5;
   white-space: pre;
   -webkit-user-select: all;
@@ -1721,7 +1721,7 @@
 .int-row-link {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -1729,7 +1729,7 @@
 .int-row-badges {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-shrink: 0;
 }
 
@@ -1740,14 +1740,14 @@
 .int-row-note {
   flex-basis: 100%;
   display: flex;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--r-md);
-  background: var(--surface-2);
-  font-size: var(--fs-2xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+  font-size: var(--font-size-xs);
   line-height: 1.5;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .int-row-note-text {
   min-width: 0;
@@ -1759,17 +1759,17 @@
      line spacing inside any one of them, so a paragraph and the disclosure
      summary beneath it read as one run-on line: `…nothing else can do it.`
      followed immediately by `1 more finding`. */
-  gap: var(--space-2);
+  gap: var(--spacing-2);
 }
 .int-row-note-when {
-  color: var(--text-faint);
+  color: var(--color-text-muted);
 }
 
 /* WHAT IS WRONG: the line a reader is here for, so it takes the body colour
    while everything around it is quieter. */
 .int-note-problem {
   margin: 0;
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 /* WHAT TO DO: one step down, because it is read second and only once. It is
@@ -1780,21 +1780,21 @@
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2);
-  color: var(--text-muted);
+  gap: var(--spacing-2);
+  color: var(--color-text-tertiary);
 }
 
 /* THE OTHER FINDINGS, ruled off. A disclosure that opens into more sentences
    needs to be visibly not part of the sentence above it. */
 .int-more {
   margin: 0;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
 }
 .int-more .int-findings > li {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* THE DISCLOSURE INSIDE THE BODY IS THE ONLY CONTROL IN ITS ROW, so it is
@@ -1802,8 +1802,8 @@
    --text-faint decoration only, never a fact, and it falls under the 4.5:1
    contrast floor on both themes. */
 .int-summary {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
 }
 details > summary.int-summary {
   cursor: pointer;
@@ -1817,15 +1817,15 @@ details > summary.int-summary::-webkit-details-marker {
 /* A section heading inside the setup dialog, for a tool the engine reaches
    over more than one surface. */
 .int-section {
-  font-size: var(--fs-xs);
+  font-size: var(--font-size-compact);
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .int-findings {
-  margin: var(--space-1) 0 0;
-  padding-left: var(--space-4);
+  margin: var(--spacing-1) 0 0;
+  padding-left: var(--spacing-4);
 }
 
 /* WHICH THINGS A FINDING IS ABOUT, as chips.
@@ -1839,7 +1839,7 @@ details > summary.int-summary::-webkit-details-marker {
 .int-subjects {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1848,12 +1848,12 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .int-subject {
   display: inline-block;
-  padding: 1px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--surface-1);
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
+  padding: 1px var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
   /* The addresses and URLs this carries have no spaces to break at. */
   overflow-wrap: anywhere;
 }
@@ -1864,11 +1864,11 @@ details > summary.int-summary::-webkit-details-marker {
 .int-subject-more {
   cursor: pointer;
   font: inherit;
-  font-size: var(--fs-2xs);
+  font-size: var(--font-size-xs);
 }
 .int-subject-more:hover {
-  color: var(--text);
-  border-color: var(--text-faint);
+  color: var(--color-text-primary);
+  border-color: var(--color-text-muted);
 }
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
@@ -1880,8 +1880,8 @@ details > summary.int-summary::-webkit-details-marker {
 .builder-section + .builder-section,
 .sheet-body > .builder-section,
 .dialog-body > .builder-section {
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
 }
 /* A section inside a section (one tool inside Integrations) is a sub-part,
    not a new part: no rule of its own. */
@@ -1891,12 +1891,12 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .builder-section-title {
   margin: 0;
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
 }
 .builder-section .builder-section .builder-section-title {
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
 }
 .builder-section p,
 .builder-fact p,
@@ -1905,16 +1905,16 @@ details > summary.int-summary::-webkit-details-marker {
 }
 .builder-list {
   margin: 0;
-  padding-left: var(--space-4);
+  padding-left: var(--spacing-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 /* Two fields that make one answer (a contact's surface and its identity) sit
    side by side and share the width, so neither reads as a separate question. */
 .builder-pair {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   min-width: 0;
 }
 .builder-pair > .field {

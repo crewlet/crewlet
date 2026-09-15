@@ -2,7 +2,7 @@
 
 .app {
   display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-columns: var(--size-shell-rail) minmax(0, 1fr);
   height: 100dvh;
   overflow: hidden;
 }
@@ -13,8 +13,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg-sunken);
-  border-right: 1px solid var(--border-subtle);
+  background: var(--color-surface-background);
+  border-right: 1px solid var(--color-border-default);
 }
 
 /* The brand had no vertical padding at all (a two-line lockup inside a fixed
@@ -30,9 +30,9 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: var(--topbar-h);
-  padding: var(--space-4) calc(var(--nav-gutter) + var(--nav-row-pad)) var(--space-3);
+  gap: var(--spacing-2);
+  min-height: var(--size-shell-topbar);
+  padding: var(--spacing-4) calc(var(--size-nav-gutter) + var(--size-nav-row-pad)) var(--spacing-3);
   flex: none;
 }
 .brand img {
@@ -40,17 +40,17 @@
   height: 22px;
 }
 .brand-name {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   letter-spacing: -0.02em;
-  color: var(--heading);
+  color: var(--color-text-primary);
 }
 /* The company's own name sits under the product's, because on this screen the
    company is the subject and Crewlet is the tool. */
 .brand-org {
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
-  letter-spacing: var(--track-wide);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
 }
 
@@ -58,18 +58,18 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-2) var(--nav-gutter) var(--space-4);
+  padding: var(--spacing-2) var(--size-nav-gutter) var(--spacing-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 .nav-group-label {
-  padding: var(--space-3) var(--nav-row-pad) var(--space-1);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  padding: var(--spacing-3) var(--size-nav-row-pad) var(--spacing-1);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 /* The row is the click target and the active tint, so it takes as much of the
    rail's width as the gutter leaves it; its own padding, not the rail's, is
@@ -77,42 +77,42 @@
 .nav-item {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  height: var(--row-h);
-  padding: 0 var(--nav-row-pad);
-  border-radius: var(--r-sm);
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-  font-weight: var(--fw-medium);
+  gap: var(--spacing-2);
+  height: var(--size-row-md);
+  padding: 0 var(--size-nav-row-pad);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-medium);
   width: 100%;
   text-align: left;
   min-width: 0;
   transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
+    background var(--motion-duration-fast) var(--motion-easing-default),
+    color var(--motion-duration-fast) var(--motion-easing-default);
 }
 .nav-item:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
   text-decoration: none;
 }
 .nav-item > svg {
-  color: var(--text-faint);
+  color: var(--color-text-muted);
 }
 /* The active row is the ONE place the accent appears in the chrome. That is
    the whole job of an accent: say where you are. */
 .nav-item.active {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
 }
 .nav-item.active > svg {
-  color: var(--accent-ink);
+  color: var(--color-brand-accent-ink);
 }
 .nav-item .nav-badge {
   margin-left: auto;
-  font-size: var(--fs-3xs);
+  font-size: var(--font-size-2xs);
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .nav-item.active .nav-badge {
   color: inherit;
@@ -121,22 +121,22 @@
    chrome, because it is the one thing that should pull the eye out of
    whatever screen you are on. */
 .nav-item .nav-badge.attention {
-  color: var(--caution-ink);
-  background: var(--caution-soft);
-  border-radius: var(--r-full);
+  color: var(--color-feedback-warning-ink);
+  background: var(--color-feedback-warning-soft);
+  border-radius: var(--radius-pill);
   padding: 0 6px;
-  font-weight: var(--fw-semibold);
+  font-weight: var(--font-weight-semibold);
 }
 
 .sidebar-foot {
   flex: none;
   /* Same gutter as the rail above it, so the status pill and the theme
      buttons line up with the nav rather than sitting further out. */
-  padding: var(--space-2) var(--nav-gutter);
-  border-top: 1px solid var(--border-subtle);
+  padding: var(--spacing-2) var(--size-nav-gutter);
+  border-top: 1px solid var(--color-border-default);
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
 }
 
 /* The engine pill: one row that always says the same four things in the same
@@ -149,18 +149,18 @@
 .engine-pill {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--nav-row-pad);
-  border-radius: var(--r-sm);
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  padding: var(--spacing-2) var(--size-nav-row-pad);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   text-align: left;
   min-width: 0;
 }
 .engine-pill:hover {
-  background: var(--surface-hover);
-  color: var(--text);
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
 }
 
 /* ---- Main --------------------------------------------------------------- */
@@ -170,55 +170,55 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: var(--bg);
+  background: var(--color-surface-background);
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  height: var(--topbar-h);
-  padding: 0 var(--space-4);
+  gap: var(--spacing-3);
+  height: var(--size-shell-topbar);
+  padding: 0 var(--spacing-4);
   flex: none;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg);
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
 }
 .topbar h1 {
-  font-size: var(--fs-sm);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-tight);
 }
 .crumb {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--spacing-1);
   min-width: 0;
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
 }
 .crumb a {
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .crumb a:hover {
-  color: var(--text);
+  color: var(--color-text-primary);
 }
 
 .omni {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  height: var(--control-h);
-  padding: 0 var(--space-2) 0 var(--space-3);
+  gap: var(--spacing-2);
+  height: var(--size-control-md);
+  padding: 0 var(--spacing-2) 0 var(--spacing-3);
   min-width: 220px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-muted);
-  font-size: var(--fs-xs);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-subtle);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-compact);
 }
 .omni:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
+  border-color: var(--color-border-hover);
+  color: var(--color-text-primary);
 }
 /* The shortcut hint (`ui/Kbd.tsx`) as a whole, so its keys stay together at
    the end of the box. */
@@ -237,32 +237,32 @@
   scroll-behavior: auto;
 }
 .screen-inner {
-  max-width: var(--screen-max);
+  max-width: var(--size-content-max);
   margin: 0 auto;
-  padding: var(--space-5) var(--space-5) var(--space-16);
+  padding: var(--spacing-5) var(--spacing-5) var(--spacing-10);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--spacing-5);
   min-width: 0;
 }
 
 .screen-head {
   display: flex;
   align-items: flex-end;
-  gap: var(--space-3);
+  gap: var(--spacing-3);
   flex-wrap: wrap;
   min-width: 0;
 }
 .screen-head .screen-title {
-  font-size: var(--fs-xl);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--track-tight);
-  color: var(--heading);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-tight);
+  color: var(--color-text-primary);
 }
 .screen-head .screen-sub {
-  font-size: var(--fs-xs);
-  color: var(--text-muted);
-  max-width: var(--measure);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-tertiary);
+  max-width: var(--size-measure);
 }
 
 /* A toolbar sticks under the topbar so filters stay reachable in a long list,
@@ -271,13 +271,13 @@
 .toolbar {
   position: sticky;
   top: 0;
-  z-index: var(--z-sticky);
+  z-index: var(--z-index-sticky);
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   flex-wrap: wrap;
-  padding: var(--space-2) 0;
-  background: var(--bg);
+  padding: var(--spacing-2) 0;
+  background: var(--color-surface-background);
   min-width: 0;
 }
 
@@ -286,92 +286,92 @@
 .degraded {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  font-size: var(--fs-xs);
-  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  font-size: var(--font-size-compact);
+  border-bottom: 1px solid var(--color-border-default);
   flex: none;
 }
 .degraded.caution {
-  background: var(--caution-soft);
-  color: var(--caution-ink);
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
 }
 .degraded.critical {
-  background: var(--critical-soft);
-  color: var(--critical-ink);
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
 }
 
 /* ---- Command palette ---------------------------------------------------- */
 
 .palette {
   width: min(620px, 100%);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  box-shadow: var(--shadow-3);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   max-height: min(60dvh, 520px);
-  animation: rise var(--dur-slow) var(--ease-out);
+  animation: rise var(--motion-duration-slow) var(--motion-easing-emphasized);
 }
 .palette-input {
   width: 100%;
-  height: var(--row-h-lg);
-  padding: 0 var(--space-4);
+  height: var(--size-row-lg);
+  padding: 0 var(--spacing-4);
   border: none;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--color-border-default);
   background: transparent;
-  font-size: var(--fs-md);
-  color: var(--text);
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
 }
 .palette-input:focus {
   outline: none;
 }
 .palette-results {
   overflow-y: auto;
-  padding: var(--space-1);
+  padding: var(--spacing-1);
 }
 .palette-group {
-  padding: var(--space-2) var(--space-3) var(--space-1);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
+  padding: var(--spacing-2) var(--spacing-3) var(--spacing-1);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--font-letter-spacing-wide);
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--color-text-tertiary);
 }
 .palette-item {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--spacing-2);
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--r-sm);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-md);
   cursor: pointer;
   text-align: left;
-  font-size: var(--fs-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
   min-width: 0;
 }
 .palette-item[aria-selected="true"] {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
+  background: var(--color-brand-accent-soft);
+  color: var(--color-brand-accent-ink);
 }
 .palette-item .palette-hint {
   margin-left: auto;
-  font-size: var(--fs-2xs);
-  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 .palette-foot {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-3xs);
-  color: var(--text-muted);
-  background: var(--surface-2);
+  gap: var(--spacing-3);
+  padding: var(--spacing-2) var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-subtle);
 }
 
 /* The drawer's veil, and the control that opens it. Both are declared
@@ -383,8 +383,8 @@
 .drawer-veil {
   position: fixed;
   inset: 0;
-  background: color-mix(in srgb, var(--bg-sunken) 60%, transparent);
-  z-index: calc(var(--z-drawer) - 1);
+  background: color-mix(in srgb, var(--color-surface-background) 60%, transparent);
+  z-index: calc(var(--z-index-overlay) - 1);
 }
 .drawer-toggle {
   display: none;
@@ -403,10 +403,10 @@
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
-    width: var(--sidebar-w);
-    z-index: var(--z-drawer);
+    width: var(--size-shell-rail);
+    z-index: var(--z-index-overlay);
     transform: translateX(-100%);
-    box-shadow: var(--shadow-3);
+    box-shadow: var(--shadow-xl);
     /* HIDDEN, not only moved. A rail translated off screen keeps every link
        and control in the tab order and the accessibility tree, so a keyboard
        walked through a dozen stops nobody could see. Hiding waits for the
@@ -414,19 +414,19 @@
        can take focus the moment it opens. */
     visibility: hidden;
     transition:
-      transform var(--dur-slow) var(--ease),
-      visibility 0s linear var(--dur-slow);
+      transform var(--motion-duration-slow) var(--motion-easing-default),
+      visibility 0s linear var(--motion-duration-slow);
   }
   .sidebar[data-open="true"] {
     transform: none;
     visibility: visible;
-    transition: transform var(--dur-slow) var(--ease);
+    transition: transform var(--motion-duration-slow) var(--motion-easing-default);
   }
   .drawer-toggle {
     display: inline-flex;
   }
   .screen-inner {
-    padding: var(--space-4) var(--space-3) var(--space-12);
+    padding: var(--spacing-4) var(--spacing-3) var(--spacing-9);
   }
   .omni {
     min-width: 0;

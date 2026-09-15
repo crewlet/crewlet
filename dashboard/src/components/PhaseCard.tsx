@@ -75,7 +75,9 @@ function ToolRow({
         // a truncating single-line span and was the thing that wrapped, so a
         // failed call showed its alert on its own line above the tool.
         mark={
-          failed ? <Icon name="alert" size="xs" style={{ color: "var(--critical-ink)" }} /> : null
+          failed ? (
+            <Icon name="alert" size="xs" style={{ color: "var(--color-feedback-danger-ink)" }} />
+          ) : null
         }
         label={name}
       >

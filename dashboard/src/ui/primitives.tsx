@@ -59,7 +59,7 @@ export function Panel({
       {(title || actions) && (
         <header className="panel-head">
           <div className="panel-title truncate">
-            {icon && <Icon name={icon} size="sm" style={{ color: "var(--text-muted)" }} />}
+            {icon && <Icon name={icon} size="sm" style={{ color: "var(--color-text-tertiary)" }} />}
             <span className="truncate">{title}</span>
             {count != null && <span className="count-chip">{count}</span>}
           </div>

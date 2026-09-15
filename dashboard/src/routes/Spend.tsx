@@ -164,7 +164,7 @@ export function Spend() {
               tone={org.refused_at ? "critical" : undefined}
             />
             {org.refused_at && (
-              <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
+              <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
                 Turns are being declined at the budget gate. Last refusal{" "}
                 {fmtDateTime(org.refused_at)}.
               </p>
@@ -322,7 +322,7 @@ export function Spend() {
         >
           {budgets.loading && !budgets.data && <Skeleton rows={3} />}
           {budgets.data && budgets.data.durable === false ? (
-            <div className="banner neutral" style={{ margin: "var(--space-3)" }}>
+            <div className="banner neutral" style={{ margin: "var(--spacing-3)" }}>
               <Icon name="database" size="sm" />
               <span>
                 The durable counter could not be READ — which is not the same as it being zero. It

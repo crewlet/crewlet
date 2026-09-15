@@ -324,7 +324,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
           <Icon
             name="alert"
             size="xs"
-            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
+            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
         )}
         {withoutActor(event.summary, actor) || event.type}

@@ -200,7 +200,7 @@ export function SeatScreen({ handle }: { handle: string }) {
     <>
       <ScreenHead
         title={
-          <span className="row" style={{ gap: "var(--space-3)" }}>
+          <span className="row" style={{ gap: "var(--spacing-3)" }}>
             <Avatar name={seat.name} size="lg" human={human} />
             {seat.name}
           </span>
@@ -444,7 +444,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       <div className="t-label">Responsibilities</div>
                       <ul
                         className="col gap-1"
-                        style={{ paddingLeft: "var(--space-4)", margin: 0 }}
+                        style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}
                       >
                         {seat.responsibilities.map((r, i) => (
                           <li key={i} className="t-cell">
@@ -459,7 +459,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       <div className="t-label">Behavioural guidelines</div>
                       <ul
                         className="col gap-1"
-                        style={{ paddingLeft: "var(--space-4)", margin: 0 }}
+                        style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}
                       >
                         {seat.guidelines.map((r, i) => (
                           <li key={i} className="t-cell">
@@ -835,7 +835,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   tone={agent.budget.refused_at ? "critical" : undefined}
                 />
                 {agent.budget.refused_at && (
-                  <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
+                  <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
                     Turns for this seat are being declined at the budget gate. Last refusal{" "}
                     {fmtDateTime(agent.budget.refused_at)}.
                   </p>

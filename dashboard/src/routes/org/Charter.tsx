@@ -28,7 +28,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
       )}
       <Panel title="Policies" icon="shield" count={policies.length}>
         {policies.length ? (
-          <ol className="col gap-2" style={{ paddingLeft: "var(--space-4)", margin: 0 }}>
+          <ol className="col gap-2" style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}>
             {policies.map((p, i) => (
               <li key={i} className="t-body measure">
                 {p}
@@ -53,7 +53,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
                 {u.goals.length ? (
                   <ul
                     className="col gap-1"
-                    style={{ paddingLeft: "var(--space-4)", margin: "var(--space-2) 0 0" }}
+                    style={{ paddingLeft: "var(--spacing-4)", margin: "var(--spacing-2) 0 0" }}
                   >
                     {u.goals.map((g, i) => (
                       <li key={i} className="t-cell">
@@ -65,7 +65,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
                   <span className="t-caption faint">No goals set.</span>
                 )}
                 {u.knowledge.length > 0 && (
-                  <p className="t-caption" style={{ marginTop: "var(--space-2)" }}>
+                  <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
                     Knowledge: {u.knowledge.join(", ")}
                   </p>
                 )}

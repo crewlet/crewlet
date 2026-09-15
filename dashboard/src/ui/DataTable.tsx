@@ -182,7 +182,7 @@ export function ColHead({ children, unit }: { children: ReactNode; unit?: string
   return (
     <>
       {children}
-      {unit && <span style={{ color: "var(--text-faint)" }}> {unit}</span>}
+      {unit && <span style={{ color: "var(--color-text-muted)" }}> {unit}</span>}
     </>
   );
 }

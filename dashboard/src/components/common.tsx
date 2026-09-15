@@ -47,7 +47,7 @@ export function SeatChip({
       // the accent everywhere it appears is identity-colouring by accident.
       // The affordance is the hover state and the cursor.
       className="row seat-chip"
-      style={{ gap: "var(--space-2)", minWidth: 0 }}
+      style={{ gap: "var(--spacing-2)", minWidth: 0 }}
       href={href(["seats", target])}
     >
       <Avatar name={name} size={size} human={human} />
@@ -129,7 +129,7 @@ export function AttentionRow({ item }: { item: Attention }) {
         <Icon name={item.icon} size="sm" />
       </span>
       <span className="col" style={{ gap: 2, flex: 1, minWidth: 0 }}>
-        <span className="t-body" style={{ fontWeight: "var(--fw-medium)" }}>
+        <span className="t-body" style={{ fontWeight: "var(--font-weight-medium)" }}>
           {item.title}
         </span>
         <span className="t-caption">{item.detail}</span>
@@ -192,7 +192,7 @@ export function EventRow({
           <Icon
             name="alert"
             size="xs"
-            style={{ display: "inline", color: "var(--critical-ink)", marginRight: 4 }}
+            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
           />
         )}
         {event.summary || event.type}
