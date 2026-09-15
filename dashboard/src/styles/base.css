@@ -1,175 +1,17 @@
-/* The reset, the document, and the primitives every screen shares. */
+/* The utility classes the screens still spell, and nothing else.
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+   The reset, the document's own type and colour, the focus ring, the
+   scrollbars and the reduced-motion collapse are `@crewlethq/tokens/css/base`
+   now, and the body's height and overflow belong to the shell that owns the
+   rail. What is left here is being replaced screen by screen with Text,
+   Stack, Inline, Spacer and AutoGrid; this file is deleted when the last
+   spelling of a class in it goes.
 
-html {
-  -webkit-text-size-adjust: 100%;
-  text-size-adjust: 100%;
-}
-
-/* THE DOCUMENT DOES NOT SCROLL. `.screen` does, and it is the only thing that
-   may: the sidebar is a fixed rail beside a scrolling pane, and a page that
-   can also scroll as a whole moves that rail off the top of the window and
-   leaves the reader looking at background below the app.
-   `min-height` only asked the body to be at least a viewport tall — it still
-   PERMITTED it to grow, so the shell's invariant held by nobody ever
-   exceeding it rather than by anything enforcing it. A fixed height plus
-   hidden overflow makes it unreachable instead of merely unused, and costs
-   nothing: `.app` is already exactly 100dvh. */
-body {
-  margin: 0;
-  height: 100dvh;
-  overflow: hidden;
-  background: var(--color-surface-background);
-  color: var(--color-text-primary);
-  font-family: var(--font-family-sans);
-  font-size: var(--font-size-sm);
-  line-height: var(--font-line-height-normal);
-  font-weight: var(--font-weight-regular);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  /* Inter's own tabular figures and contextual alternates. `tnum` is the one
-     that matters on this product: a token count that changes width as it
-     counts up makes a whole column jitter. */
-  font-feature-settings:
-    "cv05" 1,
-    "ss03" 1;
-}
-
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-  margin: 0;
-  color: var(--color-text-primary);
-  font-weight: var(--font-weight-semibold);
-  line-height: var(--font-line-height-tight);
-  letter-spacing: var(--font-letter-spacing-tight);
-}
-
-p {
-  margin: 0;
-}
-
-a {
-  color: var(--color-brand-accent-ink);
-  text-decoration: none;
-}
-a:hover {
-  text-decoration: underline;
-}
-
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-  margin: 0;
-}
-
-button {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-}
-
-code,
-kbd,
-pre,
-samp,
-.mono {
-  font-family: var(--font-family-mono);
-  font-variant-ligatures: none;
-  /* Every number in this product is a number that changes. Tabular figures
-     are what stop a live token counter shifting the column beside it. */
-  font-variant-numeric: tabular-nums;
-}
-
-pre {
-  margin: 0;
-}
-
-hr {
-  border: none;
-  border-top: 1px solid var(--color-border-default);
-  margin: 0;
-}
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-}
-
-svg {
-  display: block;
-  flex: none;
-}
-
-img {
-  max-width: 100%;
-}
-
-/* One focus treatment for the whole product, and it is only ever the keyboard
-   ring — a mouse click that painted a ring around a row made every list look
-   permanently selected. */
-:focus {
-  outline: none;
-}
-:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-  border-radius: var(--radius-xs);
-}
-
-::selection {
-  background: var(--color-brand-accent-soft);
-}
-
-/* Scrollbars belong to the theme. A bright system gutter down the side of a
-   dark page is the single most visible way a web app admits it is a web app. */
-* {
-  scrollbar-color: var(--color-scrollbar) transparent;
-  scrollbar-width: thin;
-}
-::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: var(--color-scrollbar);
-  border: 3px solid transparent;
-  background-clip: content-box;
-  border-radius: var(--radius-pill);
-}
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-scrollbar-hover);
-  background-clip: content-box;
-}
-::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
+   The body rule that left carried a comment claiming Inter's tabular figures
+   were what stopped a live token counter shifting the column beside it, and
+   then set `cv05` and `ss03` and no `tnum` at all. The claim is true and the
+   declaration never made it so: `.t-num` below is where a number that changes
+   gets tabular figures, and it is the only place that promises them. */
 
 /* ---- Type utilities -----------------------------------------------------
    Named for what they MEAN, not for their size, so a change of scale is one
@@ -215,11 +57,12 @@ img {
 }
 /* A caption-sized thing that is a LINK, and reads as one.
    `.t-caption` on an <a> is not: it sets the muted colour, which wins over
-   the anchor rule above, so four real navigations across the dashboard —
-   a phase's event, a turn's id, a seat's last error, the spend screen —
-   rendered as dim static micro-text a reader could only find by hovering.
-   One class rather than four local overrides: the failure was the same
-   collision every time, and a fifth caption-link would have repeated it. */
+   the anchor rule in the baseline, so four real navigations across the
+   dashboard, a phase's event, a turn's id, a seat's last error and the spend
+   screen, rendered as dim static micro-text a reader could only find by
+   hovering. One class rather than four local overrides: the failure was the
+   same collision every time, and a fifth caption-link would have repeated
+   it. */
 .t-link {
   font-size: var(--font-size-xs);
   color: var(--color-brand-accent-ink);
@@ -242,6 +85,12 @@ img {
 .t-num {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
+}
+
+.mono {
+  font-family: var(--font-family-mono);
+  font-variant-ligatures: none;
+  font-variant-numeric: tabular-nums;
 }
 
 .muted {

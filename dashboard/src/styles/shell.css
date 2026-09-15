@@ -1,5 +1,16 @@
 /* The application frame: sidebar, topbar, and the one scroll container. */
 
+/* THE DOCUMENT DOES NOT SCROLL. `.screen` does, and it is the only thing that
+   may: the sidebar is a rail beside a scrolling pane, and a page that can
+   also scroll as a whole moves that rail off the top of the window and leaves
+   the reader looking at background below the application. The rule sits with
+   the frame that owns the rail rather than in the shared baseline, because a
+   document that does not carry a rail has no reason to be nailed down. */
+body {
+  height: 100dvh;
+  overflow: hidden;
+}
+
 .app {
   display: grid;
   grid-template-columns: var(--size-shell-rail) minmax(0, 1fr);
