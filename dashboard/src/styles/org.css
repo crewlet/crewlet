@@ -297,36 +297,21 @@
 /* ---- Org builder: table -------------------------------------------------
    The builder's table (`routes/org/builder/TableView.tsx`).
 
-   THE TABLE IS THE DESIGN SYSTEM'S `DataView`, so the toolbar, the sortable
-   headers, the row shapes, the settings frame, the pager and the count are
-   all drawn by it and none of them are here. What is left is the one cell
-   this screen composes: a node's icon, its name and the marks it carries.
+   THE TABLE IS THE DESIGN SYSTEM'S `OrgTable`, over its `TreeGrid`, so the
+   rows, the cells, the column template, the tree's wires, the two-line name
+   group, the strip of row controls and the split add pill are all drawn by it
+   and none of them are here. It replaced a treegrid drawn by hand, whose
+   column template, row grid, sideways scroller and popup layer were ninety
+   lines of this file doing what one component already does on every other
+   screen.
 
-   It replaced a treegrid drawn by hand, whose column template, row grid,
-   sideways scroller and popup layer were ninety lines of this file doing what
-   one component already does on every other screen. */
-
-.btable-name {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-
-/* The icon or avatar keeps its size whatever the name does: a name that wraps
-   onto a second line must not squeeze the mark that says what kind of node it
-   is, which is the one part of the cell a reader scans down the column. */
-
-.btable-name > :first-child {
-  flex: none;
-}
-
-/* The name is what takes the width the marks beside it leave, and what wraps
-   when there is not enough of it. */
-
-.btable-label {
-  min-width: 0;
-}
+   WHICH LEAVES NOTHING TO DRAW. `.btable-name` and `.btable-label` are
+   HANDLES, not styles: the suite finds a row by its NAME cell rather than by
+   whichever cell happens to mention a name. Every declaration they used to
+   carry was already set on the same elements by
+   `.crewlet-org-table__node`, `__icon` and `__name`, four of them byte for
+   byte, and the one that was not (`min-width` on the label span) was inert,
+   since the span is not a flex item and the ellipsis lives on `__name`. */
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
    `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change

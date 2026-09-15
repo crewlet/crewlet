@@ -20,7 +20,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { ComponentProps, ElementType } from "react";
-import { TreeCanvas, type TreeCardContext } from "@crewlethq/ui";
+import {
+  OrgTable,
+  OrgTableActions,
+  OrgTableAdd,
+  OrgTableName,
+  TreeCanvas,
+  type TreeCardContext,
+} from "@crewlethq/ui";
 
 /**
  * Pick an option, which is how every choice in this product is made.
@@ -173,6 +180,125 @@ function referenceChart(outline: boolean): {
 function className(el: Element | null | undefined): string {
   const first = el?.classList[0];
   return first ?? "";
+}
+
+/**
+ * The parts of the design system's org table, asked of the design system.
+ *
+ * THE SAME PROBLEM THE CHART HAS, one screen over: a table suite has to reach
+ * for elements the package draws and no prop and no role names any of them.
+ * The name group a row's own handle rides on, the zone its mark sits in, the
+ * caption line under the name, the strip that stays quiet until the row is
+ * reached and the slot the add splits open in are all read off a reference
+ * table rendered here, so one place knows them and it learns them from the
+ * component rather than from a comment.
+ */
+export function orgTableParts(): {
+  /** The two-line name group: mark, name, caption, trailing slot. */
+  node: string;
+  /** The zone the row's mark sits in. */
+  icon: string;
+  /** The second line, which the caption and its marks ride. */
+  caption: string;
+  /** The strip of controls that acts on the row, quiet until it is reached. */
+  actions: string;
+  /** The slot the add pill splits open in. */
+  add: string;
+} {
+  const { container, unmount } = render(
+    createElement(OrgTable, {
+      label: "Reference table",
+      controls: false,
+      columns: [
+        { key: "name", header: "Name" },
+        { key: "actions", header: "Actions", headerHidden: true },
+      ],
+      rows: [{ id: "a", label: "A" }],
+      renderCell: (id: string, column: number) =>
+        column === 1
+          ? createElement(OrgTableName, {
+              icon: createElement("svg"),
+              name: "A",
+              caption: REFERENCE_CAPTION,
+              trailing: createElement("span", null, "state"),
+            })
+          : createElement(
+              "span",
+              null,
+              createElement(OrgTableAdd, {
+                label: "Add to A",
+                sections: [
+                  { key: "one", label: "Add one", icon: createElement("svg"), onSelect: () => {} },
+                ],
+              }),
+              createElement(
+                OrgTableActions,
+                null,
+                createElement("button", { type: "button" }, "Edit A"),
+              ),
+            ),
+    }),
+  );
+  const cells = [...container.querySelectorAll("[role='gridcell']")];
+  const name = cells[0];
+  const controls = cells[1];
+  // The caption is what holds the word for what kind of thing the row is; the
+  // group is the cell's own last child, since the wires are drawn before it.
+  const kind = [...(name?.querySelectorAll("*") ?? [])].find(
+    (el) => el.children.length === 0 && el.textContent === REFERENCE_CAPTION,
+  );
+  const names = {
+    node: className(name?.lastElementChild),
+    icon: className(name?.lastElementChild?.firstElementChild),
+    caption: className(kind?.parentElement),
+    add: className(childHolding(controls, "Add to A")),
+    actions: className(childHolding(controls, "Edit A")),
+  };
+  unmount();
+  for (const [part, found] of Object.entries(names)) {
+    if (!found) throw new Error(`the org table draws no ${part} this harness can find`);
+  }
+  return names;
+}
+
+/**
+ * The element inside `root` that the design system drew as `part`, where
+ * `part` came from a reference render above.
+ *
+ * `getElementsByClassName` rather than a selector built from the name: a
+ * selector spelled into a template literal reads, to the suite that polices
+ * this, exactly like a package class written out by hand.
+ */
+export function drawnPart(root: Element | Document, part: string): HTMLElement | null {
+  return (root.getElementsByClassName(part)[0] as HTMLElement | undefined) ?? null;
+}
+
+/** Whether `element` sits inside the part named: `closest`, without the selector. */
+export function insidePart(element: Element, part: string): boolean {
+  for (let at: Element | null = element; at !== null; at = at.parentElement) {
+    if (at.classList.contains(part)) return true;
+  }
+  return false;
+}
+
+/** The word the reference row writes under its name, which finds its caption. */
+const REFERENCE_CAPTION = "Unit";
+
+/**
+ * The direct child of `cell` that holds the control named `label`, which is
+ * the slot the package wraps that control in.
+ */
+function childHolding(cell: Element | undefined, label: string): Element | null {
+  const control = [...(cell?.querySelectorAll("button") ?? [])].find(
+    (button) => button.getAttribute("aria-label") === label || button.textContent === label,
+  );
+  let part: Element | null = control ?? null;
+  // The caller's own wrapper is the cell's child; the package's slot is inside
+  // it, which is the element this is looking for.
+  while (part?.parentElement && part.parentElement.parentElement !== cell) {
+    part = part.parentElement;
+  }
+  return part;
 }
 
 /**

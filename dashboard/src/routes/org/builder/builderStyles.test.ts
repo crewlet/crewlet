@@ -10,6 +10,12 @@
  * card's height on a live push, twice per tool-loop round, and every card
  * beside it would move. jsdom has no layout to catch that, so the rules that
  * prevent it are read from the stylesheet.
+ *
+ * WHAT A RULE'S TEXT CANNOT SAY is whether it reaches the element this screen
+ * renders, whether a later rule beats it, and whether it restates something
+ * the design system already set there. That is `TableView.drawing.test.tsx`,
+ * which puts the shipped stylesheet and this one into one document and reads
+ * the cascade over the table this screen actually draws.
  */
 
 import { readFileSync } from "node:fs";
@@ -41,11 +47,31 @@ test("the live state and problem count slots neither shrink nor wrap", () => {
 });
 
 /*
- * A WIRING MARK KEEPS ITS SIZE TOO. It is a glyph on a chart node's caption,
- * and a node one rank tall is measured: a mark that could shrink or grow would
- * relay the chart. The name beside it truncating, and the slot the live state
- * and the count sit in, are the design system's `OrgNodeLabel` now, with the
- * suite that reads them; this is the one part of that promise this screen
+ * THE HANDLES ON THE TABLE'S CELLS DECLARE NOTHING, and that is the whole of
+ * what they are for: `.btable-name` is how this suite finds a row by its NAME
+ * cell rather than by whichever cell happens to mention a name. It declared
+ * display, align-items, gap and min-width, and `.crewlet-org-table__node`
+ * arrives on that same element through `className` and declares the same four,
+ * byte for byte; `.btable-name > :first-child { flex: none }` restated the
+ * package's own rule for the icon, and `.btable-label { min-width: 0 }` was
+ * inert, since the span is not a flex item and the ellipsis lives on the
+ * package's name element. An absence is the one thing a rendered document
+ * cannot show (a restatement that agrees computes to the same answer), so it
+ * is asserted here, over the text.
+ */
+test("the handles this screen puts on the table's cells draw nothing", () => {
+  for (const handle of [".btable-name", ".btable-label", ".btable-name > :first-child"]) {
+    expect(rule(handle), handle).toBe("");
+  }
+});
+
+/*
+ * A WIRING MARK KEEPS ITS SIZE TOO. It is a glyph on a chart node's caption
+ * and on a table row's, and both are one rank tall: a mark that could shrink
+ * or grow would relay the chart and change a row's height with its wiring. The
+ * name beside it truncating, and the slot the live state and the count sit in,
+ * are the design system's `OrgNodeLabel` and `OrgTableName` now, with the
+ * suites that read them; this is the one part of that promise this screen
  * still draws for itself.
  */
 test("a wiring mark keeps its size", () => {
@@ -69,7 +95,7 @@ test("the card width the chart is drawn at is declared", () => {
  * pointer's controls are the design system's `TreeCanvas`, so a rule here that
  * drew one again would be this screen quietly disagreeing with every other
  * chart in the product. The same holds for the treegrid this file used to draw
- * by hand, which is `DataView` now.
+ * by hand, which is `OrgTable` over `TreeGrid` now.
  */
 test("no builder rule redraws what the design system's chart and table draw", () => {
   const redrawn = rules(css)
@@ -108,7 +134,11 @@ const CARRIED_HUE = /var\(--color-(feedback|data|phase)-[-\w]*\)/;
  */
 test("a builder node or row takes no status or data hue, only the accent for the selection", () => {
   const builder = rules(css).filter(([selector]) => /\.(bchart|btable|bnode)/.test(selector));
-  expect(builder.length).toBeGreaterThan(5);
+  // The filter really reaches this screen's own rules: a pattern that matched
+  // nothing would make the guard below pass on an empty list.
+  expect(builder.map(([selector]) => selector)).toEqual(
+    expect.arrayContaining([".bchart", ".bnode-state,\n.bnode-count", ".bnode-mark"]),
+  );
   const hues = builder.filter(([, body]) => CARRIED_HUE.test(body)).map(([selector]) => selector);
   expect(hues).toEqual([]);
 });
