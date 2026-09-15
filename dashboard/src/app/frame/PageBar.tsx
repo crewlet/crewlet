@@ -22,6 +22,7 @@ import { href } from "../router.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { Button, cx } from "~/ui/primitives.tsx";
 import { PAGE_ACTIONS_SLOT } from "./PageActions.tsx";
+import { MaxStars, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 
 export interface Crumb {
   label: string;
@@ -91,6 +92,48 @@ export function CopyLink({ label = "Copy link" }: { label?: string }) {
   return (
     <Button size="sm" variant="ghost" icon="copy" onClick={copy} title={label}>
       {said || label}
+    </Button>
+  );
+}
+
+/**
+ * Keep a shortcut to this page, or drop the one you have.
+ *
+ * THE ONLY PRODUCER OF A STAR. `lib/starred.ts` was written whole — the cap,
+ * the refusal at it, the storage guards, its own suite — and nothing in the
+ * product could create one or read one back, so every workspace sidebar's
+ * Starred section had an empty list by construction.
+ *
+ * ONE BUTTON, one gesture: a filled star means "not this one", which is why
+ * `toggleStar` is the only verb. It reports, including the refusal at the cap
+ * — reaching fifty is not "it worked" and must not render as a filled star.
+ */
+export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
+  const stars = useStarred();
+  const toggle = useToggleStar();
+  const [said, setSaid] = useState("");
+  const key = path.join("/");
+  const kept = stars.some((s) => s.path.join("/") === key);
+  // A PAGE WITH NO IDENTITY CANNOT BE KEPT. The inbox and each workspace's
+  // landing page are one click from the rail, and a star on one is a shortcut
+  // to somewhere the reader is never more than one click from.
+  if (path.length < 2) return null;
+  const onClick = () => {
+    const what = toggle({ path, label, workspace });
+    if (what !== "full") return;
+    setSaid(`${MaxStars} is the limit`);
+    window.setTimeout(() => setSaid(""), 2_400);
+  };
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={onClick}
+      title={said || (kept ? "Remove from Starred" : "Keep in Starred")}
+      aria-pressed={kept}
+    >
+      <Icon name="star" size="sm" fill={kept ? "currentColor" : "none"} />
+      {said}
     </Button>
   );
 }

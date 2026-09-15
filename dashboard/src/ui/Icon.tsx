@@ -116,6 +116,11 @@ const P = {
   send: "m22 2-7 20-4-9-9-4z",
   bell: "M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 0 1-3.46 0",
   power: "M18.36 6.64a9 9 0 1 1-12.73 0M12 2v10",
+  // FILLED BY THE CALLER rather than by a second path: a star is the one mark
+  // in this set whose two states are the same outline, and drawing `starOn`
+  // beside it would be two shapes that have to keep matching. `Icon` takes
+  // `fill`, so the kept state is `fill="currentColor"` on this one path.
+  star: "m12 2.5 2.95 5.98 6.6.96-4.77 4.65 1.12 6.57L12 17.56l-5.9 3.1 1.12-6.57L2.45 9.44l6.6-.96z",
 } as const;
 
 export type IconName = keyof typeof P;

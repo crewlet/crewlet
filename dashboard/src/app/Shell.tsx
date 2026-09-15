@@ -29,7 +29,7 @@ import { CommandPalette } from "./CommandPalette.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
 import { WorkspaceSidebar, type SidebarSection } from "./frame/WorkspaceSidebar.tsx";
-import { PageBar, CopyLink } from "./frame/PageBar.tsx";
+import { PageBar, CopyLink, StarPage } from "./frame/PageBar.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { crumbsFor, titleOf, type Labels } from "./workspaces/crumbs.ts";
 import {
@@ -38,6 +38,7 @@ import {
   useCompanySidebar,
   useCostSidebar,
   useKnowledgeSidebar,
+  useKeptSections,
   useWorkSidebar,
 } from "./workspaces/sidebars.tsx";
 import { Icon } from "~/ui/Icon.tsx";
@@ -140,19 +141,22 @@ function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
   const activity = useActivitySidebar();
   const cost = useCostSidebar();
   const admin = useAdminSidebar();
+  // WHAT THIS READER KEPT AND OPENED, appended to whichever tree is shown, so
+  // every workspace has them and none of the six implements them.
+  const kept = useKeptSections(workspace);
   switch (workspace) {
     case "work":
-      return work;
+      return [...work, ...kept];
     case "company":
-      return company;
+      return [...company, ...kept];
     case "knowledge":
-      return knowledge;
+      return [...knowledge, ...kept];
     case "activity":
-      return activity;
+      return [...activity, ...kept];
     case "cost":
-      return cost;
+      return [...cost, ...kept];
     case "admin":
-      return admin;
+      return [...admin, ...kept];
     default:
       // The Inbox and My work are two-pane screens whose scope lives in the
       // page itself — a sidebar of filters would be the grammar's first
@@ -317,6 +321,7 @@ export function Shell({ children }: { children: ReactNode }) {
           actions={
             <>
               {actions}
+              <StarPage path={path} label={where} workspace={workspaceOf(path) || ""} />
               <CopyLink />
             </>
           }

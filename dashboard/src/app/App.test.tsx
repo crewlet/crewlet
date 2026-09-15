@@ -8,7 +8,7 @@
  * sees, and it is the one least likely to be exercised by hand.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { App } from "./App.tsx";
 import { Router } from "./router.tsx";
@@ -16,6 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { DESTINATIONS } from "./nav.ts";
 import { buildHash } from "./router.tsx";
+import { forgetStars, resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -172,6 +173,36 @@ describe("live state reaches the screen", () => {
       </ClientContext.Provider>,
     );
     expect(screen.getAllByText("CEO").length).toBeGreaterThan(0);
+  });
+
+  // THE STAR'S WHOLE ROUND TRIP. `lib/starred.ts` was written complete — the
+  // cap, the refusal at it, the storage guards, its own suite — and nothing in
+  // the product could make a star or read one back: the page bar's own doc
+  // comment promised "Copy link, star, open" and only Copy link existed, so
+  // every workspace sidebar's Starred section was empty by construction.
+  test("keeping a page puts it in this workspace's sidebar", async () => {
+    forgetStars();
+    resetStarsForTest();
+    location.hash = "#/company/people/ceo";
+    const { store, view } = mount();
+    store.applyOrg({
+      name: "Acme",
+      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+    });
+    view.rerender(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    expect(screen.queryByText("Starred")).toBeNull();
+    fireEvent.click(screen.getByTitle("Keep in Starred"));
+    expect(screen.getByText("Starred")).toBeDefined();
+    // AND IT IS THE SAME BUTTON that takes it back out: a filled star means
+    // "not this one".
+    fireEvent.click(screen.getByTitle("Remove from Starred"));
+    expect(screen.queryByText("Starred")).toBeNull();
   });
 
   test("a seat opened on a tab it does not have still has a page under it", () => {

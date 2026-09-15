@@ -29,6 +29,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatTone } from "~/lib/seats.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
+import { useStarred } from "~/lib/starred.ts";
+import { useRecents } from "~/lib/recents.ts";
 import type { OrgUnit, WorkProjectRow } from "~/protocol/index.ts";
 
 /**
@@ -277,4 +279,63 @@ function toneOf(tone: string): SidebarRow["tone"] {
   if (tone === "needs") return "caution";
   if (tone === "broken") return "critical";
   return undefined;
+}
+
+/**
+ * The two sections every workspace gets for free.
+ *
+ * WHAT YOU KEPT AND WHAT YOU OPENED, and they are opposites: a star is a
+ * decision that does not decay, a recent is a side effect that does. A rail
+ * built only from recents loses the board somebody checks every morning the
+ * first day they spend somewhere else, and one built only from stars never
+ * offers the thing they were reading five minutes ago.
+ *
+ * SCOPED TO THIS WORKSPACE. Both records carry the workspace they were made
+ * in, so the Work sidebar offers work and the Admin sidebar offers nodes —
+ * a single global list would put a config revision under Knowledge.
+ *
+ * Neither section renders empty. There is nothing to say about a reader who
+ * has kept nothing: the control that fills it is in the page bar, not here,
+ * so an empty-state sentence would point at a button in another component.
+ *
+ * `lib/starred.ts` and `lib/recents.ts` were both written whole — the caps,
+ * the refusals, the storage guards, their suites — and until the page bar
+ * grew a star and this grew its sections, only the command palette read
+ * either, so a star had no producer at all and a recent had one reader.
+ */
+export function useKeptSections(workspace: string): SidebarSection[] {
+  const stars = useStarred();
+  const recents = useRecents();
+  return useMemo(() => {
+    const out: SidebarSection[] = [];
+    const kept = stars.filter((s) => s.workspace === workspace);
+    if (kept.length > 0) {
+      out.push({
+        key: "starred",
+        label: "Starred",
+        collapsible: true,
+        rows: kept.map((s) => ({
+          key: `star-${s.path.join("/")}`,
+          label: s.label,
+          path: s.path,
+          icon: "star" as const,
+        })),
+      });
+    }
+    const seen = recents.filter((r) => r.workspace === workspace);
+    if (seen.length > 0) {
+      out.push({
+        key: "recents",
+        label: "Recent",
+        collapsible: true,
+        rows: seen.map((r) => ({
+          key: `recent-${r.path.join("/")}`,
+          label: r.label,
+          path: r.path,
+          icon: "clock" as const,
+        })),
+      });
+    }
+    return out;
+  }, [stars, recents, workspace]);
 }
