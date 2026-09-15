@@ -6,7 +6,7 @@
  * socket can see. That much is deliberate. What was not is that the banner
  * explaining it offered nothing that could set a token: with anonymous reads
  * allowed the socket is never refused, so the dialog's other two doors (a
- * socket refusal, and the engine panel) both stay shut on exactly the screen
+ * socket refusal, and the palette) both stay shut on exactly the screen
  * that needs it. The reader is told what is missing and left with no way to
  * supply it.
  */

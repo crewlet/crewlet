@@ -48,7 +48,7 @@ import { PageNote } from "~/app/frame/PageNote.tsx";
 function refusal(err: unknown): string {
   if (!(err instanceof RestError)) return String(err);
   if (err.unauthorized) {
-    return "This surface needs an operator token. Set one from the engine panel.";
+    return "This surface needs an operator token. Set one with the button below, or from the command palette.";
   }
   return err.detail || err.code || "the engine refused the read";
 }
