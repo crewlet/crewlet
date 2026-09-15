@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/events/types"
 )
 
 // MemoryLedger is the in-process [Ledger] twin.
@@ -44,13 +46,30 @@ func (m *MemoryLedger) Claim(_ context.Context, run Run) (bool, error) {
 
 // Recent returns the newest rows first, at most limit of them.
 func (m *MemoryLedger) Recent(_ context.Context, limit int) ([]Run, error) {
+	return m.recent(limit, func(Run) bool { return true }), nil
+}
+
+// RecentFor returns one schedule's newest rows first, at most limit of them.
+func (m *MemoryLedger) RecentFor(_ context.Context, scope types.ScheduleScope,
+	scopeID, name string, limit int) ([]Run, error) {
+
+	return m.recent(limit, func(r Run) bool {
+		return r.Scope == scope && r.ScopeID == scopeID && r.ScheduleName == name
+	}), nil
+}
+
+// recent is the one walk both listings take, so the total order the Ledger
+// contract names cannot hold for one of them and not the other.
+func (m *MemoryLedger) recent(limit int, keep func(Run) bool) []Run {
 	if limit <= 0 {
-		return nil, nil
+		return nil
 	}
 	m.mu.Lock()
 	rows := make([]Run, 0, len(m.claim))
 	for _, run := range m.claim {
-		rows = append(rows, run)
+		if keep(run) {
+			rows = append(rows, run)
+		}
 	}
 	m.mu.Unlock()
 
@@ -63,7 +82,7 @@ func (m *MemoryLedger) Recent(_ context.Context, limit int) ([]Run, error) {
 	if len(rows) > limit {
 		rows = rows[:limit]
 	}
-	return rows, nil
+	return rows
 }
 
 // Purge drops rows fired strictly before the cutoff, and their claim keys

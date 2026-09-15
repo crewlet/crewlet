@@ -514,7 +514,20 @@ export interface ScheduleRunRow {
 
 export interface SchedulesAnswer {
   schedules: ScheduleRow[];
+  /** The COMPANY's newest fires, capped across every schedule — so a company
+   *  with twenty hourly ones fills this in a couple of hours. One schedule's
+   *  own history is `schedule_runs`. */
   recent_runs?: ScheduleRunRow[];
+}
+
+/** One schedule's own dispatch history, newest first. */
+export interface ScheduleRunsAnswer {
+  scope_type: string;
+  scope_id: string;
+  schedule_name: string;
+  runs: ScheduleRunRow[];
+  /** The page filled, so older fires are past it. */
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -2713,6 +2726,7 @@ export interface QueryMap {
   fleet: FleetAnswer;
   budgets: BudgetsAnswer;
   schedules: SchedulesAnswer;
+  schedule_runs: ScheduleRunsAnswer;
   integrations: IntegrationsAnswer;
   sandbox_runs: { runs: SandboxRun[] };
   retention: RetentionReport;

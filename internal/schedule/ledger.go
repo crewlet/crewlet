@@ -133,6 +133,22 @@ type Ledger interface {
 	// whose page size arrived as 0 pull the whole table.
 	Recent(ctx context.Context, limit int) ([]Run, error)
 
+	// RecentFor is [Ledger.Recent] narrowed to ONE schedule, in the same
+	// order and under the same limit rule.
+	//
+	// Because `Recent` is the whole company's, and a company-wide page of
+	// fifty is not a history of anything: twenty schedules firing hourly
+	// fill it in two and a half hours, so "did the standup fire this
+	// week" was unanswerable while every row of the answer sat in the
+	// table. A screen wanting one schedule's history had to page the
+	// company's and filter, which is the shape that makes a reader
+	// conclude a schedule stopped running.
+	//
+	// The scope tuple is the identity a [Row] carries, so a caller hands
+	// back exactly what the schedule listing gave it.
+	RecentFor(ctx context.Context, scope types.ScheduleScope,
+		scopeID, name string, limit int) ([]Run, error)
+
 	// Purge drops rows whose FiredAt is strictly before `before`, returning
 	// how many went.
 	//

@@ -51,6 +51,11 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/events", what: "events"},
 	{method: "GET", pattern: "/tokens/breakdown", what: "tokens"},
 	{method: "GET", pattern: "/schedules", what: "schedules"},
+	// ONE SCHEDULE'S OWN HISTORY. Three path segments because a schedule's
+	// identity is all three — two units may each declare a "standup", and a
+	// role and a unit may both — so a name alone would merge two teams'
+	// histories into one list.
+	{method: "GET", pattern: "/schedules/{scope_type}/{scope_id}/{name}/runs", what: "schedule_runs", path: map[string]string{"scope_type": "scope_type", "scope_id": "scope_id", "name": "name"}},
 	{method: "GET", pattern: "/fleet", what: "fleet"},
 	{method: "GET", pattern: "/sandbox-runs", what: "sandbox_runs"},
 	{method: "GET", pattern: "/budgets", what: "budgets"},

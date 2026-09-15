@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -239,6 +240,14 @@ type Sources struct {
 // not on the ledger. Satisfied by the SQL ledger and its memory twin alike.
 type ScheduleRuns interface {
 	Recent(ctx context.Context, limit int) ([]schedule.Run, error)
+
+	// RecentFor is the same listing narrowed to ONE schedule — see
+	// [schedule.Ledger]. The company-wide page is not a history of
+	// anything: twenty schedules firing hourly fill fifty rows in two and
+	// a half hours, so "did the standup fire this week" was unanswerable
+	// while every row of the answer sat in the table.
+	RecentFor(ctx context.Context, scope types.ScheduleScope,
+		scopeID, name string, limit int) ([]schedule.Run, error)
 }
 
 // clock reads the injected time, or the wall clock.
@@ -299,6 +308,13 @@ func Register(r *Registry, s Sources) {
 	// still has a credential presented to it, and "this token resolves to
 	// no seat" is the answer a screen needs in order to say what to bind.
 	r.Register("viewer", s.viewer)
+	if s.Runs != nil {
+		// ONE SCHEDULE'S OWN HISTORY, gated on the LEDGER rather than on
+		// the company: the configured rows are a projection of the org
+		// and this is a store read, so a node with one and not the other
+		// is a real shape.
+		r.Register("schedule_runs", s.scheduleRuns)
+	}
 	if s.Company != nil {
 		// Gated on the COMPANY, not on the durable counter: the caps are
 		// what the screen is about, and a node with a company and no store

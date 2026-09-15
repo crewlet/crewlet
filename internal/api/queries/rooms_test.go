@@ -110,7 +110,7 @@ func everySeam(t *testing.T) queries.Sources {
 		Company:  func() *config.Company { return cfg },
 		Coord:    coordmemory.New(),
 		Plane:    coordmemory.NewFleet(),
-		Runs:     fakeRuns{},
+		Runs:     &fakeRuns{},
 		Diary:    &learning.Diary{},
 		Episodes: &learning.Episodes{},
 		Skills:   &learning.Skills{},

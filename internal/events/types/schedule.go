@@ -17,6 +17,23 @@ const (
 	ScheduleScopeUnit ScheduleScope = "unit"
 )
 
+// ScheduleScopes is the closed set, which is what makes a refusal able to say
+// what would have worked.
+func ScheduleScopes() []ScheduleScope {
+	return []ScheduleScope{ScheduleScopeRole, ScheduleScopeUnit}
+}
+
+// Valid reports whether s is a scope this build knows.
+//
+// EVERY ENUM IN THIS TREE HAS ONE, and this one did not: a value off the wire
+// has to be a value rather than a panic, and a surface taking a scope as a
+// parameter has to be able to refuse an unknown one naming the two. It is on
+// the type rather than at each caller so two callers cannot disagree about
+// what a scope is.
+func (s ScheduleScope) Valid() bool {
+	return s == ScheduleScopeRole || s == ScheduleScopeUnit
+}
+
 // ScheduledTaskFired records the scheduler dispatching a recurring run.
 //
 // Observability only: the agent's actual wake is a TaskAssigned published to
