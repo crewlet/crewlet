@@ -19,11 +19,11 @@ import { fileURLToPath } from "node:url";
 //
 // Two halves, one file. Vite's own `build.license` writes every npm package the
 // bundle contains, each with its license text, sorted by package, so the output
-// is as reproducible as the bundle the CI diff checks. It only sees what comes
-// out of node_modules, so `sourceNotices` appends the rest: the fonts, which are
-// copied from public/ untouched, and the icon paths adapted from Feather Icons,
-// which live in our own source and lose their attribution comment to the
-// minifier.
+// is as reproducible as the bundle the CI diff checks. It only sees what a
+// MODULE GRAPH reaches, so `sourceNotices` appends what travels as files: the
+// faces, and the Material Symbols drawings behind every glyph, both
+// redistributed by a package under a license of their own that the package's
+// own MIT text does not cover.
 //
 // A `.txt` name rather than Vite's default `.vite/license.md`: the engine serves
 // this tree, and a notice under a dot directory with a Markdown type is one
