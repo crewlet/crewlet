@@ -181,6 +181,12 @@ export function useKnowledgeSidebar(): SidebarSection[] {
           key: c.key,
           label: c.name || c.key,
           path: ["knowledge", c.key],
+          // HOW MUCH IS IN IT, which is what makes a rail of forty spaces
+          // navigable: the one with four hundred pages and the one with
+          // two looked identical. Trashed pages are not counted, so the
+          // number and the list behind it agree.
+          count: c.pages,
+          countTitle: "pages in this container, trashed ones excluded",
         })),
         empty: "This node knows about no containers yet.",
       },

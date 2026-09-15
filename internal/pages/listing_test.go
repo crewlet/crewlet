@@ -87,3 +87,74 @@ func titles(l pages.Listing) []string {
 	}
 	return out
 }
+
+func (r *roundTrip) containers() []pages.ContainerListing {
+	r.t.Helper()
+	got, err := r.reader.Containers(r.t.Context(),
+		statelog.Freshness{Level: statelog.ReadSession})
+	if err != nil {
+		r.t.Fatalf("Containers: %v", err)
+	}
+	return got
+}
+
+// A CONTAINER SAYS HOW MUCH IS IN IT, which the rail beside it could not.
+//
+// The count is DERIVED rather than a field on the container document: the
+// document is what a writer wrote and this is a fact about other rows, so
+// putting it there would have every page create rewrite its container and two
+// writers adding a page to one space contend on a counter neither touched.
+//
+// TRASHED PAGES DO NOT COUNT. A trashed page is invisible to every default
+// listing this reader serves, so counting it would put a number on the rail
+// the list beside it cannot account for — a reader clicks "3" and finds two.
+func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	// A CONTAINER IS A DOCUMENT SOMEBODY WROTE, and a page merely NAMES one
+	// — so a space with pages and no document is not in this listing at all.
+	// Declaring three, one of which nobody writes to, is what makes the zero
+	// below a real case rather than an absent key.
+	for _, key := range []string{"ENG", "PROD", "EMPTY"} {
+		if _, err := r.store.EnsureContainer(t.Context(), key, key, ""); err != nil {
+			t.Fatalf("EnsureContainer %s: %v", key, err)
+		}
+	}
+	r.drain()
+	for _, title := range []string{"Alpha", "Beta", "Gamma"} {
+		r.write(author("jane"), pages.NewPage{Title: title, Body: "prose"})
+	}
+	r.write(author("jane"), pages.NewPage{
+		Container: "PROD", Title: "Only one", Body: "prod's own",
+	})
+	// A FOURTH PAGE IN ENG, TRASHED. Without it "trashed pages do not
+	// count" is a claim rather than a case: every count would be identical
+	// with or without the predicate.
+	binned := r.write(author("jane"), pages.NewPage{Title: "Delta", Body: "prose"})
+	if _, err := r.store.Trash(t.Context(), author("jane"), binned.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
+
+	counts := map[string]int{}
+	for _, c := range r.containers() {
+		counts[c.Key] = c.Pages
+	}
+	if counts["ENG"] != 3 {
+		t.Errorf("ENG holds %d pages, want 3 — the fourth is trashed, and a "+
+			"rail that counted it sends a reader to a list of three",
+			counts["ENG"])
+	}
+	if counts["PROD"] != 1 {
+		t.Errorf("PROD holds %d pages, want 1", counts["PROD"])
+	}
+
+	// AND A CONTAINER NOBODY HAS WRITTEN TO IS ZERO rather than absent,
+	// because the count comes from a GROUP BY that has no row for it — the
+	// listing has to supply the zero, or an empty space renders blank where
+	// every other one renders a number.
+	if n, listed := counts["EMPTY"]; !listed || n != 0 {
+		t.Errorf("EMPTY is listed=%v with %d pages, want it listed at zero",
+			listed, n)
+	}
+}
