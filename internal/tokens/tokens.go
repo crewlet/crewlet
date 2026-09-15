@@ -157,10 +157,23 @@ type TurnRow struct {
 
 // Rollup is the whole breakdown.
 type Rollup struct {
-	// SinceDays and AgentRole describe the WINDOW this covers, so a reader
-	// looking at a number knows what it is a number of. Both are set by
-	// the caller that chose them, not derived here.
-	SinceDays int    `json:"since_days"`
+	// Since and Until describe the WINDOW this covers, so a reader looking
+	// at a number knows what it is a number of. Both are RFC3339 instants
+	// set by the caller that chose them, not derived here.
+	//
+	// INSTANTS RATHER THAN A DAY COUNT, which is what this was. A count is
+	// a window anchored at now, and a time-range control produces two edges
+	// that need not be: "1 June to 8 June" is not any number of days back
+	// from this afternoon, and a rollup that could only say "7 days" put a
+	// heading over the figures that disagreed with the chart beside them
+	// the moment a reader named their own window.
+	//
+	// Until is EXCLUSIVE, matching every other half-open window in this
+	// engine, so two adjacent rollups share their boundary instant without
+	// either losing it or counting it twice.
+	Since string `json:"since"`
+	Until string `json:"until"`
+
 	AgentRole string `json:"agent_role"`
 
 	Totals   Bucket      `json:"totals"`
@@ -186,9 +199,18 @@ type Options struct {
 	// guessing one — a wrong link is worse than no link.
 	Handles map[string]string
 
-	// SinceDays and AgentRole are recorded on the rollup as the window it
-	// describes. The caller does the filtering; this only reports it.
-	SinceDays int
+	// Since, Until and AgentRole are recorded on the rollup as the window
+	// it describes. The caller does the filtering; this only reports it.
+	//
+	// Each is rendered as it is given, and a zero one renders EMPTY —
+	// unbounded on that side. Aggregate never reads the clock to fill one
+	// in: every caller here already holds the window it filtered by (the
+	// store's own [store.PhaseTokenQuery.Window] hands back both edges),
+	// and a fold that read the clock would be a second opinion about a
+	// window somebody already decided.
+	Since time.Time
+	Until time.Time
+
 	AgentRole string
 
 	// RecentTurns caps the per-turn list. Zero takes DefaultRecentTurns.
@@ -211,7 +233,8 @@ func Aggregate(records []Record, opts Options) Rollup {
 	}
 
 	out := Rollup{
-		SinceDays: opts.SinceDays,
+		Since:     stamp(opts.Since),
+		Until:     stamp(opts.Until),
 		AgentRole: opts.AgentRole,
 		// Never nil. A nil slice marshals to `null`, and the client does
 		// `d.by_phase.length` — so an empty window would throw in the
@@ -410,4 +433,12 @@ func compareStamp(a, b string) int {
 		return at.Compare(bt)
 	}
 	return cmp.Compare(a, b)
+}
+
+// stamp renders a window edge, or the empty string for an unbounded one.
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

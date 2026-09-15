@@ -197,9 +197,20 @@ func TestSpendIsFoldedOnTheTickAndNotOnThePublishPath(t *testing.T) {
 	if len(rollup.ByPhase) != 1 || rollup.ByPhase[0].Phase != "plan" {
 		t.Errorf("by_phase = %+v", rollup.ByPhase)
 	}
-	if rollup.SinceDays < 1 {
-		t.Errorf("since_days = %d; the client prints this beside the numbers",
-			rollup.SinceDays)
+	// The window, which the client prints beside the numbers. Two instants
+	// an hour apart at least — the projection's own rolling window — rather
+	// than a day count that could not name a window ending in the past.
+	at, err := time.Parse(time.RFC3339, rollup.Since)
+	if err != nil {
+		t.Fatalf("since = %q: %v", rollup.Since, err)
+	}
+	till, err := time.Parse(time.RFC3339, rollup.Until)
+	if err != nil {
+		t.Fatalf("until = %q: %v", rollup.Until, err)
+	}
+	if !till.After(at) {
+		t.Errorf("window = %s .. %s, want a half-open one with something in it",
+			rollup.Since, rollup.Until)
 	}
 }
 
