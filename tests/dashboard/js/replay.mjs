@@ -155,8 +155,8 @@ if (!state.phases.length) {
 
 // The spend rollup. The store takes it two ways and both have to work: a
 // snapshot is accepted only `if (snap.tokens && snap.tokens.totals)`, and a
-// push is stored as-is for the Spend screen to read `.since_days` off. A list
-// of raw records passes neither, and the screen renders blank with the numbers
+// push is stored as-is for the Spend screen to read its window off. A list of
+// raw records passes neither, and the screen renders blank with the numbers
 // sitting in memory the whole time.
 if (state.tokens === null) {
   problems.push(
@@ -170,10 +170,24 @@ if (state.tokens === null) {
         "reconnecting tab would drop the rollup it was just sent",
     );
   }
-  if (!state.tokens.since_days) {
+  // THE WINDOW IS TWO INSTANTS, half-open. It was a count of days, which can
+  // only name a window anchored at now — and the Cost screen's range control
+  // produces two edges that need not be. Both are required: a rollup carrying
+  // one edge describes a window with no other end, and the screen prints the
+  // pair beside the numbers.
+  for (const edge of ["since", "until"]) {
+    if (!state.tokens[edge]) {
+      problems.push(
+        `the spend rollup has no \`${edge}\`: the screen prints the window ` +
+          "beside the numbers and can say nothing about what they cover " +
+          "without both edges",
+      );
+    }
+  }
+  if (state.tokens.since && state.tokens.until && !(state.tokens.until > state.tokens.since)) {
     problems.push(
-      "the spend rollup has no `since_days`: the screen prints it beside the " +
-        "numbers and renders a 0-day window without it",
+      "the spend rollup's window ends where it begins: half-open, that names " +
+        "no records at all, so the figures beside it are a sum over nothing",
     );
   }
   if (!Array.isArray(state.tokens.by_phase)) {
