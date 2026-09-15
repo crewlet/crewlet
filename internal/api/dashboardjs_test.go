@@ -290,6 +290,67 @@ func sameOrigin(url string) bool {
 	return strings.HasPrefix(url, "/") && !strings.HasPrefix(url, "//")
 }
 
+// TestTheDesignSystemCascadesInOrder checks the served stylesheet carries the
+// design system's baseline BEFORE the components that sit on it.
+//
+// Order is what decides a tie, and there is one. The baseline's `:focus-visible`
+// rule and a component's `.crewlet-btn` rule each count as a single class, so
+// whichever is written later wins every property they share. The baseline sets
+// `border-radius`, which means a baseline written last squares off every
+// button, input and dialog the moment a reader tabs to it — visible only to
+// somebody using the keyboard, and to nothing else in this suite.
+//
+// It is an ORDERING of two files, so nothing but the built artifact can show
+// it: the source says `import` and the cascade says which import was evaluated
+// first, which is the bundler's answer rather than the author's. This reads
+// what the browser is handed.
+func TestTheDesignSystemCascadesInOrder(t *testing.T) {
+	t.Parallel()
+	a := newApp(t, api.Options{})
+	shell := mustFetch(t, a, "/dashboard", "text/html")
+
+	sheets := 0
+	for _, m := range staticRef.FindAllSubmatch(shell, -1) {
+		if !strings.HasSuffix(string(m[1]), ".css") {
+			continue
+		}
+		sheets++
+		sheet := mustFetch(t, a, string(m[1]), "text/css")
+
+		// The baseline's own rule: `:focus-visible` as a whole selector, not a
+		// component's `.crewlet-x:focus-visible`.
+		base := baselineFocus.FindIndex(sheet)
+		first := componentRule.FindIndex(sheet)
+		if base == nil {
+			t.Fatalf("%s carries no bare :focus-visible rule, so the design system's "+
+				"baseline is not in the bundle at all; main.tsx imports "+
+				"@crewlethq/tokens/css/base", m[1])
+		}
+		if first == nil {
+			t.Fatalf("%s carries no component rule, so this scan proves nothing "+
+				"about an order it cannot see", m[1])
+		}
+		if base[0] > first[0] {
+			t.Errorf("%s writes the design system's baseline after the component "+
+				"stylesheets (%d > %d), so the baseline wins every tie: a focused "+
+				"control takes the baseline's radius. Import the five "+
+				"@crewlethq/tokens stylesheets above every module import in main.tsx",
+				m[1], base[0], first[0])
+		}
+	}
+	if sheets == 0 {
+		t.Error("the shell named no stylesheet, so nothing was measured")
+	}
+}
+
+var (
+	// baselineFocus matches the baseline's own focus rule: `:focus-visible` as
+	// a complete selector, which is how it is told from a component's.
+	baselineFocus = regexp.MustCompile(`(?:^|[{}])\s*:focus-visible\s*\{`)
+	// componentRule matches the first rule of any design system component.
+	componentRule = regexp.MustCompile(`\.crewlet-[a-z]`)
+)
+
 // TestTheNoticesAreServedAsText checks a running engine answers its notices,
 // from the binary, as text a browser shows.
 func TestTheNoticesAreServedAsText(t *testing.T) {
