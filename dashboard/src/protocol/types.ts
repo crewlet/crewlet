@@ -1950,6 +1950,11 @@ export interface PageContainer {
   name?: string;
   purpose?: string;
   created_at?: string;
+  /** How many pages this container holds, TRASHED ONES EXCLUDED — so the
+   *  number on the rail and the list behind it agree. DERIVED beside the
+   *  container rather than stored on it: the document is what a writer wrote,
+   *  and a count on it would have every page create rewrite its container. */
+  pages: number;
 }
 
 export interface PageComment {

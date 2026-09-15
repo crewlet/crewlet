@@ -192,7 +192,7 @@ func (s *stubPages) Get(_ context.Context, _ string,
 
 func (s *stubPages) Containers(_ context.Context,
 	fresh statelog.Freshness,
-) ([]pages.Container, error) {
+) ([]pages.ContainerListing, error) {
 	s.level, s.fresh = fresh.Level, fresh
 	return nil, s.err
 }

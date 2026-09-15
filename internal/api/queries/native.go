@@ -128,7 +128,7 @@ type WorkReader interface {
 type PageReader interface {
 	List(ctx context.Context, f pages.Filter, fresh statelog.Freshness) (pages.Listing, error)
 	Get(ctx context.Context, ref string, fresh statelog.Freshness) (pages.Detail, error)
-	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.Container, error)
+	Containers(ctx context.Context, fresh statelog.Freshness) ([]pages.ContainerListing, error)
 }
 
 // ---- work -------------------------------------------------------------- //

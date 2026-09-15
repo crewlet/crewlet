@@ -247,7 +247,7 @@ func (emptyPages) Get(context.Context, string, statelog.Freshness) (pages.Detail
 	return pages.Detail{}, nil
 }
 
-func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.Container, error) {
+func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.ContainerListing, error) {
 	return nil, nil
 }
 
