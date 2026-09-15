@@ -236,7 +236,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/activity/runs` · `#/activity/runs/{turn_id}` | **Coding runs** — live and durable | |
 | `#/activity/schedules` | **Schedules** | |
 | `#/activity/a2a` | **Agent-to-agent** | |
-| `#/activity/events` · `#/activity/events/{id}` | **Event log** | `category=` · `actor=` · `q=` |
+| `#/activity/events` · `#/activity/events/{id}` | **Event log** — the time axis, then the rows | `window=1h\|6h\|1d\|7d\|30d\|<from>/<to>` · `category=` · `actor=` · `q=` · `failed=` |
 | `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` | **Infrastructure** — nodes, leases, duties, replication *(operator)* | |
@@ -297,6 +297,41 @@ draws**, so the hour in progress is on the chart while it is still being spent
 and the query changes once per column rather than once per second; a list's are
 not. An interval never moves at all — it is the one window that is stable to
 link to.
+
+### A log is an axis, then its rows
+
+Two screens are log-shaped — the event log and the Inbox — and both had the
+same hole: a page of rows answers *what happened* and has no dimension at all
+for *when the company was busy*. A burst at four in the morning and a steady
+trickle across a week are the same hundred rows in the same column.
+
+**`Histogram`** is that dimension, and its bars are the **engine's**. The
+browser holds at most a page and the store's window it never holds, so an axis
+folded client-side would be right for one window and absent for every other —
+the same rule the spend series follows. Both halves compile their filters
+through one predicate in the store, so a bar can never claim rows the listing
+beneath it would not show. Every bucket is drawn, empty ones included, because
+a quiet hour is a fact about the company rather than a gap in the chart; the
+height is the true proportion with a floor in **pixels**, not percent, so a
+bucket of 4 beside a bucket of 400 stays visibly shorter instead of both being
+rounded up to the same visible sliver.
+
+**A bar is a control.** Clicking one narrows `window=` to the bucket it covers,
+which is the gesture every log tool has and the reason the axis is worth having:
+"what happened in that spike" is the question the spike creates.
+
+**`FacetRail`** is the other half — one dimension of the list, as chips that
+narrow it. Two screens had two of these and they disagreed about the one thing
+that matters: whether a count is over what is **loaded** or over what **exists**.
+That is a required prop now rather than a caption somebody remembers, and it is
+said beside the chips. A number next to a chip is read as "how many there are",
+and when it is really "how many of the four hundred rows this tab happens to be
+holding" the reader is being told something false about their own company.
+
+A facet count is computed with its **own** filter lifted and every other one
+applied, because that is the only meaning it can have: a chip says how many rows
+choosing it would show. Counted through its own filter, every chip but the
+selected one reads zero and the rail is a dead end.
 
 ### The four frame-level keys
 

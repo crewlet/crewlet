@@ -25,8 +25,15 @@ import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
 import { Badge, Button, Chip, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
-import { newestFirst, plural } from "~/lib/format.ts";
+import { newestFirst, plural, tsKey } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
+import { useNow } from "~/lib/clock.ts";
+import { useQuery } from "~/lib/useQuery.ts";
+import { spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
+import type { Offer } from "~/lib/range.ts";
+import { TimeRangePicker } from "~/ui/TimeRange.tsx";
+import { Histogram } from "~/ui/Histogram.tsx";
+import { FacetRail } from "~/ui/FacetRail.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
@@ -53,6 +60,27 @@ const CATEGORIES = [
 
 const PAGE = 100;
 
+/**
+ * WHICH WINDOWS THE LOG HAS.
+ *
+ * The whole vocabulary bar the two shortest, and a custom interval: an event
+ * log is asked "what just happened" and "what happened last Tuesday" in the
+ * same breath, and both are questions about the store rather than about what
+ * this tab is holding. `1h` is the short end because that is where the minute
+ * bucket stops being drawable — sixty bars — and the store's own retention is
+ * thirty days, so `90d` would offer a window two thirds of which can never
+ * have rows in it.
+ */
+const LOG_OFFER: Offer = {
+  ranges: ["1h", "6h", "1d", "7d", "30d"],
+  custom: true,
+  fallback: "1d",
+  // ALL THREE, which is why `event_series` has a bucket the spend series does
+  // not: "what just happened" is the commonest question asked of a log, and an
+  // hour is the whole of that answer's window.
+  buckets: ["minute", "hour", "day"],
+};
+
 /** Whether two instants fall on the same local day. */
 function sameDay(a: string, b: string): boolean {
   const x = new Date(a);
@@ -67,12 +95,26 @@ function sameDay(a: string, b: string): boolean {
 export function Activity() {
   const { socket } = useClient();
   const liveEvents = useEvents();
+  const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
   const [q, setQ] = useParam("q", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
+  // NOT ALIGNED to the bucket. A chart rounds its edges up so the column in
+  // progress is drawn and the query changes once per column; a LIST's newest
+  // row is the newest row, and rounding up would ask the store for rows that
+  // do not exist yet. The axis below is drawn from the engine's own snapped
+  // window, which is where that rounding belongs.
+  const range = useTimeRange(now, LOG_OFFER, false);
+  const { since, until, bucket } = range;
 
   const [older, setOlder] = useState<FeedRow[]>([]);
+  // Whether this window's FIRST page has been asked for. A window is a query
+  // now, so the screen asks it rather than waiting to be told to: without
+  // this, a reader who scrubbed to a day the axis says holds nine thousand
+  // events saw whatever the live socket had pushed since the tab opened —
+  // one row on a freshly started engine — under a heading claiming the day.
+  const [fetched, setFetched] = useState(false);
   const [cursor, setCursor] = useState<{ before_time: string; before_id: string } | null>(null);
   const [exhausted, setExhausted] = useState(false);
   const [paging, setPaging] = useState(false);
@@ -94,7 +136,8 @@ export function Activity() {
     setCursor(null);
     setExhausted(false);
     setPageError(null);
-  }, [category, actor]);
+    setFetched(false);
+  }, [category, actor, since, until]);
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
@@ -104,8 +147,18 @@ export function Activity() {
       return true;
     });
     const needle = q.trim().toLowerCase();
+    const from = tsKey(since);
+    const to = tsKey(until);
     return (
       all
+        // THE WINDOW, half-open, applied to the LIVE rows too. They arrive on
+        // the socket regardless of what the reader is looking at, so without
+        // this a reader scrubbed back to last Tuesday would watch this
+        // afternoon's events appear at the top of it.
+        .filter((e) => {
+          const at = tsKey(e.timestamp);
+          return at >= from && at < to;
+        })
         .filter((e) => !category || e.category === category)
         // EQUALITY, because that is what the server does. `store.List` compares
         // the actor for equality, so a prefix typed here narrowed the loaded
@@ -123,15 +176,24 @@ export function Activity() {
         )
         .sort(newestFirst)
     );
-  }, [liveEvents, older, category, actor, q, onlyFailed]);
+  }, [liveEvents, older, category, actor, q, onlyFailed, since, until]);
 
-  const counts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const e of [...liveEvents, ...older]) {
-      map.set(e.category, (map.get(e.category) ?? 0) + 1);
-    }
-    return map;
-  }, [liveEvents, older]);
+  // THE AXIS IS THE ENGINE'S. This tab holds at most the last 400 events and
+  // the store's window it never holds, so a histogram folded here would be
+  // right for one window and absent for every other — and it is counted
+  // through the same predicate the listing filters with, so a bar can never
+  // claim rows the list below it would not show.
+  //
+  // The SERVER-SIDE filters only. `q` and `failed` are applied in the browser
+  // to whatever arrived, so an axis carrying them would be counting a set the
+  // engine was never asked about.
+  const series = useQuery("event_series", {
+    since,
+    until,
+    bucket,
+    ...(category ? { category } : {}),
+    ...(actor ? { actor } : {}),
+  });
 
   const loadOlder = useCallback(async () => {
     setPaging(true);
@@ -140,7 +202,7 @@ export function Activity() {
       // The cursor names BOTH halves. The engine reads `before_time` and
       // `before_id`; a client sending one bare `before` gets every page
       // rejected with `query_failed`.
-      const params: Record<string, unknown> = { limit: PAGE };
+      const params: Record<string, unknown> = { limit: PAGE, since, until };
       if (category) params.category = category;
       if (actor) params.actor = actor;
       if (cursor) {
@@ -165,14 +227,25 @@ export function Activity() {
     } finally {
       setPaging(false);
     }
-  }, [socket, cursor, rows, category, actor]);
+  }, [socket, cursor, rows, category, actor, since, until]);
+
+  // THE FIRST PAGE OF THE WINDOW, once per window. `loadOlder` is a
+  // dependency and changes with every render that changes `rows`, so the
+  // `fetched` flag is what makes this once rather than a loop — a plain
+  // dependency on the callback would refetch on its own answer.
+  useEffect(() => {
+    if (fetched) return;
+    setFetched(true);
+    void loadOlder();
+  }, [fetched, loadOlder]);
 
   const filtered = !!(category || actor || q || onlyFailed);
 
   return (
     <>
       <PageActions>
-        {<Badge outline>{plural(rows.length, "event")} shown</Badge>}
+        <Badge outline>{windowLabel(range.window)}</Badge>
+        <TimeRangePicker range={range} ariaLabel="Window" />
         {filtered ? (
           <Button
             icon="x"
@@ -190,8 +263,47 @@ export function Activity() {
       </PageActions>
       <PageNote>
         Everything the engine published, live and then paged out of the store. This tab holds the
-        last 400 in memory; older rows are fetched.
+        last 400 in memory; older rows are fetched. The store keeps 30 days.
       </PageNote>
+
+      <Panel
+        title="When"
+        icon="activity"
+        subtitle={
+          series.data
+            ? `${plural(series.data.total, "event")} over ${spanWords(series.data.since, series.data.until)}`
+            : undefined
+        }
+        actions={
+          series.data ? (
+            <span className="t-caption">
+              one bar per {series.data.bucket} — click one to narrow the window
+            </span>
+          ) : undefined
+        }
+      >
+        <QueryState
+          error={series.error}
+          loading={series.loading}
+          empty={
+            series.data && series.data.total === 0
+              ? {
+                  title: "Nothing was published in this window",
+                  hint: "Widen the range, or clear the filters above it.",
+                }
+              : undefined
+          }
+        >
+          {series.data && series.data.total > 0 && (
+            <Histogram
+              bars={series.data.bars}
+              bucket={series.data.bucket}
+              total={series.data.total}
+              onPick={range.set}
+            />
+          )}
+        </QueryState>
+      </Panel>
 
       <div className="toolbar">
         <div style={{ maxWidth: 300, flex: 1 }}>
@@ -216,26 +328,31 @@ export function Activity() {
         <span className="spacer" />
       </div>
 
-      <div className="row wrap gap-1">
-        <Chip on={!category} onClick={() => setCategory("")}>
-          All
-        </Chip>
-        {CATEGORIES.map((c) => (
-          <Chip
-            key={c}
-            on={category === c}
-            count={counts.get(c) ?? 0}
-            onClick={() => setCategory(category === c ? "" : c)}
-            title={
-              counts.get(c)
-                ? undefined
-                : "No events of this category are in the loaded window — the category still exists."
-            }
-          >
-            {c}
-          </Chip>
-        ))}
-      </div>
+      {/* THE CLOSED SET, so a category with nothing in it is still offered:
+          that says the category exists and is quiet, which is an answer — and
+          a key the engine omits is exactly that zero. */}
+      <FacetRail
+        name="Category"
+        value={category}
+        onChange={setCategory}
+        over="window"
+        facets={CATEGORIES.map((c) => ({
+          value: c,
+          label: c,
+          // THE ENGINE'S, over the whole window, with the category filter
+          // lifted — so a chip says how many rows choosing it would show.
+          // Counted over the rows this tab happened to be holding, a log
+          // reporting nine thousand events in its window offered a `system`
+          // chip reading 0, which is a false statement about somebody's
+          // company however carefully the caption hedged it. Null while the
+          // axis is still loading, because "0" is a claim and "we do not
+          // know yet" is the truth.
+          count: series.data ? (series.data.by_category[c] ?? 0) : null,
+          title: series.data?.by_category[c]
+            ? undefined
+            : "No events of this category are in this window — the category still exists.",
+        }))}
+      />
 
       <Panel padding="none">
         {rows.length ? (

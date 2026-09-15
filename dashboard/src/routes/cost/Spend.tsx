@@ -76,6 +76,10 @@ const SPEND_OFFER: Offer = {
   ranges: ["1d", "7d", "30d", "90d"],
   custom: true,
   fallback: "1d",
+  // THE BUCKETS `token_series` ACCEPTS, which is two: a minute bucket over a
+  // week is ten thousand points nobody can read, and the engine refuses a
+  // third value rather than guessing which branch its switch should end on.
+  buckets: ["hour", "day"],
 };
 
 /**
