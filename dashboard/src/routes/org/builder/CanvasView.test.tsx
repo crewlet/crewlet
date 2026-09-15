@@ -28,6 +28,7 @@ import { Tag } from "@crewlethq/ui";
 import { isDrawnAs } from "~/testing.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
 import type { BuilderState } from "./model/reducer.ts";
+import { NODE_TONES } from "./nodeTone.ts";
 import { fixtureCompany, fixtureDerived } from "./model/testkit.ts";
 import { answered, checkedEdit, PLACED, record } from "./testState.ts";
 import {
@@ -40,6 +41,8 @@ import {
   chartLinks,
   harnessProbe,
   isOutlinedCard,
+  nodeName,
+  nodeTrailing,
   type BuilderSpies,
   type HarnessProbe,
 } from "./viewTestkit.tsx";
@@ -113,7 +116,18 @@ const focused = () => document.activeElement?.getAttribute("data-tree-id");
 /** A menu item's label, without the shortcut hint beside it. */
 const label = menuEntryLabel;
 /** A treeitem's node name. */
-const nameOf = (el: HTMLElement) => el.querySelector(".bchart-name")!.textContent;
+const nameOf = (el: HTMLElement) => nodeName(el);
+/**
+ * The marks drawn on a node's caption, as the two sentences each carries: the
+ * glyph's accessible name and the tooltip a pointer gets, which must agree.
+ */
+const markNames = (el: HTMLElement) =>
+  [...el.querySelectorAll<HTMLElement>(".bnode-mark")].map((mark) => [
+    mark.getAttribute("title"),
+    mark.querySelector("[role='img']")?.getAttribute("aria-label"),
+  ]);
+/** The same, as one sentence each, for a claim about what a node says. */
+const markSentences = (el: HTMLElement) => markNames(el).map(([tooltip]) => tooltip);
 
 describe("which chart", () => {
   test("the chart the lens hands in is the one drawn, whatever the URL says", () => {
@@ -198,8 +212,13 @@ describe("the tree", () => {
     // claim is "drawn as the chart draws somebody outside the system" rather
     // than the name of a class that belongs to the package.
     expect(isOutlinedCard(chartCard(item("CEO")))).toBe(true);
-    expect(item("Dev").closest(".bchart-row")!.classList.contains("human")).toBe(false);
-    expect(within(item("CEO")).getByText(/Human seat/)).toBeDefined();
+    // EVERY SEAT IS A NODE OF ITS OWN, so an agent seat inside a unit is a
+    // card that is not outlined rather than a row that is not marked.
+    expect(isOutlinedCard(chartCard(item("Dev")))).toBe(false);
+    expect(within(item("CEO")).getByText("Human seat")).toBeDefined();
+    // And the hue is an agent seat's alone: a human seat wears the boundary.
+    expect(chartCard(item("CEO")).getAttribute("data-tone")).toBeNull();
+    expect(chartCard(item("Dev")).getAttribute("data-tone")).not.toBeNull();
   });
 
   test("a root seat placed by reference is a row of its unit, and a dangling reference is marked at the root", () => {
@@ -223,15 +242,20 @@ describe("the tree", () => {
       derived: fixtureDerived(doc, PLACED),
     });
     mount(state);
-    expect(within(item("Designer")).getByText("Placed by unit reference")).toBeDefined();
+    // A NODE IS ONE RANK TALL, so a wiring mark is a glyph on its caption
+    // rather than a badge with the sentence written out. It is still named,
+    // and the name is the engine's own sentence where the engine gave one.
+    // Both sentences, because both readers need one: the glyph's accessible
+    // name and the tooltip a pointer gets say the same thing.
+    expect(markNames(item("Designer"))).toEqual([
+      ["Declared at the root with a unit reference", "Declared at the root with a unit reference"],
+    ]);
     expect(item("Designer").getAttribute("aria-level")).toBe("4");
     expect(item("Scout").getAttribute("aria-level")).toBe("2");
-    const mark = within(item("Scout")).getByText("No unit named Ghost");
-    // The engine's own sentence, carried on the mark it explains.
-    expect(mark.closest("[title]")!.getAttribute("title")).toBe(
+    expect(markSentences(item("Scout"))).toEqual([
       "Seat Scout names unit Ghost, which is no unit.",
-    );
-    expect(within(item("SRE")).getByText("Datadog fallback")).toBeDefined();
+    ]);
+    expect(markSentences(item("SRE"))).toEqual(["Alerts that name no seat wake this seat"]);
   });
 
   test("the problems the last check placed are counted on the node in the critical tone", () => {
@@ -270,10 +294,11 @@ describe("the tree", () => {
     ).toBe(true);
     expect(within(item("Sales")).getByText("1 problem")).toBeDefined();
     expect(within(item("Engineering")).queryByText(/problem/)).toBeNull();
-    // IN THE FIRST LINE'S SLOT, which stays when a check is out and the count
-    // with it: the line is as tall either way, so the card keeps its height.
+    // IN THE NODE'S TRAILING SLOT, which stays when a check is out and the
+    // count with it: the node is the same size either way, so it keeps its
+    // place and so does every node beside it.
     const slot = badge.closest(".bnode-count")!;
-    expect(slot.parentElement!.classList.contains("bchart-line")).toBe(true);
+    expect(slot.parentElement).toBe(nodeTrailing(item("Account Executive")));
     act(() =>
       probe.dispatch({
         type: "record",
@@ -285,7 +310,7 @@ describe("the tree", () => {
       }),
     );
     expect(within(item("Account Executive")).queryByText(/problem/)).toBeNull();
-    expect(item("Account Executive").querySelector(".bchart-line > .bnode-count")).not.toBeNull();
+    expect(nodeTrailing(item("Account Executive"))!.querySelector(".bnode-count")).not.toBeNull();
   });
 
   test("a unit whose lead names no seat is marked with the engine's warning", () => {
@@ -309,11 +334,10 @@ describe("the tree", () => {
       derived: fixtureDerived(doc, PLACED),
     });
     const { probe } = mount(state);
-    const mark = within(item("Sales")).getByText("Lead names no seat");
-    expect(mark.closest("[title]")!.getAttribute("title")).toBe(
+    expect(markSentences(item("Sales"))).toEqual([
       "Unit Sales names lead Ghost, which is no seat.",
-    );
-    expect(within(item("Engineering")).queryByText("Lead names no seat")).toBeNull();
+    ]);
+    expect(markSentences(item("Engineering"))).toEqual([]);
     // Still there while the check of a later edit is out.
     act(() =>
       probe.dispatch({
@@ -325,7 +349,9 @@ describe("the tree", () => {
         },
       }),
     );
-    expect(within(item("Sales")).getByText("Lead names no seat")).toBeDefined();
+    expect(markSentences(item("Sales"))).toEqual([
+      "Unit Sales names lead Ghost, which is no seat.",
+    ]);
   });
 
   test("a unit's other warnings are not read as a lead that names no seat", () => {
@@ -463,6 +489,142 @@ describe("keys", () => {
     press("ContextMenu");
     fireEvent.click(screen.getByRole("menuitem", { name: "Edit reports" }));
     expect(spies.openEditor).toHaveBeenLastCalledWith(seatKey("dev"), "reports");
+  });
+});
+
+/*
+ * WHAT A POINTER GETS ON A NODE, and where each of them sits.
+ *
+ * A node is one rank tall, so its right edge splits into two cells and no
+ * more: Edit and Delete, which are also what Enter and Delete do. What is
+ * about a node's CHILDREN rather than about the node (expand, add) hangs on
+ * the branch below it, where the children come off. Everything else is the
+ * node's own menu, which the ContextMenu key opens and the toolbar mirrors,
+ * and this is the suite that says a control moved rather than went away.
+ */
+describe("what a node offers a pointer", () => {
+  /**
+   * Every control the chart draws for a node, by its accessible name: the
+   * label an icon-only control carries, else the words on it.
+   */
+  const controls = (name: string) => {
+    const card = chartCard(item(name));
+    return [...card.querySelectorAll("button")].map(
+      (b) => b.getAttribute("aria-label") ?? b.textContent,
+    );
+  };
+
+  test("the node's own edge carries Edit and Delete, and nothing else", () => {
+    const { spies } = mount();
+    expect(controls("Engineering")).toEqual([
+      "Edit Engineering",
+      "Delete Engineering",
+      "Actions for Engineering",
+      // The lead along the bottom edge, which stays drawn: it is a fact about
+      // the organization rather than a tool for changing it.
+      "VP Engineering",
+      "Collapse Engineering",
+      "Add to Engineering",
+    ]);
+    pointerPress("Edit Engineering");
+    expect(spies.openEditor).toHaveBeenCalledWith(unitKey("Engineering"));
+    pointerPress("Delete Engineering");
+    expect(spies.openDelete).toHaveBeenCalledWith(unitKey("Engineering"));
+  });
+
+  /* The company cannot be deleted, so it is not offered and does not refuse. */
+  test("the company has no Delete, and a read-only draft has none at all", () => {
+    mount();
+    expect(controls("Acme")).toEqual([
+      "Edit Acme",
+      "Actions for Acme",
+      "Collapse Acme",
+      "Add to Acme",
+    ]);
+    cleanup();
+    mount(undefined, { readOnly: true });
+    expect(controls("Engineering")).toEqual([
+      "Edit Engineering",
+      "Actions for Engineering",
+      "Collapse Engineering",
+    ]);
+    // The lead is still READ on a read-only draft; it is simply not a control.
+    expect(within(chartCard(item("Engineering"))).getByText("VP Engineering")).toBeDefined();
+  });
+
+  /*
+   * A SEAT TAKES NO CHILD, so its branch carries nothing: the band collapses
+   * rather than drawing an empty strip under every leaf of the chart.
+   */
+  test("a seat has the two actions and no branch controls", () => {
+    mount();
+    expect(controls("Dev")).toEqual(["Edit Dev", "Delete Dev", "Actions for Dev"]);
+  });
+
+  /*
+   * THE MENU IS STILL THERE FOR THE KEY THAT OPENS IT. Its trigger is drawn
+   * nowhere, and what it offers is the one list every surface offers.
+   */
+  test("the ContextMenu key still opens the node's whole menu", () => {
+    mount();
+    item("Engineering").focus();
+    press("ContextMenu");
+    expect(screen.getAllByRole("menuitem").map((m) => label(m))).toEqual([
+      "Add unit",
+      "Add agent seat",
+      "Add human seat",
+      "Edit",
+      "Move to",
+      "Delete",
+    ]);
+  });
+});
+
+/*
+ * AN AGENT SEAT CARRIES A HUE, and it is the one thing on this chart drawn by
+ * what a node IS rather than by what the engine said about it. Derived from
+ * the seat's KEY, because a company document has no colour in it and a hue
+ * hashed from the name would repaint the chart on every keystroke in the
+ * editor.
+ */
+describe("a seat's hue", () => {
+  const toneOf = (name: string) => chartCard(item(name)).getAttribute("data-tone");
+
+  test("an agent seat has one, and nothing else on the chart does", () => {
+    const doc = fixtureCompany();
+    doc.roles![0] = { name: "CEO", kind: "human", contact: { slack_user_id: "U0CEO" } };
+    mount(checkedEdit(doc));
+    expect(toneOf("Dev")).not.toBeNull();
+    // A human seat wears the dashed boundary instead, which reads to somebody
+    // who cannot separate the hues at all.
+    expect(toneOf("CEO")).toBeNull();
+    expect(toneOf("Engineering")).toBeNull();
+    expect(toneOf("Acme")).toBeNull();
+  });
+
+  test("it is one of the six the design system measures", () => {
+    mount();
+    for (const seat of ["Dev", "VP Engineering", "SRE", "Designer"]) {
+      expect(NODE_TONES, seat).toContain(toneOf(seat));
+    }
+  });
+
+  /*
+   * A RENAME DOES NOT REPAINT IT. The key outlives the name, so a seat keeps
+   * its hue while it is renamed, moved or given a handle; the colour is a mark
+   * an operator recognises it by, and one that changed as they typed would be
+   * no mark at all.
+   */
+  test("a rename leaves the hue where it was", () => {
+    const { probe } = mount();
+    const before = toneOf("Dev");
+    act(() =>
+      probe.dispatch({
+        type: "record",
+        intent: { type: "renameSeat", target: seatKey("dev"), name: "Staff Engineer" },
+      }),
+    );
+    expect(toneOf("Staff Engineer")).toBe(before);
   });
 });
 
@@ -614,8 +776,13 @@ describe("the reporting chart", () => {
       ["2", "A"],
       ["3", "B"],
     ]);
-    expect(within(item("Chief")).getByText("No manager")).toBeDefined();
-    expect(within(item("B")).getByText("In a reporting cycle of 2 seats")).toBeDefined();
+    // A TOP OF THE FOREST IS DRAWN BY BEING ONE, so what it says about having
+    // no manager is said to a reader who cannot see where it sits. A seat in a
+    // cycle is NOT drawn by where it sits, since every seat in a loop has one
+    // above it, so that one is a glyph on the caption as well.
+    expect(within(item("Chief")).getByText("No manager.")).toBeDefined();
+    expect(markSentences(item("B"))).toEqual(["In a reporting cycle of 2 seats"]);
+    expect(within(item("B")).getByText("In a reporting cycle of 2 seats.")).toBeDefined();
 
     item("B").focus();
     press("Delete");

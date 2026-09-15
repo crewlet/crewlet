@@ -33,15 +33,23 @@ const rule = (selector: string) =>
     .map(([, body]) => body)
     .join(";");
 
-test("the live state and problem count slots neither shrink nor wrap, and the name truncates", () => {
+test("the live state and problem count slots neither shrink nor wrap", () => {
   for (const slot of [".bnode-state", ".bnode-count"]) {
     expect(rule(slot), slot).toMatch(/flex:\s*none/);
     expect(rule(slot), slot).toMatch(/white-space:\s*nowrap/);
   }
-  // A flex child keeps its content's minimum width unless told otherwise, and
-  // a long name would then push the badge rather than truncate.
-  expect(rule(".bchart-text")).toMatch(/min-width:\s*0/);
-  expect(rule(".bchart-line")).toMatch(/min-width:\s*0/);
+});
+
+/*
+ * A WIRING MARK KEEPS ITS SIZE TOO. It is a glyph on a chart node's caption,
+ * and a node one rank tall is measured: a mark that could shrink or grow would
+ * relay the chart. The name beside it truncating, and the slot the live state
+ * and the count sit in, are the design system's `OrgNodeLabel` now, with the
+ * suite that reads them; this is the one part of that promise this screen
+ * still draws for itself.
+ */
+test("a wiring mark keeps its size", () => {
+  expect(rule(".bnode-mark")).toMatch(/flex:\s*none/);
 });
 
 // The chart reads the design system's own tree-card variable, and it reads it
@@ -73,6 +81,10 @@ test("no builder rule redraws what the design system's chart and table draw", ()
   expect(redrawn).toEqual([]);
   // And nothing names the elements the component owns.
   expect(css).not.toMatch(/\.bchart-(card|box|links|gap-probe|actions|head|row-item)\b/);
+  // And nothing here draws what a chart node SAYS: the name, its caption, the
+  // marks on that caption and a unit's lead are `OrgNodeLabel` and
+  // `OrgNodeLead`, so this screen cannot say a name at a second size.
+  expect(css).not.toMatch(/\.bchart-(name|meta|text|line|marks|lead|rows?|row)\b/);
   expect(css).not.toMatch(/\.boutline/);
 });
 
@@ -86,9 +98,17 @@ test("no builder rule redraws what the design system's chart and table draw", ()
  */
 const CARRIED_HUE = /var\(--color-(feedback|data|phase)-[-\w]*\)/;
 
-test("a builder card or row takes no status or data hue, only the accent for the selection", () => {
+/*
+ * A NODE HUE IS NOT ONE OF THESE, and it does not come from here. An agent
+ * seat is tinted with one of the design system's six node hues, chosen from
+ * the seat's own key (`nodeTone.ts`) and handed to the chart as a NAME, which
+ * the design system turns into that hue's four measured steps. So the hue
+ * still reaches no rule in this stylesheet, and this guard means what it
+ * always meant: nothing here paints a builder node by what it holds.
+ */
+test("a builder node or row takes no status or data hue, only the accent for the selection", () => {
   const builder = rules(css).filter(([selector]) => /\.(bchart|btable|bnode)/.test(selector));
-  expect(builder.length).toBeGreaterThan(8);
+  expect(builder.length).toBeGreaterThan(5);
   const hues = builder.filter(([, body]) => CARRIED_HUE.test(body)).map(([selector]) => selector);
   expect(hues).toEqual([]);
 });

@@ -260,73 +260,15 @@
   pointer-events: none;
 }
 
-/* WHAT A CARD SAYS. The stack a node's lines sit in is the package's; these
-   are the lines themselves. */
+/* WHAT A NODE SAYS IS NOT DRAWN HERE ANY MORE. The name, the caption under
+   it, the marks riding that caption, the lead along the bottom edge and the
+   stack they all sat in are the design system's `OrgNodeLabel` and
+   `OrgNodeLead`, which is what the chart this builder is drawn to match uses,
+   so the two say a name at one size rather than at two. Eight rules went with
+   them; what is left below is the two slots this screen owns, because what
+   they hold is the engine's. */
 
-.bchart-line {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
-
-.bchart-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.bchart-name {
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-semibold);
-  color: var(--color-text-primary);
-}
-
-.bchart-meta {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.bchart-marks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-1);
-}
-
-.bchart-marks:empty {
-  display: none;
-}
-
-/* A UNIT'S LEAD STAYS DRAWN, where the controls that edit the card do not:
-   who leads a unit is a fact about the organization rather than a tool for
-   changing it, and a chart that hid it until the pointer arrived would be a
-   chart you could not read the leads off. */
-
-.bchart-lead {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: 0 var(--spacing-3) var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-
-.bchart-rows {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  padding: var(--spacing-1);
-  border-top: 1px solid var(--color-border-default);
-}
-
-.bchart-row.human {
-  border: 1px dashed var(--color-border-default);
-  border-radius: var(--radius-md);
-}
-
-/* A LIVE STATE OR A CHECK NEVER RESIZES A CARD. The live state and the
+/* A LIVE STATE OR A CHECK NEVER RESIZES A NODE. The live state and the
    problem count each have a slot on the card's first line that does not
    shrink, wrap or push the name onto a second line: the name truncates
    instead, and the line is as tall with a badge as without one. So a push
@@ -339,6 +281,17 @@
   display: inline-flex;
   flex: none;
   white-space: nowrap;
+}
+
+/* A WIRING MARK ON A CHART NODE IS A GLYPH, and it keeps its size for the
+   same reason: a node one rank tall has no room for the sentence written out,
+   and a mark that changed size would move every node beside it. The sentence
+   is the glyph's own accessible name and this element's tooltip. */
+
+.bnode-mark {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
 }
 
 /* ---- Org builder: table -------------------------------------------------

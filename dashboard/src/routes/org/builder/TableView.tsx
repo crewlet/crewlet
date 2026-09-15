@@ -53,8 +53,8 @@ import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { leadLabel, nodeMenu, type OpenScreen } from "./nodeActions.tsx";
 import {
   LiveState,
-  SeatMarks,
-  UnitMarks,
+  SeatTags,
+  UnitTags,
   handleLabel,
   managerLabel,
   seatKindLabel,
@@ -434,8 +434,8 @@ function NameCell({ view }: { view: NodeView }) {
       {/* Wrapping, for the reason the path wraps: a seat cut at "Agent Dev…"
           is a seat nobody can tell from another. */}
       <span className="btable-label">{view.name || "Unnamed company"}</span>
-      {view.type === "unit" && <UnitMarks view={view} />}
-      {view.type === "seat" && <SeatMarks view={view} />}
+      {view.type === "unit" && <UnitTags view={view} />}
+      {view.type === "seat" && <SeatTags view={view} />}
     </span>
   );
 }

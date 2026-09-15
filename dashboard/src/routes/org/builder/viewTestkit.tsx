@@ -19,6 +19,7 @@
  */
 
 import { act, render } from "@testing-library/react";
+import { OrgNodeLabel } from "@crewlethq/ui";
 import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
@@ -339,4 +340,61 @@ export function chartLinks(container: HTMLElement): HTMLElement {
   const links = container.querySelector<HTMLElement>(`.${known().links}`);
   if (!links) throw new Error("the chart draws no connectors");
   return links;
+}
+
+/*
+ * WHAT A NODE SAYS IS THE DESIGN SYSTEM'S TOO. `OrgNodeLabel` draws the name,
+ * the caption under it, the slot for what arrives from a push and the zone the
+ * icon sits in, and each is a class of the package. A suite that spelled those
+ * class names would be this application naming what the package draws, which
+ * is the thing `designSystem.test.ts` refuses: bump the package and they match
+ * nothing, silently. So the harness renders one label and reads them off it.
+ */
+let labelParts: { name: string; caption: string; trailing: string } | null = null;
+
+/** What `OrgNodeLabel` calls each part it draws. Asked once, then remembered. */
+export function orgNodeParts(): { name: string; caption: string; trailing: string } {
+  if (labelParts) return labelParts;
+  const { container, unmount } = render(
+    <OrgNodeLabel name="Name" caption="Caption" trailing={<i data-probe="trailing" />} />,
+  );
+  const className = (el: Element | null | undefined) => el?.className ?? "";
+  const found = {
+    name: className(
+      [...container.querySelectorAll("span")].find((el) => el.textContent === "Name"),
+    ),
+    caption: className(
+      [...container.querySelectorAll("span")].find((el) => el.textContent === "Caption")
+        ?.parentElement,
+    ),
+    trailing: className(container.querySelector("[data-probe='trailing']")?.parentElement),
+  };
+  unmount();
+  for (const [part, name] of Object.entries(found)) {
+    if (!name) throw new Error(`the org node label draws no ${part} this harness can find`);
+  }
+  labelParts = found;
+  return found;
+}
+
+/**
+ * The first element under `item` carrying the class the label calls `part`.
+ *
+ * Matched on the classList rather than through a selector, because a selector
+ * assembled from a variable still READS as a query for a class named after
+ * that variable, and `designSystem.test.ts` scans for exactly that.
+ */
+function labelPart(item: HTMLElement, part: keyof ReturnType<typeof orgNodeParts>) {
+  const wanted = orgNodeParts()[part];
+  return [...item.querySelectorAll<HTMLElement>("*")].find((el) => el.classList.contains(wanted));
+}
+
+/** A node's name, as the label drew it. */
+export function nodeName(item: HTMLElement): string | null {
+  return labelPart(item, "name")?.textContent ?? null;
+}
+
+/** The slot a node keeps for what arrives from a push, whatever it holds. */
+export function nodeTrailing(item: HTMLElement): HTMLElement | null {
+  return labelPart(item, "trailing") ?? null;
 }

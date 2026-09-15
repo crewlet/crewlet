@@ -1,6 +1,5 @@
 /**
- * The marks a builder node carries, drawn the same on a canvas card and an
- * outline row.
+ * The marks a builder node carries, on a chart node and in a table cell.
  *
  * NEUTRAL, EXCEPT WHERE A MARK IS A STATE. A seat's kind, its placement by a
  * unit reference and its Datadog fallback role are facts about identity and
@@ -9,22 +8,36 @@
  * critical tone; a reference that names no unit is a caution; a seat's live
  * state is the `StateBadge` every other screen uses.
  *
- * A LIVE PUSH NEVER MOVES A CARD, AND NEITHER DOES A CHECK. The live state
- * badge and the problem count each sit in a slot of their own on the card's
- * first line that does not wrap and does not grow it (`.bnode-state` and
- * `.bnode-count` in `screens.css`), and the marks of a reference that names
- * nothing come from the chart, which holds them while the node still writes
- * what the check warned about. So a push twice per tool-loop round, and a
- * check after every edit, change a badge's text and never a card's measured
- * size, which is what the canvas lays out by.
+ * TWO DRAWINGS OF ONE FACT, because the two surfaces have different room. A
+ * table cell has a line to itself, so a wiring mark is a `Tag` with the
+ * sentence written out. A chart node is ONE RANK TALL and as wide as its own
+ * name, so the same fact is a glyph riding the caption, named for a reader who
+ * cannot see it and titled for one who can. Both come from this module, so
+ * what the chart marks and what the table marks cannot drift apart.
+ *
+ * A LIVE PUSH NEVER MOVES A NODE, AND NEITHER DOES A CHECK. The live state
+ * badge and the problem count sit in slots that keep their room whether or not
+ * they hold anything (`.bnode-state` and `.bnode-count`, and the chart node's
+ * own trailing slot), every glyph mark is a fixed size, and the marks of a
+ * reference that names nothing come from the chart, which holds them while the
+ * node still writes what the check warned about. So a push twice per tool-loop
+ * round, and a check after every edit, change a badge's text and never a
+ * node's measured size, which is what the canvas lays out by.
  */
 
+import type { ReactNode } from "react";
 import { StateBadge } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import type { BuilderApi } from "./BuilderContext.tsx";
-import type { SeatView, UnitView } from "./chartModel.ts";
+import type { ReportingItem, SeatView, UnitView } from "./chartModel.ts";
 import type { NodeKey } from "./model/keys.ts";
-import { ErrorGlyph, LinkGlyph, NotificationsGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
+import {
+  CycleGlyph,
+  ErrorGlyph,
+  LinkGlyph,
+  NotificationsGlyph,
+  WarningGlyph,
+} from "@crewlethq/icons/glyphs";
 import { Tag } from "@crewlethq/ui";
 
 /** "Agent seat" or "Human seat". */
@@ -85,14 +98,103 @@ export function LiveState({ api, view }: { api: BuilderApi; view: SeatView }) {
   );
 }
 
+/** What a unit's marks say, as sentences: one list, drawn two ways. */
+export function unitMarkNotes(view: UnitView): string[] {
+  if (view.danglingLead === null) return [];
+  return [view.danglingNote ?? "Lead names no seat"];
+}
+
+/** What a seat's marks say, as sentences: one list, drawn two ways. */
+export function seatMarkNotes(view: SeatView): string[] {
+  const notes: string[] = [];
+  if (view.placedByRef) notes.push("Declared at the root with a unit reference");
+  if (view.danglingUnitRef) {
+    notes.push(view.danglingNote ?? `No unit named ${view.danglingUnitRef}`);
+  }
+  if (view.datadogFallback) notes.push("Alerts that name no seat wake this seat");
+  return notes;
+}
+
 /**
  * A unit's lead that names no seat, as the engine warned. The lead chip shows
  * the name as written, and a name that reads like a seat must not look like
  * one that resolves. Read from the chart (`UnitView.danglingLead`), which
  * holds it while the unit still writes what the check warned about, so a
- * check going out does not take it off the card and change its height.
+ * check going out does not take it off the node and change its size.
+ *
+ * A GLYPH, because this is drawn on a chart node one rank tall. It is named
+ * for a reader who cannot see it, so the warning is not carried by the drawing
+ * alone.
  */
 export function UnitMarks({ view }: { view: UnitView }) {
+  if (view.danglingLead === null) return null;
+  return <Mark note={view.danglingNote ?? "Lead names no seat"} glyph={WarningGlyph} />;
+}
+
+/** The wiring marks of a seat, as glyphs: see [UnitMarks]. */
+export function SeatMarks({ view }: { view: SeatView }) {
+  const dangling = view.danglingUnitRef;
+  if (!view.placedByRef && !dangling && !view.datadogFallback) return null;
+  return (
+    <>
+      {view.placedByRef && (
+        <Mark note="Declared at the root with a unit reference" glyph={LinkGlyph} />
+      )}
+      {dangling && (
+        <Mark note={view.danglingNote ?? `No unit named ${dangling}`} glyph={WarningGlyph} />
+      )}
+      {view.datadogFallback && (
+        <Mark note="Alerts that name no seat wake this seat" glyph={NotificationsGlyph} />
+      )}
+    </>
+  );
+}
+
+/**
+ * What a reporting chart item is marked with: that it is in a cycle.
+ *
+ * ONLY THE CYCLE. That a seat has no manager is said by WHERE IT SITS, at the
+ * top of the forest with nothing above it, so a mark saying it again would be
+ * a second drawing of the same fact on every top of the chart; it is said to a
+ * reader who cannot see where it sits and to nobody else. A cycle is not said
+ * by where a seat sits at all, because every seat in a loop has one above it,
+ * so that one is drawn.
+ */
+export function ReportingMarks({ item }: { item: Pick<ReportingItem, "cycleSize"> }) {
+  if (item.cycleSize === undefined) return null;
+  return (
+    <Mark note={`In a reporting cycle of ${plural(item.cycleSize, "seat")}`} glyph={CycleGlyph} />
+  );
+}
+
+/**
+ * One glyph mark: the sentence twice, once for each reader.
+ *
+ * The glyph carries the sentence as its accessible name, and the element
+ * around it carries the same sentence as the tooltip a pointer gets. A drawing
+ * with no words anywhere is a fact only the person who wrote it can read, and
+ * these sentences are the engine's own.
+ */
+function Mark({
+  note,
+  glyph: Drawing,
+}: {
+  note: string;
+  glyph: (props: { title?: string }) => ReactNode;
+}) {
+  return (
+    <span className="bnode-mark" title={note}>
+      <Drawing title={note} />
+    </span>
+  );
+}
+
+/**
+ * The same marks as tags, for a surface with a line to spare: the table's name
+ * cell. The words are the glyphs' own names, so the two surfaces say the same
+ * thing about one fact.
+ */
+export function UnitTags({ view }: { view: UnitView }) {
   if (view.danglingLead === null) return null;
   return (
     <Tag variant="warning" leadingIcon={<WarningGlyph />} title={view.danglingNote}>
@@ -101,8 +203,8 @@ export function UnitMarks({ view }: { view: UnitView }) {
   );
 }
 
-/** The wiring marks of a seat: placement by reference, a dangling reference, the Datadog fallback. */
-export function SeatMarks({ view }: { view: SeatView }) {
+/** The wiring marks of a seat, as tags: see [UnitTags]. */
+export function SeatTags({ view }: { view: SeatView }) {
   const dangling = view.danglingUnitRef;
   if (!view.placedByRef && !dangling && !view.datadogFallback) return null;
   return (
