@@ -4,9 +4,12 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
@@ -250,8 +253,43 @@ const DefaultPhasePage = 30
 // coordination store must not answer an empty list, because "no channels have
 // been opened" and "this node could not look" are different facts and only one
 // of them is a measurement.
-func (s Sources) a2aChannels(ctx context.Context, _ Params) (any, error) {
-	channels, err := s.Channels.OpenChannels(ctx)
+// MaxA2AChannels bounds one page of the channel record.
+//
+// TWO HUNDRED, which is the activity feed's own order of magnitude and far
+// past what one company has open at once: a channel is one ask and lives for
+// one exchange, so the open set is bounded by how many asks are in flight. The
+// CLOSED set is what makes a bound necessary at all — it is kept until the
+// purge horizon, so a busy company's history is thousands of rows and a
+// listing that returned all of them would page a coordination bucket through
+// this process to draw one screen.
+const MaxA2AChannels = 200
+
+// a2aChannelStates is what `state=` selects, against the one predicate a
+// channel has.
+var a2aChannelStates = map[string]func(coord.Channel) bool{
+	"open":   coord.Channel.Open,
+	"closed": func(c coord.Channel) bool { return !c.Open() },
+	"all":    func(coord.Channel) bool { return true },
+}
+
+func (s Sources) a2aChannels(ctx context.Context, p Params) (any, error) {
+	// OPEN BY DEFAULT, which is what already shipped and what a screen
+	// watching a working company is for.
+	state := firstOf(p.String("state"), "open")
+	keep, known := a2aChannelStates[state]
+	if !known {
+		return nil, badParams("state", state, slices.Sorted(maps.Keys(a2aChannelStates)))
+	}
+	seat := strings.TrimSpace(p.String("seat"))
+	// THE RECORD IS READ WHOLE ONLY WHEN IT HAS TO BE. `OpenChannels` is
+	// the idle sweep's listing and is deliberately narrower — a closed
+	// channel re-reported is a second close for one channel — so the two
+	// stay two calls rather than one with a flag.
+	read := s.Channels.OpenChannels
+	if state != "open" {
+		read = s.Channels.AllChannels
+	}
+	channels, err := read(ctx)
 	if err != nil {
 		// BEST EFFORT, and it says so. This is a read for a screen, and a
 		// coordination blip must not turn it into a failure the reader has
@@ -267,6 +305,12 @@ func (s Sources) a2aChannels(ctx context.Context, _ Params) (any, error) {
 	}
 	out := make([]map[string]any, 0, len(channels))
 	for _, c := range channels {
+		// EITHER END, because a seat's page asks one question — "what
+		// did this seat ask, and what was it asked" — and splitting it
+		// into two params would make the common case two reads.
+		if !keep(c) || (seat != "" && c.Requester != seat && c.Target != seat) {
+			continue
+		}
 		out = append(out, map[string]any{
 			"id":        c.ID,
 			"requester": c.Requester,
@@ -282,7 +326,22 @@ func (s Sources) a2aChannels(ctx context.Context, _ Params) (any, error) {
 	slices.SortStableFunc(out, func(a, b map[string]any) int {
 		return cmp.Compare(b["last_at"].(string), a["last_at"].(string))
 	})
-	return map[string]any{"channels": out, "available": true}, nil
+	// CUT AFTER THE SORT, so a page is the most recent N rather than
+	// whichever N the bucket happened to walk first.
+	limit := Clamp(p.Int("limit", 0), MaxA2AChannels, MaxA2AChannels)
+	truncated := len(out) > limit
+	if truncated {
+		out = out[:limit]
+	}
+	return map[string]any{
+		"channels":  out,
+		"available": true,
+		"state":     state,
+		// SAYS WHAT IS MISSING, like every other cut in this tree: a page
+		// that filled is indistinguishable from a company with exactly
+		// that many channels.
+		"truncated": truncated,
+	}, nil
 }
 
 // knowledgeSearch runs the company's own knowledge search.

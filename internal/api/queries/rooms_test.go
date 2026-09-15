@@ -256,6 +256,7 @@ func (emptyPages) Containers(context.Context, statelog.Freshness) ([]pages.Conta
 type fakeChannels struct{}
 
 func (fakeChannels) OpenChannels(context.Context) ([]coord.Channel, error) { return nil, nil }
+func (fakeChannels) AllChannels(context.Context) ([]coord.Channel, error)  { return nil, nil }
 
 // EVERY QUERY A ROOM MAKES IS A QUERY THIS SERVER ANSWERS.
 //
