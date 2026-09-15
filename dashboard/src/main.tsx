@@ -12,7 +12,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
-import { bootTheme } from "./lib/theme.ts";
+import { bootTheme } from "./lib/prefs.ts";
 import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
 
 import "./styles/tokens.css";

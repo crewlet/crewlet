@@ -15,7 +15,7 @@ import { DESTINATIONS } from "./nav.ts";
 import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
-import { DENSITIES, THEMES, useAppearance, type Appearance } from "~/lib/theme.ts";
+import { DENSITIES, THEMES, useViewerPrefs, type ViewerPrefs } from "~/lib/prefs.ts";
 import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
@@ -78,7 +78,7 @@ function score(text: string, q: string): number {
  * dark" while the page is already dark is a control that does not know what it
  * is looking at.
  */
-function commands(prefs: Appearance, nav: Navigator, route: Route): Hit[] {
+function commands(prefs: ViewerPrefs, nav: Navigator, route: Route): Hit[] {
   const out: Hit[] = [];
   const add = (id: string, icon: IconName, label: string, hint: string, go: () => void) =>
     out.push({ id: `cmd-${id}`, group: "Commands", icon, label, hint, go });
@@ -115,7 +115,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const org = useOrg();
   const tools = useTools();
   const recents = useRecents();
-  const prefs = useAppearance();
+  const prefs = useViewerPrefs();
   const route = useRoute();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);

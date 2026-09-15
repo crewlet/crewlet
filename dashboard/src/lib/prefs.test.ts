@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { reloadForTest, setDensity, setTheme, useDensity, useTheme } from "./theme.ts";
+import { reloadForTest, setDensity, setTheme, useDensity, useTheme } from "./prefs.ts";
 
 beforeEach(() => {
   localStorage.clear();
