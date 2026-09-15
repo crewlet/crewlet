@@ -53,6 +53,7 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/tracker"
 	"github.com/crewlet/crewlet/internal/version"
@@ -1669,19 +1670,55 @@ func (r engineRuntime) Tools() []api.ToolInfo {
 		return nil
 	}
 	entries := company.Tools.List()
+	// THE REGISTRY'S OWN PREDICATE for where a tool delivers, never
+	// re-derived here: it is not "was this served by MCP" — a proven
+	// read-only MCP tool delivers nowhere, and the native tracker's
+	// comment tool delivers although it is a builtin. A second derivation
+	// would show one answer on the screen and enforce another at the fence.
+	delivers := company.Tools.Deliveries()
 	out := make([]api.ToolInfo, 0, len(entries))
 	for _, entry := range entries {
-		source := "builtin"
-		if server, ok := entry.FromMCP(); ok {
-			source = server
-		}
-		out = append(out, api.ToolInfo{
-			Name:        entry.Name(),
-			Description: entry.Tool.Description(),
-			Source:      source,
-		})
+		out = append(out, toolInfo(entry, delivers[entry.Name()]))
 	}
 	return out
+}
+
+// toolInfo is one registry entry as the catalogue carries it.
+//
+// A FUNCTION RATHER THAN A LOOP BODY so it can be exercised without an engine.
+// The mapping had a defect nothing could reach: it re-spelled the origin
+// instead of passing the registry's own, and every reader of the prefix — the
+// screen's origin column, its per-origin counts, the published reference —
+// silently read a company running MCP servers as one running none.
+func toolInfo(entry tools.Entry, delivers string) api.ToolInfo {
+	return api.ToolInfo{
+		Name:        entry.Name(),
+		Description: entry.Tool.Description(),
+		// THE REGISTRY'S OWN GRAMMAR, passed through rather than
+		// re-spelled: `builtin`, or `mcp:` and the bare server name.
+		// This stripped the prefix and sent the server's name alone,
+		// which disagreed with every reader of it — the screen's
+		// origin column splits on the colon and rendered the server
+		// as if it were the grammar's own word, its "from MCP
+		// servers" count tested for the prefix and therefore read
+		// zero on a company running servers, and the published API
+		// reference documents the prefixed form.
+		Source: entry.Origin,
+		Annotations: api.ToolAnnotations{
+			Title:       entry.Annotations.Title,
+			ReadOnly:    entry.Annotations.ReadOnly.String(),
+			Destructive: entry.Annotations.Destructive.String(),
+			Idempotent:  entry.Annotations.Idempotent.String(),
+			OpenWorld:   entry.Annotations.OpenWorld.String(),
+		},
+		Delivers: delivers,
+		// The schema the MODEL is offered, read rather than rebuilt. The
+		// map is the tool's own and this path only serialises it; an MCP
+		// server restarting replaces the whole Tool rather than writing
+		// into its schema, so there is nothing here for a running turn to
+		// race with.
+		InputSchema: entry.Tool.Parameters(),
+	}
 }
 
 func (r engineRuntime) Snapshot(ctx context.Context) api.RuntimeState {

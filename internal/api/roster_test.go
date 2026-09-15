@@ -189,6 +189,68 @@ func TestTheSnapshotCarriesTheToolCatalogue(t *testing.T) {
 	}
 }
 
+// AND IT CARRIES WHAT EACH TOOL DOES, not only what it is called.
+//
+// The delivery fence, the operator MCP surface and the sandbox bridge have all
+// read these hints since registration; the catalogue on the wire carried three
+// strings, so the one screen an operator audits a fresh MCP server on could
+// say what its tools are NAMED and nothing about which of them can write.
+func TestTheCatalogueCarriesWhatEachToolDoes(t *testing.T) {
+	t.Parallel()
+	a := rosterApp(t, &fakeRuntime{tools: []api.ToolInfo{
+		{
+			Name: "post_message", Description: "say something", Source: "slack",
+			Annotations: api.ToolAnnotations{
+				ReadOnly: "no", Destructive: "no",
+				Idempotent: "unknown", OpenWorld: "yes",
+			},
+			Delivers:    "slack",
+			InputSchema: map[string]any{"type": "object"},
+		},
+		{
+			Name: "lookup_colleague", Description: "who is who", Source: "builtin",
+			Annotations: api.ToolAnnotations{
+				ReadOnly: "yes", Destructive: "unknown",
+				Idempotent: "unknown", OpenWorld: "unknown",
+			},
+		},
+	}})
+
+	got := rows(t, a.Stream().Snapshot()["tools"])
+	if len(got) != 2 {
+		t.Fatalf("tools = %v", got)
+	}
+	ann, _ := got[0]["annotations"].(map[string]any)
+	if ann["read_only"] != "no" || ann["open_world"] != "yes" {
+		t.Errorf("annotations = %v, want the hints the registry recorded", ann)
+	}
+	// EVERY HINT IS A WORD, including the unadvertised one. A bool cannot
+	// hold "the server said nothing", and an absent hint arriving as
+	// `false` reads as a positive denial — which would make a fresh
+	// server's unannotated tools look like proven reads.
+	if ann["idempotent"] != "unknown" {
+		t.Errorf("an unadvertised hint came through as %#v, not a word", ann["idempotent"])
+	}
+	if got[0]["delivers"] != "slack" {
+		t.Errorf("delivers = %#v, want where the call lands", got[0]["delivers"])
+	}
+	if _, ok := got[0]["input_schema"].(map[string]any); !ok {
+		t.Errorf("no input_schema on %v", got[0])
+	}
+	// A tool that reaches nobody says so with an empty surface rather than
+	// by leaving the field out, which a client cannot tell from a build
+	// that does not send it.
+	if delivers, present := got[1]["delivers"]; !present || delivers != "" {
+		t.Errorf("delivers = %#v on a read-only builtin", delivers)
+	}
+	// AND A TOOL THAT TAKES NO ARGUMENTS SENDS NO SCHEMA, because a form
+	// rendered from `{}` and one rendered from a schema with no properties
+	// look identical and only the first means "not sent".
+	if _, present := got[1]["input_schema"]; present {
+		t.Errorf("a tool with no schema carried one: %v", got[1])
+	}
+}
+
 // A STANDALONE API SAYS NOTHING ABOUT TOOLS rather than claiming none.
 //
 // It has no engine to ask. An empty catalogue is a real answer for a node that

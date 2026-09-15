@@ -85,6 +85,39 @@ groups on it:
 Those two are the whole grammar. A server that fails to start is visible as a
 **missing group**, rather than its tools quietly going absent from the builtins.
 
+### What a tool can do
+
+Beside the origin, every catalogue row carries the **behavioural hints** the
+tool was registered with — what an MCP server advertised, plus whatever an
+operator overrode on top — and where calling it lands:
+
+| Field | What it says |
+|---|---|
+| `annotations.read_only` | The tool modifies no state |
+| `annotations.destructive` | The tool may perform irreversible updates |
+| `annotations.idempotent` | Repeat calls have no additional effect |
+| `annotations.open_world` | The tool reaches entities outside the local system |
+| `delivers` | **Where** a call puts something in front of somebody outside the turn — empty for a tool that reaches nobody |
+
+**Each hint is three-valued** — `yes`, `no`, `unknown` — and `unknown` is a
+first-class answer, not a soft `no`: it means the server did not advertise the
+hint at all. The engine reads them that way everywhere. An unannotated tool is
+**not** a known read, because treating unknown as read-only would exempt most
+of a fresh server from the [delivery fence](../concepts/turn-engine.md) the
+moment it is added.
+
+`delivers` is not "was this served by MCP". A proven read-only MCP tool
+delivers nowhere, and the engine's own work-item comment tool delivers although
+it is a builtin — the surface is a first-party declaration made at
+registration, and for an MCP tool it is the **server**, because nothing else
+about it says where its call lands.
+
+The **Tools** screen renders all of this: the strongest thing a tool's hints
+positively assert, whether it reaches outside the company, where it delivers,
+and how many arguments its schema declares. A tool whose server advertised
+nothing shows as `unknown` rather than as a read — which is the row to check
+before granting a seat a new server.
+
 ---
 
 ## Extending the engine

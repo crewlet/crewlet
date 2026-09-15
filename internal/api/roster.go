@@ -172,11 +172,34 @@ func toolRows(runtime NodeRuntime) []map[string]any {
 	infos := runtime.Tools()
 	out := make([]map[string]any, 0, len(infos))
 	for _, info := range infos {
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"name":        info.Name,
 			"description": info.Description,
 			"source":      info.Source,
-		})
+			// THE HINTS AND WHERE IT LANDS. The catalogue carried three
+			// strings, so the screen an operator audits a fresh MCP
+			// server on could say what its tools are CALLED and nothing
+			// about what they do — while the engine's own delivery fence
+			// had been reading these hints all along.
+			"annotations": map[string]any{
+				"read_only":   info.Annotations.ReadOnly,
+				"destructive": info.Annotations.Destructive,
+				"idempotent":  info.Annotations.Idempotent,
+				"open_world":  info.Annotations.OpenWorld,
+			},
+			"delivers": info.Delivers,
+		}
+		if info.Annotations.Title != "" {
+			row["title"] = info.Annotations.Title
+		}
+		// ABSENT rather than an empty object when a tool takes no
+		// arguments, which is a real shape: a form rendered from `{}` and
+		// one rendered from a schema with no properties look identical,
+		// and only the first is "this build did not send it".
+		if len(info.InputSchema) > 0 {
+			row["input_schema"] = info.InputSchema
+		}
+		out = append(out, row)
 	}
 	return out
 }

@@ -13,9 +13,25 @@ import { Section } from "~/components/common.tsx";
 import { Badge, Chip, Empty, Panel, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
+import type { Capability } from "~/lib/tools.ts";
+import {
+  capabilityOf,
+  capabilityTone,
+  hintSentence,
+  hintsAdvertised,
+  schemaFields,
+} from "~/lib/tools.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+
+/** Worst first: what an operator auditing a new server reads down. */
+const CAPABILITY_ORDER: Record<Capability, number> = {
+  destroys: 0,
+  writes: 1,
+  unknown: 2,
+  reads: 3,
+};
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -48,6 +64,14 @@ export function Tools({ server }: { server?: string }) {
 
   const builtins = tools.filter((t) => t.source === "builtin").length;
   const mcp = tools.filter((t) => t.source.startsWith("mcp")).length;
+  // HOW MANY OF THESE CAN WRITE, which is the number an operator opens this
+  // screen for after adding a server — and which the catalogue could not
+  // answer at all while it carried three strings per tool.
+  const writes = tools.filter((t) => {
+    const c = capabilityOf(t.annotations);
+    return c === "writes" || c === "destroys";
+  }).length;
+  const unannotated = tools.filter((t) => hintsAdvertised(t.annotations) === 0).length;
 
   return (
     <>
@@ -58,7 +82,7 @@ export function Tools({ server }: { server?: string }) {
       </PageNote>
 
       <Panel padding="none">
-        <StatRow cols={3}>
+        <StatRow cols={4}>
           <Stat icon="wrench" label="Total" value={tools.length} sub="across every origin" />
           <Stat icon="box" label="Built in" value={builtins} sub="shipped by the engine itself" />
           <Stat
@@ -66,6 +90,16 @@ export function Tools({ server }: { server?: string }) {
             label="From MCP servers"
             value={mcp}
             sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
+          />
+          <Stat
+            icon="alert"
+            label="Can write"
+            value={writes}
+            sub={
+              unannotated
+                ? `${unannotated} more advertise nothing at all`
+                : "every tool advertises what it does"
+            }
           />
         </StatRow>
       </Panel>
@@ -112,8 +146,15 @@ export function Tools({ server }: { server?: string }) {
               {
                 key: "name",
                 header: "Tool",
+                // SIZED TO THE NAME. With the columns this table grew, the
+                // name column took whatever was left and broke
+                // `comment_on_work_item` across three lines mid-word — an
+                // identifier a reader is matching against a config file, so
+                // a break in the middle of one is worse than a narrower
+                // description beside it.
+                shrink: true,
                 sortValue: (t) => t.name,
-                cell: (t) => <code className="inline">{t.name}</code>,
+                cell: (t) => <code className="inline nowrap">{t.name}</code>,
               },
               {
                 key: "origin",
@@ -134,10 +175,68 @@ export function Tools({ server }: { server?: string }) {
                 key: "desc",
                 header: "What it does",
                 cell: (t) => (
-                  <span className="t-caption">
-                    {t.description || <span className="faint">no description</span>}
+                  <span className="col" style={{ gap: 2 }}>
+                    <span className="t-caption">
+                      {t.description || <span className="faint">no description</span>}
+                    </span>
+                    <span className="t-caption faint">{hintSentence(t.annotations)}</span>
                   </span>
                 ),
+              },
+              {
+                key: "can",
+                header: "Can",
+                shrink: true,
+                // Sorted worst-first, which is the order an operator
+                // auditing a new server reads: the tools that can destroy
+                // something are the ones they have to decide about.
+                sortValue: (t) => CAPABILITY_ORDER[capabilityOf(t.annotations)],
+                cell: (t) => {
+                  const c = capabilityOf(t.annotations);
+                  return (
+                    <span className="row gap-1">
+                      <Badge tone={capabilityTone(c)}>{c}</Badge>
+                      {t.annotations?.open_world === "yes" && <Badge outline>outside</Badge>}
+                    </span>
+                  );
+                },
+              },
+              {
+                key: "delivers",
+                header: "Delivers to",
+                shrink: true,
+                sortValue: (t) => t.delivers ?? "",
+                cell: (t) =>
+                  t.delivers ? (
+                    <Badge outline>{t.delivers}</Badge>
+                  ) : (
+                    <span className="faint t-caption">nobody</span>
+                  ),
+              },
+              {
+                key: "args",
+                header: "Arguments",
+                shrink: true,
+                align: "right",
+                sortValue: (t) => schemaFields(t).length,
+                cell: (t) => {
+                  const fields = schemaFields(t);
+                  if (!fields.length) {
+                    return <span className="faint t-caption">none</span>;
+                  }
+                  const required = fields.filter((f) => f.required).length;
+                  return (
+                    <span
+                      className="t-caption"
+                      title={fields
+                        .map((f) => `${f.name}${f.required ? "*" : ""}: ${f.type || "—"}`)
+                        .join("\n")}
+                    >
+                      {fields.length}
+                      {required > 0 && <span className="faint"> · {required} required</span>}
+                    </span>
+                  );
+                },
               },
             ]}
           />
