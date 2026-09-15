@@ -1272,7 +1272,11 @@ dashboard/                  the source — React 19 + TypeScript, built by Vite
   src/app/                  shell, hash router, IA, command palette
   src/lib/                  store bindings, one clock, formatting, derivations
   src/ui/                   the component library and the chart kit
-  src/routes/               one file per screen
+  src/routes/<workspace>/   one directory per workspace — inbox, me, work,
+                            company, knowledge, activity, cost, admin — and
+                            one file per screen inside it. The exception is
+                            NotFound, which belongs to no workspace: it is
+                            what the dispatch falls through to
   src/styles/               tokens, base, components, shell, screens
 static/dashboard/           THE BUILD OUTPUT — committed, and what the binary embeds
 ```
