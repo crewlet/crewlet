@@ -87,17 +87,22 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// node that hung here emitted nothing at all until its budget expired —
 	// and the log could not say which bucket it was on.
 	//
-	// STOPPED WHERE THE CREATE ENDS rather than where this function does,
-	// because the line NAMES the create: left armed across the replica
-	// observation below it, a slow status read reports a bucket that is
-	// "still being created" when the create has already finished, and
-	// sends whoever is diagnosing a clustered boot at the wrong call.
+	// IT SPANS THE LOOKUP AND THE CREATE, AND SAYS SO — and it stops where
+	// the create ends rather than where this function does.
+	//
+	// Both halves were wrong in the same way, at opposite ends. Armed
+	// before the lookup while saying "created", it reported a create that
+	// had not been attempted for a bucket that already existed; left armed
+	// across the replica observation after it, it reported one that had
+	// already finished. Either way it names a step the member is not on,
+	// which is the single thing this line exists to get right.
 	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		log.WarnContext(ctx, "coord_kv_bucket_slow", "bucket", cfg.Bucket,
 			"replicas", cfg.Replicas, "waited", after,
-			"detail", "this bucket is still being created; on a fleet that is "+
-				"a metadata group that has not settled, and the next line from "+
-				"this node says whether it got past it")
+			"detail", "this bucket is still being provisioned — looked up, "+
+				"and created if it was absent; on a fleet that is a metadata "+
+				"group that has not settled, and the next line from this node "+
+				"says whether it got past it")
 	})
 
 	switch bucket, err := js.KeyValue(createCtx, cfg.Bucket); {
