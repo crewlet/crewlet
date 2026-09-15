@@ -124,35 +124,39 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	// to no seat" is the answer the screen needs in order to say what to
 	// bind. Named here so adding another is a deliberate edit to this list
 	// rather than a silent shift in every count below.
-	always := []string{"viewer"}
-	if got := registryOver(t, queries.Sources{}).Names(); !slices.Equal(got, always) {
-		t.Errorf("with no sources at all = %v, want %v", got, always)
-	}
-	if got := registryOver(t, queries.Sources{State: state}).Names(); len(got) != 2+len(always) {
-		t.Errorf("projection questions = %v", got)
-	}
-	// event, events, trace, turn, phases — five. `turn` is what made
-	// "everything that happened in this unit of work" askable at all (see
-	// migration 0014), and `phases` is the company-wide phase record with its
-	// payloads, which the event listing deliberately cannot serve.
-	if got := registryOver(t, queries.Sources{Events: db.Events()}).Names(); len(got) != 5+len(always) {
-		t.Errorf("event-log questions = %v", got)
-	}
-	full := registryOver(t, queries.Sources{
-		State: state, Events: db.Events(),
-		Health: func(context.Context) any { return map[string]any{"status": "ok"} },
-	})
-	for _, want := range []string{
-		"agent", "event", "events", "phases", "stream", "tokens", "trace", "turn", "viewer",
+	//
+	// THE EXACT SET, never a count with the names in a comment beside it.
+	// That was the shape here and it had already drifted: `turns` was
+	// registered, the comment still said five, and the number it compared
+	// against was the old one — so the registration this case exists to
+	// notice went unnoticed, and the failure it eventually produced named a
+	// number rather than the question that had appeared.
+	for _, c := range []struct {
+		what    string
+		sources queries.Sources
+		names   []string
+	}{
+		// `viewer` answers who presented this credential, which is a fact
+		// about the REQUEST rather than about anything this process was
+		// wired with.
+		{"a node with no sources at all", queries.Sources{}, []string{"viewer"}},
+		{"the live projection alone", queries.Sources{State: state},
+			[]string{"agent", "tokens", "viewer"}},
+		// `turn` is what made "everything that happened in this unit of
+		// work" askable at all (see migration 0014); `turns` is the list
+		// of them, which the dashboard used to fake by paging the raw
+		// feed; and `phases` is the company-wide phase record WITH its
+		// payloads, which the event listing deliberately cannot serve.
+		{"the event log alone", queries.Sources{Events: db.Events()},
+			[]string{"event", "events", "phases", "trace", "turn", "turns", "viewer"}},
+		{"both, plus health", queries.Sources{
+			State: state, Events: db.Events(),
+			Health: func(context.Context) any { return map[string]any{"status": "ok"} },
+		}, []string{"agent", "event", "events", "phases", "stream",
+			"tokens", "trace", "turn", "turns", "viewer"}},
 	} {
-		found := false
-		for _, got := range full.Names() {
-			if got == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("%q is not registered: %v", want, full.Names())
+		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
+			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)
 		}
 	}
 }
