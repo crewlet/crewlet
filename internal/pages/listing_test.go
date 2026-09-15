@@ -116,7 +116,7 @@ func TestAContainerSaysHowManyPagesItHolds(t *testing.T) {
 	// Declaring three, one of which nobody writes to, is what makes the zero
 	// below a real case rather than an absent key.
 	for _, key := range []string{"ENG", "PROD", "EMPTY"} {
-		if _, err := r.store.EnsureContainer(t.Context(), key, key, ""); err != nil {
+		if _, _, err := r.store.EnsureContainer(t.Context(), key, key, ""); err != nil {
 			t.Fatalf("EnsureContainer %s: %v", key, err)
 		}
 	}
@@ -224,7 +224,7 @@ func TestEveryChangeToAPageIsReadable(t *testing.T) {
 func TestThePageFeedNarrowsByPageContainerAndKind(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if _, err := r.store.EnsureContainer(t.Context(), "PROD", "Prod", ""); err != nil {
+	if _, _, err := r.store.EnsureContainer(t.Context(), "PROD", "Prod", ""); err != nil {
 		t.Fatalf("EnsureContainer: %v", err)
 	}
 	r.drain()
@@ -327,5 +327,46 @@ func TestAPastRevisionAnswersItsOwnBody(t *testing.T) {
 	// the newest: zero is what an unset parameter arrives as.
 	if _, _, err := r.reader.Revision(t.Context(), page.Page.ID, 0, fresh); err == nil {
 		t.Error("version 0 was accepted")
+	}
+}
+
+// A CONTAINER THAT ALREADY SAYS WHAT THE CHART SAYS IS NOT WRITTEN AGAIN.
+//
+// The reconcile runs on every boot and every config apply, so the ordinary
+// outcome is no change at all — and a caller that could not tell that from a
+// create would log "applied" on every restart for a company nobody had edited,
+// while the log itself grew with restarts rather than with edits.
+func TestEnsuringAnUnchangedContainerWritesNothing(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+
+	// EACH WRITE IS APPLIED BEFORE THE NEXT ONE DECIDES: a decide runs
+	// against this node's own applied rows, so a second ensure that has not
+	// seen the first would be refused as behind rather than answering.
+	ensure := func(key, name, purpose string) bool {
+		t.Helper()
+		_, changed, err := r.store.EnsureContainer(t.Context(), key, name, purpose)
+		if err != nil {
+			t.Fatalf("EnsureContainer %s: %v", key, err)
+		}
+		r.drain()
+		return changed
+	}
+
+	if !ensure("ENG", "Engineering", "Build it") {
+		t.Fatal("the first ensure wrote nothing — want a create")
+	}
+	if ensure("ENG", "Engineering", "Build it") {
+		t.Error("the second ensure wrote a record — want a no-op")
+	}
+	// A REAL EDIT IS STILL A WRITE, which is what makes the no-op above a
+	// saving rather than a container that can never be renamed.
+	if !ensure("ENG", "Platform", "Build it") {
+		t.Error("a rename wrote nothing")
+	}
+	// AND THE KEY IS CASE-INSENSITIVE, so the lower-case spelling is the
+	// same container rather than a second one.
+	if ensure("eng", "Platform", "Build it") {
+		t.Error("the lower-cased key wrote a record — want the same container")
 	}
 }

@@ -311,6 +311,16 @@ Two properties differ from the vendor path and both are visible:
 
 - **Every seat reads every page.** There is no per-seat credential, so `CanSearch` reduces to "is there an index at all" — the credential-less case below does not arise.
 - **An index that is still building says so.** It is a different fact from an empty company, and a seat is told which: "the knowledge base is not searchable from this node yet — ask a colleague rather than concluding nothing has been written down". A seat that read an empty result would act on it, by writing a page that already exists. The gate is this node's FIRST BUILD — one lap over every corpus — and not "nothing is waiting to be indexed": a page saved a moment ago is ordinary staleness, and reading the gate off a pending count made every empty search on a company with people in it answer "still building" instead. After the first lap a search is a true answer over slightly older rows, which is what a search always is.
+- **A CONTAINER IS A DOCUMENT**, and the engine writes one for every `space:`
+  the org chart names — a unit's, a seat's own — plus the two reserved ones,
+  on every config apply and every boot. It is idempotent: a container whose
+  row already says what the chart says is not written again, so the log grows
+  with edits rather than with restarts.
+
+  A page merely **names** its container, so a page can exist in a container
+  with no document — it is reachable by address and by search, and it is
+  missing from `GET /containers` and from the Knowledge rail. That is what a
+  space nobody declared looks like.
 - **A body is MARKDOWN**, and the only format — see `internal/pages`. The
   dashboard renders it (headings, lists, tables, code, links), with raw HTML
   shown as its own text and a link's scheme restricted to `http(s):`,
