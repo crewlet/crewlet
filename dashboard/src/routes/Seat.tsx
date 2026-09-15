@@ -21,7 +21,6 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -50,12 +49,14 @@ import {
   fromPhaseEvent,
   groupTurns,
   mergePhases,
+  phaseColor,
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
 import {
   Avatar,
+  BarList,
   Button,
   Card,
   DescriptionList,
@@ -942,6 +943,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   </Card.Header>
                   <BarList
                     data={(spend.data?.by_phase ?? []).map((p) => ({
+                      id: p.phase,
                       label: p.phase,
                       value: p.total_tokens,
                       display: fmtCount(p.total_tokens),
@@ -957,6 +959,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   </Card.Header>
                   <BarList
                     data={(spend.data?.by_model ?? []).map((m) => ({
+                      id: m.model,
                       label: m.model,
                       value: m.total_tokens,
                       display: fmtCount(m.total_tokens),

@@ -26,7 +26,6 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
   useEvents,
@@ -40,8 +39,21 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { phaseColor } from "~/lib/phases.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { Button, Card, EmptyState, Meter, StatCard, StatGroup, Tag, useNow } from "@crewlethq/ui";
+import {
+  ActivityStrip,
+  BarList,
+  Button,
+  Card,
+  EmptyState,
+  Legend,
+  Meter,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -133,6 +145,7 @@ export function Overview() {
     () =>
       (tokens?.by_phase ?? [])
         .map((p) => ({
+          id: p.phase,
           label: p.phase,
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
@@ -150,12 +163,13 @@ export function Overview() {
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .slice(0, 6)
         .map((a) => ({
+          id: a.agent_id || a.role,
           label: a.role,
           value: a.total_tokens,
           display: fmtCount(a.total_tokens),
-          onClick: () => nav.to(["seats", a.handle || a.role]),
+          href: href(["seats", a.handle || a.role]),
         })),
-    [tokens, nav],
+    [tokens],
   );
 
   return (
@@ -327,9 +341,7 @@ export function Overview() {
           <div className="col gap-3">
             <ActivityStrip
               buckets={strip}
-              title={(b) =>
-                `${new Date(b.t).toLocaleTimeString()} — ${b.v} event${b.v === 1 ? "" : "s"}`
-              }
+              label={`Events published in the last ${STRIP_MINUTES} minutes`}
             />
             {stripTruncated && (
               <span className="t-caption">
@@ -370,7 +382,9 @@ export function Overview() {
           <div className="col gap-3">
             <BarList data={phaseSpend} emptyLabel="No model calls in this window." />
             {phaseSpend.length > 0 && (
-              <Legend items={phaseSpend.map((p) => ({ label: p.label, color: p.color }))} />
+              <Legend
+                items={phaseSpend.map((p) => ({ id: p.id, label: p.label, color: p.color }))}
+              />
             )}
             {orgMeter && orgMeter.max > 0 && (
               <Meter

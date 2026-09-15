@@ -272,32 +272,6 @@ a.brand:hover {
   color: var(--color-text-tertiary);
 }
 
-/* ---- Meter --------------------------------------------------------------
-   What is left of the meter after the design system took it: the TRACK, which
-   the chart's own bars are drawn in. A track is always drawn, because a bar
-   with no track is a bar whose maximum the reader has to guess. */
-
-.meter-track {
-  height: 4px;
-  border-radius: var(--radius-pill);
-  background: var(--color-surface-inset);
-  overflow: hidden;
-}
-
-/* A proportional bar broken into segments: spend by phase, tools by origin.
-   Always beside its own legend; a stacked bar with no legend is decoration. */
-.stack {
-  display: flex;
-  height: 6px;
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-  background: var(--color-surface-inset);
-}
-.stack > span {
-  height: 100%;
-  min-width: 2px;
-}
-
 /* ---- Empty, error, loading ---------------------------------------------- */
 
 .empty {
@@ -481,58 +455,4 @@ code.inline {
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs);
-}
-
-/* ---- Chart -------------------------------------------------------------- */
-
-.chart {
-  width: 100%;
-  overflow: visible;
-}
-.chart .axis-line {
-  stroke: var(--color-border-default);
-  stroke-width: 1;
-}
-.chart .grid-line {
-  stroke: var(--color-border-default);
-  stroke-width: 1;
-  stroke-dasharray: 2 4;
-}
-.chart .axis-text {
-  fill: var(--color-text-tertiary);
-  font-size: 10px;
-  font-family: var(--font-family-mono);
-}
-.chart .series-label {
-  fill: var(--color-text-secondary);
-  font-size: 11px;
-}
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-1) var(--spacing-3);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.legend > span {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
-.legend .swatch {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  flex: none;
-}
-
-/* A sparkline is a shape, not a chart: no axes, no labels, and it is always
-   captioned by the number beside it. */
-.spark {
-  display: block;
-  width: 100%;
-  height: 28px;
-  overflow: visible;
 }

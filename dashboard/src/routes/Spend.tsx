@@ -15,17 +15,21 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
+import { phaseColor } from "~/lib/phases.ts";
 import {
+  BarList,
   Card,
+  dataColor,
   EmptyValue,
+  Legend,
   Meter,
   RelativeTime,
   SegmentedControl,
   Skeleton,
+  StackedBar,
   StatCard,
   StatGroup,
   TabPanel,
@@ -69,6 +73,7 @@ export function Spend() {
     () =>
       (tokens?.by_phase ?? [])
         .map((p) => ({
+          id: p.phase,
           label: p.phase,
           value: p.total_tokens,
           display: fmtCount(p.total_tokens),
@@ -85,10 +90,11 @@ export function Spend() {
         .slice()
         .sort((a, b) => b.total_tokens - a.total_tokens)
         .map((m, i) => ({
+          id: m.model,
           label: m.model,
           value: m.total_tokens,
           display: fmtCount(m.total_tokens),
-          color: vizColor(i),
+          color: dataColor(i),
           sub: `${m.calls.toLocaleString()} calls`,
         })),
     [tokens],
@@ -204,7 +210,7 @@ export function Spend() {
             <div className="col gap-3">
               <BarList data={phase} emptyLabel="No model calls in this window." />
               {phase.length > 0 && (
-                <Legend items={phase.map((p) => ({ label: p.label, color: p.color }))} />
+                <Legend items={phase.map((p) => ({ id: p.id, label: p.label, color: p.color }))} />
               )}
             </div>
           </Card>
@@ -235,10 +241,11 @@ export function Spend() {
             </Card.Header>
             <BarList
               data={(tokens?.by_worker ?? []).map((w, i) => ({
+                id: w.worker,
                 label: w.worker,
                 value: w.total_tokens,
                 display: fmtCount(w.total_tokens),
-                color: vizColor(i),
+                color: dataColor(i),
                 sub: `${w.calls} calls`,
               }))}
             />
@@ -281,6 +288,7 @@ export function Spend() {
                 cell: (a) => (
                   <StackedBar
                     segments={phaseKeys.map((p) => ({
+                      id: p,
                       label: p,
                       value: a.by_phase?.[p]?.total_tokens ?? 0,
                       color: phaseColor(p),
@@ -309,7 +317,7 @@ export function Spend() {
               variant="meta"
               style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
             >
-              <Legend items={phaseKeys.map((p) => ({ label: p, color: phaseColor(p) }))} />
+              <Legend items={phaseKeys.map((p) => ({ id: p, label: p, color: phaseColor(p) }))} />
             </Card.Footer>
           )}
         </Card>

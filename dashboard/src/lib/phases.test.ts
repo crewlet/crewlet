@@ -17,6 +17,7 @@ import {
   phaseKey,
   ledgerOf,
   narrations,
+  phaseColor,
   phaseDuration,
   phaseStarts,
   rounds,
@@ -26,6 +27,7 @@ import {
   withStarts,
   type PhaseRecord,
 } from "./phases.ts";
+import { DATA_COLOR_OTHER } from "@crewlethq/ui";
 import type { EventRecord, LiveCall } from "~/protocol/index.ts";
 
 function liveCall(over: Partial<LiveCall> = {}): LiveCall {
@@ -644,5 +646,29 @@ describe("a phase's duration", () => {
     // exactly the state this replaces — silently, and with no duration to
     // show for it.
     expect(phaseStarts([phaseEvent()]).size).toBe(0);
+  });
+});
+
+describe("the colour a phase takes inside a chart", () => {
+  test("the three phases the engine runs each carry their own hue", () => {
+    // Phase is the one categorical identity this product spends colour on
+    // outside a chart, so the bar, the stack segment and the tag all point at
+    // the same three tokens. Read as a plain data slot instead, a phase would
+    // change colour whenever the list it happened to be ranked in changed.
+    expect(phaseColor("onboarding")).toBe("var(--color-phase-onboarding)");
+    expect(phaseColor("execute")).toBe("var(--color-phase-execute)");
+    expect(phaseColor("review")).toBe("var(--color-phase-review)");
+    expect(phaseColor("EXECUTE")).toBe("var(--color-phase-execute)");
+  });
+
+  test("a nested call, and anything this build does not know, takes the residual", () => {
+    // A sub-agent, the round-cap judge and a learning worker all run UNDER one
+    // of the three, and a fourth and fifth categorical colour in one chart is
+    // a legend nobody reads.
+    const residual = phaseColor("subagent");
+    expect(residual).toBe(DATA_COLOR_OTHER);
+    expect(phaseColor("judge")).toBe(residual);
+    expect(phaseColor("auxiliary")).toBe(residual);
+    expect(phaseColor("")).toBe(residual);
   });
 });

@@ -183,13 +183,3 @@ export function DataTable<T>({
     </div>
   );
 }
-
-/** A column header with a unit, so a number never has to carry its own. */
-export function ColHead({ children, unit }: { children: ReactNode; unit?: string }) {
-  return (
-    <>
-      {children}
-      {unit && <span style={{ color: "var(--color-text-muted)" }}> {unit}</span>}
-    </>
-  );
-}
