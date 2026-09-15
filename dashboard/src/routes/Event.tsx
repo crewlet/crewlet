@@ -164,7 +164,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 <Card.Header icon={<NeurologyGlyph size="sm" />}>
                   <Card.Title>The phase this event records</Card.Title>
                 </Card.Header>
-                <Card.Body padding="tight">
+                <Card.Body padding="sm">
                   <PhaseCard record={phase} defaultOpen showRole />
                 </Card.Body>
               </Card>

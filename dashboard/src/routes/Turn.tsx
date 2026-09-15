@@ -259,7 +259,7 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
       >
         <Card.Title>What the turn was given</Card.Title>
       </Card.Header>
-      <Card.Body padding="tight">
+      <Card.Body padding="sm">
         <div className="col gap-2">
           {got.length > 0 ? (
             <div className="col gap-1">
@@ -710,7 +710,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           <Card.Header icon={<NeurologyGlyph size="sm" />} count={own.length}>
             <Card.Title>Phases</Card.Title>
           </Card.Header>
-          <Card.Body padding="tight">
+          <Card.Body padding="sm">
             <div className="col gap-2">
               {own.map((p, i) => (
                 <PhaseCard
@@ -788,7 +788,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             >
               <Card.Title>The turn's own record</Card.Title>
             </Card.Header>
-            <Card.Body padding="tight">
+            <Card.Body padding="sm">
               <div className="col gap-2">
                 {conversation && (
                   <DescriptionList

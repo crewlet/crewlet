@@ -196,7 +196,7 @@ export function Spend() {
               tone={org.refused_at ? "danger" : undefined}
             />
             {org.refused_at && (
-              <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
+              <p className="t-caption">
                 Turns are being declined at the budget gate. Last refusal{" "}
                 {fmtDateTime(org.refused_at)}.
               </p>

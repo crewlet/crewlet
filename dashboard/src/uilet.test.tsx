@@ -635,6 +635,48 @@ function panelInCard(hash = "#/spend") {
   );
 }
 
+test("a panel draws its own content inside the panel, and a table flush to it", () => {
+  /*
+   * HOW EVERY SCREEN HERE COMPOSES A PANEL: a card, a head, and the content
+   * written straight under it with no body around it. The card is flush the
+   * moment it holds a head, and flush means the card carries no inset of its
+   * own, so content that is not a slot used to be drawn hard against the
+   * border while the title above it sat at the card's inset. It was most of
+   * the panels on these screens, and it is exactly the property this dashboard
+   * would lose in silence on a bump, because nothing at a call site here
+   * mentions a body at all.
+   *
+   * The second half is what a table needs and the first would take away: at
+   * `padding="none"` the rows still reach the card's own edges.
+   *
+   * What a body IS, is asked of the package rather than spelled: a reference
+   * one is rendered here and its classes are what the content is checked
+   * against. See testing.tsx.
+   */
+  const body = drawnClasses(Card.Body, { padding: "md", children: "reference" });
+  expect(body.length).toBeGreaterThan(0);
+  const inABody = (node: Element | null) => {
+    for (let at = node; at !== null; at = at.parentElement) {
+      if (body.every((name) => at!.classList.contains(name))) return true;
+    }
+    return false;
+  };
+
+  render(
+    <Card as="section">
+      <Card.Header icon={<AddGlyph size="sm" />} subtitle="what a panel says beside its name">
+        <Card.Title>By model</Card.Title>
+      </Card.Header>
+      <p className="t-caption">No model calls in this window.</p>
+    </Card>,
+  );
+  expect(inABody(screen.getByText("No model calls in this window."))).toBe(true);
+
+  cleanup();
+  panelInCard();
+  expect(inABody(document.querySelector("table"))).toBe(false);
+});
+
 test("a record table offers the settings frame, the page control and the handles", () => {
   // The three controls the panel tables did not have. The cog is the way to
   // the column list and the page size; the chevrons are the pages themselves;

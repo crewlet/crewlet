@@ -657,7 +657,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             </div>
             {turns.length > 0 && (
               <Card>
-                <Card.Body padding="tight">
+                <Card.Body padding="sm">
                   <div className="row">
                     <span className="t-caption">
                       Showing the most recent phases the engine holds for this seat.
@@ -938,7 +938,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   tone={agent.budget.refused_at ? "danger" : undefined}
                 />
                 {agent.budget.refused_at && (
-                  <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
+                  <p className="t-caption">
                     Turns for this seat are being declined at the budget gate. Last refusal{" "}
                     {fmtDateTime(agent.budget.refused_at)}.
                   </p>
