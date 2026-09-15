@@ -377,23 +377,49 @@ func settleForeign(t *testing.T, foreign *atomic.Int64) {
 // It is a test rather than a benchmark because the ordering is the invariant.
 // The magnitudes belong to whoever runs the benchmark on the hardware they
 // are sizing.
+// benchArmRuns is how many times each arm is measured before the fastest is
+// taken. Three: enough that one unlucky scheduling window cannot decide the
+// answer, few enough that the case stays a few seconds rather than a minute.
+const benchArmRuns = 3
+
 func TestTheMultiRowApplyIsTheFastestShape(t *testing.T) {
 	if testing.Short() {
-		t.Skip("times three apply transactions of 4 000 rows each")
+		t.Skip("times three apply transactions of 4 000 rows each, three times over")
 	}
 	t.Parallel()
 	db, w := benchWriterT(t)
 	items := benchItems(benchRows)
 	ctx := t.Context()
 
+	// THE BEST OF THREE, not one run.
+	//
+	// This is a RATIO between two shapes, and the whole suite runs its
+	// packages in parallel — so an arm can be measured while several other
+	// packages are hammering the same disk and cores. Noise only ever makes
+	// an arm SLOWER, never faster, so the minimum of a few runs is the
+	// least-contaminated sample of each and the ratio between two minima is
+	// the property being asserted.
+	//
+	// One run each was enough alone and not enough in the suite: a real run
+	// measured 766ms against 970ms — a ratio of 1.27 against a floor of 1.5
+	// — and failed a build over a machine that was busy rather than over a
+	// chunker that had stopped chunking. Widening the floor instead would
+	// have bought the same green build by making the test unable to notice
+	// the regression it exists for.
 	timeArm := func(run func(context.Context, *store.Writer, *store.DB, []benchItem) error) time.Duration {
 		t.Helper()
-		resetBenchT(ctx, t, w)
-		started := time.Now()
-		if err := run(ctx, w, db, items); err != nil {
-			t.Fatalf("apply: %v", err)
+		best := time.Duration(0)
+		for i := 0; i < benchArmRuns; i++ {
+			resetBenchT(ctx, t, w)
+			started := time.Now()
+			if err := run(ctx, w, db, items); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if took := time.Since(started); best == 0 || took < best {
+				best = took
+			}
 		}
-		return time.Since(started)
+		return best
 	}
 
 	unprepared := timeArm(applyUnprepared)
