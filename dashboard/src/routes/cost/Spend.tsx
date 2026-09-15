@@ -264,8 +264,8 @@ export function Spend() {
         <TimeRangePicker range={range} ariaLabel="Window" />
       </PageActions>
       <PageNote>
-        What the company's model calls actually cost, and how much headroom the budget gate has
-        left.
+        How many tokens the company&rsquo;s model calls have spent, and how much headroom the budget
+        gate has left. Every figure here is in tokens.
       </PageNote>
 
       <Panel padding="none">
