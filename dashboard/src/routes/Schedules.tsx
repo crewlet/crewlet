@@ -29,6 +29,8 @@ import { useNow } from "~/lib/clock.ts";
 import type { ScheduleRow, ScheduleRunRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { usePageLabels } from "~/app/Shell.tsx";
+import { useNavigator } from "~/app/router.tsx";
 
 /** The ledger's two outcomes, and nothing else — see the note above. */
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "neutral"> = {
@@ -46,10 +48,21 @@ const runID = (r: ScheduleRunRow) => identity(r.scope_type, r.scope_id, r.schedu
 
 export function Schedules({ scope = [] }: { scope?: string[] }) {
   const now = useNow();
+  const nav = useNavigator();
   // `#/activity/schedules/{scope_type}/{scope_id}/{name}` names ONE schedule.
   // Three segments because a schedule's identity is all three: two units may
   // each declare a "standup", and a role and a unit may both.
   const [scopeType, scopeId, scheduleName] = scope;
+  // ONE SCHEDULE'S OWN HISTORY, which the company-wide ledger below cannot
+  // be: `schedules.recent_runs` is fifty rows across every schedule, so
+  // twenty hourly ones fill it in two and a half hours and "did the standup
+  // fire this week" is unanswerable. The three segments were destructured
+  // here and never read, so this address rendered the whole list.
+  const one = useQuery(
+    "schedule_runs",
+    { scope_type: scopeType, scope_id: scopeId, name: scheduleName },
+    { enabled: Boolean(scopeType && scopeId && scheduleName), pollMs: 30_000 },
+  );
   // Schedules are pushed on a config apply, and the RUNS are not pushed at
   // all — so this polls, slowly, because a cron's next fire moves in minutes.
   const { data, loading, error } = useQuery("schedules", undefined, { pollMs: 30_000 });
@@ -67,6 +80,29 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
   // first, so the first row per identity is the latest one.
   const lastFire = new Map<string, ScheduleRunRow>();
   for (const run of runs) if (!lastFire.has(runID(run))) lastFire.set(runID(run), run);
+
+  const chosen =
+    scopeType && scopeId && scheduleName
+      ? schedules.find(
+          (s) => s.scope_type === scopeType && s.scope_id === scopeId && s.name === scheduleName,
+        )
+      : undefined;
+
+  if (scopeType && scopeId && scheduleName) {
+    return (
+      <OneSchedule
+        scopeType={scopeType}
+        scopeId={scopeId}
+        name={scheduleName}
+        row={chosen}
+        runs={one.data?.runs ?? []}
+        truncated={Boolean(one.data?.truncated)}
+        loading={one.loading}
+        error={one.error}
+        now={now}
+      />
+    );
+  }
 
   return (
     <>
@@ -123,6 +159,12 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
           <DataTable
             rows={schedules}
             rowKey={rowID}
+            // A SCHEDULE HAS AN ADDRESS, and it is its whole identity: two
+            // units may each declare a "standup", and a role and a unit may
+            // both, so the trail is all three segments. The route existed and
+            // rendered this same list, because the screen destructured its
+            // segments and never read them.
+            onRowClick={(s) => nav.to(["activity", "schedules", s.scope_type, s.scope_id, s.name])}
             defaultSort={{ key: "next", dir: "asc" }}
             columns={[
               {
@@ -317,6 +359,170 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
                   ) : (
                     <span className="faint">—</span>
                   ),
+              },
+            ]}
+          />
+        </Panel>
+      </QueryState>
+    </>
+  );
+}
+
+/**
+ * One schedule: what it is, and every fire this node's ledger still holds.
+ *
+ * # Why this is its own read
+ *
+ * `schedules.recent_runs` is the COMPANY's fifty most recent fires. A company
+ * with twenty hourly schedules fills that page in two and a half hours, so a
+ * screen wanting one schedule's history had to page the company's and filter —
+ * which is exactly the shape that makes a reader conclude a schedule stopped
+ * running when it simply fell off the end.
+ *
+ * # A schedule the config no longer declares still has a history
+ *
+ * The ledger outlives the configuration: a schedule somebody removed has rows
+ * until the retention sweep takes them, and this page shows them. So the
+ * header degrades to the identity rather than refusing — "there is no such
+ * schedule" would be wrong about the rows underneath it.
+ */
+function OneSchedule({
+  scopeType,
+  scopeId,
+  name,
+  row,
+  runs,
+  truncated,
+  loading,
+  error,
+  now,
+}: {
+  scopeType: string;
+  scopeId: string;
+  name: string;
+  row?: ScheduleRow;
+  runs: ScheduleRunRow[];
+  truncated: boolean;
+  loading: boolean;
+  error: string | null;
+  now: number;
+}) {
+  usePageLabels({ [[scopeType, scopeId, name].join("/")]: name });
+  return (
+    <>
+      <PageActions>
+        {
+          <>
+            <Badge outline mono>
+              {scopeType}:{scopeId}
+            </Badge>
+            {row && !row.enabled && <Badge outline>disabled</Badge>}
+            {row?.problem && (
+              <Badge tone="critical" title={row.problem}>
+                cannot fire
+              </Badge>
+            )}
+          </>
+        }
+      </PageActions>
+      <PageNote>
+        {row
+          ? row.task
+          : "The company configuration no longer declares this schedule. Its history is kept until the retention sweep takes it."}
+      </PageNote>
+
+      {row && (
+        <Panel padding="none">
+          <StatRow cols={3}>
+            <Stat icon="clock" label="Cron" value={row.cron} sub={row.timezone || "UTC"} />
+            <Stat
+              icon="calendar"
+              label="Next"
+              value={row.next_run ? inTime(row.next_run, now) : "—"}
+              sub={row.problem || (row.enabled ? "as the expression schedules it" : "disabled")}
+            />
+            <Stat
+              icon="users"
+              label="Wakes"
+              value={row.runners?.length ?? 0}
+              sub={row.runners?.length ? row.runners.join(", ") : "nobody"}
+            />
+          </StatRow>
+        </Panel>
+      )}
+
+      <QueryState
+        error={error}
+        loading={loading}
+        empty={
+          runs.length
+            ? undefined
+            : {
+                title: "This schedule has not fired",
+                hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
+              }
+        }
+      >
+        <Panel
+          title="Fires"
+          icon="clock"
+          count={runs.length}
+          padding="none"
+          // SAYS WHEN IT CUT: a page that filled is indistinguishable from a
+          // schedule that has fired exactly that many times.
+          subtitle={
+            truncated ? `the newest ${runs.length} — older fires are past this page` : undefined
+          }
+        >
+          <DataTable
+            rows={runs}
+            rowKey={(r) => `${r.fired_at}:${r.fire_label}:${r.target_handle}`}
+            defaultSort={{ key: "fired", dir: "desc" }}
+            columns={[
+              {
+                key: "fired",
+                header: "Fired",
+                shrink: true,
+                sortValue: (r) => tsKey(r.fired_at),
+                cell: (r) => (
+                  <span className="t-caption" title={fmtDateTime(r.fired_at)}>
+                    {relTime(r.fired_at, now)}
+                  </span>
+                ),
+              },
+              {
+                key: "target",
+                header: "Woke",
+                shrink: true,
+                cell: (r) =>
+                  r.target_handle ? (
+                    <SeatChip name={r.target_handle} handle={r.target_handle} />
+                  ) : (
+                    <span className="faint">—</span>
+                  ),
+              },
+              {
+                key: "outcome",
+                header: "Outcome",
+                shrink: true,
+                sortValue: (r) => r.outcome,
+                cell: (r) => (
+                  <Badge tone={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome || "—"}</Badge>
+                ),
+              },
+              {
+                // THE TICK, which is not the instant it ran: a catchup fire
+                // runs now for a tick that was due earlier, and the pair is
+                // the only way to see that.
+                key: "due",
+                header: "For the tick",
+                shrink: true,
+                sortValue: (r) => tsKey(r.scheduled_at),
+                cell: (r) => (
+                  <span className="t-caption" title={r.fire_label}>
+                    {r.scheduled_at ? fmtDateTime(r.scheduled_at) : "—"}
+                  </span>
+                ),
               },
             ]}
           />
