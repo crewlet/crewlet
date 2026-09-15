@@ -389,6 +389,14 @@ func Register(r *Registry, s Sources) {
 		// every day of its own window. Folding it in would make the
 		// five-sprint report pay for five series nobody asked to draw.
 		r.Register("work_burndown", s.workBurndown)
+		// AND WHO IS CARRYING HOW MUCH, across every project at once.
+		// The two halves of that question live apart and neither is
+		// reachable from the other: what somebody HOLDS is a group-by
+		// over the tasks, and what they CAN hold is a sprint policy —
+		// per project, which is what `work_sprints` answers one of. A
+		// caller that summed them itself paid one round trip per
+		// project and rewrote the three-valued capacity per surface.
+		r.Register("work_workload", s.workWorkload)
 		// THE FEED IS ITS OWN QUESTION, because it is ordered by the
 		// LOG rather than by anything a board sorts on: one durable
 		// table at any age, with a cursor that is a position.

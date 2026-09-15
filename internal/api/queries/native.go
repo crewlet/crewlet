@@ -114,6 +114,8 @@ type WorkReader interface {
 		tracker.SprintListing, error)
 	Burndown(ctx context.Context, q tracker.BurndownQuery, now time.Time) (
 		tracker.Burndown, error)
+	Workload(ctx context.Context, q tracker.WorkloadQuery, now time.Time) (
+		tracker.WorkloadAnswer, error)
 	Activity(ctx context.Context, q tracker.ActivityQuery, now time.Time) (
 		tracker.ActivityAnswer, error)
 	MyWork(ctx context.Context, q tracker.MyWorkQuery, now time.Time) (
@@ -691,6 +693,28 @@ func (s Sources) workSprints(ctx context.Context, p Params) (any, error) {
 		return nil, unavailableIfBehind(err)
 	}
 	return listing, nil
+}
+
+// workWorkload answers who is carrying how much, against what they can take.
+//
+// NO VIEWER AND NO HANDLE. Every other read of somebody's load is about ONE
+// person and resolves the viewer from the caller's own credential; this one is
+// about everybody at once, which is the whole question — "who is overloaded"
+// has no answer that names a person in advance.
+func (s Sources) workWorkload(ctx context.Context, p Params) (any, error) {
+	fresh, err := freshness(p)
+	if err != nil {
+		return nil, err
+	}
+	out, err := s.Work.Workload(ctx, tracker.WorkloadQuery{
+		Unit:  strings.TrimSpace(p.String("unit")),
+		Level: fresh.Level, MaxLag: fresh.MaxLag, MaxLagSeq: fresh.MaxLagSeq,
+		MinPosition: fresh.MinPosition,
+	}, time.Now().UTC())
+	if err != nil {
+		return nil, unavailableIfBehind(err)
+	}
+	return out, nil
 }
 
 // workBurndown answers one sprint's day-by-day series.

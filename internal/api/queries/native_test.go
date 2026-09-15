@@ -35,14 +35,16 @@ type stubWork struct {
 	personQuery  tracker.PersonQuery
 	person       tracker.PersonState
 
-	projectQuery tracker.ProjectQuery
-	projects     tracker.ProjectListing
-	detailQuery  tracker.ProjectDetailQuery
-	project      tracker.ProjectDetail
-	sprintQuery  tracker.SprintQuery
-	sprints      tracker.SprintListing
-	burnQuery    tracker.BurndownQuery
-	burndown     tracker.Burndown
+	projectQuery  tracker.ProjectQuery
+	projects      tracker.ProjectListing
+	detailQuery   tracker.ProjectDetailQuery
+	project       tracker.ProjectDetail
+	sprintQuery   tracker.SprintQuery
+	sprints       tracker.SprintListing
+	burnQuery     tracker.BurndownQuery
+	workloadQuery tracker.WorkloadQuery
+	burndown      tracker.Burndown
+	workload      tracker.WorkloadAnswer
 
 	activityQuery tracker.ActivityQuery
 	activity      tracker.ActivityAnswer
@@ -83,6 +85,13 @@ func (s *stubWork) Burndown(_ context.Context, q tracker.BurndownQuery,
 
 	s.burnQuery = q
 	return s.burndown, s.err
+}
+
+func (s *stubWork) Workload(_ context.Context, q tracker.WorkloadQuery,
+	_ time.Time) (tracker.WorkloadAnswer, error) {
+
+	s.workloadQuery = q
+	return s.workload, s.err
 }
 
 func (s *stubWork) Activity(_ context.Context, q tracker.ActivityQuery,

@@ -76,6 +76,7 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/projects/{key}", what: "work_project", path: map[string]string{"key": "key"}},
 	{method: "GET", pattern: "/work/projects", what: "work_projects"},
 	{method: "GET", pattern: "/work/sprints", what: "work_sprints"},
+	{method: "GET", pattern: "/work/workload", what: "work_workload"},
 	// THE SERIES, beside the figures. Documented since the query shipped
 	// and never wired, which is the one way a missing route is worse than
 	// no route at all: /work/{id} below matches the path, so a reader

@@ -665,6 +665,43 @@ a reason that has nothing to do with what they wrote.
 the check is about growth, and applying it to an unwatch would leave a task
 that had somehow grown past the cap as one nobody could leave.
 
+## Who is carrying how much
+
+**The workload** answers, for everybody at once, what they are holding against
+what they can take. It counts **open** work — every task assigned to them, in
+or out of a sprint — because "is this person overloaded" is a question about
+their whole queue, where a sprint report is about one fortnight's commitment.
+The two numbers are deliberately different and both are worth having.
+
+A **capacity** comes from a project's `sprint_policy`, and only while that
+project has a sprint RUNNING: a capacity is a statement about a fortnight, and
+holding somebody to a number nobody is currently working to is worse than
+holding them to none. A person working across two sprinting projects has both
+capacities and their capacity is the **sum**; the answer says how many projects
+it came from, so you can tell a whole week's number from part of one.
+
+Three things it will not do:
+
+- **An undeclared capacity is an absence, never a zero.** A company that has
+  never set one reads as a company nobody can judge — which is true — rather
+  than as a company where everybody is permanently over.
+- **Two measures do not add up.** A person whose projects size in points and in
+  minutes has no summable capacity, and the answer says *that* rather than
+  leaving the capacity absent: "nobody said" and "it cannot be added up" send
+  you to a sprint policy and to two, respectively.
+- **It does not re-rank by how far over somebody is.** The heaviest queue
+  first: one point over a capacity of two would otherwise outrank forty against
+  a capacity nobody declared.
+
+Beside the total it carries the three shapes of work that is not simply in
+progress — **blocked**, **overdue** and **unscheduled** — because a person at
+capacity whose whole queue is blocked has a different problem from one who is
+simply busy, and a total alone cannot tell them apart.
+
+`GET /work/workload`, optionally narrowed to one `unit` — which narrows the
+tasks and the capacities together, since narrowing only the first would hold
+somebody to a number covering work the answer does not show.
+
 ## What a person can do
 
 **The dashboard** renders the board, the list, the calendar and the timeline over the same

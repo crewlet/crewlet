@@ -339,6 +339,13 @@ func (stubWorkReader) Burndown(_ context.Context, q tracker.BurndownQuery, _ tim
 	return tracker.Burndown{Project: q.Project, Sprint: q.Sprint}, nil
 }
 
+func (stubWorkReader) Workload(_ context.Context, q tracker.WorkloadQuery, _ time.Time) (
+	tracker.WorkloadAnswer, error) {
+	return tracker.WorkloadAnswer{
+		Rows: []tracker.WorkloadRow{{Handle: q.Unit, Open: 1}},
+	}, nil
+}
+
 func (stubWorkReader) Activity(context.Context, tracker.ActivityQuery, time.Time) (
 	tracker.ActivityAnswer, error) {
 	return tracker.ActivityAnswer{}, nil

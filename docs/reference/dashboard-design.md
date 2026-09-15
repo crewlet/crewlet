@@ -225,7 +225,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/work/{KEY}-{n}` · `#/work/{id}` | **Item** — description, thread, history, links, properties | `thread=comments\|history\|woke` · `record=` (which change's routing) |
 | `#/goals` · `#/goals/{id}` | **Goals** | |
 | `#/company` | **Company** — the charter and the chart | `lens=chart\|charter` |
-| `#/company/people` | **People** — the one directory | `group=state\|unit\|flat` · `q=` |
+| `#/company/people` | **People** — the one directory, and who is carrying how much | `view=seats\|workload` · `group=state\|unit\|flat` · `q=` |
 | `#/company/people/{handle}` | **Seat** — agent or human | agent: overview · model · conversations · memory · cost · access; human: overview · access. `conversation=` opens one thread |
 | `#/company/units/{id}` | **Unit** — lead, purpose, goals, seats, sub-units | |
 | `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
