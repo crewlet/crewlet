@@ -13,7 +13,7 @@ import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
-import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   DescriptionGlyph,
@@ -113,7 +113,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     </span>,
                   ],
                   ["Actor", data.actor || <span className="muted">the engine itself</span>],
-                  ["Source", data.source || <span className="muted">—</span>],
+                  ["Source", data.source || <EmptyValue label="Not reported" />],
                   ["Category", humanize(data.category) || "system"],
                   [
                     "Topic",
@@ -122,7 +122,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                         {data.topic}
                       </code>
                     ) : (
-                      <span className="muted">—</span>
+                      <EmptyValue label="Not reported" />
                     ),
                   ],
                   [
@@ -143,7 +143,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                         {data.parent_span_id && ` (parent ${data.parent_span_id})`}
                       </span>
                     ) : (
-                      <span className="muted">—</span>
+                      <EmptyValue label="Not reported" />
                     ),
                   ],
                 ]}

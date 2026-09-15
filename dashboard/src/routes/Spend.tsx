@@ -410,7 +410,7 @@ export function Spend() {
                           valueText={`${fmtExact(s.durable_used)} / ${fmtExact(s.max_tokens)}`}
                         />
                       ) : (
-                        <span className="muted">—</span>
+                        <EmptyValue label="No budget set" />
                       ),
                   },
                 ]}

@@ -8,7 +8,7 @@ import { Badge, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
-import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { CalendarClockGlyph, ErrorGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
@@ -123,7 +123,7 @@ export function Schedules() {
                   s.next_run ? (
                     <RelativeTime className="t-caption" value={s.next_run} now={now} />
                   ) : (
-                    <span className="muted">—</span>
+                    <EmptyValue label="Not reported" />
                   ),
               },
               {

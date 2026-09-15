@@ -108,3 +108,27 @@ test("every budget meter names what it measures and says its value in words", as
   const meter = await screen.findByRole("meter", { name: "Unmetered budget" });
   expect(meter.getAttribute("aria-valuetext")).toBe("250 / 1,000");
 });
+
+// AN ABSENCE SAYS WHAT IT IS. A seat with no budget drew a bare em dash in
+// the headroom column, which a screen reader reads as "dash" or skips, so the
+// one row in the table that cannot run out of budget was the one row that said
+// nothing about itself.
+test("a seat with no budget says so where the meter would be", async () => {
+  location.hash = "#/spend";
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(what === "budgets" ? budgets : null);
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Spend />
+      </Router>
+    </ClientContext.Provider>,
+  );
+
+  await screen.findByText("Unmetered");
+  const row = screen.getByText("Unmetered").closest("tr")!;
+  expect(within(row).getByText("No budget set")).toBeDefined();
+  expect(within(row).queryByRole("meter")).toBeNull();
+});

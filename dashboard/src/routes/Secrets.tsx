@@ -33,7 +33,7 @@ import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
-import { RelativeTime, Skeleton, useNow, useToast } from "@crewlethq/ui";
+import { EmptyValue, RelativeTime, Skeleton, useNow, useToast } from "@crewlethq/ui";
 import {
   AddGlyph,
   CloseGlyph,
@@ -253,7 +253,7 @@ export function Secrets() {
                 key: "by",
                 header: "Set by",
                 sortValue: (s) => s.updated_by,
-                cell: (s) => s.updated_by || <span className="muted">—</span>,
+                cell: (s) => s.updated_by || <EmptyValue label="Not recorded" />,
               },
               {
                 key: "at",
@@ -334,7 +334,7 @@ function Readers({ paths }: { paths: string[] | null }) {
     );
   }
   if (paths.length === 0) {
-    return <span className="muted">—</span>;
+    return <EmptyValue label="No field reads it" />;
   }
   return (
     <Badge outline title={paths.join("\n")}>

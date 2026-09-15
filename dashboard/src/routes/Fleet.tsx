@@ -14,7 +14,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
-import { EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DnsGlyph,
   ErrorGlyph,
@@ -180,7 +180,7 @@ export function Fleet() {
                   n.posture ? (
                     <Badge tone={n.posture === "serve" ? "positive" : "caution"}>{n.posture}</Badge>
                   ) : (
-                    <span className="muted">—</span>
+                    <EmptyValue label="Not reported" />
                   ),
               },
               {
@@ -215,7 +215,7 @@ export function Fleet() {
                       {fmtDuration(n.expires_in * 1000)}
                     </span>
                   ) : (
-                    <span className="muted">—</span>
+                    <EmptyValue label="Not reported" />
                   ),
               },
               {
@@ -227,7 +227,7 @@ export function Fleet() {
                   n.started_at ? (
                     <RelativeTime className="t-caption" value={n.started_at} now={now} />
                   ) : (
-                    <span className="muted">—</span>
+                    <EmptyValue label="Not reported" />
                   ),
               },
             ]}
@@ -290,7 +290,7 @@ export function Fleet() {
                     s.expires_in != null ? (
                       fmtDuration(s.expires_in * 1000)
                     ) : (
-                      <span className="muted">—</span>
+                      <EmptyValue label="Not reported" />
                     ),
                 },
               ]}
@@ -329,7 +329,7 @@ export function Fleet() {
                     d.expires_in != null ? (
                       fmtDuration(d.expires_in * 1000)
                     ) : (
-                      <span className="muted">—</span>
+                      <EmptyValue label="Not reported" />
                     ),
                 },
               ]}

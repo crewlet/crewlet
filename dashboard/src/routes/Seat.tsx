@@ -65,7 +65,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
-import { EmptyState, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   AccountTreeGlyph,
   ArrowForwardGlyph,
@@ -715,7 +715,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                               {e.review_outcome ?? e.outcome}
                             </Badge>
                           ) : (
-                            <span className="muted">—</span>
+                            <EmptyValue label="Not reported" />
                           ),
                       },
                       {
@@ -733,7 +733,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           e.conversation_key ? (
                             <span className="mono t-caption">{e.conversation_key}</span>
                           ) : (
-                            <span className="muted">—</span>
+                            <EmptyValue label="Not reported" />
                           ),
                       },
                     ]}

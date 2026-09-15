@@ -38,7 +38,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
-import { EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DescriptionGlyph,
   DifferenceGlyph,
@@ -195,7 +195,7 @@ export function ConfigScreen() {
                       sortValue: (r) => r.summary,
                       cell: (r) => (
                         <span className="truncate">
-                          {r.summary || <span className="muted">—</span>}
+                          {r.summary || <EmptyValue label="No summary" />}
                         </span>
                       ),
                     },
@@ -204,7 +204,7 @@ export function ConfigScreen() {
                       header: "By",
                       shrink: true,
                       sortValue: (r) => r.created_by,
-                      cell: (r) => r.created_by || <span className="muted">—</span>,
+                      cell: (r) => r.created_by || <EmptyValue label="Not recorded" />,
                     },
                   ]}
                 />
