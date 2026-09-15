@@ -43,40 +43,6 @@ export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "a
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Identity
-// ---------------------------------------------------------------------------
-
-/**
- * A seat's monogram. Deliberately neutral — see the note in components.css.
- */
-export function Avatar({
-  name,
-  size = "md",
-  human,
-}: {
-  name: string;
-  size?: "sm" | "md" | "lg";
-  human?: boolean;
-}) {
-  const initials =
-    (name || "?")
-      .split(/[\s\-_.]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((w) => w[0])
-      .join("") || "?";
-  return (
-    <span
-      className={cx("avatar", size !== "md" && size, human && "human")}
-      title={name}
-      aria-hidden="true"
-    >
-      {initials}
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Measure
 // ---------------------------------------------------------------------------
 

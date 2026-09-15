@@ -18,11 +18,10 @@
 
 import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Avatar } from "~/ui/primitives.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { Avatar, Button, Modal } from "@crewlethq/ui";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -327,7 +326,7 @@ export function DisconnectDialog({
             <ul className="int-rows">
               {apps.map((app) => (
                 <li key={app.handle} className="int-row int-seat-row">
-                  <Avatar name={app.name || app.handle} size="sm" />
+                  <Avatar name={app.name || app.handle} size="xs" decorative />
                   <div className="int-row-identity">
                     <span className="int-row-name">{app.name || app.handle}</span>
                   </div>

@@ -90,7 +90,7 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, CodeBlock, CopyButton, Skeleton, Tag, cx } from "@crewlethq/ui";
+import { Button, Card, CodeBlock, CopyButton, EmptyValue, Skeleton, Tag, cx } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -607,7 +607,13 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             <Stat
               icon={PersonGlyph}
               label="Seat"
-              value={role ? <SeatChip name={role} handle={role} size="md" /> : "—"}
+              value={
+                role ? (
+                  <SeatChip name={role} handle={role} size="sm" />
+                ) : (
+                  <EmptyValue label="No seat recorded" />
+                )
+              }
               // The conversation key used to sit here, raw and truncated —
               // "mattermost:9zd7xj4mqj8hf8fy4gt7aitiny:cnjzasu…" under a seat's
               // name, with nothing saying what it was. It is a property of the

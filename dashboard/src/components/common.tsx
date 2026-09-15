@@ -9,7 +9,6 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -24,7 +23,7 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { Button, RelativeTime, Tag, cx, formatRelative, useNow } from "@crewlethq/ui";
+import { Avatar, Button, RelativeTime, Tag, cx, formatRelative, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   ErrorGlyph,
@@ -50,12 +49,12 @@ export function SeatChip({
   name,
   handle,
   human,
-  size = "sm",
+  size = "xs",
 }: {
   name: string;
   handle?: string;
   human?: boolean;
-  size?: "sm" | "md";
+  size?: "xs" | "sm";
 }) {
   const target = handle || name;
   return (
@@ -68,7 +67,7 @@ export function SeatChip({
       style={{ gap: "var(--spacing-2)", minWidth: 0 }}
       href={href(["seats", target])}
     >
-      <Avatar name={name} size={size} human={human} />
+      <Avatar name={name} size={size} variant={human ? "dashed" : "solid"} decorative />
       <span className="truncate">{name}</span>
     </a>
   );
@@ -105,7 +104,12 @@ export function SeatCard({
   return (
     <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
       <div className="row">
-        <Avatar name={seat.name} size="lg" human={seat.kind === "human"} />
+        <Avatar
+          name={seat.name}
+          size="lg"
+          variant={seat.kind === "human" ? "dashed" : "solid"}
+          decorative
+        />
         <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
           <strong className="truncate t-body">{seat.name}</strong>
           {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}

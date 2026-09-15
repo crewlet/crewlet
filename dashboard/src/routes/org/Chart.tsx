@@ -27,9 +27,8 @@ import { seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
-import { Avatar } from "~/ui/primitives.tsx";
 import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
-import { ButtonLink, Callout, Card, EmptyState, Tag, cx } from "@crewlethq/ui";
+import { Avatar, ButtonLink, Callout, Card, EmptyState, Tag, cx } from "@crewlethq/ui";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -196,7 +195,7 @@ function SeatNode({ seat, live, selected }: { seat: Seat; live: Live; selected: 
       href={href(seatPath(seat))}
       aria-current={selected ? "true" : undefined}
     >
-      <Avatar name={seat.name} human={human} />
+      <Avatar name={seat.name} variant={human ? "dashed" : "solid"} size="sm" decorative />
       <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
         <span className="truncate t-cell">{seat.name}</span>
         {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}

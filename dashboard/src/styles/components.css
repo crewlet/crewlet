@@ -60,50 +60,6 @@
   }
 }
 
-/* ---- Avatar -------------------------------------------------------------
-   A monogram, and it is NEUTRAL. The system this replaces coloured a seat by
-   `PALETTE[hash(name) % 8]`, over the same eight families it also used for
-   phases and event categories, so one amber meant "the execute phase", "the
-   decision category" and "the Analyst" at once. A hash of a name carries no
-   information: rename the seat and its colour changes, which is the proof it
-   never meant anything. Identity is the monogram and the name. */
-
-.avatar {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: var(--radius-md);
-  background: var(--color-surface-elevated);
-  border: 1px solid var(--color-border-default);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.02em;
-  flex: none;
-  text-transform: uppercase;
-}
-.avatar.lg {
-  width: 40px;
-  height: 40px;
-  font-size: var(--font-size-sm);
-  border-radius: var(--radius-lg);
-}
-.avatar.sm {
-  width: 20px;
-  height: 20px;
-  font-size: 9px;
-  border-radius: var(--radius-xs);
-}
-/* A human seat is drawn, not tinted: the engine does not run it, and that is a
-   structural fact rather than a status. */
-.avatar.human {
-  border-style: dashed;
-  border-color: var(--color-border-default);
-  background: transparent;
-}
-
 /* A link that IS a row takes the page's text colour, not the link colour.
    Otherwise every seat name in every list renders in the accent, which is
    identity-colouring by accident, and the accent is reserved for saying where

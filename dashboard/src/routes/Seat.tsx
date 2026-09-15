@@ -21,7 +21,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { Avatar, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -56,6 +56,7 @@ import {
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
 import {
+  Avatar,
   Button,
   Card,
   EmptyState,
@@ -220,7 +221,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       <ScreenHead
         title={
           <span className="row" style={{ gap: "var(--spacing-3)" }}>
-            <Avatar name={seat.name} size="lg" human={human} />
+            <Avatar name={seat.name} size="lg" variant={human ? "dashed" : "solid"} decorative />
             {seat.name}
           </span>
         }
@@ -527,7 +528,12 @@ export function SeatScreen({ handle }: { handle: string }) {
                   {reports.map((r) => (
                     <a key={r.key} className="seat-card" href={href(seatPath(r))}>
                       <div className="row">
-                        <Avatar name={r.name} human={r.kind === "human"} />
+                        <Avatar
+                          name={r.name}
+                          variant={r.kind === "human" ? "dashed" : "solid"}
+                          size="sm"
+                          decorative
+                        />
                         <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
                           <span className="truncate t-cell">{r.name}</span>
                           <span className="truncate t-caption">{r.goal || r.unit?.name}</span>

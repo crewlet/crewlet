@@ -25,7 +25,6 @@
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar } from "~/ui/primitives.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,7 +47,7 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, ButtonLink, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
+import { Avatar, Button, ButtonLink, EmptyState, Skeleton, Tag } from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 
 /**
@@ -1379,7 +1378,7 @@ export function EntryRow({
                     the console does on its roster: a row of bare names reads
                     as configuration, and a row with the agent's mark reads
                     as the person it stands for. */}
-                <Avatar name={seat.name || seat.handle} size="sm" />
+                <Avatar name={seat.name || seat.handle} size="xs" decorative />
                 <div className="int-row-identity">
                   <span className="int-row-name">
                     {seat.name || seat.handle}

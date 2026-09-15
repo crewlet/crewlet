@@ -17,6 +17,8 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { Avatar } from "@crewlethq/ui";
+import { drawnClasses } from "~/testing.tsx";
 import { afterEach, describe, expect, test } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
 import { OutlineView } from "./OutlineView.tsx";
@@ -159,7 +161,12 @@ describe("the grid", () => {
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
     const ceo = rowOf(seatKey("ceo"));
-    expect(ceo.querySelector(".avatar.human")).not.toBeNull();
+    // The claim is the VARIANT the row passes, so the badge is compared
+    // against the one uilet draws for a human seat rather than a class name.
+    const [badge] = drawnClasses(Avatar, { variant: "dashed", name: "CEO" }).filter(
+      (name) => !drawnClasses(Avatar, { name: "CEO" }).includes(name),
+    );
+    expect(ceo.querySelector(`.${badge}`)).not.toBeNull();
     expect(within(ceo).getByText("Human seat")).toBeDefined();
   });
 });

@@ -49,8 +49,6 @@ import {
 } from "react";
 import type { Derived } from "~/protocol/index.ts";
 
-import { Avatar } from "~/ui/primitives.tsx";
-
 import {
   isExpandable,
   level,
@@ -92,7 +90,7 @@ import {
   KeyboardArrowDownGlyph,
   PersonAddGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, IconButton, LAYER_REPOSITION_EVENT, LayerHost, Menu } from "@crewlethq/ui";
+import { Avatar, Button, IconButton, LAYER_REPOSITION_EVENT, LayerHost, Menu } from "@crewlethq/ui";
 import { LayerNode } from "~/ui/layerNode.tsx";
 
 /** The columns, in order. Their positions are the cells' `aria-colindex`. */
@@ -659,7 +657,12 @@ function NameCell({
         )}
       </span>
       {view.type === "seat" ? (
-        <Avatar name={view.name} size="sm" human={view.kind === "human"} />
+        <Avatar
+          name={view.name}
+          size="xs"
+          variant={view.kind === "human" ? "dashed" : "solid"}
+          decorative
+        />
       ) : view.type === "company" ? (
         <ApartmentGlyph size="sm" />
       ) : (

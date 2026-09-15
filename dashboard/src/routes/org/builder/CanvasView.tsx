@@ -60,7 +60,6 @@ import {
 } from "react";
 import { plural } from "~/lib/format.ts";
 import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Avatar } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
   ancestors,
@@ -114,7 +113,7 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
-import { EmptyState, IconButton, Menu, Tag, cx, type MenuEntry } from "@crewlethq/ui";
+import { Avatar, EmptyState, IconButton, Menu, Tag, cx, type MenuEntry } from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.
@@ -407,7 +406,12 @@ function SeatBody({ api, view }: { api: BuilderApi; view: SeatView }) {
   return (
     <>
       <span className="bchart-line">
-        <Avatar name={view.name} size="sm" human={view.kind === "human"} />
+        <Avatar
+          name={view.name}
+          size="xs"
+          variant={view.kind === "human" ? "dashed" : "solid"}
+          decorative
+        />
         <span className="bchart-text">
           <span className="bchart-name truncate">{view.name}</span>
           <span className="bchart-meta truncate">
@@ -441,7 +445,12 @@ function ReportingCard({
     <div className={cx("bchart-card", "seat", item.kind === "human" && "human")}>
       <div {...ctx.item(item.id)} className="bchart-head">
         <span className="bchart-line">
-          <Avatar name={item.name} size="sm" human={item.kind === "human"} />
+          <Avatar
+            name={item.name}
+            size="xs"
+            variant={item.kind === "human" ? "dashed" : "solid"}
+            decorative
+          />
           <span className="bchart-text">
             <span className="bchart-name truncate">{item.name}</span>
             <span className="bchart-meta truncate">
