@@ -190,6 +190,24 @@ type ListQuery struct {
 	// NOT mean history is exhausted here; only a zero-row page does.
 	RelatedAgent string
 
+	// Since and Until bound the window a caller is asking about, as a
+	// half-open interval `[Since, Until)`.
+	//
+	// SEPARATE FROM [ListQuery.Before], which is a CURSOR: the cursor is
+	// where this page resumes and moves with every page, while these are
+	// what the reader asked for and do not. Folding a window into the
+	// cursor would make the second page of a bounded read unbounded, which
+	// is the failure a keyset exists to avoid wearing a filter's clothes.
+	//
+	// The history window still applies underneath: a `Since` older than
+	// [EventHistory] does not reach rows the log no longer keeps, and
+	// saying so is the caller's job rather than this read's.
+	//
+	// Zero means unbounded on that side, which is a meaningful zero: an
+	// instant nobody named is not midnight in 1970.
+	Since time.Time
+	Until time.Time
+
 	// Before is an exclusive cursor. Nil starts at the newest row.
 	Before *Cursor
 }
@@ -417,6 +435,17 @@ func (l *EventLog) List(ctx context.Context, q ListQuery) ([]EventRecord, error)
 	addEq("trace_id", q.TraceID)
 	addEq("actor", q.Actor)
 	addEq("turn_id", q.TurnID)
+	// THE WINDOW, half-open, on the same column the keyset walks — so it
+	// narrows the index range the read already scans rather than adding a
+	// term the planner has to filter on.
+	if !q.Since.IsZero() {
+		where = append(where, col("event_time")+" >= ?")
+		args = append(args, EncodeTime(q.Since))
+	}
+	if !q.Until.IsZero() {
+		where = append(where, col("event_time")+" < ?")
+		args = append(args, EncodeTime(q.Until))
+	}
 
 	from := "crewlet_events"
 	if joined {
@@ -572,6 +601,48 @@ const MaxTurnEvents = MaxTraceEvents
 // index the read walked.
 func (l *EventLog) TurnEventCount(ctx context.Context, turnID string) (int, error) {
 	return l.countEvents(ctx, "turn_id", turnID)
+}
+
+// TurnTraces is every trace one turn touched, in the order it first touched
+// them.
+//
+// ASKED RATHER THAN DERIVED FROM THE ROWS, and the reason is the cap above. A
+// turn RESUMED on another node after a restart spans more than one trace —
+// which is exactly the turn somebody opens a turn page to understand — and a
+// caller deriving the set from the rows it was given loses any trace whose
+// events fell in the middle a capped read dropped. One button labelled
+// "trace" then leads to half the story with nothing saying a second half
+// exists.
+//
+// A DISTINCT walk of the same (turn_id, event_time, event_id) index the read
+// walked, bounded by the same history window, so it is a seek over one turn's
+// range rather than a scan. Ordered by first appearance, because that is the
+// order a reader follows them in: the trace the turn started under comes
+// first.
+func (l *EventLog) TurnTraces(ctx context.Context, turnID string) ([]string, error) {
+	rows, err := l.db.sql.QueryContext(ctx,
+		"SELECT trace_id, MIN(event_time) AS first_at FROM crewlet_events "+
+			"WHERE turn_id = ? AND event_time >= ? AND trace_id != '' "+
+			"GROUP BY trace_id ORDER BY first_at ASC, trace_id ASC",
+		turnID, EncodeTime(now().Add(-EventHistory)))
+	if err != nil {
+		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []string{}
+	for rows.Next() {
+		var id string
+		var first int64
+		if err := rows.Scan(&id, &first); err != nil {
+			return nil, fmt.Errorf("store: scan the traces of turn %s: %w", turnID, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read the traces of turn %s: %w", turnID, err)
+	}
+	return out, nil
 }
 
 // TraceEventCount is the same question about a trace. See [EventLog.TurnEventCount].

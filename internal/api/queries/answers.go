@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
@@ -678,6 +679,28 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		TraceID:      p.String("trace_id"),
 		Actor:        p.String("actor"),
 		RelatedAgent: p.String("agent"),
+		// TURN_ID WAS DECLARED, DOCUMENTED AGAINST MIGRATION 0014, AND
+		// DEAD: the column exists, the reader filters on it, and no
+		// surface ever passed one — so "every event of this turn" was
+		// answerable by the store and unaskable from anywhere.
+		TurnID: p.String("turn_id"),
+	}
+	// THE WINDOW, which is what a reader scrubbing a time range means and
+	// is NOT the cursor: a cursor is where a page resumes and moves with
+	// every page, while these are what was asked for and do not.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return nil, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return nil, err
+	}
+	q.Since, q.Until = since, until
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		return nil, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+			"window is half-open, so an empty one names no rows at all",
+			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
 	}
 	if before := p.String("before_id"); before != "" {
 		at, err := time.Parse(time.RFC3339Nano, p.String("before_time"))
@@ -704,6 +727,26 @@ func (s Sources) events(ctx context.Context, p Params) (any, error) {
 		// the walk. Saying so beats a client inferring it wrongly.
 		"exhausted": len(rows) == 0,
 	}, nil
+}
+
+// instantParam reads an RFC 3339 instant, or the zero time when absent.
+//
+// THE ZERO IS MEANINGFUL and is what makes each side of a window optional: an
+// instant nobody named is unbounded rather than midnight in 1970. A value that
+// is present and unparseable is refused naming the parameter, because a
+// silently-dropped bound is a read that answers a different question than the
+// one asked.
+func instantParam(p Params, name string) (time.Time, error) {
+	raw := strings.TrimSpace(p.String(name))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %s must be an RFC 3339 instant "+
+			"(2026-04-16T09:00:00Z), and %q is not: %w", ErrBadParams, name, raw, err)
+	}
+	return at.UTC(), nil
 }
 
 // cursorOf is the position a caller resumes from, or nil at the end.
