@@ -126,6 +126,21 @@ test("searching again from deep in the log goes back to the first page", () => {
   expect(location.hash).not.toContain("page=3");
 });
 
+test("Reset to Default returns the log to the size the screen opens at", () => {
+  // A list screen opens at twenty rows, which is about one screenful of the
+  // log; the design system's own default is ten. The settings frame resets to
+  // whatever it was TOLD the default is, so a screen that does not say hands
+  // its reader back a size nobody on this screen ever chose, and writes it
+  // into the link as well.
+  mount("#/activity?per=5");
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to Default" }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+  // Absent is how the default says its own name: every parameter falls back to
+  // the value the screen opens on.
+  expect(location.hash).not.toContain("per=");
+});
+
 test("the footer counts what the filters kept, not what the page holds", () => {
   // Not the row count alone: a reader who has narrowed a log needs to know
   // there is more behind the filter than the one row in front of them. And

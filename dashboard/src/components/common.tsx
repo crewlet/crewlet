@@ -183,6 +183,16 @@ export interface TableChoices {
   onPageChange: (next: number) => void;
   itemsPerPage: DataTableItemsPerPage;
   onItemsPerPageChange: (next: DataTableItemsPerPage) => void;
+  /**
+   * How many rows the screen opens with, handed to the table as well.
+   *
+   * Same reason as [TableChoices.defaultSort] below: the size is controlled,
+   * so this seeds nothing, and what it answers is Reset to Default. Without
+   * it the frame resets to the design system's own ten, so a list screen that
+   * opens at twenty came back from a reset on a size it never chose and its
+   * link then carried `per=10`.
+   */
+  defaultItemsPerPage: number;
   itemsPerPageOptions: number[];
   visibleColumns: Record<string, boolean>;
   onVisibleColumnsChange: (next: Record<string, boolean>) => void;
@@ -190,6 +200,16 @@ export interface TableChoices {
   onColumnOrderChange: (next: string[]) => void;
   sort: DataTableSortState | null;
   onSortChange: (next: DataTableSortState | null) => void;
+  /**
+   * The order the screen opens in, handed to the table as well as read here.
+   *
+   * The sort is controlled, so this seeds nothing: what it answers is the
+   * settings frame's Reset to Default, which has no default to put back
+   * without it and leaves the table ordered by nothing at all. Passing it
+   * also keeps the URL honest, because the parameter's own fallback is this
+   * value, so a reset lands back on a clean link rather than on `sort=none`.
+   */
+  defaultSort: DataTableSortState | null;
   storageKey: string;
   paginated: true;
   resizable: true;
@@ -294,6 +314,7 @@ export function useTableChoices<T>({
     onPageChange: (next) => setPageParam(String(Math.max(1, Math.trunc(next)))),
     itemsPerPage,
     onItemsPerPageChange: (next) => setPerParam(next === ALL_ITEMS ? ALL_ITEMS : String(next)),
+    defaultItemsPerPage,
     itemsPerPageOptions: TABLE_PAGE_SIZES,
     visibleColumns,
     onVisibleColumnsChange: (next) =>
@@ -303,6 +324,7 @@ export function useTableChoices<T>({
       setOrderParam(next.filter((key) => declared.includes(key)).join(",")),
     sort,
     onSortChange: (next) => setSortParam(encodeSort(next)),
+    defaultSort,
     // The SCREEN and the TABLE, and nothing narrower. Two tables on one route
     // would otherwise share one set of widths and each keep re-teaching the
     // other its own. Deliberately not the record the screen is showing: a

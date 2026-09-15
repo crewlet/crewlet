@@ -39,6 +39,7 @@ import {
   tabId,
 } from "@crewlethq/ui";
 import { Announcer, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
+import type { DataTableSortState } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { RecordTable } from "./components/common.tsx";
 import { drawnClasses } from "./testing.tsx";
@@ -590,7 +591,7 @@ const ROW_COLUMNS = [
  * from. Its parameters carry the table's own name, so the two tables a screen
  * draws never share a page: these are `rows.page`, `rows.per` and so on.
  */
-function panel(hash = "#/spend") {
+function panel(hash = "#/spend", defaultSort: DataTableSortState | null = null) {
   location.hash = hash;
   return render(
     <Router>
@@ -599,6 +600,7 @@ function panel(hash = "#/spend") {
         table="rows"
         rows={ROWS}
         columns={ROW_COLUMNS}
+        defaultSort={defaultSort}
         getRowKey={(row) => row.seat}
       />
     </Router>,
@@ -679,6 +681,33 @@ test("the settings frame carries the page sizes and the column list", () => {
   expect(within(frame).getByText("Column Order & Visibility")).toBeDefined();
   expect(within(frame).getByRole("button", { name: "Move Spent up" })).toBeDefined();
   expect(within(frame).getByRole("button", { name: "Reset to Default" })).toBeDefined();
+});
+
+test("Reset to Default puts the screen's own opening order back", () => {
+  // What a reader means by the button, and what they got instead. The frame
+  // resets to the DESIGN SYSTEM's defaults, so a table whose opening order and
+  // page size are the screen's came back from a reset ordered by nothing and
+  // sized at the package's own ten, and the URL then carried that non-default
+  // through every reload and everybody the link was sent to. Both defaults
+  // travel with the rest of the choices now, so the reset lands on the screen
+  // the reader opened.
+  panel("#/spend", { key: "spent", direction: "desc" });
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+
+  fireEvent.click(within(screen.getByRole("columnheader", { name: /Seat/ })).getByRole("button"));
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+  expect(location.hash).toContain("rows.sort=seat%3Aasc");
+
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Reset to Default" }));
+  fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+  expect(seatOrder()).toEqual(["planner", "reviewer", "unmetered"]);
+  // And the link is clean again: every parameter's fallback is the value the
+  // screen opens on, so the default order and the default size name themselves
+  // by being absent.
+  expect(location.hash).not.toContain("rows.sort");
+  expect(location.hash).not.toContain("rows.per");
 });
 
 test("wrapping is kept in this browser and never in the link", () => {
