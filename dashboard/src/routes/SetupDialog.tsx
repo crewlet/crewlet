@@ -1060,7 +1060,7 @@ export function SetupDialog({
           <details className="int-form-more" open={moreOpen} onToggle={onMoreToggle}>
             <summary className="int-summary">
               More settings
-              <span className="faint"> ({folded.length})</span>
+              <span className="muted"> ({folded.length})</span>
             </summary>
             <div className="int-form-more-fields">
               {folded.map(({ section, r }) => (

@@ -195,7 +195,7 @@ export function ConfigScreen() {
                       sortValue: (r) => r.summary,
                       cell: (r) => (
                         <span className="truncate">
-                          {r.summary || <span className="faint">—</span>}
+                          {r.summary || <span className="muted">—</span>}
                         </span>
                       ),
                     },
@@ -204,7 +204,7 @@ export function ConfigScreen() {
                       header: "By",
                       shrink: true,
                       sortValue: (r) => r.created_by,
-                      cell: (r) => r.created_by || <span className="faint">—</span>,
+                      cell: (r) => r.created_by || <span className="muted">—</span>,
                     },
                   ]}
                 />

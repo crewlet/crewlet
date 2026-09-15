@@ -159,7 +159,7 @@ function UnitBlock({ unit, live, selection }: { unit: Unit; live: Live; selectio
             title={unit.leadInherited ? "Inherited from a parent unit" : "This unit's own lead"}
           >
             {unit.lead.name}
-            {unit.leadInherited && <span className="faint"> (inherited)</span>}
+            {unit.leadInherited && <span className="muted"> (inherited)</span>}
           </Badge>
         )}
         <span className="spacer" />

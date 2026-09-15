@@ -203,7 +203,7 @@ export function EventRow({
       </span>
       <span className="feed-tail">
         {event.source && <span className="truncate">{event.source}</span>}
-        <span className="faint">{humanize(event.category) || "system"}</span>
+        <span className="muted">{humanize(event.category) || "system"}</span>
       </span>
     </>
   );

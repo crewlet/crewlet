@@ -575,7 +575,7 @@ a.brand:hover {
   background: var(--color-surface-subtle);
 }
 .input-affix {
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-compact);
   user-select: none;
 }
@@ -738,7 +738,7 @@ a.brand:hover {
 }
 .input::placeholder,
 .textarea::placeholder {
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
 }
 .select {
   appearance: none;
@@ -984,7 +984,7 @@ fieldset.field {
 }
 .chip .chip-count {
   font-variant-numeric: tabular-nums;
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
 }
 .chip[aria-pressed="true"] .chip-count {
   color: inherit;

@@ -5,8 +5,8 @@
  * screen stylesheet's class, and the builder needs a dozen more (an
  * acknowledgement before a rename, "Clear lead" on a move, a schedule's enabled
  * toggle). Hand-rolled, the description beside a box ended up in the
- * decoration-only faint ink, which is under the contrast floor for a sentence
- * that says what ticking the box deletes.
+ * decoration-only ink, which is under the contrast floor for a sentence that
+ * says what ticking the box deletes.
  *
  * THE RULES IT KEEPS.
  *
@@ -16,7 +16,7 @@
  *   "Also remove the accounts Crewlet created, checkbox" and then the
  *   consequence, rather than the whole paragraph as a name.
  * - A DESTRUCTIVE CHOICE SAYS SO ON THE BOX: `tone="critical"` tints the box
- *   itself, and the description stays in the muted ink every fact uses.
+ *   itself, and the description stays in the ink every other fact uses.
  * - `framed` draws the bordered row a dialog uses for a decision that stands on
  *   its own; a checkbox among form fields is unframed.
  */

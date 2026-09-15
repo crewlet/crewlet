@@ -113,7 +113,7 @@ export function RemoveSecretDialog({
                 </code>
               ))}
             </span>
-            <span className="t-caption faint">
+            <span className="t-caption">
               Point those fields somewhere else, or remove them, before removing this.
             </span>
           </span>
@@ -128,7 +128,7 @@ export function RemoveSecretDialog({
               The active configuration could not be read, so it is not known whether anything points
               at this name.
             </span>
-            {unknown && <span className="t-caption faint">{unknown}</span>}
+            {unknown && <span className="t-caption">{unknown}</span>}
           </span>
         </div>
       )}

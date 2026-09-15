@@ -141,7 +141,7 @@ export function Tools() {
                 header: "What it does",
                 cell: (t) => (
                   <span className="t-caption">
-                    {t.description || <span className="faint">no description</span>}
+                    {t.description || <span className="muted">no description</span>}
                   </span>
                 ),
               },

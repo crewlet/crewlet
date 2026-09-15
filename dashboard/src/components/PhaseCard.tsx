@@ -387,7 +387,7 @@ export function PhaseCard({
             <section className="col gap-1">
               <div className="t-label">
                 Rounds
-                <span className="faint">
+                <span className="muted">
                   {" · "}
                   what the model thought, said and called, in order
                 </span>
@@ -424,7 +424,7 @@ export function PhaseCard({
                 <section className="col gap-1">
                   <div className="t-label">
                     Transcript
-                    <span className="faint"> · recorded before rounds were kept apart</span>
+                    <span className="muted"> · recorded before rounds were kept apart</span>
                   </div>
                   <p className="prose">{legacy.answer.trim()}</p>
                 </section>
@@ -476,7 +476,7 @@ export function PhaseCard({
                   <div className="col gap-1">
                     <div className="t-label">
                       Callable this round
-                      <span className="faint"> · full JSON schemas were sent</span>
+                      <span className="muted"> · full JSON schemas were sent</span>
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolsAvailable.map((t) => (
@@ -491,7 +491,7 @@ export function PhaseCard({
                   <div className="col gap-1">
                     <div className="t-label">
                       Offered as prose
-                      <span className="faint"> · discoverable, not yet callable</span>
+                      <span className="muted"> · discoverable, not yet callable</span>
                     </div>
                     <div className="row wrap gap-1">
                       {record.toolCatalogue.map((t) => (

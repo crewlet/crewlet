@@ -224,7 +224,7 @@ export function ListField({
     <fieldset className="field list-field" aria-describedby={describedBy || undefined}>
       <legend>
         {label}
-        {required === false && <span className="faint"> (optional)</span>}
+        {required === false && <span className="muted"> (optional)</span>}
       </legend>
       {count > 0 && (
         <ol className="list-field-items">

@@ -112,8 +112,8 @@ export function EventScreen({ eventId }: { eventId: string }) {
                       <RelativeTime value={data.timestamp} now={now} />
                     </span>,
                   ],
-                  ["Actor", data.actor || <span className="faint">the engine itself</span>],
-                  ["Source", data.source || <span className="faint">—</span>],
+                  ["Actor", data.actor || <span className="muted">the engine itself</span>],
+                  ["Source", data.source || <span className="muted">—</span>],
                   ["Category", humanize(data.category) || "system"],
                   [
                     "Topic",
@@ -122,7 +122,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                         {data.topic}
                       </code>
                     ) : (
-                      <span className="faint">—</span>
+                      <span className="muted">—</span>
                     ),
                   ],
                   [
@@ -132,7 +132,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                         {data.trace_id}
                       </code>
                     ) : (
-                      <span className="faint">not traced</span>
+                      <span className="muted">not traced</span>
                     ),
                   ],
                   [
@@ -143,7 +143,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                         {data.parent_span_id && ` (parent ${data.parent_span_id})`}
                       </span>
                     ) : (
-                      <span className="faint">—</span>
+                      <span className="muted">—</span>
                     ),
                   ],
                 ]}
@@ -182,7 +182,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   </span>
                 </div>
               ) : (
-                <span className="t-caption faint">
+                <span className="t-caption">
                   This event carries no payload — its type and summary are the whole record.
                 </span>
               )}

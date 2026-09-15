@@ -180,7 +180,7 @@ export function Fleet() {
                   n.posture ? (
                     <Badge tone={n.posture === "serve" ? "positive" : "caution"}>{n.posture}</Badge>
                   ) : (
-                    <span className="faint">—</span>
+                    <span className="muted">—</span>
                   ),
               },
               {
@@ -195,7 +195,7 @@ export function Fleet() {
                     </Badge>
                     {data && (n.config_epoch ?? 0) < data.target_epoch && (
                       <span
-                        className="t-caption faint"
+                        className="t-caption"
                         title={`applied epoch ${n.config_epoch ?? 0}, target ${data.target_epoch}`}
                       >
                         behind
@@ -215,7 +215,7 @@ export function Fleet() {
                       {fmtDuration(n.expires_in * 1000)}
                     </span>
                   ) : (
-                    <span className="faint">—</span>
+                    <span className="muted">—</span>
                   ),
               },
               {
@@ -227,7 +227,7 @@ export function Fleet() {
                   n.started_at ? (
                     <RelativeTime className="t-caption" value={n.started_at} now={now} />
                   ) : (
-                    <span className="faint">—</span>
+                    <span className="muted">—</span>
                   ),
               },
             ]}
@@ -290,7 +290,7 @@ export function Fleet() {
                     s.expires_in != null ? (
                       fmtDuration(s.expires_in * 1000)
                     ) : (
-                      <span className="faint">—</span>
+                      <span className="muted">—</span>
                     ),
                 },
               ]}
@@ -329,7 +329,7 @@ export function Fleet() {
                     d.expires_in != null ? (
                       fmtDuration(d.expires_in * 1000)
                     ) : (
-                      <span className="faint">—</span>
+                      <span className="muted">—</span>
                     ),
                 },
               ]}

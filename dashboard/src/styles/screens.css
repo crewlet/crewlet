@@ -947,7 +947,7 @@
 .feed-time {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-2xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .feed-actor {
@@ -1528,7 +1528,7 @@
   gap: var(--spacing-2);
   font-size: var(--font-size-2xs);
   line-height: var(--font-line-height-normal);
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
 }
 .int-form-note a {
   color: inherit;
@@ -1757,7 +1757,7 @@
   gap: var(--spacing-2);
 }
 .int-row-note-when {
-  color: var(--color-text-muted);
+  color: var(--color-text-tertiary);
 }
 
 /* WHAT IS WRONG: the line a reader is here for, so it takes the body colour

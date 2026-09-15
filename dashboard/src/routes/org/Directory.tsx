@@ -21,7 +21,7 @@ export function Directory({ index }: { index: OrgIndex }) {
   const [unitName] = useParam("unit", "", "filter");
   const [seatHandle] = useParam("seat", "", "filter");
   const seatFor = (seat: Seat) => agents.find((a) => a.role === seat.name);
-  const unknown = <span className="faint">Not reported</span>;
+  const unknown = <span className="muted">Not reported</span>;
 
   return (
     <Panel padding="none">
@@ -54,7 +54,7 @@ export function Directory({ index }: { index: OrgIndex }) {
             key: "unit",
             header: "Unit",
             sortValue: (s) => s.unit?.name ?? "",
-            cell: (s) => s.unit?.name ?? <span className="faint">org-wide</span>,
+            cell: (s) => s.unit?.name ?? <span className="muted">org-wide</span>,
           },
           {
             key: "manager",
@@ -64,7 +64,7 @@ export function Directory({ index }: { index: OrgIndex }) {
               s.manager ? (
                 <SeatChip name={s.manager.name} handle={s.manager.handle} />
               ) : index.hierarchy ? (
-                <span className="faint">Nobody</span>
+                <span className="muted">Nobody</span>
               ) : (
                 unknown
               ),

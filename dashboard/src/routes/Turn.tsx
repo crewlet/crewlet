@@ -342,7 +342,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
         {withoutActor(event.summary, actor) || event.type}
       </span>
       <span className="feed-tail">
-        <span className="faint mono truncate">{event.type}</span>
+        <span className="muted mono truncate">{event.type}</span>
       </span>
     </a>
   );

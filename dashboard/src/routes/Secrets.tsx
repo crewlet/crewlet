@@ -253,7 +253,7 @@ export function Secrets() {
                 key: "by",
                 header: "Set by",
                 sortValue: (s) => s.updated_by,
-                cell: (s) => s.updated_by || <span className="faint">—</span>,
+                cell: (s) => s.updated_by || <span className="muted">—</span>,
               },
               {
                 key: "at",
@@ -328,13 +328,13 @@ export function Secrets() {
 function Readers({ paths }: { paths: string[] | null }) {
   if (paths === null) {
     return (
-      <span className="faint" title="The active configuration could not be read.">
+      <span className="muted" title="The active configuration could not be read.">
         not known
       </span>
     );
   }
   if (paths.length === 0) {
-    return <span className="faint">—</span>;
+    return <span className="muted">—</span>;
   }
   return (
     <Badge outline title={paths.join("\n")}>

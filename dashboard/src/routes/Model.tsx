@@ -342,7 +342,7 @@ export function ModelActivity() {
         <section className="col gap-1">
           <div className="t-label">
             Running now
-            <span className="faint"> · {plural(running.length, "phase")} mid-flight</span>
+            <span className="muted"> · {plural(running.length, "phase")} mid-flight</span>
           </div>
           <DataTable
             rows={running}
@@ -367,7 +367,7 @@ export function ModelActivity() {
         <section className="col gap-1">
           <div className="t-label">
             Recent phases
-            <span className="faint"> · newest first · open a row for its transcript</span>
+            <span className="muted"> · newest first · open a row for its transcript</span>
           </div>
           <DataTable
             rows={settled.items}

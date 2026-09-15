@@ -243,7 +243,7 @@ export function Field({
     <div className="field">
       <label htmlFor={id}>
         {label}
-        {required === false && <span className="faint"> (optional)</span>}
+        {required === false && <span className="muted"> (optional)</span>}
         {/* AND REQUIRED IS MARKED ONLY WHERE IT IS NEWS.
             
             The convention on this form is that required is the default and
@@ -256,7 +256,7 @@ export function Field({
             screen a moment ago and is now the one thing standing between the
             answer above it and its working, so the caller that knows it is
             gated asks for the mark. See SetupDialog's `required_when`. */}
-        {required === true && markRequired && <span className="faint"> (required)</span>}
+        {required === true && markRequired && <span className="muted"> (required)</span>}
       </label>
       {picker ? (
         <select

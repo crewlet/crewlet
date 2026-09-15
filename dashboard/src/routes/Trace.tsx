@@ -159,7 +159,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                     {fmtTime(event.timestamp)}
                   </time>
                   <span className="feed-actor truncate" style={{ paddingLeft: depth * 12 }}>
-                    {depth > 0 && <span className="faint">└ </span>}
+                    {depth > 0 && <span className="muted">└ </span>}
                     {event.actor || "engine"}
                   </span>
                   <span className="feed-what truncate">
@@ -180,7 +180,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
                     />
                   </span>
                   <span className="feed-tail">
-                    <span className="faint">{humanize(event.category)}</span>
+                    <span className="muted">{humanize(event.category)}</span>
                     <ChevronRightGlyph size="xs" />
                   </span>
                 </a>

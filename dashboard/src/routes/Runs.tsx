@@ -212,7 +212,7 @@ export function Runs() {
                     <span className="t-caption">up</span>
                   ) : (
                     <span
-                      className="t-caption faint"
+                      className="t-caption"
                       title="the sandbox has been reclaimed; the run's record remains"
                     >
                       reclaimed

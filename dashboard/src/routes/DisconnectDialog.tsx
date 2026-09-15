@@ -320,7 +320,7 @@ export function DisconnectDialog({
             people rather than a list of URLs. */}
         {removeSeats && apps && apps.length > 0 && (
           <div className="col gap-2">
-            <span className="t-caption faint">
+            <span className="t-caption">
               Each agent&apos;s app is uninstalled, which stops it acting immediately. Deleting the
               app itself is yours to do{appPath ? <>: {marked(appPath)}</> : null}.
             </span>
@@ -375,7 +375,7 @@ export function DisconnectDialog({
                   revoked credential, an instance that is gone. Offered
                   only after one has actually failed, because it leaves
                   the vendor holding things nobody will remove. */}
-              <span className="t-caption faint">
+              <span className="t-caption">
                 Forcing drops the integration without waiting for {name}. Whatever it still holds
                 becomes yours to remove there.
               </span>

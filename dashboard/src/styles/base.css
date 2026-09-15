@@ -99,9 +99,13 @@
 .secondary {
   color: var(--color-text-secondary);
 }
-.faint {
-  color: var(--color-text-muted);
-}
+/* There is no third text utility. `.faint` drew the DECORATION step, which is
+   measured between 2.8:1 and 4.5:1 precisely because nothing readable is
+   supposed to be in it, and sixty-six spellings put words there: "(optional)",
+   "not set", "none", "nobody", "not reported by this engine", a seat's goal,
+   an event's category and type. Each of them is a fact, so each takes
+   `.muted`, and `designSystem.test.ts` is what stops the step collecting
+   words again. */
 .truncate {
   overflow: hidden;
   text-overflow: ellipsis;

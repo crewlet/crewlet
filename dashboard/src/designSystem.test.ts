@@ -200,3 +200,49 @@ test("no source names a token the engine no longer declares", () => {
     .map(({ name }) => name);
   expect(offenders).toEqual([]);
 });
+
+/**
+ * Every innermost rule of a stylesheet, as `[selector, declarations]`.
+ *
+ * Innermost because a nested at-rule's own body would otherwise be read as one
+ * declaration block: the inner rules are what carry the colours.
+ */
+function rules(source: string): [string, string][] {
+  return [...code(source).matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => [m[1]!.trim(), m[2]!]);
+}
+
+/** A `color:` declaration, told from `background-color:` and `border-color:`. */
+const TEXT_COLOUR = /(^|[;\s])color:\s*var\(--color-text-muted\)/;
+
+test("the decoration step is spent as a text colour on nothing but a glyph", () => {
+  // `--color-text-muted` is measured BETWEEN 2.8:1 and 4.5:1, deliberately: it
+  // is the decoration step, and a step that reached the text floor would
+  // invite itself into a table cell. The palette suite measures the token and
+  // says nothing about where it is spent, which is how the engine came to draw
+  // "not set", "none", "nobody" and "not reported by this engine" in it. The
+  // rule this restores covered the shell's stylesheet alone, and went with it;
+  // every sheet the dashboard ships is in it now.
+  const offenders = files(/\.css$/)
+    .flatMap(({ name, text }) =>
+      rules(text)
+        .filter(([, body]) => TEXT_COLOUR.test(body))
+        .flatMap(([selector]) => selector.split(",").map((s) => `${name}: ${s.trim()}`)),
+    )
+    // A glyph beside a label is decoration: the label carries the words.
+    .filter((offender) => !/(^|\s|>)svg$/.test(offender));
+  expect(offenders).toEqual([]);
+});
+
+test("the decoration-step scan reads rules, and recognises what it polices", () => {
+  // A parser that found no rules would pass the test above for any stylesheet,
+  // and a pattern that matched no declaration would pass it for any rule.
+  const sheets = files(/\.css$/).map(({ name }) => name);
+  expect(sheets).toContain("styles/base.css");
+  expect(rules(".a {\n  color: red;\n}\n").map(([selector]) => selector)).toEqual([".a"]);
+  const decoration = `color: var(--color-text${"-muted"})`;
+  expect(TEXT_COLOUR.test(`  ${decoration};`)).toBe(true);
+  expect(TEXT_COLOUR.test(`  font-size: 1px; ${decoration};`)).toBe(true);
+  // A background or a border may carry the step: it is a mark there, not text.
+  expect(TEXT_COLOUR.test(`  background-${decoration};`)).toBe(false);
+  expect(TEXT_COLOUR.test(`  border-${decoration};`)).toBe(false);
+});

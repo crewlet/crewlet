@@ -371,11 +371,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                           @{seat.handle}
                         </code>
                       ) : (
-                        <span className="faint">not reported by this engine</span>
+                        <span className="muted">not reported by this engine</span>
                       ),
                     ],
                     ["Kind", human ? "Human teammate, never run by the engine" : "Agent seat"],
-                    ["Goal", seat.goal || <span className="faint">not set</span>],
+                    ["Goal", seat.goal || <span className="muted">not set</span>],
                     [
                       "Unit",
                       seat.unitChain.length ? (
@@ -397,13 +397,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                           )}
                         </span>
                       ) : (
-                        <span className="faint">org-wide</span>
+                        <span className="muted">org-wide</span>
                       ),
                     ],
                     [
                       "Unit lead",
                       !seat.unit ? (
-                        <span className="faint">none</span>
+                        <span className="muted">none</span>
                       ) : seat.unit.lead ? (
                         <span key="l" className="row gap-1">
                           <SeatChip name={seat.unit.lead.name} handle={seat.unit.lead.handle} />
@@ -412,9 +412,9 @@ export function SeatScreen({ handle }: { handle: string }) {
                           )}
                         </span>
                       ) : hierarchy ? (
-                        <span className="faint">none</span>
+                        <span className="muted">none</span>
                       ) : (
-                        <span className="faint">not reported by this engine</span>
+                        <span className="muted">not reported by this engine</span>
                       ),
                     ],
                     [
@@ -422,9 +422,9 @@ export function SeatScreen({ handle }: { handle: string }) {
                       manager ? (
                         <SeatChip name={manager.name} handle={manager.handle} />
                       ) : hierarchy ? (
-                        <span className="faint">nobody</span>
+                        <span className="muted">nobody</span>
                       ) : (
-                        <span className="faint">not reported by this engine</span>
+                        <span className="muted">not reported by this engine</span>
                       ),
                     ],
                   ]}
@@ -446,7 +446,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                   {configRole && (
                     <KeyValue
                       items={[
-                        ["Email", configRole.email || <span className="faint">not set</span>],
+                        ["Email", configRole.email || <span className="muted">not set</span>],
                         ["Model", <Model key="m" llm={configRole.llm} />],
                         ...phaseOverrides(configRole),
                         [
@@ -498,7 +498,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     </div>
                   )}
                   {!seat.backstory && !seat.responsibilities.length && !seat.guidelines.length && (
-                    <span className="t-caption faint">
+                    <span className="t-caption">
                       No profile is set. Backstory, responsibilities and guidelines render straight
                       into this seat's executor prompt.
                     </span>
@@ -594,7 +594,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               <section className="col gap-1 live-region">
                 <div className="t-label">
                   Running now
-                  <span className="faint"> · updates as each round is written</span>
+                  <span className="muted"> · updates as each round is written</span>
                 </div>
                 <div className="col gap-2">
                   {liveTurns.map((g) => (
@@ -715,7 +715,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                               {e.review_outcome ?? e.outcome}
                             </Badge>
                           ) : (
-                            <span className="faint">—</span>
+                            <span className="muted">—</span>
                           ),
                       },
                       {
@@ -733,7 +733,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                           e.conversation_key ? (
                             <span className="mono t-caption">{e.conversation_key}</span>
                           ) : (
-                            <span className="faint">—</span>
+                            <span className="muted">—</span>
                           ),
                       },
                     ]}
@@ -1085,14 +1085,14 @@ function ConfigValue({ value, secret = false }: { value: string | undefined; sec
     case "literal":
       return <code className="inline">{value}</code>;
     default:
-      return <span className="faint">not set</span>;
+      return <span className="muted">not set</span>;
   }
 }
 
 /** A seat's `llm:` field, as a chain or as one chain per phase. */
 function Model({ llm }: { llm: unknown }) {
   const rows = formatPhaseLLM(llm);
-  if (!rows.length) return <span className="faint">the company default provider</span>;
+  if (!rows.length) return <span className="muted">the company default provider</span>;
   const only = rows[0];
   if (rows.length === 1 && only && only.phase === "")
     return <code className="inline">{only.chain}</code>;
@@ -1140,7 +1140,7 @@ function phaseOverrides(role: ConfigRole): [ReactNode, ReactNode][] {
 function SeatIntegrations({ role }: { role: ConfigRole }) {
   const i = role.integrations ?? {};
   const text = (value: string | undefined) =>
-    value ? <code className="inline">{value}</code> : <span className="faint">not set</span>;
+    value ? <code className="inline">{value}</code> : <span className="muted">not set</span>;
   const items: [ReactNode, ReactNode][] = [];
   if (i.github) {
     items.push(
@@ -1156,7 +1156,7 @@ function SeatIntegrations({ role }: { role: ConfigRole }) {
             ))}
           </span>
         ) : (
-          <span className="faint">every repository the installation covers</span>
+          <span className="muted">every repository the installation covers</span>
         ),
       ],
       ["GitHub App", text(i.github.app_slug)],

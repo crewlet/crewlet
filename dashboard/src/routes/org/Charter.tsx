@@ -20,7 +20,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
     <div className="col gap-4">
       <Panel title="Mission" icon={TargetGlyph}>
         <p className="t-body measure">
-          {org.mission || <span className="faint">No mission is set.</span>}
+          {org.mission || <span className="muted">No mission is set.</span>}
         </p>
       </Panel>
       {org.vision && (
@@ -64,7 +64,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
                     ))}
                   </ul>
                 ) : (
-                  <span className="t-caption faint">No goals set.</span>
+                  <span className="t-caption">No goals set.</span>
                 )}
                 {u.knowledge.length > 0 && (
                   <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>

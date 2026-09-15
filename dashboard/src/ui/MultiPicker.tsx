@@ -171,7 +171,7 @@ export function MultiPicker({
     <div className="field multi-picker">
       <label htmlFor={inputID}>
         {label}
-        {required === false && <span className="faint"> (optional)</span>}
+        {required === false && <span className="muted"> (optional)</span>}
       </label>
       {value.length > 0 && (
         <ul className="multi-picker-values" aria-label={`Chosen: ${label}`}>

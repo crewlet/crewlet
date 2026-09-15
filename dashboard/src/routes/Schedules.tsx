@@ -123,7 +123,7 @@ export function Schedules() {
                   s.next_run ? (
                     <RelativeTime className="t-caption" value={s.next_run} now={now} />
                   ) : (
-                    <span className="faint">—</span>
+                    <span className="muted">—</span>
                   ),
               },
               {
@@ -142,7 +142,7 @@ export function Schedules() {
                       )}
                     </span>
                   ) : (
-                    <span className="faint">never</span>
+                    <span className="muted">never</span>
                   ),
               },
             ]}

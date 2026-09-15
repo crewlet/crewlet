@@ -392,7 +392,7 @@ export function Spend() {
                       s.max_tokens ? (
                         fmtExact(s.max_tokens)
                       ) : (
-                        <span className="faint">unlimited</span>
+                        <span className="muted">unlimited</span>
                       ),
                   },
                   {
@@ -410,7 +410,7 @@ export function Spend() {
                           valueText={`${fmtExact(s.durable_used)} / ${fmtExact(s.max_tokens)}`}
                         />
                       ) : (
-                        <span className="faint">—</span>
+                        <span className="muted">—</span>
                       ),
                   },
                 ]}
