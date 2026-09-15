@@ -41,6 +41,7 @@ import { WorkSearch } from "~/routes/WorkSearch.tsx";
 import { Sprints } from "~/routes/Sprints.tsx";
 import { Pages, PageView } from "~/routes/Pages.tsx";
 import { Conversations } from "~/routes/Conversations.tsx";
+import { Turns } from "~/routes/Turns.tsx";
 import { Schedules } from "~/routes/Schedules.tsx";
 import { ModelActivity } from "~/routes/Model.tsx";
 import { LiveNow } from "~/routes/LiveNow.tsx";
@@ -95,7 +96,7 @@ function ActivityRoutes({ rest }: { rest: string[] }) {
   if (!first) return <LiveNow />;
   switch (first) {
     case "turns":
-      return id ? <TurnScreen key={id} turnId={id} /> : <ModelActivity />;
+      return id ? <TurnScreen key={id} turnId={id} /> : <Turns />;
     case "runs":
       return <Runs key={id ?? ""} runId={id} />;
     case "schedules":

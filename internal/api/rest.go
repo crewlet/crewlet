@@ -49,6 +49,10 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/events/trace/{trace_id}", what: "trace", path: map[string]string{"trace_id": "trace_id"}},
 	{method: "GET", pattern: "/events/{id}", what: "event", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/events", what: "events"},
+	// THE LIST OF TURNS. Not under /events/: a turn is not an event, and
+	// filing it there would put the unit of work under the log that
+	// records it.
+	{method: "GET", pattern: "/turns", what: "turns"},
 	{method: "GET", pattern: "/tokens/breakdown", what: "tokens"},
 	{method: "GET", pattern: "/schedules", what: "schedules"},
 	// ONE SCHEDULE'S OWN HISTORY. Three path segments because a schedule's
