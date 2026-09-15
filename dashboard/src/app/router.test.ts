@@ -18,7 +18,7 @@
 
 import { describe, expect, test } from "vitest";
 import { buildHash, parseHash, samePath } from "./router.tsx";
-import { DESTINATIONS, RAIL, RESERVED_SEGMENTS, workspaceOf } from "./nav.ts";
+import { DESTINATIONS, RAIL, RESERVED_SEGMENTS, railRow, workspaceOf } from "./nav.ts";
 import { crumbsFor, titleOf } from "./workspaces/crumbs.ts";
 
 describe("parsing", () => {
@@ -233,6 +233,30 @@ describe("the breadcrumb", () => {
       "Fix the applier",
     );
   });
+});
+
+// EVERY FIXED DESTINATION NAMES ITSELF IN THE TRAIL, from the one table.
+//
+// The work workspace's trail reads the segment after `work/` as a KEY — a
+// project is uppercase, an item is `KEY-n` — so a lowercase reserved segment
+// matched neither and fell through to the item branch. `#/work/search` read
+// "Work / Item / search": a trail naming a page that does not exist, on the
+// screen whose whole job is finding the page that does. The previous shape
+// spelled each reserved segment out by hand, which is what left `search` out
+// on the day it was added, so this walks the DESTINATIONS table instead.
+test("every fixed destination names itself rather than reading as a key", () => {
+  for (const dest of DESTINATIONS) {
+    // EXCEPT A WORKSPACE'S OWN LANDING PAGE, whose trail is the workspace
+    // name: the sidebar calls it "All work" because it sits among that
+    // workspace's other rows, and the trail calls it "Work" because there is
+    // nothing above it to disambiguate from. Two labels for one address, and
+    // both are right in their own chrome.
+    if (samePath(dest.path, railRow(dest.workspace)?.path ?? [])) continue;
+    const crumbs = crumbsFor(dest.path);
+    const last = crumbs[crumbs.length - 1];
+    expect(last?.label, `#/${dest.path.join("/")}`).toBe(dest.label);
+    expect(last?.path, `#/${dest.path.join("/")} links to itself`).toBeUndefined();
+  }
 });
 
 // A WORKSPACE THAT OWNS TWO FIRST SEGMENTS still says which one you are on.

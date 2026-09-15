@@ -94,10 +94,19 @@ function destinationLabel(workspace: string, segment: string): string | undefine
 
 function workCrumbs(rest: string[], labels: Labels): Crumb[] {
   const [first = "", second, third] = rest;
-  if (first === "views") {
+
+  // A FIXED DESTINATION FIRST, from the one table, because everything below
+  // reads the segment as a KEY: a project key is uppercase and an item key is
+  // `KEY-n`, so a lowercase reserved segment matches neither and fell through
+  // to the item branch. `#/work/search` read "Work / Item / search" — a trail
+  // naming a page that does not exist, on a screen whose whole job is finding
+  // the page that does. Spelling each one here was the previous shape and it
+  // is what left `search` out on the day it was added.
+  const fixed = destinationLabel("work", first);
+  if (fixed) {
     return second
-      ? [{ label: "Saved views", path: ["work", "views"] }, { label: named(labels, second) }]
-      : [{ label: "Saved views" }];
+      ? [{ label: fixed, path: ["work", first] }, { label: named(labels, second) }]
+      : [{ label: fixed }];
   }
 
   // A PROJECT KEY IS UPPERCASE and an item key is `KEY-n`, which is what tells
