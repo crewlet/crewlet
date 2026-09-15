@@ -212,6 +212,10 @@ func (s *Service) Routes(mux *http.ServeMux) {
 	// bot identity, so an app per agent is the only way each acts as itself.
 	mux.HandleFunc("POST /setup/integrations/github/app", s.beginApp)
 	mux.HandleFunc("GET /setup/integrations/{kind}/runs/{id}", s.runByID)
+	// The LISTING, which is what makes the route above reachable at all:
+	// nothing could name a run id, so one pass was readable only by the
+	// caller that had just started it.
+	mux.HandleFunc("GET /setup/integrations/{kind}/runs", s.runs)
 }
 
 // configWriter adapts the config surface to what setup.Writer needs.
