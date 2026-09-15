@@ -58,7 +58,6 @@ import {
   CopyButton,
   Disclosure,
   KeyValue,
-  Panel,
   Stat,
   StatRow,
 } from "~/ui/primitives.tsx";
@@ -100,7 +99,7 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Skeleton, cx } from "@crewlethq/ui";
+import { Card, Skeleton, cx } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -176,7 +175,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
   const triggerId = typeof trigger?.id === "string" ? trigger.id : "";
   if (!woke && !said) return null;
   return (
-    <Panel padding="normal">
+    <Card>
       <div className="col gap-3">
         {woke && (
           <div className="col gap-1">
@@ -216,7 +215,7 @@ function TurnBrief({ rec, trigger }: { rec: TurnRecord; trigger: PhaseRecord["tr
           </div>
         )}
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -245,55 +244,60 @@ function Prefetch({ blocks }: { blocks: PrefetchBlock[] }) {
   const gated = blocks.filter((b) => !b.hit && b.gated);
   const empty = blocks.filter((b) => !b.hit && !b.gated);
   return (
-    <Panel
-      title="What the turn was given"
-      icon={Book2Glyph}
-      subtitle="the context blocks its prompt was assembled from"
-      padding="tight"
-    >
-      <div className="col gap-2">
-        {got.length > 0 ? (
-          <div className="col gap-1">
-            {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
-                The grid's second track starts at 120px, so a byte count sat
-                stranded mid-panel with the whole right half empty — and a
-                bare "134 B" beside a label says nothing about what was
-                measured. The heading says it once, and the rows carry the
-                numbers where numbers go. */}
-            <div className="row gap-2">
-              <span className="t-label spacer">Reached the prompt</span>
-              <span className="t-label">Rendered size</span>
-            </div>
-            {got.map((b) => (
-              <div key={b.label} className="row gap-2">
-                <span className="t-cell truncate">{b.label}</span>
-                {b.note && <span className="t-caption truncate">{b.note}</span>}
-                <span className="spacer" />
-                <span className="mono t-num t-caption">{fmtBytes(b.bytes)}</span>
+    <Card as="section">
+      <Card.Header
+        icon={<Book2Glyph size="sm" />}
+        subtitle="the context blocks its prompt was assembled from"
+      >
+        <Card.Title>What the turn was given</Card.Title>
+      </Card.Header>
+      <Card.Body padding="tight">
+        <div className="col gap-2">
+          {got.length > 0 ? (
+            <div className="col gap-1">
+              {/* FULL-WIDTH ROWS with the figure at the far end, not a KeyValue.
+                  The grid's second track starts at 120px, so a byte count sat
+                  stranded mid-panel with the whole right half empty, and a
+                  bare "134 B" beside a label says nothing about what was
+                  measured. The heading says it once, and the rows carry the
+                  numbers where numbers go. */}
+              <div className="row gap-2">
+                <span className="t-label spacer">Reached the prompt</span>
+                <span className="t-label">Rendered size</span>
               </div>
-            ))}
-          </div>
-        ) : (
-          <span className="t-caption">
-            The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
-            alone — no stored context reached it.
-          </span>
-        )}
-        {gated.length > 0 && (
-          <div className="banner neutral">
-            <InfoGlyph size="sm" />
-            <span>
-              Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
-              these filters were skipped — the executor searches later with{" "}
-              <code className="inline">search_knowledge</code>, once it knows what the task needs.
+              {got.map((b) => (
+                <div key={b.label} className="row gap-2">
+                  <span className="t-cell truncate">{b.label}</span>
+                  {b.note && <span className="t-caption truncate">{b.note}</span>}
+                  <span className="spacer" />
+                  <span className="mono t-num t-caption">{fmtBytes(b.bytes)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className="t-caption">
+              The prompt was built from the seat&rsquo;s own identity and this turn&rsquo;s trigger
+              alone. No stored context reached it.
             </span>
-          </div>
-        )}
-        {empty.length > 0 && (
-          <span className="t-caption">Nothing to add from {list(empty.map((b) => b.label))}.</span>
-        )}
-      </div>
-    </Panel>
+          )}
+          {gated.length > 0 && (
+            <div className="banner neutral">
+              <InfoGlyph size="sm" />
+              <span>
+                Not searched: {list(gated.map((b) => b.label))}. The trigger was a bare pointer, so
+                these filters were skipped. The executor searches later with{" "}
+                <code className="inline">search_knowledge</code>, once it knows what the task needs.
+              </span>
+            </div>
+          )}
+          {empty.length > 0 && (
+            <span className="t-caption">
+              Nothing to add from {list(empty.map((b) => b.label))}.
+            </span>
+          )}
+        </div>
+      </Card.Body>
+    </Card>
   );
 }
 
@@ -596,7 +600,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
         }
       >
-        <Panel padding="none">
+        <Card padding="none">
           <StatRow cols={4}>
             <Stat
               icon={PersonGlyph}
@@ -654,7 +658,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               sub={outcome.sub || (running ? "still running" : "no turn record")}
             />
           </StatRow>
-        </Panel>
+        </Card>
 
         <TurnBrief rec={rec} trigger={trigger} />
 
@@ -663,130 +667,156 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             entirely on a healthy turn, which is the state the flat list could
             never reach. */}
         {story.wentWrong.length > 0 && (
-          <Panel
-            title="What went wrong"
-            icon={ErrorGlyph}
-            count={story.wentWrong.length}
-            subtitle="guard breaches, exhausted chains, refused calls — the reason to open this page"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<ErrorGlyph size="sm" />}
+              count={story.wentWrong.length}
+              subtitle="guard breaches, exhausted chains and refused calls, the reason to open this page"
+            >
+              <Card.Title>What went wrong</Card.Title>
+            </Card.Header>
             <EventList events={story.wentWrong} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {prefetch.length > 0 && <Prefetch blocks={prefetch} />}
 
-        <Panel title="Phases" icon={NeurologyGlyph} count={own.length} padding="tight">
-          <div className="col gap-2">
-            {own.map((p, i) => (
-              <PhaseCard key={p.key} record={p} nested={nested.get(p.key)} defaultOpen={i === 0} />
-            ))}
-            {!own.length && (
-              <span className="t-caption">
-                No phase completed in this turn — it may have died before its first phase published.
-              </span>
-            )}
-          </div>
-        </Panel>
+        <Card as="section">
+          <Card.Header icon={<NeurologyGlyph size="sm" />} count={own.length}>
+            <Card.Title>Phases</Card.Title>
+          </Card.Header>
+          <Card.Body padding="tight">
+            <div className="col gap-2">
+              {own.map((p, i) => (
+                <PhaseCard
+                  key={p.key}
+                  record={p}
+                  nested={nested.get(p.key)}
+                  defaultOpen={i === 0}
+                />
+              ))}
+              {!own.length && (
+                <span className="t-caption">
+                  No phase completed in this turn. It may have died before its first phase
+                  published.
+                </span>
+              )}
+            </div>
+          </Card.Body>
+        </Card>
 
         {story.did.length > 0 && (
-          <Panel
-            title="What else it did"
-            icon={BoltGlyph}
-            count={story.did.length}
-            subtitle="work outside the tool loop: coding runs, delegations, colleagues"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<BoltGlyph size="sm" />}
+              count={story.did.length}
+              subtitle="work outside the tool loop: coding runs, delegations, colleagues"
+            >
+              <Card.Title>What else it did</Card.Title>
+            </Card.Header>
             <EventList events={story.did} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {story.leftBehind.length > 0 && (
-          <Panel
-            title="What the seat learned"
-            icon={DatabaseGlyph}
-            count={story.leftBehind.length}
-            // "What it left behind" read as work abandoned rather than as
-            // memory written. This is the reflection pass — it runs AFTER the
-            // last phase, on auxiliary workers of its own, and everything in
-            // it is something the seat now knows that it did not before.
-            subtitle="the reflection pass, once the phases were done"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              // "What it left behind" read as work abandoned rather than as
+              // memory written. This is the reflection pass: it runs AFTER the
+              // last phase, on auxiliary workers of its own, and everything in
+              // it is something the seat now knows that it did not before.
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<DatabaseGlyph size="sm" />}
+              count={story.leftBehind.length}
+              subtitle="the reflection pass, once the phases were done"
+            >
+              <Card.Title>What the seat learned</Card.Title>
+            </Card.Header>
             <EventList events={story.leftBehind} actor={role} />
-          </Panel>
+          </Card>
         )}
 
         {story.rest.length > 0 && (
-          <Panel
-            title="Also published"
-            icon={TimelineGlyph}
-            count={story.rest.length}
-            subtitle="rows this build has no particular place for"
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<TimelineGlyph size="sm" />}
+              count={story.rest.length}
+              subtitle="rows this build has no particular place for"
+            >
+              <Card.Title>Also published</Card.Title>
+            </Card.Header>
             <div className="list">
               {story.rest.map((e) => (
                 <EventRow key={e.id} event={e as unknown as FeedRow} showDate />
               ))}
             </div>
-          </Panel>
+          </Card>
         )}
 
         {(rec.summary || rec.learning) && (
-          <Panel
-            title="The turn's own record"
-            icon={DescriptionGlyph}
-            subtitle="the two events the engine closes every turn with"
-            padding="tight"
-          >
-            <div className="col gap-2">
-              {conversation && (
-                <KeyValue
-                  items={[
-                    [
-                      "Conversation",
-                      // LABELLED, and explained. It is "{source}:{channel}:
-                      // {thread}" — which external thread this turn was
-                      // answering — and it used to be an unexplained
-                      // truncated string under the seat's name.
-                      <span className="row gap-2" style={{ alignItems: "baseline" }}>
-                        <code className="inline">{conversation}</code>
-                        <span className="t-caption">the external thread this turn served</span>
-                      </span>,
-                    ],
-                  ]}
-                />
-              )}
-              {/* One expander per record, EACH with its own copy button. A
-                  single control in the panel head copied one of the two
-                  without saying which. */}
-              {rec.summary && (
-                <Disclosure
-                  label="agent_turn_completed — the dashboard's summary"
-                  actions={
-                    <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
-                  }
-                >
-                  <Code selectable label="agent_turn_completed, as JSON">
-                    {summaryJSON}
-                  </Code>
-                </Disclosure>
-              )}
-              {rec.learning && (
-                <Disclosure
-                  label="turn_completed — the learning subsystem's record"
-                  actions={
-                    <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
-                  }
-                >
-                  <Code selectable label="turn_completed, as JSON">
-                    {learningJSON}
-                  </Code>
-                </Disclosure>
-              )}
-            </div>
-          </Panel>
+          <Card as="section">
+            <Card.Header
+              icon={<DescriptionGlyph size="sm" />}
+              subtitle="the two events the engine closes every turn with"
+            >
+              <Card.Title>The turn's own record</Card.Title>
+            </Card.Header>
+            <Card.Body padding="tight">
+              <div className="col gap-2">
+                {conversation && (
+                  <KeyValue
+                    items={[
+                      [
+                        "Conversation",
+                        // LABELLED, and explained. It is "{source}:{channel}:
+                        // {thread}", which external thread this turn was
+                        // answering, and it used to be an unexplained
+                        // truncated string under the seat's name.
+                        <span className="row gap-2" style={{ alignItems: "baseline" }}>
+                          <code className="inline">{conversation}</code>
+                          <span className="t-caption">the external thread this turn served</span>
+                        </span>,
+                      ],
+                    ]}
+                  />
+                )}
+                {/* One expander per record, EACH with its own copy button. A
+                    single control in the panel head copied one of the two
+                    without saying which. */}
+                {rec.summary && (
+                  <Disclosure
+                    label="agent_turn_completed, the dashboard's summary"
+                    actions={
+                      <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
+                    }
+                  >
+                    <Code selectable label="agent_turn_completed, as JSON">
+                      {summaryJSON}
+                    </Code>
+                  </Disclosure>
+                )}
+                {rec.learning && (
+                  <Disclosure
+                    label="turn_completed, the learning subsystem's record"
+                    actions={
+                      <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
+                    }
+                  >
+                    <Code selectable label="turn_completed, as JSON">
+                      {learningJSON}
+                    </Code>
+                  </Disclosure>
+                )}
+              </div>
+            </Card.Body>
+          </Card>
         )}
       </QueryState>
     </>

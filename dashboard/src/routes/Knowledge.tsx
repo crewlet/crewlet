@@ -17,7 +17,7 @@ import { useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, Button, Panel, SearchInput } from "~/ui/primitives.tsx";
+import { Badge, Button, SearchInput } from "~/ui/primitives.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -32,7 +32,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { EmptyState, Skeleton } from "@crewlethq/ui";
+import { Card, EmptyState, Skeleton } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -153,7 +153,15 @@ export function Knowledge() {
                   }
           }
         >
-          <Panel title="Results" icon={SearchGlyph} count={data?.hits?.length ?? 0} padding="none">
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<SearchGlyph size="sm" />}
+              count={data?.hits?.length ?? 0}
+            >
+              <Card.Title>Results</Card.Title>
+            </Card.Header>
             <div className="list">
               {(data?.hits ?? []).map((hit) => (
                 <div key={hit.id} className="hit">
@@ -170,11 +178,14 @@ export function Knowledge() {
                 </div>
               ))}
             </div>
-            <footer className="panel-foot">
-              A snippet is capped by contract — it exists to say WHICH page to read, not to be the
+            <Card.Footer
+              variant="meta"
+              style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
+            >
+              A snippet is capped by contract. It exists to say WHICH page to read, not to be the
               page.
-            </footer>
-          </Panel>
+            </Card.Footer>
+          </Card>
         </QueryState>
       )}
 

@@ -4,11 +4,11 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
-import { EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { CalendarClockGlyph, ErrorGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
@@ -38,7 +38,7 @@ export function Schedules() {
         badges={<Badge outline>{plural(schedules.length, "schedule")} defined</Badge>}
       />
 
-      <Panel padding="none">
+      <Card padding="none">
         <StatRow cols={3}>
           <Stat
             icon={CalendarClockGlyph}
@@ -59,7 +59,7 @@ export function Schedules() {
             sub={`in the last ${runs.length} recorded runs`}
           />
         </StatRow>
-      </Panel>
+      </Card>
 
       {loading && !schedules.length && (
         <Skeleton label="Loading the schedules" variant="text" rows={4} />
@@ -76,7 +76,15 @@ export function Schedules() {
               }
         }
       >
-        <Panel title="Defined" icon={CalendarClockGlyph} count={schedules.length} padding="none">
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<CalendarClockGlyph size="sm" />}
+            count={schedules.length}
+          >
+            <Card.Title>Defined</Card.Title>
+          </Card.Header>
           <DataTable
             rows={schedules}
             rowKey={(s) => `${s.scope}:${s.scope_name}:${s.name}`}
@@ -147,9 +155,17 @@ export function Schedules() {
               },
             ]}
           />
-        </Panel>
+        </Card>
 
-        <Panel title="Recent runs" icon={ScheduleGlyph} count={runs.length} padding="none">
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<ScheduleGlyph size="sm" />}
+            count={runs.length}
+          >
+            <Card.Title>Recent runs</Card.Title>
+          </Card.Header>
           <DataTable
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${r.name}:${r.scope_name}`}
@@ -188,7 +204,7 @@ export function Schedules() {
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
     </>
   );

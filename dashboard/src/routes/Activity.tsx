@@ -24,12 +24,12 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Panel, SearchInput } from "~/ui/primitives.tsx";
+import { Badge, Button, Chip, SearchInput } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { CloseGlyph } from "@crewlethq/icons/glyphs";
-import { Skeleton } from "@crewlethq/ui";
+import { Card, Skeleton } from "@crewlethq/ui";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -201,7 +201,7 @@ export function Activity() {
         ))}
       </div>
 
-      <Panel padding="none">
+      <Card padding="none">
         {rows.length ? (
           <div className="list">
             {rows.map((ev) => (
@@ -220,7 +220,10 @@ export function Activity() {
             }}
           />
         )}
-        <footer className="panel-foot">
+        <Card.Footer
+          variant="meta"
+          style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
+        >
           {pageError ? (
             <QueryState error={pageError} loading={false} />
           ) : exhausted ? (
@@ -237,8 +240,8 @@ export function Activity() {
               </span>
             </>
           )}
-        </footer>
-      </Panel>
+        </Card.Footer>
+      </Card>
       {paging && <Skeleton label="Loading more events" variant="text" rows={3} />}
     </>
   );

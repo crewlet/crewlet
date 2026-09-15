@@ -26,7 +26,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Button, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
@@ -42,7 +42,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { EmptyState, Meter, useNow } from "@crewlethq/ui";
+import { Card, EmptyState, Meter, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -186,17 +186,20 @@ export function Overview() {
       />
 
       {/* 1. What needs a person. Always first, always present. */}
-      <Panel
-        title="Needs a person"
-        icon={FlagGlyph}
-        count={attention.length}
-        padding="none"
-        actions={
-          attention.length > 0 ? (
-            <span className="t-caption">most costly to ignore first</span>
-          ) : undefined
-        }
-      >
+      <Card as="section" padding="none">
+        <Card.Header
+          divided
+          style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+          icon={<FlagGlyph size="sm" />}
+          count={attention.length}
+          actions={
+            attention.length > 0 ? (
+              <span className="t-caption">most costly to ignore first</span>
+            ) : undefined
+          }
+        >
+          <Card.Title>Needs a person</Card.Title>
+        </Card.Header>
         {attention.length ? (
           <div className="list">
             {attention.slice(0, 8).map((item) => (
@@ -222,10 +225,10 @@ export function Overview() {
             description="No stopped seats, no paused coding runs, no budget refusing charges, and a company configuration is active."
           />
         )}
-      </Panel>
+      </Card>
 
       {/* 2. What the company is doing. */}
-      <Panel padding="none">
+      <Card padding="none">
         <StatRow cols={4}>
           <Stat
             icon={BoltGlyph}
@@ -268,19 +271,21 @@ export function Overview() {
             }
           />
         </StatRow>
-      </Panel>
+      </Card>
 
       <div className="grid grid-auto-lg">
-        <Panel
-          title="Live seats"
-          icon={GroupGlyph}
-          count={live.length}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["people"])}>
-              All seats
-            </Button>
-          }
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<GroupGlyph size="sm" />}
+            count={live.length}
+            actions={
+              <Button size="sm" variant="ghost" onClick={() => nav.to(["people"])}>
+                All seats
+              </Button>
+            }
+          >
+            <Card.Title>Live seats</Card.Title>
+          </Card.Header>
           {live.length ? (
             <div className="seat-grid">
               {live.map(({ seat, agent }) => (
@@ -299,17 +304,19 @@ export function Overview() {
               }
             />
           )}
-        </Panel>
+        </Card>
 
-        <Panel
-          title={`Activity · last ${STRIP_MINUTES} minutes`}
-          icon={TimelineGlyph}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
-              Event log
-            </Button>
-          }
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<TimelineGlyph size="sm" />}
+            actions={
+              <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
+                Event log
+              </Button>
+            }
+          >
+            <Card.Title>{`Activity · last ${STRIP_MINUTES} minutes`}</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <ActivityStrip
               buckets={strip}
@@ -337,20 +344,22 @@ export function Overview() {
               )}
             </div>
           </div>
-        </Panel>
+        </Card>
       </div>
 
       <div className="grid grid-auto-lg">
-        <Panel
-          title="Spend by phase"
-          icon={TokenGlyph}
-          subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
-          actions={
-            <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
-              Spend
-            </Button>
-          }
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<TokenGlyph size="sm" />}
+            subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
+            actions={
+              <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
+                Spend
+              </Button>
+            }
+          >
+            <Card.Title>Spend by phase</Card.Title>
+          </Card.Header>
           <div className="col gap-3">
             <BarList data={phaseSpend} emptyLabel="No model calls in this window." />
             {phaseSpend.length > 0 && (
@@ -369,15 +378,17 @@ export function Overview() {
               />
             )}
           </div>
-        </Panel>
+        </Card>
 
-        <Panel
-          title="Top seats by spend"
-          icon={GroupGlyph}
-          subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
-        >
+        <Card as="section">
+          <Card.Header
+            icon={<GroupGlyph size="sm" />}
+            subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
+          >
+            <Card.Title>Top seats by spend</Card.Title>
+          </Card.Header>
           <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
-        </Panel>
+        </Card>
       </div>
 
       <Section

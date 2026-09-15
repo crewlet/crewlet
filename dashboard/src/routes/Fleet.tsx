@@ -9,12 +9,12 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
-import { EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DnsGlyph,
   ErrorGlyph,
@@ -72,7 +72,7 @@ export function Fleet() {
         </div>
       )}
 
-      <Panel padding="none">
+      <Card padding="none">
         <StatRow cols={4}>
           <Stat
             icon={DnsGlyph}
@@ -107,7 +107,7 @@ export function Fleet() {
             sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
           />
         </StatRow>
-      </Panel>
+      </Card>
 
       {loading && !data && <Skeleton label="Loading the fleet" variant="text" rows={4} />}
       <QueryState
@@ -122,7 +122,15 @@ export function Fleet() {
               }
         }
       >
-        <Panel title="Nodes" icon={DnsGlyph} count={nodes.length} padding="none">
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<DnsGlyph size="sm" />}
+            count={nodes.length}
+          >
+            <Card.Title>Nodes</Card.Title>
+          </Card.Header>
           <DataTable<FleetNode>
             rows={nodes}
             rowKey={(n) => n.id}
@@ -232,10 +240,13 @@ export function Fleet() {
               },
             ]}
           />
-        </Panel>
+        </Card>
 
         {nodes.some((n) => n.config_error) && (
-          <Panel title="Config apply errors" icon={ErrorGlyph}>
+          <Card as="section">
+            <Card.Header icon={<ErrorGlyph size="sm" />}>
+              <Card.Title>Config apply errors</Card.Title>
+            </Card.Header>
             <div className="col gap-2">
               {nodes
                 .filter((n) => n.config_error)
@@ -248,16 +259,19 @@ export function Fleet() {
                   </div>
                 ))}
             </div>
-          </Panel>
+          </Card>
         )}
 
         <div className="grid grid-auto-lg">
-          <Panel
-            title="Seat placement"
-            icon={GroupGlyph}
-            count={data?.seats?.length ?? 0}
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<GroupGlyph size="sm" />}
+              count={data?.seats?.length ?? 0}
+            >
+              <Card.Title>Seat placement</Card.Title>
+            </Card.Header>
             <DataTable
               rows={data?.seats ?? []}
               rowKey={(s) => s.handle}
@@ -295,14 +309,17 @@ export function Fleet() {
                 },
               ]}
             />
-          </Panel>
+          </Card>
 
-          <Panel
-            title="Company-wide duties"
-            icon={MemoryGlyph}
-            count={data?.duties?.length ?? 0}
-            padding="none"
-          >
+          <Card as="section" padding="none">
+            <Card.Header
+              divided
+              style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+              icon={<MemoryGlyph size="sm" />}
+              count={data?.duties?.length ?? 0}
+            >
+              <Card.Title>Company-wide duties</Card.Title>
+            </Card.Header>
             <DataTable
               rows={data?.duties ?? []}
               rowKey={(d) => d.duty}
@@ -334,11 +351,14 @@ export function Fleet() {
                 },
               ]}
             />
-          </Panel>
+          </Card>
         </div>
 
         {(data?.unplaceable?.length || data?.unmanned_roles?.length) && (
-          <Panel title="Not running anywhere" icon={WarningGlyph}>
+          <Card as="section">
+            <Card.Header icon={<WarningGlyph size="sm" />}>
+              <Card.Title>Not running anywhere</Card.Title>
+            </Card.Header>
             <div className="col gap-2">
               {data?.unmanned_roles?.map((r) => (
                 <div key={r} className="banner caution">
@@ -361,7 +381,7 @@ export function Fleet() {
                 </div>
               ))}
             </div>
-          </Panel>
+          </Card>
         )}
       </QueryState>
     </>

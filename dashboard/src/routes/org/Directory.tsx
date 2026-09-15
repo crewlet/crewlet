@@ -13,7 +13,8 @@ import { SeatChip, StateBadge } from "~/components/common.tsx";
 import { statusLine, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { DataTable } from "~/ui/DataTable.tsx";
-import { Badge, Panel } from "~/ui/primitives.tsx";
+import { Badge } from "~/ui/primitives.tsx";
+import { Card } from "@crewlethq/ui";
 
 export function Directory({ index }: { index: OrgIndex }) {
   const agents = useAgents();
@@ -24,7 +25,7 @@ export function Directory({ index }: { index: OrgIndex }) {
   const unknown = <span className="muted">Not reported</span>;
 
   return (
-    <Panel padding="none">
+    <Card padding="none">
       <DataTable<Seat>
         rows={index.seats}
         rowKey={(s) => s.key}
@@ -102,6 +103,6 @@ export function Directory({ index }: { index: OrgIndex }) {
           },
         ]}
       />
-    </Panel>
+    </Card>
   );
 }

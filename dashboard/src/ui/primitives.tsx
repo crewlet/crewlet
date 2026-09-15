@@ -39,54 +39,6 @@ import {
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
 
 // ---------------------------------------------------------------------------
-// Surface
-// ---------------------------------------------------------------------------
-
-export function Panel({
-  title,
-  subtitle,
-  icon: Glyph,
-  count,
-  actions,
-  children,
-  padding = "normal",
-  className,
-  style,
-}: {
-  title?: ReactNode;
-  subtitle?: ReactNode;
-  icon?: ComponentType<GlyphProps>;
-  count?: number | null;
-  actions?: ReactNode;
-  children?: ReactNode;
-  padding?: "normal" | "tight" | "none";
-  className?: string;
-  style?: CSSProperties;
-}) {
-  return (
-    <section className={cx("panel-flush", className)} style={style}>
-      {(title || actions) && (
-        <header className="panel-head">
-          <div className="panel-title truncate">
-            {Glyph && <Glyph size="sm" style={{ color: "var(--color-text-tertiary)" }} />}
-            <span className="truncate">{title}</span>
-            {count != null && <span className="count-chip">{count}</span>}
-          </div>
-          {subtitle && <span className="panel-sub truncate">{subtitle}</span>}
-          <span className="spacer" />
-          {actions}
-        </header>
-      )}
-      <div
-        className={cx("panel-body", padding === "tight" && "tight", padding === "none" && "none")}
-      >
-        {children}
-      </div>
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Controls
 // ---------------------------------------------------------------------------
 

@@ -26,7 +26,6 @@ import {
   Badge,
   Button,
   KeyValue,
-  Panel,
   Stat,
   StatRow,
   TabPanel,
@@ -65,7 +64,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
-import { EmptyState, EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyState, EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   AccountTreeGlyph,
   ArrowForwardGlyph,
@@ -318,7 +317,7 @@ export function SeatScreen({ handle }: { handle: string }) {
       <TabPanel id={panel} value={tab}>
         {tab === "overview" && (
           <>
-            <Panel padding="none">
+            <Card padding="none">
               <StatRow cols={4}>
                 <Stat
                   icon={BoltGlyph}
@@ -357,10 +356,13 @@ export function SeatScreen({ handle }: { handle: string }) {
                   }
                 />
               </StatRow>
-            </Panel>
+            </Card>
 
             <div className="grid grid-auto-lg">
-              <Panel title="Who this is" icon={PersonGlyph}>
+              <Card as="section">
+                <Card.Header icon={<PersonGlyph size="sm" />}>
+                  <Card.Title>Who this is</Card.Title>
+                </Card.Header>
                 <KeyValue
                   items={[
                     ["Role", seat.name],
@@ -429,13 +431,15 @@ export function SeatScreen({ handle }: { handle: string }) {
                     ],
                   ]}
                 />
-              </Panel>
+              </Card>
 
-              <Panel
-                title="Configuration"
-                icon={ManufacturingGlyph}
-                subtitle="from the company document"
-              >
+              <Card as="section">
+                <Card.Header
+                  icon={<ManufacturingGlyph size="sm" />}
+                  subtitle="from the company document"
+                >
+                  <Card.Title>Configuration</Card.Title>
+                </Card.Header>
                 <SettingsState
                   error={config.error}
                   loading={config.loading}
@@ -457,9 +461,12 @@ export function SeatScreen({ handle }: { handle: string }) {
                     />
                   )}
                 </SettingsState>
-              </Panel>
+              </Card>
 
-              <Panel title="Profile" icon={Book2Glyph}>
+              <Card as="section">
+                <Card.Header icon={<Book2Glyph size="sm" />}>
+                  <Card.Title>Profile</Card.Title>
+                </Card.Header>
                 <div className="col gap-3">
                   {seat.backstory && (
                     <div className="col gap-1">
@@ -504,7 +511,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     </span>
                   )}
                 </div>
-              </Panel>
+              </Card>
             </div>
 
             {reports.length > 0 && (
@@ -534,12 +541,15 @@ export function SeatScreen({ handle }: { handle: string }) {
             )}
 
             {(configRole?.schedules?.length ?? 0) > 0 && (
-              <Panel
-                title="Recurring work"
-                icon={CalendarClockGlyph}
-                count={configRole?.schedules?.length ?? 0}
-                padding="none"
-              >
+              <Card as="section" padding="none">
+                <Card.Header
+                  divided
+                  style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                  icon={<CalendarClockGlyph size="sm" />}
+                  count={configRole?.schedules?.length ?? 0}
+                >
+                  <Card.Title>Recurring work</Card.Title>
+                </Card.Header>
                 <DataTable
                   rows={configRole?.schedules ?? []}
                   rowKey={(s) => s.name}
@@ -558,7 +568,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
             )}
           </>
         )}
@@ -618,17 +628,19 @@ export function SeatScreen({ handle }: { handle: string }) {
               ))}
             </div>
             {turns.length > 0 && (
-              <Panel padding="tight">
-                <div className="row">
-                  <span className="t-caption">
-                    Showing the most recent phases the engine holds for this seat.
-                  </span>
-                  <span className="spacer" />
-                  <Button size="sm" onClick={() => nav.to(["model"], { role: seat.name })}>
-                    All model activity for {seat.name}
-                  </Button>
-                </div>
-              </Panel>
+              <Card>
+                <Card.Body padding="tight">
+                  <div className="row">
+                    <span className="t-caption">
+                      Showing the most recent phases the engine holds for this seat.
+                    </span>
+                    <span className="spacer" />
+                    <Button size="sm" onClick={() => nav.to(["model"], { role: seat.name })}>
+                      All model activity for {seat.name}
+                    </Button>
+                  </div>
+                </Card.Body>
+              </Card>
             )}
           </>
         )}
@@ -640,13 +652,16 @@ export function SeatScreen({ handle }: { handle: string }) {
             )}
             <QueryState error={memory.error} loading={memory.loading}>
               <div className="col gap-4">
-                <Panel
-                  title="Private diary"
-                  icon={Book2Glyph}
-                  count={memory.data?.diary?.length ?? 0}
-                  subtitle="what this seat chose to remember"
-                  padding="none"
-                >
+                <Card as="section" padding="none">
+                  <Card.Header
+                    divided
+                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                    icon={<Book2Glyph size="sm" />}
+                    count={memory.data?.diary?.length ?? 0}
+                    subtitle="what this seat chose to remember"
+                  >
+                    <Card.Title>Private diary</Card.Title>
+                  </Card.Header>
                   {memory.data?.diary?.length ? (
                     <div className="list">
                       {memory.data.diary.map((d, i) => (
@@ -668,15 +683,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="A seat writes here by calling reflect_and_persist during a turn."
                     />
                   )}
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Past turns"
-                  icon={LayersGlyph}
-                  count={memory.data?.episodes?.length ?? 0}
-                  subtitle="one row per completed turn, searched by similarity at turn start"
-                  padding="none"
-                >
+                <Card as="section" padding="none">
+                  <Card.Header
+                    divided
+                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                    icon={<LayersGlyph size="sm" />}
+                    count={memory.data?.episodes?.length ?? 0}
+                    subtitle="one row per completed turn, searched by similarity at turn start"
+                  >
+                    <Card.Title>Past turns</Card.Title>
+                  </Card.Header>
                   <DataTable
                     rows={memory.data?.episodes ?? []}
                     rowKey={(e) => e.id ?? e.turn_id ?? e.created_at}
@@ -738,15 +756,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                       },
                     ]}
                   />
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Skills it taught itself"
-                  icon={BoltGlyph}
-                  count={memory.data?.skills?.length ?? 0}
-                  subtitle="drafted from its own past work, loadable mid-turn"
-                  padding="none"
-                >
+                <Card as="section" padding="none">
+                  <Card.Header
+                    divided
+                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                    icon={<BoltGlyph size="sm" />}
+                    count={memory.data?.skills?.length ?? 0}
+                    subtitle="drafted from its own past work, loadable mid-turn"
+                  >
+                    <Card.Title>Skills it taught itself</Card.Title>
+                  </Card.Header>
                   {memory.data?.skills?.length ? (
                     <div className="list">
                       {memory.data.skills.map((s, i) => (
@@ -771,14 +792,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="The learning loop drafts these from repeated work. A young company has none."
                     />
                   )}
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Who it has worked with"
-                  icon={GroupGlyph}
-                  count={memory.data?.counterparties?.length ?? 0}
-                  padding="none"
-                >
+                <Card as="section" padding="none">
+                  <Card.Header
+                    divided
+                    style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                    icon={<GroupGlyph size="sm" />}
+                    count={memory.data?.counterparties?.length ?? 0}
+                  >
+                    <Card.Title>Who it has worked with</Card.Title>
+                  </Card.Header>
                   {memory.data?.counterparties?.length ? (
                     <div className="list">
                       {memory.data.counterparties.map((c, i) => (
@@ -800,7 +824,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="Built up from observed interactions."
                     />
                   )}
-                </Panel>
+                </Card>
               </div>
             </QueryState>
           </>
@@ -808,7 +832,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "cost" && (
           <>
-            <Panel padding="none">
+            <Card padding="none">
               <StatRow cols={3}>
                 <Stat
                   icon={TokenGlyph}
@@ -847,18 +871,20 @@ export function SeatScreen({ handle }: { handle: string }) {
                   }
                 />
               </StatRow>
-            </Panel>
+            </Card>
 
             {/* The live meter and the configured budget are DIFFERENT facts and
               the screen says so. The previous seat page printed "no budget is
               set" in one tab while another printed the budget from the same
               config, because one read a field the server never sent. */}
             {agent?.budget ? (
-              <Panel
-                title="Live budget meter"
-                icon={TargetGlyph}
-                subtitle="process-lifetime, not the 7-day window"
-              >
+              <Card as="section">
+                <Card.Header
+                  icon={<TargetGlyph size="sm" />}
+                  subtitle="process-lifetime, not the 7-day window"
+                >
+                  <Card.Title>Live budget meter</Card.Title>
+                </Card.Header>
                 <Meter
                   value={agent.budget.used}
                   max={agent.budget.max}
@@ -872,7 +898,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {fmtDateTime(agent.budget.refused_at)}.
                   </p>
                 )}
-              </Panel>
+              </Card>
             ) : (
               <div className="banner neutral">
                 <InfoGlyph size="sm" />
@@ -891,7 +917,10 @@ export function SeatScreen({ handle }: { handle: string }) {
             )}
             <QueryState error={spend.error} loading={spend.loading}>
               <div className="grid grid-auto-lg">
-                <Panel title="By phase" icon={LayersGlyph}>
+                <Card as="section">
+                  <Card.Header icon={<LayersGlyph size="sm" />}>
+                    <Card.Title>By phase</Card.Title>
+                  </Card.Header>
                   <BarList
                     data={(spend.data?.by_phase ?? []).map((p) => ({
                       label: p.phase,
@@ -902,8 +931,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                     }))}
                     emptyLabel="No calls in the window."
                   />
-                </Panel>
-                <Panel title="By model" icon={MemoryGlyph}>
+                </Card>
+                <Card as="section">
+                  <Card.Header icon={<MemoryGlyph size="sm" />}>
+                    <Card.Title>By model</Card.Title>
+                  </Card.Header>
                   <BarList
                     data={(spend.data?.by_model ?? []).map((m) => ({
                       label: m.model,
@@ -913,10 +945,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                     }))}
                     emptyLabel="No calls in the window."
                   />
-                </Panel>
+                </Card>
               </div>
 
-              <Panel title="Recent turns" icon={LayersGlyph} padding="none">
+              <Card as="section" padding="none">
+                <Card.Header
+                  divided
+                  style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                  icon={<LayersGlyph size="sm" />}
+                >
+                  <Card.Title>Recent turns</Card.Title>
+                </Card.Header>
                 <DataTable
                   rows={spend.data?.by_turn ?? []}
                   rowKey={(t) => t.turn_id}
@@ -952,7 +991,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
             </QueryState>
           </>
         )}
@@ -967,7 +1006,10 @@ export function SeatScreen({ handle }: { handle: string }) {
           >
             {configRole && settings?.state === "found" && (
               <div className="col gap-4">
-                <Panel title="Identity on other surfaces" icon={LinkGlyph}>
+                <Card as="section">
+                  <Card.Header icon={<LinkGlyph size="sm" />}>
+                    <Card.Title>Identity on other surfaces</Card.Title>
+                  </Card.Header>
                   {Object.keys(configRole.contact ?? {}).length ? (
                     <KeyValue
                       items={Object.entries(configRole.contact ?? {}).map(([k, v]) => [
@@ -983,19 +1025,24 @@ export function SeatScreen({ handle }: { handle: string }) {
                       description="A human seat needs at least one so inbound activity can be attributed to them. An agent seat's identities are derived from its handle and email."
                     />
                   )}
-                </Panel>
+                </Card>
 
-                <Panel title="Integrations" icon={CableGlyph} subtitle="this seat's own settings">
+                <Card as="section">
+                  <Card.Header icon={<CableGlyph size="sm" />} subtitle="this seat's own settings">
+                    <Card.Title>Integrations</Card.Title>
+                  </Card.Header>
                   <SeatIntegrations role={configRole} />
-                </Panel>
+                </Card>
 
-                <Panel
-                  title="Tool credentials"
-                  icon={KeyGlyph}
-                  subtitle="names only: a credential value never reaches this page"
-                >
+                <Card as="section">
+                  <Card.Header
+                    icon={<KeyGlyph size="sm" />}
+                    subtitle="names only: a credential value never reaches this page"
+                  >
+                    <Card.Title>Tool credentials</Card.Title>
+                  </Card.Header>
                   <ToolCredentials seat={seat} role={configRole} unit={settings.unit} />
-                </Panel>
+                </Card>
               </div>
             )}
           </SettingsState>

@@ -24,13 +24,13 @@ import { useState } from "react";
 import { href } from "~/app/router.tsx";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Button, ButtonLink, Code, Panel, Segmented } from "~/ui/primitives.tsx";
+import { Button, ButtonLink, Code, Segmented } from "~/ui/primitives.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
-import { Callout } from "@crewlethq/ui";
+import { Callout, Card } from "@crewlethq/ui";
 
 /** What each starting point gives the operator, in one line. */
 const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
@@ -91,11 +91,13 @@ export function CreateCompany({
   };
 
   return (
-    <Panel
-      title="Create the company"
-      icon={AccountTreeGlyph}
-      subtitle="the charter, a shape to start from, and your own seat"
-    >
+    <Card as="section">
+      <Card.Header
+        icon={<AccountTreeGlyph size="sm" />}
+        subtitle="the charter, a shape to start from, and your own seat"
+      >
+        <Card.Title>Create the company</Card.Title>
+      </Card.Header>
       <div className="col gap-4 measure">
         <Field label="Company name" value={name} onChange={setName} autoFocus disabled={disabled} />
         <Field
@@ -189,7 +191,7 @@ export function CreateCompany({
           </Button>
         </div>
       </div>
-    </Panel>
+    </Card>
   );
 }
 
@@ -199,16 +201,18 @@ export function CreateCompany({
  */
 export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <Panel
-      title="The company is created"
-      icon={CheckGlyph}
-      subtitle="two steps the dashboard cannot take for you"
-      actions={
-        <Button size="sm" variant="ghost" onClick={onDismiss}>
-          Dismiss
-        </Button>
-      }
-    >
+    <Card as="section">
+      <Card.Header
+        icon={<CheckGlyph size="sm" />}
+        subtitle="two steps the dashboard cannot take for you"
+        actions={
+          <Button size="sm" variant="ghost" onClick={onDismiss}>
+            Dismiss
+          </Button>
+        }
+      >
+        <Card.Title>The company is created</Card.Title>
+      </Card.Header>
       <div className="col gap-3">
         <div className="col gap-1">
           <strong>Connect chat and trackers</strong>
@@ -233,7 +237,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
           <Code>{PROVIDER_SNIPPET}</Code>
         </div>
       </div>
-    </Panel>
+    </Card>
   );
 }
 

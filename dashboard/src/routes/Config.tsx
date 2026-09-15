@@ -30,7 +30,6 @@ import {
   ButtonLink,
   Code,
   CopyButton,
-  Panel,
   Segmented,
   TabPanel,
 } from "~/ui/primitives.tsx";
@@ -38,7 +37,7 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
-import { EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DescriptionGlyph,
   DifferenceGlyph,
@@ -103,12 +102,14 @@ export function ConfigScreen() {
             )}
             <QueryState error={active.error} loading={active.loading}>
               {active.data ? (
-                <Panel
-                  title="Active revision"
-                  icon={DescriptionGlyph}
-                  subtitle="as the engine resolved it"
-                  actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
-                >
+                <Card as="section">
+                  <Card.Header
+                    icon={<DescriptionGlyph size="sm" />}
+                    subtitle="as the engine resolved it"
+                    actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
+                  >
+                    <Card.Title>Active revision</Card.Title>
+                  </Card.Header>
                   <div className="col gap-1">
                     <Code plain selectable label="The active company configuration, as JSON">
                       {pretty}
@@ -118,7 +119,7 @@ export function ConfigScreen() {
                       page.
                     </span>
                   </div>
-                </Panel>
+                </Card>
               ) : (
                 <EmptyState
                   icon={<ManufacturingGlyph />}
@@ -152,12 +153,15 @@ export function ConfigScreen() {
                     }
               }
             >
-              <Panel
-                title="Revisions"
-                icon={ScheduleGlyph}
-                count={(audit.data ?? []).length}
-                padding="none"
-              >
+              <Card as="section" padding="none">
+                <Card.Header
+                  divided
+                  style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+                  icon={<ScheduleGlyph size="sm" />}
+                  count={(audit.data ?? []).length}
+                >
+                  <Card.Title>Revisions</Card.Title>
+                </Card.Header>
                 <DataTable<RevisionMeta>
                   rows={audit.data ?? []}
                   rowKey={(r) => r.revision_id}
@@ -208,19 +212,23 @@ export function ConfigScreen() {
                     },
                   ]}
                 />
-              </Panel>
+              </Card>
             </QueryState>
 
             {lens === "diff" && (
-              <Panel
-                title={revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
-                icon={DifferenceGlyph}
-                subtitle={
-                  against
-                    ? `against revision ${against.slice(0, 10)}`
-                    : "against the active revision"
-                }
-              >
+              <Card as="section">
+                <Card.Header
+                  icon={<DifferenceGlyph size="sm" />}
+                  subtitle={
+                    against
+                      ? `against revision ${against.slice(0, 10)}`
+                      : "against the active revision"
+                  }
+                >
+                  <Card.Title>
+                    {revision ? `Changes in ${revision.slice(0, 10)}` : "Diff"}
+                  </Card.Title>
+                </Card.Header>
                 {!revision ? (
                   <EmptyState
                     size="compact"
@@ -264,7 +272,7 @@ export function ConfigScreen() {
                     </div>
                   </QueryState>
                 )}
-              </Panel>
+              </Card>
             )}
           </>
         )}

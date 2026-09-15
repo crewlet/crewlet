@@ -26,14 +26,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
-import { EmptyValue, RelativeTime, Skeleton, useNow, useToast } from "@crewlethq/ui";
+import { Card, EmptyValue, RelativeTime, Skeleton, useNow, useToast } from "@crewlethq/ui";
 import {
   AddGlyph,
   CloseGlyph,
@@ -177,7 +177,7 @@ export function Secrets() {
         </span>
       </div>
 
-      <Panel padding="none">
+      <Card padding="none">
         <StatRow cols={3}>
           <Stat
             icon={KeyGlyph}
@@ -198,7 +198,7 @@ export function Secrets() {
             sub="a rekey moves every value onto a new one"
           />
         </StatRow>
-      </Panel>
+      </Card>
 
       {loading && rows === null && <Skeleton label="Loading the secrets" variant="text" rows={4} />}
       <QueryState
@@ -213,7 +213,7 @@ export function Secrets() {
               }
         }
       >
-        <Panel padding="none">
+        <Card padding="none">
           <DataTable<SecretRow>
             rows={list}
             rowKey={(s) => s.name}
@@ -287,7 +287,7 @@ export function Secrets() {
               },
             ]}
           />
-        </Panel>
+        </Card>
       </QueryState>
 
       {writing && (

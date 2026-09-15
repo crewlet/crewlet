@@ -14,13 +14,13 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Panel, Segmented, Stat, StatRow, TabPanel } from "~/ui/primitives.tsx";
+import { Badge, Segmented, Stat, StatRow, TabPanel } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
-import { EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   AutorenewGlyph,
@@ -109,7 +109,7 @@ export function Spend() {
       />
 
       <TabPanel id={panel} value={days}>
-        <Panel padding="none">
+        <Card padding="none">
           <StatRow cols={4}>
             <Stat
               icon={TokenGlyph}
@@ -154,15 +154,17 @@ export function Spend() {
               }
             />
           </StatRow>
-        </Panel>
+        </Card>
 
         {org && org.max > 0 && (
-          <Panel
-            title="Company budget meter"
-            icon={TargetGlyph}
-            subtitle="process-lifetime — not the window above"
-            actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
-          >
+          <Card as="section">
+            <Card.Header
+              icon={<TargetGlyph size="sm" />}
+              subtitle="process-lifetime, not the window above"
+              actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
+            >
+              <Card.Title>Company budget meter</Card.Title>
+            </Card.Header>
             <Meter
               value={org.used}
               max={org.max}
@@ -176,23 +178,28 @@ export function Spend() {
                 {fmtDateTime(org.refused_at)}.
               </p>
             )}
-          </Panel>
+          </Card>
         )}
 
         <div className="grid grid-auto-lg">
-          <Panel title="By phase" icon={LayersGlyph} subtitle="where the tokens actually go">
+          <Card as="section">
+            <Card.Header icon={<LayersGlyph size="sm" />} subtitle="where the tokens actually go">
+              <Card.Title>By phase</Card.Title>
+            </Card.Header>
             <div className="col gap-3">
               <BarList data={phase} emptyLabel="No model calls in this window." />
               {phase.length > 0 && (
                 <Legend items={phase.map((p) => ({ label: p.label, color: p.color }))} />
               )}
             </div>
-          </Panel>
-          <Panel
-            title="By model"
-            icon={MemoryGlyph}
-            subtitle="from each completion's own reported model"
-          >
+          </Card>
+          <Card as="section">
+            <Card.Header
+              icon={<MemoryGlyph size="sm" />}
+              subtitle="from each completion's own reported model"
+            >
+              <Card.Title>By model</Card.Title>
+            </Card.Header>
             <div className="col gap-3">
               <BarList data={models} limit={8} emptyLabel="No model calls in this window." />
               <p className="t-caption">
@@ -200,15 +207,17 @@ export function Spend() {
                 a fallback chain serves several models under one key.
               </p>
             </div>
-          </Panel>
+          </Card>
         </div>
 
         {(tokens?.by_worker ?? []).length > 0 && (
-          <Panel
-            title="Background workers"
-            icon={AutorenewGlyph}
-            subtitle="spend outside any seat's turn"
-          >
+          <Card as="section">
+            <Card.Header
+              icon={<AutorenewGlyph size="sm" />}
+              subtitle="spend outside any seat's turn"
+            >
+              <Card.Title>Background workers</Card.Title>
+            </Card.Header>
             <BarList
               data={(tokens?.by_worker ?? []).map((w, i) => ({
                 label: w.worker,
@@ -218,15 +227,18 @@ export function Spend() {
                 sub: `${w.calls} calls`,
               }))}
             />
-          </Panel>
+          </Card>
         )}
 
-        <Panel
-          title="By seat"
-          icon={GroupGlyph}
-          count={tokens?.by_agent?.length ?? 0}
-          padding="none"
-        >
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<GroupGlyph size="sm" />}
+            count={tokens?.by_agent?.length ?? 0}
+          >
+            <Card.Title>By seat</Card.Title>
+          </Card.Header>
           <DataTable
             rows={tokens?.by_agent ?? []}
             rowKey={(a) => a.agent_id || a.role}
@@ -278,18 +290,24 @@ export function Spend() {
             ]}
           />
           {phaseKeys.length > 0 && (
-            <footer className="panel-foot">
+            <Card.Footer
+              variant="meta"
+              style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
+            >
               <Legend items={phaseKeys.map((p) => ({ label: p, color: phaseColor(p) }))} />
-            </footer>
+            </Card.Footer>
           )}
-        </Panel>
+        </Card>
 
-        <Panel
-          title="Recent turns"
-          icon={LayersGlyph}
-          count={tokens?.by_turn?.length ?? 0}
-          padding="none"
-        >
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<LayersGlyph size="sm" />}
+            count={tokens?.by_turn?.length ?? 0}
+          >
+            <Card.Title>Recent turns</Card.Title>
+          </Card.Header>
           <DataTable
             rows={tokens?.by_turn ?? []}
             rowKey={(t) => t.turn_id}
@@ -332,14 +350,17 @@ export function Spend() {
               },
             ]}
           />
-        </Panel>
+        </Card>
 
-        <Panel
-          title="Durable budget counters"
-          icon={DatabaseGlyph}
-          subtitle="the fleet's shared ledger, not this process's meter"
-          padding="none"
-        >
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<DatabaseGlyph size="sm" />}
+            subtitle="the fleet's shared ledger, not this process's meter"
+          >
+            <Card.Title>Durable budget counters</Card.Title>
+          </Card.Header>
           {budgets.loading && !budgets.data && (
             <Skeleton label="Loading the durable budget counters" variant="text" rows={3} />
           )}
@@ -417,7 +438,7 @@ export function Spend() {
               />
             </QueryState>
           )}
-        </Panel>
+        </Card>
       </TabPanel>
     </>
   );

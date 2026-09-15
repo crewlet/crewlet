@@ -27,9 +27,9 @@ import { seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
-import { Avatar, Badge, ButtonLink, Panel } from "~/ui/primitives.tsx";
+import { Avatar, Badge, ButtonLink } from "~/ui/primitives.tsx";
 import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, EmptyState, cx } from "@crewlethq/ui";
+import { Callout, Card, EmptyState, cx } from "@crewlethq/ui";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;
@@ -107,13 +107,16 @@ export function Chart({ index }: { index: OrgIndex }) {
         </Callout>
       )}
       {index.rootSeats.length > 0 && (
-        <Panel title="Org-wide" icon={CrownGlyph} subtitle="seats above every unit">
+        <Card as="section">
+          <Card.Header icon={<CrownGlyph size="sm" />} subtitle="seats above every unit">
+            <Card.Title>Org-wide</Card.Title>
+          </Card.Header>
           <div className="org-seats">
             {index.rootSeats.map((seat) => (
               <SeatNode key={seat.key} seat={seat} live={live} selected={selection.seat === seat} />
             ))}
           </div>
-        </Panel>
+        </Card>
       )}
       <div className="org-tree">
         {index.topUnits.map((unit) => (

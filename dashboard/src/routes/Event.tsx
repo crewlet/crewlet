@@ -8,12 +8,12 @@
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, KeyValue, Panel } from "~/ui/primitives.tsx";
+import { Badge, Button, Code, CopyButton, KeyValue } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
-import { EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Card, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   DescriptionGlyph,
@@ -90,7 +90,10 @@ export function EventScreen({ eventId }: { eventId: string }) {
       >
         {data && (
           <>
-            <Panel title="Envelope" icon={DescriptionGlyph}>
+            <Card as="section">
+              <Card.Header icon={<DescriptionGlyph size="sm" />}>
+                <Card.Title>Envelope</Card.Title>
+              </Card.Header>
               <KeyValue
                 items={[
                   [
@@ -148,27 +151,34 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   ],
                 ]}
               />
-            </Panel>
+            </Card>
 
             {phase && (
-              <Panel title="The phase this event records" icon={NeurologyGlyph} padding="tight">
-                <PhaseCard record={phase} defaultOpen showRole />
-              </Panel>
+              <Card as="section">
+                <Card.Header icon={<NeurologyGlyph size="sm" />}>
+                  <Card.Title>The phase this event records</Card.Title>
+                </Card.Header>
+                <Card.Body padding="tight">
+                  <PhaseCard record={phase} defaultOpen showRole />
+                </Card.Body>
+              </Card>
             )}
 
-            <Panel
-              title="Payload"
-              icon={DatabaseGlyph}
-              subtitle="verbatim, as the engine stored it"
-              actions={
-                data.payload ? (
-                  <CopyButton
-                    text={() => JSON.stringify(data.payload, null, 2)}
-                    title="this event's payload, as JSON"
-                  />
-                ) : undefined
-              }
-            >
+            <Card as="section">
+              <Card.Header
+                icon={<DatabaseGlyph size="sm" />}
+                subtitle="verbatim, as the engine stored it"
+                actions={
+                  data.payload ? (
+                    <CopyButton
+                      text={() => JSON.stringify(data.payload, null, 2)}
+                      title="this event's payload, as JSON"
+                    />
+                  ) : undefined
+                }
+              >
+                <Card.Title>Payload</Card.Title>
+              </Card.Header>
               {data.payload ? (
                 // Same treatment as the Turn record: this screen's whole
                 // point is one JSON record, so the record owns select-all
@@ -186,10 +196,13 @@ export function EventScreen({ eventId }: { eventId: string }) {
                   This event carries no payload — its type and summary are the whole record.
                 </span>
               )}
-            </Panel>
+            </Card>
 
             {data.tags && Object.keys(data.tags).length > 0 && (
-              <Panel title="Tags" icon={TagGlyph}>
+              <Card as="section">
+                <Card.Header icon={<TagGlyph size="sm" />}>
+                  <Card.Title>Tags</Card.Title>
+                </Card.Header>
                 <KeyValue
                   items={Object.entries(data.tags).map(([k, v]) => [
                     k,
@@ -198,7 +211,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     </code>,
                   ])}
                 />
-              </Panel>
+              </Card>
             )}
           </>
         )}

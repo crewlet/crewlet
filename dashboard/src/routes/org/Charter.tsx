@@ -10,25 +10,33 @@
 import { Section } from "~/components/common.tsx";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
-import { Panel } from "~/ui/primitives.tsx";
-import { EmptyState } from "@crewlethq/ui";
+import { Card, EmptyState } from "@crewlethq/ui";
 import { ExploreGlyph, ShieldGlyph, TargetGlyph } from "@crewlethq/icons/glyphs";
 
 export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex }) {
   const policies = org.policies ?? [];
   return (
     <div className="col gap-4">
-      <Panel title="Mission" icon={TargetGlyph}>
+      <Card as="section">
+        <Card.Header icon={<TargetGlyph size="sm" />}>
+          <Card.Title>Mission</Card.Title>
+        </Card.Header>
         <p className="t-body measure">
           {org.mission || <span className="muted">No mission is set.</span>}
         </p>
-      </Panel>
+      </Card>
       {org.vision && (
-        <Panel title="Vision" icon={ExploreGlyph}>
+        <Card as="section">
+          <Card.Header icon={<ExploreGlyph size="sm" />}>
+            <Card.Title>Vision</Card.Title>
+          </Card.Header>
           <p className="t-body measure">{org.vision}</p>
-        </Panel>
+        </Card>
       )}
-      <Panel title="Policies" icon={ShieldGlyph} count={policies.length}>
+      <Card as="section">
+        <Card.Header icon={<ShieldGlyph size="sm" />} count={policies.length}>
+          <Card.Title>Policies</Card.Title>
+        </Card.Header>
         {policies.length ? (
           <ol className="col gap-2" style={{ paddingLeft: "var(--spacing-4)", margin: 0 }}>
             {policies.map((p, i) => (
@@ -45,12 +53,15 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
             description="Policies render into every planner's prompt in full. They are the company's standing instructions."
           />
         )}
-      </Panel>
+      </Card>
       {index.units.length > 0 && (
         <Section title="Unit goals" hint="what each team is for">
           <div className="grid grid-auto">
             {index.units.map((u) => (
-              <Panel key={u.key} title={u.name} subtitle={u.type || undefined}>
+              <Card key={u.key} as="section">
+                <Card.Header subtitle={u.type || undefined}>
+                  <Card.Title>{u.name}</Card.Title>
+                </Card.Header>
                 {u.purpose && <p className="t-caption">{u.purpose}</p>}
                 {u.goals.length ? (
                   <ul
@@ -71,7 +82,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
                     Knowledge: {u.knowledge.join(", ")}
                   </p>
                 )}
-              </Panel>
+              </Card>
             ))}
           </div>
         </Section>

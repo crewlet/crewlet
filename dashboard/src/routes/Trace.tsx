@@ -12,7 +12,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -24,7 +24,7 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Skeleton } from "@crewlethq/ui";
+import { Card, Skeleton } from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -119,7 +119,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               }
         }
       >
-        <Panel padding="none">
+        <Card padding="none">
           <StatRow cols={3}>
             <Stat
               icon={LayersGlyph}
@@ -144,9 +144,16 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
             />
           </StatRow>
-        </Panel>
+        </Card>
 
-        <Panel title="Spans" icon={ForkRightGlyph} padding="none">
+        <Card as="section" padding="none">
+          <Card.Header
+            divided
+            style={{ paddingInline: "var(--spacing-4)", paddingTop: "var(--spacing-3)" }}
+            icon={<ForkRightGlyph size="sm" />}
+          >
+            <Card.Title>Spans</Card.Title>
+          </Card.Header>
           <div className="list">
             {rows.map(({ event, depth }) => {
               // The bar's offset and width place the span inside the trace's
@@ -187,11 +194,14 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               );
             })}
           </div>
-          <footer className="panel-foot">
-            Spans whose parent is not in this trace are shown as roots rather than dropped — a trace
+          <Card.Footer
+            variant="meta"
+            style={{ paddingInline: "var(--spacing-4)", paddingBottom: "var(--spacing-3)" }}
+          >
+            Spans whose parent is not in this trace are shown as roots rather than dropped. A trace
             can legitimately begin mid-flight.
-          </footer>
-        </Panel>
+          </Card.Footer>
+        </Card>
 
         {events[0] && (
           <div className="row">
