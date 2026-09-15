@@ -13,7 +13,8 @@
 import { useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Button, KeyValue, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -284,39 +285,42 @@ export function Runs({ runId }: { runId?: string }) {
               </span>
             </div>
           )}
-          <KeyValue
-            items={[
-              ["Task", detail.task_description || "—"],
-              [
-                "Seat",
-                <SeatChip
-                  key="s"
-                  name={detail.role || detail.agent_handle}
-                  handle={detail.agent_handle}
-                />,
-              ],
-              ["Coding agent", detail.coding_agent || "—"],
-              ["Runs in", detail.placement || "—"],
-              [
-                "Branch",
-                detail.branch ? (
-                  <code key="b" className="inline">
-                    {detail.branch}
-                  </code>
-                ) : (
-                  "—"
-                ),
-              ],
-              ["Owner node", detail.owner || "—"],
-              ["Started", fmtDateTime(detail.started_at)],
-              ["Updated", fmtDateTime(detail.updated_at)],
-              ["Ran for", fmtDuration(tsKey(detail.updated_at) - tsKey(detail.started_at))],
-              [
-                "Turn",
-                <code key="t" className="inline">
-                  {detail.turn_id}
-                </code>,
-              ],
+          <PropertiesRail
+            groups={[
+              {
+                properties: [
+                  { label: "Task", value: detail.task_description },
+                  {
+                    label: "Seat",
+                    value: (
+                      <SeatChip
+                        name={detail.role || detail.agent_handle}
+                        handle={detail.agent_handle}
+                      />
+                    ),
+                  },
+                  { label: "Coding agent", value: detail.coding_agent },
+                  { label: "Runs in", value: detail.placement },
+                  {
+                    label: "Branch",
+                    value: detail.branch ? (
+                      <code className="inline">{detail.branch}</code>
+                    ) : undefined,
+                  },
+                  { label: "Owner node", value: detail.owner },
+                  { label: "Started", value: fmtDateTime(detail.started_at) },
+                  { label: "Updated", value: fmtDateTime(detail.updated_at) },
+                  {
+                    label: "Ran for",
+                    value: fmtDuration(tsKey(detail.updated_at) - tsKey(detail.started_at)),
+                  },
+                  {
+                    label: "Turn",
+                    value: <code className="inline">{detail.turn_id}</code>,
+                    path: ["activity", "turns", detail.turn_id],
+                  },
+                ],
+              },
             ]}
           />
         </Panel>

@@ -7,7 +7,8 @@
 
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Code, CopyButton, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
@@ -76,55 +77,50 @@ export function EventScreen({ eventId }: { eventId: string }) {
         {data && (
           <>
             <Panel title="Envelope" icon="file">
-              <KeyValue
-                items={[
-                  [
-                    "Id",
-                    <code key="i" className="inline">
-                      {data.id}
-                    </code>,
-                  ],
-                  [
-                    "Type",
-                    <code key="t" className="inline">
-                      {data.type}
-                    </code>,
-                  ],
-                  ["When", `${fmtDateTime(data.timestamp)} · ${relTime(data.timestamp, now)}`],
-                  ["Actor", data.actor || <span className="faint">the engine itself</span>],
-                  ["Source", data.source || <span className="faint">—</span>],
-                  ["Category", humanize(data.category) || "system"],
-                  [
-                    "Topic",
-                    data.topic ? (
-                      <code key="tp" className="inline">
-                        {data.topic}
-                      </code>
-                    ) : (
-                      <span className="faint">—</span>
-                    ),
-                  ],
-                  [
-                    "Trace",
-                    data.trace_id ? (
-                      <code key="tr" className="inline">
-                        {data.trace_id}
-                      </code>
-                    ) : (
-                      <span className="faint">not traced</span>
-                    ),
-                  ],
-                  [
-                    "Span",
-                    data.span_id ? (
-                      <span key="s" className="mono t-caption">
-                        {data.span_id}
-                        {data.parent_span_id && ` (parent ${data.parent_span_id})`}
-                      </span>
-                    ) : (
-                      <span className="faint">—</span>
-                    ),
-                  ],
+              <PropertiesRail
+                groups={[
+                  {
+                    properties: [
+                      { label: "Id", value: <code className="inline">{data.id}</code> },
+                      { label: "Type", value: <code className="inline">{data.type}</code> },
+                      {
+                        label: "When",
+                        value: `${fmtDateTime(data.timestamp)} · ${relTime(data.timestamp, now)}`,
+                      },
+                      // A WORDED EMPTY, not a dash: an event with no actor was
+                      // published by the engine rather than by anybody, which
+                      // is a fact rather than a blank.
+                      {
+                        label: "Actor",
+                        value: data.actor || <span className="faint">the engine itself</span>,
+                      },
+                      { label: "Source", value: data.source },
+                      { label: "Category", value: humanize(data.category) || "system" },
+                      {
+                        label: "Topic",
+                        value: data.topic ? (
+                          <code className="inline">{data.topic}</code>
+                        ) : undefined,
+                      },
+                      {
+                        label: "Trace",
+                        value: data.trace_id ? (
+                          <code className="inline">{data.trace_id}</code>
+                        ) : (
+                          <span className="faint">not traced</span>
+                        ),
+                      },
+                      {
+                        label: "Span",
+                        value: data.span_id ? (
+                          <span className="mono t-caption">
+                            {data.span_id}
+                            {data.parent_span_id && ` (parent ${data.parent_span_id})`}
+                          </span>
+                        ) : undefined,
+                      },
+                    ],
+                  },
                 ]}
               />
             </Panel>
@@ -169,13 +165,15 @@ export function EventScreen({ eventId }: { eventId: string }) {
 
             {data.tags && Object.keys(data.tags).length > 0 && (
               <Panel title="Tags" icon="hash">
-                <KeyValue
-                  items={Object.entries(data.tags).map(([k, v]) => [
-                    k,
-                    <code key={k} className="inline">
-                      {v}
-                    </code>,
-                  ])}
+                <PropertiesRail
+                  groups={[
+                    {
+                      properties: Object.entries(data.tags).map(([k, v]) => ({
+                        label: k,
+                        value: <code className="inline">{v}</code>,
+                      })),
+                    },
+                  ]}
                 />
               </Panel>
             )}

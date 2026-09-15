@@ -2151,40 +2151,6 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* A metadata list, not a panel layout: two columns sized for compact pairs,
    with the label track fixed so every value in the panel starts on one line. */
-.work-props {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: var(--space-2) var(--space-3);
-  font-size: var(--fs-xs);
-  align-items: baseline;
-  min-width: 0;
-}
-.work-props dt {
-  color: var(--text-muted);
-  font-size: var(--fs-2xs);
-  min-width: 0;
-}
-.work-props dd {
-  margin: 0;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.work-props-section {
-  grid-column: 1 / -1;
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border-subtle);
-  font-size: var(--fs-3xs);
-  font-weight: var(--fw-medium);
-  letter-spacing: var(--track-wide);
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-.work-props-section:first-child {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
-}
 /* A value nothing in this company explains, or one a filter cannot reach.
    Said in a word beside the value rather than by dimming it: "archived" and
    "this build could not read it" are different facts and neither is a shade. */

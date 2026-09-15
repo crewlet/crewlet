@@ -58,7 +58,6 @@ import {
   CopyButton,
   Disclosure,
   DownloadButton,
-  KeyValue,
   Panel,
   PhaseTag,
   Skeleton,
@@ -99,6 +98,7 @@ import { useAgents, usePhaseEvents } from "~/lib/store-hooks.ts";
 import type { EventRecord, FeedRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -981,19 +981,27 @@ export function TurnScreen({ turnId }: { turnId: string }) {
           >
             <div className="col gap-2">
               {conversation && (
-                <KeyValue
-                  items={[
-                    [
-                      "Conversation",
-                      // LABELLED, and explained. It is "{source}:{channel}:
-                      // {thread}" — which external thread this turn was
-                      // answering — and it used to be an unexplained
-                      // truncated string under the seat's name.
-                      <span className="row gap-2 baseline">
-                        <code className="inline">{conversation}</code>
-                        <span className="t-caption">the external thread this turn served</span>
-                      </span>,
-                    ],
+                <PropertiesRail
+                  groups={[
+                    {
+                      properties: [
+                        {
+                          // LABELLED, and explained. It is "{source}:{channel}:
+                          // {thread}" — which external thread this turn was
+                          // answering — and it used to be an unexplained
+                          // truncated string under the seat's name.
+                          label: "Conversation",
+                          value: (
+                            <span className="row gap-2 baseline">
+                              <code className="inline">{conversation}</code>
+                              <span className="t-caption">
+                                the external thread this turn served
+                              </span>
+                            </span>
+                          ),
+                        },
+                      ],
+                    },
                   ]}
                 />
               )}
