@@ -12,12 +12,7 @@
 
 import { useCallback, useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
-import {
-  MATCH_FOOTER_LABELS,
-  QueryState,
-  SeatChip,
-  useTableChoices,
-} from "~/components/common.tsx";
+import { QueryState, SeatChip, useTableChoices } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
@@ -320,8 +315,6 @@ export function Runs() {
         {...choices}
         columns={columns}
         rows={shown}
-        totalCount={rows.length}
-        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={(r) => r.turn_id}
         onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
         isSelected={(r) => r.turn_id === selected}

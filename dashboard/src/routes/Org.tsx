@@ -27,6 +27,7 @@
 
 import { useId, useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
+import { plural } from "~/lib/format.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { Charter } from "./org/Charter.tsx";
@@ -36,7 +37,7 @@ import { PreviousRevisionNote } from "./org/builder/AfterSaveStrip.tsx";
 import { Builder } from "./org/builder/Builder.tsx";
 import { builderSurfaces } from "./org/builder/surfaces.ts";
 import { AccountTreeGlyph, EditGlyph, FlagGlyph, GroupGlyph } from "@crewlethq/icons/glyphs";
-import { PageHeader, SegmentedControl, TabPanel } from "@crewlethq/ui";
+import { PageHeader, SegmentedControl, TabPanel, Tag } from "@crewlethq/ui";
 
 type Lens = "chart" | "directory" | "charter" | "builder";
 
@@ -54,6 +55,15 @@ export function OrgScreen() {
       <PageHeader
         title={org?.name ? `${org.name} org chart` : "Org chart"}
         description="The hierarchy is the execution graph: knowledge, delegation and routing all follow it."
+        /* HOW MANY SEATS THE COMPANY HAS, which the directory's own count line
+           used to carry under its rows. It is a fact about the organization
+           rather than about one lens, so it is said once here. Not on the
+           builder: that lens draws a DRAFT, and this index is the revision
+           this node has applied, so the two numbers differ exactly while
+           somebody is editing. */
+        {...(lens === "builder"
+          ? {}
+          : { badges: <Tag appearance="outline">{plural(index.seats.length, "seat")}</Tag> })}
         actions={
           <SegmentedControl<Lens>
             label="Org view"

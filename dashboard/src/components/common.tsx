@@ -37,7 +37,6 @@ import {
   InlineCode,
   RelativeTime,
   Stack,
-  TableFooter,
   tableColumns,
   Tag,
   useNow,
@@ -48,7 +47,6 @@ import type {
   DataTableProps,
   DataTableSortState,
   DataViewColumn,
-  TableFooterLabels,
 } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
@@ -92,29 +90,6 @@ export const TABLE_PAGE_SIZES = [5, 10, 20, 50, 100];
  */
 export const PANEL_PAGE_SIZE = 10;
 export const LIST_PAGE_SIZE = 20;
-
-/**
- * What a list screen's footer says once its table pages.
- *
- * The design system's own sentence is "Showing 12 of 80", and its first number
- * is how many rows the VIEW holds. A list screen hands the view everything the
- * filters kept and the table slices that into pages, so under paging the
- * sentence would claim eighty rows were on screen when twenty are drawn. The
- * count is still worth saying, because what it actually counts is the filter,
- * so this says that instead and leaves which rows are in front of the reader
- * to the pager, which announces its own page and range.
- *
- * Nothing is overridden for the unfiltered case: the footer already says
- * "80 rows" when every row matched, which is a fact about the list rather than
- * about the page and is true whether the table pages or not.
- */
-export const MATCH_FOOTER_LABELS: Partial<TableFooterLabels> = {
-  showing: (visible, total) => (
-    <>
-      {visible} of {total} match
-    </>
-  ),
-};
 
 /**
  * Where a table's choices live: the URL for what a reader would send someone,
@@ -213,8 +188,14 @@ export interface TableChoices {
   storageKey: string;
   paginated: true;
   resizable: true;
+  /**
+   * The cog, which is now the ONE way to a table's columns.
+   *
+   * The Columns button beside it is gone from the design system, so the
+   * settings frame is where a reader hides a column, brings one back or drags
+   * the order. A table that turned this off would draw no control at all.
+   */
   showSettings: true;
-  settingsVariant: "rich";
 }
 
 /** A sort as a URL parameter. `none` is a reader who sorted by nothing. */
@@ -334,11 +315,6 @@ export function useTableChoices<T>({
     paginated: true,
     resizable: true,
     showSettings: true,
-    // The rich frame, always: every table here carries its title in a card
-    // header or a screen header rather than in the table, so the compact frame
-    // the design system picks for a titled table would never be the right one,
-    // and it holds neither the column list nor the chip row.
-    settingsVariant: "rich",
   };
 }
 
@@ -371,17 +347,20 @@ export type RecordTableProps<T> = Pick<
  * A COMPONENT RATHER THAN A BUNDLE OF PROPS, which is what it was. Where a
  * table's choices live is now the URL, and a screen that draws its table
  * inside a condition (every seat tab does) cannot call a hook at the point it
- * spreads a bundle in. What it draws is still entirely the design system's;
- * this adds no element of its own bar the count underneath.
+ * spreads a bundle in. What it draws is entirely the design system's: it adds
+ * no element of its own at all.
  *
  * WHAT IT DECIDES, so that thirteen call sites do not each decide it: the
- * compact variant, the rich settings frame, a page of ten and the count. What
- * a call site decides is its rows, its columns, which column names the row
+ * compact variant, the settings frame and a page of ten. What a call site
+ * decides is its rows, its columns, which column names the row
  * (`hideable: false`) and what the table opens sorted by.
  *
- * THE COUNT IS THE PAGE'S. The screen holds every row and this holds the page,
- * so both numbers are known exactly: ten of sixty-three, where the card header
- * above it already says sixty-three on its own.
+ * HOW MANY ROWS THERE ARE IS THE CARD HEADER'S, said by its `count` chip. The
+ * line this used to draw under the rows counted the PAGE, so on every panel
+ * holding more than ten rows the two numbers disagreed by design: the header
+ * said sixty-three and the line under the rows said ten. One number, above the
+ * rows, where a reader looks for the panel's own facts. Which rows of how many
+ * are in front of them is still the pager's own announcement.
  *
  * DENSITY IS DELIBERATELY NOT PASSED, and that is a decision rather than an
  * omission. The reader's own three-step density, the one the rail's switcher
@@ -411,31 +390,15 @@ export function RecordTable<T>({
     defaultSort,
   });
   const { columns: byKey, order } = useMemo(() => tableColumns(columns), [columns]);
-  // What the table is drawing, for the footer: the page's share of the rows,
-  // and the last page's share is whatever is left rather than a full page.
-  const onPage =
-    choices.itemsPerPage === ALL_ITEMS
-      ? rows.length
-      : Math.max(
-          0,
-          Math.min(choices.itemsPerPage, rows.length - (choices.page - 1) * choices.itemsPerPage),
-        );
   return (
-    <>
-      <DataTable<T>
-        {...rest}
-        {...choices}
-        data={[...rows]}
-        columns={byKey}
-        defaultColumnOrder={order}
-        variant="compact"
-      />
-      <TableFooter
-        visibleCount={onPage}
-        totalCount={rows.length}
-        {...(rest.loading === undefined ? {} : { loading: rest.loading })}
-      />
-    </>
+    <DataTable<T>
+      {...rest}
+      {...choices}
+      data={[...rows]}
+      columns={byKey}
+      defaultColumnOrder={order}
+      variant="compact"
+    />
   );
 }
 

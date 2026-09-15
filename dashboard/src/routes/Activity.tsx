@@ -2,10 +2,10 @@
  * The event log.
  *
  * It is a LIST SCREEN, drawn the way every list screen in this product is
- * drawn: a head, a toolbar carrying the search box and the Filter and Sort
- * menus, a chip for each axis a reader narrowed, the rows, and a footer saying
- * how many of how many are on screen. The row of hand-built pills this
- * replaces was a fourth idea of what a filter looks like.
+ * drawn: a head carrying how many rows are on screen and how far back the log
+ * goes, a toolbar carrying the search box and the Filter and Sort menus, a
+ * chip for each axis a reader narrowed, and the rows. The row of hand-built
+ * pills this replaces was a fourth idea of what a filter looks like.
  *
  * Two things this screen gets right that its predecessor did not:
  *
@@ -30,16 +30,16 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
-import { MATCH_FOOTER_LABELS, QueryState, useTableChoices } from "~/components/common.tsx";
+import { QueryState, useTableChoices } from "~/components/common.tsx";
 import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
 import { href } from "~/app/router.tsx";
 import { eventHistoryLabel, fmtDateTime, humanize, newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { ErrorGlyph } from "@crewlethq/icons/glyphs";
 import {
-  Button,
   DataView,
   EmptyState,
+  PageHeader,
   RelativeTime,
   Tag,
   useNow,
@@ -278,55 +278,65 @@ export function Activity() {
   });
 
   return (
-    <DataView<FeedRow>
-      title="Event log"
-      description="Everything the engine published, live and then paged out of the store. This tab holds the last 400 in memory; older rows are fetched."
-      badges={<Tag appearance="outline">{plural(rows.length, "event")} shown</Tag>}
-      framed
-      {...choices}
-      columns={columns}
-      rows={rows}
-      totalCount={all.length}
-      labels={{ footer: MATCH_FOOTER_LABELS }}
-      rowKey="id"
-      getRowHref={(e) => href(["events", e.id])}
-      rowTone={(e) => (e.failed ? "danger" : null)}
-      filters={filters}
-      filterValues={values}
-      onFilterValuesChange={onValuesChange}
-      emptyMessage={
-        <EmptyState
-          size="compact"
-          title={filtered ? "Nothing matches these filters" : "Nothing has been published yet"}
-          description={
-            filtered
-              ? "Older rows may still match. Load more history from the footer below."
-              : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to."
-          }
-        />
-      }
-      pagination={
-        pageError ? (
-          <QueryState error={pageError} loading={false} />
-        ) : exhausted ? (
-          <span>That is the beginning of the retained history.</span>
-        ) : (
+    <>
+      {/* THE SCREEN DRAWS ITS OWN HEAD, as the other six list screens here do,
+          because a failed history fetch needs somewhere above the rows to be
+          said. The table's end strip cannot hold it: that strip is drawn only
+          once there is no more to load, so a reader who pressed Load older and
+          was refused would be shown nothing at all, and the button they would
+          press again would be gone. */}
+      <PageHeader
+        title="Event log"
+        description="Everything the engine published, live and then paged out of the store. This tab holds the last 400 in memory; older rows are fetched."
+        badges={
           <>
-            <Button
-              variant="secondary"
-              size="small"
-              onClick={() => void loadOlder()}
-              disabled={paging}
-            >
-              {paging ? "Loading older events" : `Load ${PAGE} older`}
-            </Button>
-            <span>
-              {older.length > 0 && `${plural(older.length, "older row")} fetched · `}
-              {eventHistoryLabel(engine?.event_history_seconds)}
-            </span>
+            <Tag appearance="outline">{plural(rows.length, "event")} shown</Tag>
+            {/* HOW FAR BACK THE LOG GOES is a fact about the SCREEN, not about
+                its last row. It used to ride beside the Load older button under
+                the rows, where a reader met it on the way to pressing that
+                button; the button is the table's own now and says only what it
+                does, so the retention note would otherwise be visible only to a
+                reader who had already exhausted the list. */}
+            <Tag appearance="outline">{eventHistoryLabel(engine?.event_history_seconds)}</Tag>
           </>
-        )
-      }
-    />
+        }
+      />
+
+      {pageError && <QueryState error={pageError} loading={false} />}
+
+      <DataView<FeedRow>
+        framed
+        {...choices}
+        columns={columns}
+        rows={rows}
+        rowKey="id"
+        getRowHref={(e) => href(["events", e.id])}
+        rowTone={(e) => (e.failed ? "danger" : null)}
+        filters={filters}
+        filterValues={values}
+        onFilterValuesChange={onValuesChange}
+        emptyMessage={
+          <EmptyState
+            size="compact"
+            title={filtered ? "Nothing matches these filters" : "Nothing has been published yet"}
+            description={
+              filtered
+                ? "Older rows may still match. Load more history with the button under the rows."
+                : "The log fills as the engine works. A company with no integrations and no schedules has nothing to react to."
+            }
+          />
+        }
+        /* HISTORY PAGING IS THE TABLE'S OWN, drawn under the rows and inside
+           the frame rather than in a strip beneath it. The cursor and the
+           request stay here, because what "older" means is the screen's: it is
+           the engine's event query, narrowed by the same two filters the rows
+           are. */
+        hasMore={!exhausted}
+        onLoadMore={() => void loadOlder()}
+        loadingMore={paging}
+        loadMoreLabel={`Load ${PAGE} older`}
+        endMessage={<span>That is the beginning of the retained history.</span>}
+      />
+    </>
   );
 }

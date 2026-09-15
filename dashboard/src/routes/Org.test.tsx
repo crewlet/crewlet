@@ -203,6 +203,21 @@ describe("the directory", () => {
     return Object.fromEntries(headers.map((h, i) => [h, cells[i]!]));
   };
 
+  test("how many seats there are is in the screen's head, not under the rows", () => {
+    // The directory's own count line used to say it, under its rows, and it
+    // counted the page rather than the company. It is a fact about the
+    // organization rather than about one lens, so it is said once, in the head
+    // every lens shares. Not on the builder: that lens draws a DRAFT, and this
+    // count is the revision this node has applied.
+    mount("#/org?lens=directory", projection);
+    expect(within(screen.getByRole("banner")).getByText("4 seats")).toBeDefined();
+    expect(screen.queryByText(/match/)).toBeNull();
+    cleanup();
+
+    mount("#/org?lens=builder", projection);
+    expect(within(screen.getByRole("banner")).queryByText("4 seats")).toBeNull();
+  });
+
   test("reporting lines are the engine's, and an unreported one says so", () => {
     mount("#/org?lens=directory", projection);
     // Dev A reports to the manager the engine chose, and the CEO manages the

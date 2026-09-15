@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { MATCH_FOOTER_LABELS, QueryState, useTableChoices } from "~/components/common.tsx";
+import { QueryState, useTableChoices } from "~/components/common.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { useParam } from "~/app/router.tsx";
@@ -321,8 +321,6 @@ export function Secrets() {
         {...choices}
         columns={columns}
         rows={shown}
-        totalCount={list.length}
-        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={(s) => s.name}
         filters={filters}
         filterValues={values}

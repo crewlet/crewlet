@@ -38,7 +38,7 @@ import {
   Tag,
   tabId,
 } from "@crewlethq/ui";
-import { Announcer, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
+import { Announcer, Card, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
 import type { DataTableSortState } from "@crewlethq/ui";
 import { Router } from "~/app/router.tsx";
 import { RecordTable } from "./components/common.tsx";
@@ -614,6 +614,27 @@ function seatOrder(): string[] {
     .map((row) => row.querySelector("td")?.textContent ?? "");
 }
 
+/** A panel as a screen composes one: a card, its head, and the table under it. */
+function panelInCard(hash = "#/spend") {
+  location.hash = hash;
+  return render(
+    <Router>
+      <Card padding="none">
+        <Card.Header divided count={ROWS.length}>
+          <Card.Title>Rows</Card.Title>
+        </Card.Header>
+        <RecordTable
+          screen="panel"
+          table="rows"
+          rows={ROWS}
+          columns={ROW_COLUMNS}
+          getRowKey={(row) => row.seat}
+        />
+      </Card>
+    </Router>,
+  );
+}
+
 test("a record table offers the settings frame, the page control and the handles", () => {
   // The three controls the panel tables did not have. The cog is the way to
   // the column list and the page size; the chevrons are the pages themselves;
@@ -647,13 +668,28 @@ test("a page past the end of the rows is pulled back to the last one", () => {
 });
 
 test("a hidden column travels in the link rather than in this browser", () => {
-  // The Columns panel is drawn because the screen holds the choice, which is
-  // also the only way back for a column a reader has hidden.
+  // THE COG IS THE ONE WAY IN, now that the Columns button beside it is gone:
+  // the frame is where a column is hidden and the only way one comes back. The
+  // choice is the screen's, so where it goes is the link, not this browser.
   panel();
-  fireEvent.click(screen.getByRole("button", { name: "Columns" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: /Spent/ }));
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  const frame = screen.getByRole("dialog");
+  fireEvent.click(within(frame).getByRole("checkbox", { name: /Spent/ }));
+  // Every edit in the frame is a draft until Apply, so the link does not move
+  // under a reader who is still deciding.
+  expect(location.hash).not.toContain("rows.hide=");
+  fireEvent.click(within(frame).getByRole("button", { name: "Apply" }));
   expect(location.hash).toContain("rows.hide=spent");
   expect(screen.queryByRole("columnheader", { name: /Spent/ })).toBeNull();
+});
+
+test("a table offers its columns through the cog and through nothing else", () => {
+  // The design system took the Columns button out of a table's chrome, because
+  // the same list is in the settings frame the cog opens. A screen left with
+  // both would be offering one choice in two places, and the panel it drew was
+  // the reason a table with no pager still paid for a toolbar row.
+  panel();
+  expect(screen.queryByRole("button", { name: "Columns" })).toBeNull();
 });
 
 test("the column a table is sorted by is in the link", () => {
@@ -760,4 +796,50 @@ test("a column is sorted from a button inside its header, and the cell says whic
   expect(header.getAttribute("aria-sort")).toBe("ascending");
   fireEvent.click(button);
   expect(header.getAttribute("aria-sort")).toBe("descending");
+});
+
+test("a panel table says nothing about how many rows it holds", () => {
+  // The count line under the rows is gone from the design system, and this
+  // passes nothing to put it back. What it said was the PAGE's share, so on
+  // every panel holding more than ten rows it disagreed with the card head
+  // above it by design: the head counted the panel, the line counted the page.
+  panel("#/spend?rows.per=1");
+  expect(seatOrder()).toEqual(["planner"]);
+  // The two sentences the line drew, in the words it drew them in.
+  expect(screen.queryByText(/^Showing/)).toBeNull();
+  expect(screen.queryByText(/^3 rows$/)).toBeNull();
+  // The one count left is the PAGER's, and it is spoken rather than drawn: it
+  // says where the reader is, which is the question the control they just
+  // pressed asked.
+  const spoken = screen.getByText(/Rows 1 to 1 of 3/);
+  expect(spoken.closest("[aria-live]")).not.toBeNull();
+});
+
+test("a panel table draws its controls on the head of the card it sits in", () => {
+  // The composition the screens here write, unchanged: a card, a head, a
+  // table. The pager and the cog belong to the TABLE, and they are drawn on
+  // the CARD's head, which is something neither component can do on its own
+  // and which the engine passes nothing to arrange.
+  panelInCard("#/spend?rows.per=1");
+  const title = screen.getByRole("heading", { name: "Rows" });
+  const cog = screen.getByRole("button", { name: /table settings/i });
+  const pager = screen.getByRole("button", { name: /next page/i });
+  // The row the title is on holds both, and the rows are not on it.
+  let head: HTMLElement | null = title.parentElement;
+  while (head && !(head.contains(cog) && head.contains(pager))) head = head.parentElement;
+  expect(head).not.toBeNull();
+  expect(head!.querySelector("table")).toBeNull();
+});
+
+test("the cog on a card head opens that table's own frame", () => {
+  // The controls move where they are DRAWN and nowhere else: the frame the cog
+  // opens is still the table's, holding its columns, and the pager still turns
+  // its rows.
+  panelInCard("#/spend?rows.per=1");
+  fireEvent.click(screen.getByRole("button", { name: /table settings/i }));
+  const frame = screen.getByRole("dialog");
+  expect(within(frame).getByRole("checkbox", { name: /Spent/ })).toBeDefined();
+  fireEvent.click(within(frame).getByRole("button", { name: "Cancel" }));
+  fireEvent.click(screen.getByRole("button", { name: /next page/i }));
+  expect(seatOrder()).toEqual(["reviewer"]);
 });

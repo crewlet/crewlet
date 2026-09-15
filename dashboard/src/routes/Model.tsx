@@ -20,12 +20,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
-import {
-  MATCH_FOOTER_LABELS,
-  QueryState,
-  RecordTable,
-  useTableChoices,
-} from "~/components/common.tsx";
+import { QueryState, RecordTable, useTableChoices } from "~/components/common.tsx";
 import { PhaseTag } from "~/components/PhaseTag.tsx";
 import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -42,7 +37,6 @@ import {
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
 import {
-  Button,
   Card,
   DataView,
   type DataViewColumn,
@@ -382,6 +376,14 @@ export function ModelActivity() {
               </Tag>
             )}
             <Tag appearance="outline">{plural(filtered.length, "phase")} loaded</Tag>
+            {/* HOW FAR BACK THE RECORD GOES is a fact about the SCREEN, not
+                about its last row. It used to ride beside the Load older
+                button under the rows, where a reader met it on the way to
+                pressing that button; the button is the table's own now and
+                says only what it does, so the retention note would otherwise
+                be visible only to a reader who had already exhausted the
+                list. */}
+            <Tag appearance="outline">{eventHistoryLabel(engine?.event_history_seconds)}</Tag>
           </>
         }
       />
@@ -425,13 +427,18 @@ export function ModelActivity() {
           moves when the reader asks it to. */}
       <NewItemsNotice count={settled.pending} noun="new phase" onShow={settled.flush} />
 
+      {/* A REFUSED PAGE IS SAID ABOVE THE ROWS, beside the screen's other
+          query failures, rather than in the table's end strip. That strip is
+          drawn only once there is nothing more to load, so a reader who
+          pressed Load older and was refused would be shown nothing and the
+          button they would press again would be gone. */}
+      {pageError && <QueryState error={pageError} loading={false} />}
+
       <DataView<PhaseRecord>
         framed
         {...settledChoices}
         columns={columns}
         rows={settled.items}
-        totalCount={merged.filter((r) => !r.live).length}
-        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={phaseRecordKey}
         onRowClick={openSeat}
         rowTone={(r) => (r.failed ? "danger" : null)}
@@ -450,25 +457,15 @@ export function ModelActivity() {
             }
           />
         }
-        pagination={
-          pageError ? (
-            <QueryState error={pageError} loading={false} />
-          ) : exhausted ? (
-            <span>That is the beginning of the retained record.</span>
-          ) : (
-            <>
-              <Button
-                variant="secondary"
-                size="small"
-                onClick={() => void loadOlder()}
-                disabled={paging}
-              >
-                {paging ? "Loading older phases" : `Load ${PAGE} older phases`}
-              </Button>
-              <span>{eventHistoryLabel(engine?.event_history_seconds)}</span>
-            </>
-          )
-        }
+        /* HISTORY PAGING IS THE TABLE'S OWN, drawn under the rows and inside
+           the frame rather than in a strip beneath it. The cursor and the
+           request stay here, because what "older" means is the screen's: it is
+           the engine's phase query, narrowed by the filters the rows are. */
+        hasMore={!exhausted}
+        onLoadMore={() => void loadOlder()}
+        loadingMore={paging}
+        loadMoreLabel={`Load ${PAGE} older phases`}
+        endMessage={<span>That is the beginning of the retained record.</span>}
       />
 
       {/* A bare row, not a panel: one link did not need card chrome. The spend

@@ -17,17 +17,12 @@
  */
 
 import { useCallback, useMemo } from "react";
-import {
-  MATCH_FOOTER_LABELS,
-  QueryState,
-  SeatChip,
-  useTableChoices,
-} from "~/components/common.tsx";
+import { QueryState, SeatChip, useTableChoices } from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { tsKey } from "~/lib/format.ts";
+import { plural, tsKey } from "~/lib/format.ts";
 import type { A2AChannel } from "~/protocol/index.ts";
 import {
   Callout,
@@ -196,6 +191,10 @@ export function Conversations() {
       <PageHeader
         title="Agent-to-agent"
         description="The private channels seats opened with each other. One ask, one answer, then closed. The channel is the authorization record, not the transport."
+        /* HOW MANY CHANNELS THERE ARE, where every other list screen here says
+           it. The line under the rows used to carry it, and it counted the
+           page rather than the record. */
+        badges={<Tag appearance="outline">{plural(all.length, "channel")} in the record</Tag>}
       />
 
       <StatGroup columns={3}>
@@ -235,8 +234,6 @@ export function Conversations() {
             {...choices}
             columns={columns}
             rows={shown}
-            totalCount={all.length}
-            labels={{ footer: MATCH_FOOTER_LABELS }}
             getRowKey={(c) => c.id}
             filters={filters}
             filterValues={values}

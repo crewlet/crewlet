@@ -9,7 +9,7 @@
 import { useCallback, useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
-import { MATCH_FOOTER_LABELS, useTableChoices } from "~/components/common.tsx";
+import { useTableChoices } from "~/components/common.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
@@ -180,8 +180,6 @@ export function Tools() {
         {...choices}
         columns={columns}
         rows={rows}
-        totalCount={tools.length}
-        labels={{ footer: MATCH_FOOTER_LABELS }}
         getRowKey={(t) => `${t.source}:${t.name}`}
         filters={filters}
         filterValues={values}

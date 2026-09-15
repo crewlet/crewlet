@@ -15,12 +15,7 @@
 
 import { useCallback, useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import {
-  MATCH_FOOTER_LABELS,
-  SeatChip,
-  StateBadge,
-  useTableChoices,
-} from "~/components/common.tsx";
+import { SeatChip, StateBadge, useTableChoices } from "~/components/common.tsx";
 import { statusLine, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import {
@@ -198,8 +193,6 @@ export function Directory({ index }: { index: OrgIndex }) {
       {...choices}
       columns={columns}
       rows={shown}
-      totalCount={index.seats.length}
-      labels={{ footer: MATCH_FOOTER_LABELS }}
       getRowKey={(s) => s.key}
       filters={filters}
       filterValues={values}
