@@ -193,6 +193,47 @@ func TestTheReferenceIndexDoesNotRewriteWhatItWalks(t *testing.T) {
 	}
 }
 
+// NO TIER A FIELD IS AN INTERFACE, which is what the trim's reach rests on.
+//
+// A string behind an interface is read by the walk and never rewritten — the
+// dynamic value is not addressable — so a field of interface type would be
+// silently outside the trim while every test above still passed. Asserted
+// over the TYPE rather than a value, so it holds for the fields a future
+// config has and not only for the ones a fixture happens to fill.
+func TestNoTierAFieldHidesAStringBehindAnInterface(t *testing.T) {
+	t.Parallel()
+	var found []string
+	var walk func(reflect.Type, string, map[reflect.Type]bool)
+	walk = func(t2 reflect.Type, path string, seen map[reflect.Type]bool) {
+		if seen[t2] {
+			return // a self-referential config shape would not terminate
+		}
+		seen[t2] = true
+		switch t2.Kind() {
+		case reflect.Interface:
+			found = append(found, path)
+		case reflect.Pointer, reflect.Slice, reflect.Array:
+			walk(t2.Elem(), path+"[]", seen)
+		case reflect.Map:
+			walk(t2.Key(), path+"[key]", seen)
+			walk(t2.Elem(), path+"[]", seen)
+		case reflect.Struct:
+			for i := range t2.NumField() {
+				if f := t2.Field(i); f.PkgPath == "" {
+					walk(f.Type, path+"."+f.Name, seen)
+				}
+			}
+		}
+	}
+	walk(reflect.TypeOf(config.Bootstrap{}), "bootstrap", map[reflect.Type]bool{})
+
+	if len(found) > 0 {
+		t.Errorf("these Tier A fields are interfaces, so a string inside one is "+
+			"read by the trim and never rewritten:\n\t%s",
+			strings.Join(found, "\n\t"))
+	}
+}
+
 // ---- helpers --------------------------------------------------------- //
 
 const pad = " \t"

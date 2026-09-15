@@ -111,6 +111,14 @@ func (b *Bootstrap) normalize() error {
 // by copy still traverses, but a struct field of it cannot be set, so the
 // only caller that rewrites anything passes &cfg. Map ENTRIES are the
 // exception in both directions and are handled by [mapEntries].
+//
+// A string behind an INTERFACE is read but never rewritten: the dynamic
+// value an interface holds is not addressable, and reseating it would mean
+// rebuilding whatever holds the interface. That costs the read-only caller
+// nothing — it walks the map[string]any a store row decodes to — but it
+// would make a Tier A field of interface type silently unreachable by the
+// trim, so a test asserts Tier A has none rather than leaving it to be
+// remembered.
 func mapStrings(v reflect.Value, path string, replace func(path, s string) string) (bool, []string) {
 	if !v.IsValid() {
 		return false, nil
