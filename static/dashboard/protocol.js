@@ -789,7 +789,7 @@ function withQuery(path, query) {
 * reaches the caller, when the caller sent the precondition that asks for it.
 */
 async function request(method, path, options = {}) {
-	const { body, headers = {}, query, signal } = options;
+	const { body, headers = {}, query, signal, read = "json" } = options;
 	const contentType = options.contentType ?? (body === void 0 ? void 0 : "application/json");
 	let encoded;
 	if (body !== void 0) {
@@ -845,6 +845,11 @@ async function request(method, path, options = {}) {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", forward);
 	}
+	if (read === "text" && response.ok) return {
+		status: response.status,
+		body: text,
+		etag: response.headers.get("ETag")
+	};
 	let parsed = null;
 	if (text !== "") try {
 		parsed = JSON.parse(text);

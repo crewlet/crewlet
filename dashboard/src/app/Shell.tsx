@@ -42,7 +42,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useNow } from "~/lib/clock.ts";
-import { useDensity, useTheme, type ThemeChoice } from "~/lib/theme.ts";
+import { useDensityPreference, useThemePreference, type ThemePreference } from "@crewlethq/ui";
 import { onTokenRequested } from "~/protocol/index.ts";
 
 export function Shell({ children }: { children: ReactNode }) {
@@ -54,8 +54,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const budget = useOrgBudget();
   const org = useOrg();
   const now = useNow();
-  const [theme, setTheme] = useTheme();
-  const [density, setDensity] = useDensity();
+  const [theme, setTheme] = useThemePreference({ storageKey: "crewlet_theme" });
+  const [density, setDensity] = useDensityPreference({ storageKey: "crewlet_density" });
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [enginePanel, setEnginePanel] = useState(false);
@@ -219,7 +219,7 @@ export function Shell({ children }: { children: ReactNode }) {
             )}
           </button>
           <div className="row" style={{ gap: 4 }}>
-            <Segmented<ThemeChoice>
+            <Segmented<ThemePreference>
               size="sm"
               semantics="radio"
               ariaLabel="Theme"

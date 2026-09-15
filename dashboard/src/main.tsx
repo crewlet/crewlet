@@ -12,19 +12,29 @@ import { createRoot } from "react-dom/client";
 import { App } from "./app/App.tsx";
 import { Router } from "./app/router.tsx";
 import { ClientContext } from "./lib/store-hooks.ts";
-import { bootTheme } from "./lib/theme.ts";
 import { LiveSocket, Store, apiToken } from "./protocol/index.ts";
+import { applyStoredPreferences } from "@crewlethq/ui";
 
-import "./styles/tokens.css";
-import "./styles/fonts.css";
+// The design system, in cascade order: the variables, then the themes that
+// repaint them, then density, the faces and the document baseline. themes.css
+// and tokens.css share the :root selector and neither adds specificity, so
+// the later import is the one that paints.
+import "@crewlethq/tokens/css";
+import "@crewlethq/tokens/css/themes";
+import "@crewlethq/tokens/css/density";
+import "@crewlethq/tokens/css/fonts";
+import "@crewlethq/tokens/css/base";
+
 import "./styles/base.css";
 import "./styles/components.css";
 import "./styles/shell.css";
 import "./styles/screens.css";
 
 // Before the first paint, so a reader whose machine is set to light never sees
-// a dark flash on the way to their own preference.
-bootTheme();
+// a dark flash on the way to their own preference. A Content-Security-Policy
+// with no inline script is why this is a call from the module bundle rather
+// than the usual snippet in the document head.
+applyStoredPreferences({ themeKey: "crewlet_theme", densityKey: "crewlet_density" });
 
 const store = new Store();
 const socket = new LiveSocket(store);

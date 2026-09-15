@@ -2,6 +2,54 @@
 
 The app bundles dependencies which contain the following licenses:
 
+## @crewlethq/tokens - 0.3.0 (MIT AND OFL-1.1)
+
+MIT License
+
+Copyright (c) 2026 Crewlet
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## @crewlethq/ui - 0.3.0 (MIT)
+
+MIT License
+
+Copyright (c) 2026 Crewlet
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## react-dom - 19.2.8 (MIT)
 
 MIT License
@@ -79,13 +127,19 @@ SOFTWARE.
 The dashboard serves these font files from /static/dashboard/fonts/.
 
 The faces in this directory are redistributed under the SIL Open Font License,
-Version 1.1. They are unmodified `latin` and `latin-ext` subsets of the
-upstream variable fonts.
+Version 1.1. They are the `latin` and `latin-ext` subsets that Google Fonts
+serves for these families: subsets and partial instances of the upstream
+variable fonts, and therefore Modified Versions under the definitions below.
+Neither family declares a Reserved Font Name. fonts/README.md records where
+each file was downloaded from, and SHA256SUMS its checksum.
 
-  Inter:           Copyright (c) 2016 The Inter Project Authors
-                   https://github.com/rsms/inter
-  JetBrains Mono:  Copyright (c) 2020 The JetBrains Mono Project Authors
-                   https://github.com/JetBrains/JetBrainsMono
+  Inter
+    Copyright (c) 2016 The Inter Project Authors
+    https://github.com/rsms/inter
+
+  JetBrains Mono
+    Copyright (c) 2020 The JetBrains Mono Project Authors
+    https://github.com/JetBrains/JetBrainsMono
 
 -----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
