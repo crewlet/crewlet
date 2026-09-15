@@ -14,13 +14,23 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Segmented, Stat, StatRow, TabPanel } from "~/ui/primitives.tsx";
+import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
-import { Card, EmptyValue, Meter, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyValue,
+  Meter,
+  RelativeTime,
+  SegmentedControl,
+  Skeleton,
+  TabPanel,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   AutorenewGlyph,
@@ -97,12 +107,12 @@ export function Spend() {
         sub="What the company's model calls actually cost, and how much headroom the budget gate has left."
         badges={tokens ? <Tag appearance="outline">{tokens.since_days}-day window</Tag> : undefined}
         actions={
-          <Segmented
-            ariaLabel="Window"
+          <SegmentedControl
+            label="Window"
             semantics="tabs"
             panelId={panel}
             value={days}
-            onChange={setDays}
+            onValueChange={setDays}
             options={WINDOWS.map((d) => ({ value: d, label: `${d}d` }))}
           />
         }

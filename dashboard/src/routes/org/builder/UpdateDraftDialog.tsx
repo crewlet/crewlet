@@ -25,14 +25,13 @@
  */
 
 import { configValueKind, plural } from "~/lib/format.ts";
-import { Segmented } from "~/ui/primitives.tsx";
 import type { Choice, RebaseEntry } from "./model/history.ts";
 import { isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
 import { RefreshGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
 export type NameOf = (key: NodeKey) => string | null;
@@ -248,12 +247,12 @@ export function UpdateDraftDialog({
                     </tbody>
                   </table>
                 </div>
-                <Segmented<Choice | "">
-                  ariaLabel={`Resolve: ${label}`}
+                <SegmentedControl<Choice | "">
+                  label={`Resolve: ${label}`}
                   semantics="radio"
                   size="sm"
                   value={entry.choice ?? ""}
-                  onChange={(v) => onChoose(entry.index, v === "" ? null : v)}
+                  onValueChange={(v) => onChoose(entry.index, v === "" ? null : v)}
                   options={[
                     { value: "mine", label: "Keep mine" },
                     { value: "theirs", label: "Keep theirs" },

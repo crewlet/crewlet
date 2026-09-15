@@ -21,7 +21,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { Avatar, KeyValue, Stat, StatRow, TabPanel, Tabs } from "~/ui/primitives.tsx";
+import { Avatar, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -63,6 +63,8 @@ import {
   Meter,
   RelativeTime,
   Skeleton,
+  TabPanel,
+  Tabs,
   Tag,
   useNow,
 } from "@crewlethq/ui";
@@ -90,8 +92,6 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
-
-type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
@@ -307,17 +307,17 @@ export function SeatScreen({ handle }: { handle: string }) {
         </div>
       )}
 
-      <Tabs<Tab>
+      <Tabs
         ariaLabel="Seat sections"
         panelId={panel}
-        value={tab as Tab}
-        onChange={setTab}
-        options={[
-          { value: "overview", label: "Overview", icon: PersonGlyph },
-          { value: "model", label: "Model activity", icon: NeurologyGlyph },
-          { value: "memory", label: "Memory", icon: DatabaseGlyph },
-          { value: "cost", label: "Cost", icon: TokenGlyph },
-          { value: "access", label: "Access", icon: KeyGlyph },
+        value={tab}
+        onValueChange={setTab}
+        items={[
+          { value: "overview", label: "Overview", icon: <PersonGlyph /> },
+          { value: "model", label: "Model activity", icon: <NeurologyGlyph /> },
+          { value: "memory", label: "Memory", icon: <DatabaseGlyph /> },
+          { value: "cost", label: "Cost", icon: <TokenGlyph /> },
+          { value: "access", label: "Access", icon: <KeyGlyph /> },
         ]}
       />
 

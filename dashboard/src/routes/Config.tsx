@@ -24,7 +24,6 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
-import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
@@ -37,7 +36,9 @@ import {
   EmptyState,
   EmptyValue,
   RelativeTime,
+  SegmentedControl,
   Skeleton,
+  TabPanel,
   Tag,
   useNow,
 } from "@crewlethq/ui";
@@ -82,16 +83,16 @@ export function ConfigScreen() {
         title="Configuration"
         sub="The founder-owned company document, versioned in the store and applied live. Secrets are redacted by the engine before it leaves the process."
         actions={
-          <Segmented<Lens>
-            ariaLabel="Configuration view"
+          <SegmentedControl<Lens>
+            label="Configuration view"
             semantics="tabs"
             panelId={panel}
             value={lens as Lens}
-            onChange={setLens}
+            onValueChange={setLens}
             options={[
-              { value: "active", label: "Active", icon: DescriptionGlyph },
-              { value: "audit", label: "History", icon: ScheduleGlyph },
-              { value: "diff", label: "Diff", icon: DifferenceGlyph },
+              { value: "active", label: "Active", icon: <DescriptionGlyph /> },
+              { value: "audit", label: "History", icon: <ScheduleGlyph /> },
+              { value: "diff", label: "Diff", icon: <DifferenceGlyph /> },
             ]}
           />
         }

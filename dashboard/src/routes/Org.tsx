@@ -30,7 +30,6 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
-import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { Charter } from "./org/Charter.tsx";
 import { Chart } from "./org/Chart.tsx";
 import { Directory } from "./org/Directory.tsx";
@@ -38,6 +37,7 @@ import { PreviousRevisionNote } from "./org/builder/AfterSaveStrip.tsx";
 import { Builder } from "./org/builder/Builder.tsx";
 import { builderSurfaces } from "./org/builder/surfaces.ts";
 import { AccountTreeGlyph, EditGlyph, FlagGlyph, GroupGlyph } from "@crewlethq/icons/glyphs";
+import { SegmentedControl, TabPanel } from "@crewlethq/ui";
 
 type Lens = "chart" | "directory" | "charter" | "builder";
 
@@ -56,17 +56,17 @@ export function OrgScreen() {
         title={org?.name ? `${org.name} org chart` : "Org chart"}
         sub="The hierarchy is the execution graph: knowledge, delegation and routing all follow it."
         actions={
-          <Segmented<Lens>
-            ariaLabel="Org view"
+          <SegmentedControl<Lens>
+            label="Org view"
             semantics="tabs"
             panelId={panel}
             value={lens}
-            onChange={setLens}
+            onValueChange={setLens}
             options={[
-              { value: "chart", label: "Chart", icon: AccountTreeGlyph },
-              { value: "directory", label: "Directory", icon: GroupGlyph },
-              { value: "charter", label: "Charter", icon: FlagGlyph },
-              { value: "builder", label: "Builder", icon: EditGlyph },
+              { value: "chart", label: "Chart", icon: <AccountTreeGlyph /> },
+              { value: "directory", label: "Directory", icon: <GroupGlyph /> },
+              { value: "charter", label: "Charter", icon: <FlagGlyph /> },
+              { value: "builder", label: "Builder", icon: <EditGlyph /> },
             ]}
           />
         }

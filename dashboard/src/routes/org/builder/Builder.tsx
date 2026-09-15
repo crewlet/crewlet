@@ -54,7 +54,6 @@ import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hook
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Segmented, TabPanel } from "~/ui/primitives.tsx";
 import type { Tone } from "@crewlethq/ui";
 import {
   BuilderContext,
@@ -137,7 +136,9 @@ import {
   LayerHost,
   Menu,
   Modal,
+  SegmentedControl,
   Skeleton,
+  TabPanel,
   Tag,
   ToastProvider,
   cx,
@@ -1213,25 +1214,25 @@ function Lens({
       <div className={cx("org-builder-body", fill && "fill")}>
         {!startingCompany && (
           <div className="org-builder-toolbar" role="toolbar" aria-label="Organization builder">
-            <Segmented
-              ariaLabel="Builder view"
+            <SegmentedControl
+              label="Builder view"
               semantics="tabs"
               panelId={viewPanel}
               value={view}
-              onChange={setView}
+              onValueChange={setView}
               size="sm"
               options={[
-                { value: "canvas", label: "Canvas", icon: AccountTreeGlyph },
-                { value: "outline", label: "Outline", icon: ListGlyph },
+                { value: "canvas", label: "Canvas", icon: <AccountTreeGlyph /> },
+                { value: "outline", label: "Outline", icon: <ListGlyph /> },
               ]}
             />
             {view === "canvas" && (
-              <Segmented
-                ariaLabel="Chart"
+              <SegmentedControl
+                label="Chart"
                 semantics="tabs"
                 panelId={chartPanel}
                 value={chart}
-                onChange={setChart}
+                onValueChange={setChart}
                 size="sm"
                 options={[
                   { value: "structure", label: "Structure" },

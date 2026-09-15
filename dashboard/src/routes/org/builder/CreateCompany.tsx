@@ -24,13 +24,12 @@ import { useState } from "react";
 import { href } from "~/app/router.tsx";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
-import { Button, ButtonLink, Callout, Card, CodeBlock } from "@crewlethq/ui";
+import { Button, ButtonLink, Callout, Card, CodeBlock, SegmentedControl } from "@crewlethq/ui";
 import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /** What each starting point gives the operator, in one line. */
@@ -113,11 +112,11 @@ export function CreateCompany({
 
         <div className="col gap-1">
           <span className="t-cell">Start from</span>
-          <Segmented<TemplateId>
-            ariaLabel="Start from"
+          <SegmentedControl<TemplateId>
+            label="Start from"
             semantics="radio"
             value={template}
-            onChange={setTemplate}
+            onValueChange={setTemplate}
             options={TEMPLATES.map((t) => ({ value: t.id, label: t.label }))}
           />
           <span className="t-caption">{chosen.hint}</span>
@@ -126,11 +125,11 @@ export function CreateCompany({
         {template === "established_company" && (
           <div className="col gap-1">
             <span className="t-cell">Unit leads</span>
-            <Segmented<LeadsAre>
-              ariaLabel="Unit leads"
+            <SegmentedControl<LeadsAre>
+              label="Unit leads"
               semantics="radio"
               value={leads}
-              onChange={setLeads}
+              onValueChange={setLeads}
               options={[
                 { value: "agents", label: "Leads are agents" },
                 { value: "people", label: "Leads are people" },

@@ -20,7 +20,6 @@
 import { useState } from "react";
 import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.ts";
 import { Field } from "~/ui/Field.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import { useBuilder, type AddKind } from "./BuilderContext.tsx";
 import {
   ContactField,
@@ -35,7 +34,7 @@ import { COMPANY_KEY, mintKey, type NodeKey } from "./model/keys.ts";
 import type { Intent } from "./model/operations.ts";
 import { recordIntent } from "./model/reducer.ts";
 import { AddGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Modal } from "@crewlethq/ui";
+import { Button, Modal, SegmentedControl } from "@crewlethq/ui";
 
 const KINDS: { value: AddKind; label: string }[] = [
   { value: "unit", label: "Unit" },
@@ -147,12 +146,12 @@ export function AddNodeDialog({
             : refusal
         }
       />
-      <Segmented<AddKind>
-        ariaLabel="What to add"
+      <SegmentedControl<AddKind>
+        label="What to add"
         semantics="radio"
         value={kind}
         options={KINDS}
-        onChange={chooseKind}
+        onValueChange={chooseKind}
       />
       <Field
         label="Name"

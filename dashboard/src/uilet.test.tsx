@@ -15,11 +15,29 @@
  * side-effect import and takes the rest of the suite with it.
  */
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { createRef } from "react";
 import { afterEach, expect, test, vi } from "vitest";
-import { AddGlyph, ArrowUpwardGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
-import { Button, ButtonLink, CodeBlock, CopyButton, IconButton, Tag } from "@crewlethq/ui";
+import {
+  AddGlyph,
+  ArrowUpwardGlyph,
+  ComputerGlyph,
+  DarkModeGlyph,
+  LightModeGlyph,
+  MoreVertGlyph,
+} from "@crewlethq/icons/glyphs";
+import {
+  Button,
+  ButtonLink,
+  CodeBlock,
+  CopyButton,
+  IconButton,
+  SegmentedControl,
+  TabPanel,
+  Tabs,
+  Tag,
+  tabId,
+} from "@crewlethq/ui";
 import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
@@ -295,4 +313,108 @@ test("a filter tag says whether it is on, and still reads as its own label", () 
   expect(screen.getByRole("button", { name: "4 failed" }).getAttribute("aria-pressed")).toBe(
     "false",
   );
+});
+
+// The two rows a screen draws look alike and are NOT alike: one is a set of
+// sections and one is a setting. The engine picks which, and the difference is
+// a history entry per keypress, so it is checked here rather than assumed.
+const LENSES = [
+  { value: "chart", label: "Chart" },
+  { value: "directory", label: "Directory" },
+  { value: "charter", label: "Charter" },
+];
+
+function tabRow(row: "tabs" | "segmented") {
+  const onValueChange = vi.fn();
+  render(
+    <>
+      {row === "tabs" ? (
+        <Tabs
+          ariaLabel="View"
+          value="chart"
+          items={LENSES}
+          onValueChange={onValueChange}
+          panelId="panel"
+        />
+      ) : (
+        <SegmentedControl
+          label="View"
+          value="chart"
+          options={LENSES}
+          onValueChange={onValueChange}
+          semantics="tabs"
+          panelId="panel"
+        />
+      )}
+      <TabPanel id="panel" value="chart">
+        content
+      </TabPanel>
+    </>,
+  );
+  return onValueChange;
+}
+
+test.each(["tabs", "segmented"] as const)("%s: the arrows move focus and select nothing", (row) => {
+  const onValueChange = tabRow(row);
+  const tabs = screen.getAllByRole("tab");
+  tabs[0]!.focus();
+  fireEvent.keyDown(tabs[0]!, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tabs[1]);
+  fireEvent.keyDown(tabs[1]!, { key: "End" });
+  expect(document.activeElement).toBe(tabs[2]);
+  fireEvent.keyDown(tabs[2]!, { key: "ArrowRight" });
+  expect(document.activeElement).toBe(tabs[0]);
+  fireEvent.keyDown(tabs[0]!, { key: "ArrowLeft" });
+  expect(document.activeElement).toBe(tabs[2]);
+  // A horizontal row of tabs does not move on Up and Down.
+  fireEvent.keyDown(tabs[2]!, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(tabs[2]);
+  // NOTHING SELECTED: each of those would have pushed a history entry.
+  expect(onValueChange).not.toHaveBeenCalled();
+  fireEvent.click(tabs[2]!);
+  expect(onValueChange).toHaveBeenCalledWith("charter");
+});
+
+test.each(["tabs", "segmented"] as const)("%s: one tab stop, and the panel it names", (row) => {
+  tabRow(row);
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs.map((tab) => tab.tabIndex)).toEqual([0, -1, -1]);
+  expect(tabs[0]!.getAttribute("aria-selected")).toBe("true");
+  for (const tab of tabs) expect(tab.getAttribute("aria-controls")).toBe("panel");
+  const panel = screen.getByRole("tabpanel");
+  expect(panel.getAttribute("aria-labelledby")).toBe(tabId("panel", "chart"));
+  expect(document.getElementById(tabId("panel", "chart"))).toBe(tabs[0]);
+  expect(screen.getByRole("tabpanel", { name: "Chart" })).toBe(panel);
+});
+
+test("a setting is a radio group whose arrows select as they move", () => {
+  const onValueChange = vi.fn();
+  render(
+    <SegmentedControl
+      label="Theme"
+      semantics="radio"
+      value="system"
+      options={[
+        { value: "light", label: "", icon: <LightModeGlyph />, title: "Light" },
+        { value: "system", label: "", icon: <ComputerGlyph />, title: "Follow the system" },
+        { value: "dark", label: "", icon: <DarkModeGlyph />, title: "Dark" },
+      ]}
+      onValueChange={onValueChange}
+    />,
+  );
+  const group = screen.getByRole("radiogroup", { name: "Theme" });
+  const radios = within(group).getAllByRole("radio");
+  // Named, although their only visible content is a glyph.
+  expect(screen.getByRole("radio", { name: "Dark" })).toBe(radios[2]);
+  expect(radios[1]!.getAttribute("aria-checked")).toBe("true");
+  expect(radios.map((radio) => radio.tabIndex)).toEqual([-1, 0, -1]);
+  // A setting has no panel, so it is not a tab row and must not say it is.
+  expect(screen.queryByRole("tab")).toBeNull();
+
+  radios[1]!.focus();
+  fireEvent.keyDown(radios[1]!, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(radios[2]);
+  expect(onValueChange).toHaveBeenLastCalledWith("dark");
+  fireEvent.keyDown(radios[2]!, { key: "ArrowUp" });
+  expect(onValueChange).toHaveBeenLastCalledWith("system");
 });

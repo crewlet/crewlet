@@ -632,47 +632,6 @@ fieldset.field {
   color: var(--color-brand-accent);
 }
 
-/* Segmented control: lenses, tabs, ranges. One implementation; the system
-   this replaces had lens tabs, room tabs and filter pills as three. */
-.segmented {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  background: var(--color-surface-inset);
-  border-radius: var(--radius-md);
-  min-width: 0;
-}
-.segmented > button {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  height: calc(var(--size-control-md) - 6px);
-  padding: 0 var(--spacing-3);
-  border-radius: calc(var(--radius-md) - 1px);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  transition:
-    background var(--motion-duration-fast) var(--motion-easing-default),
-    color var(--motion-duration-fast) var(--motion-easing-default);
-}
-.segmented > button:hover {
-  color: var(--color-text-primary);
-}
-.segmented > button[aria-selected="true"],
-.segmented > button[aria-checked="true"] {
-  background: var(--color-surface-subtle);
-  color: var(--color-text-primary);
-  box-shadow: var(--shadow-xs);
-}
-.segmented.sm > button {
-  height: calc(var(--size-control-sm) - 4px);
-  padding: 0 var(--spacing-2);
-  font-size: var(--font-size-2xs);
-}
-
 /* Filter chips. Neutral until ON, when they take the accent: the one thing
    that is currently narrowing the list is exactly the "current selection" the
    accent is reserved for. */
@@ -708,56 +667,6 @@ fieldset.field {
 }
 .chip[aria-pressed="true"] .chip-count {
   color: inherit;
-}
-
-/* The region a tab row controls. It keeps the gap of the layout around it, so
-   wrapping a screen's sections in one moves nothing. */
-.tab-panel {
-  display: flex;
-  flex-direction: column;
-  gap: inherit;
-  min-width: 0;
-}
-
-/* Tabs: the in-page navigation a section owns. */
-.tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-4);
-  border-bottom: 1px solid var(--color-border-default);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.tabs::-webkit-scrollbar {
-  display: none;
-}
-.tabs > button {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) 0;
-  font-size: var(--font-size-compact);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  transition: color var(--motion-duration-fast) var(--motion-easing-default);
-}
-.tabs > button:hover {
-  color: var(--color-text-primary);
-}
-.tabs > button[aria-selected="true"] {
-  color: var(--color-text-primary);
-}
-.tabs > button[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--color-brand-accent);
-  border-radius: var(--radius-pill) var(--radius-pill) 0 0;
 }
 
 /* ---- Meter --------------------------------------------------------------

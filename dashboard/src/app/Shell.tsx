@@ -26,7 +26,6 @@ import {
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import {
   useAgents,
   useClient,
@@ -42,6 +41,7 @@ import {
   Button,
   ButtonLink,
   IconButton,
+  SegmentedControl,
   cx,
   focusables,
   isComposing,
@@ -238,25 +238,25 @@ export function Shell({ children }: { children: ReactNode }) {
             )}
           </button>
           <div className="row" style={{ gap: 4 }}>
-            <Segmented<ThemePreference>
+            <SegmentedControl<ThemePreference>
               size="sm"
               semantics="radio"
-              ariaLabel="Theme"
+              label="Theme"
               value={theme}
-              onChange={setTheme}
+              onValueChange={setTheme}
               options={[
-                { value: "light", label: "", icon: LightModeGlyph, title: "Light" },
-                { value: "system", label: "", icon: ComputerGlyph, title: "Follow the system" },
-                { value: "dark", label: "", icon: DarkModeGlyph, title: "Dark" },
+                { value: "light", label: "", icon: <LightModeGlyph />, title: "Light" },
+                { value: "system", label: "", icon: <ComputerGlyph />, title: "Follow the system" },
+                { value: "dark", label: "", icon: <DarkModeGlyph />, title: "Dark" },
               ]}
             />
             <span className="spacer" />
-            <Segmented
+            <SegmentedControl
               size="sm"
               semantics="radio"
-              ariaLabel="Density"
+              label="Density"
               value={density}
-              onChange={setDensity}
+              onValueChange={setDensity}
               options={[
                 { value: "compact", label: "S", title: "Compact" },
                 { value: "normal", label: "M", title: "Normal" },

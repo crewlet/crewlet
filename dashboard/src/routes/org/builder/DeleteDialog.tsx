@@ -34,7 +34,6 @@ import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Segmented } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -56,7 +55,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { DeleteGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Modal } from "@crewlethq/ui";
+import { Button, Callout, Modal, SegmentedControl } from "@crewlethq/ui";
 
 type PlacedChoice = "keep" | "remove";
 
@@ -193,11 +192,11 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
               isRecord(p.json) && typeof p.json.name === "string" ? p.json.name : p.key,
             )}
           />
-          <Segmented<PlacedChoice>
-            ariaLabel="Seats placed here by unit reference"
+          <SegmentedControl<PlacedChoice>
+            label="Seats placed here by unit reference"
             semantics="radio"
             value={placedSeats}
-            onChange={setPlacedSeats}
+            onValueChange={setPlacedSeats}
             options={[
               { value: "keep", label: "Keep them at the top level" },
               { value: "remove", label: "Delete them too" },

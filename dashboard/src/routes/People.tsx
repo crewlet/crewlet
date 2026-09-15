@@ -17,12 +17,12 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
-import { Segmented, SearchInput, TabPanel } from "~/ui/primitives.tsx";
+import { SearchInput } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { GroupGlyph } from "@crewlethq/icons/glyphs";
-import { EmptyState, Tag } from "@crewlethq/ui";
+import { EmptyState, SegmentedControl, TabPanel, Tag } from "@crewlethq/ui";
 
 type Grouping = "state" | "unit" | "flat";
 
@@ -125,12 +125,12 @@ export function People() {
           />
         </div>
         <span className="spacer" />
-        <Segmented<Grouping>
-          ariaLabel="Grouping"
+        <SegmentedControl<Grouping>
+          label="Grouping"
           semantics="tabs"
           panelId={panel}
           value={group as Grouping}
-          onChange={setGroup}
+          onValueChange={setGroup}
           options={[
             { value: "state", label: "By state" },
             { value: "unit", label: "By unit" },
