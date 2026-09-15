@@ -10,7 +10,10 @@
  * through `tsKey`, never through `<` on the string.
  */
 
+import { dates, zone } from "./prefs.ts";
+
 /** Parse an ISO timestamp, tolerating a naive one (the engine emits both). */
+
 export function parseUTC(ts: string | null | undefined): Date | null {
   if (!ts) return null;
   let s = String(ts);
@@ -57,6 +60,39 @@ export function oldestFirst(
 // Time
 // ---------------------------------------------------------------------------
 
+/**
+ * The zone and the date shape every formatter below renders in.
+ *
+ * READ FROM THE MODULE rather than taken as an argument, which is the one
+ * place this file departs from its own "pass what you need" rule. A zone is a
+ * preference held by one browser and read by three hundred call sites; passing
+ * it would mean threading it through every component that renders a timestamp,
+ * and the ones that forgot would silently render in a different zone from the
+ * ones beside them — the exact inconsistency the preference exists to end.
+ *
+ * `lib/prefs.ts` announces a change, so a component that must re-render on one
+ * subscribes with `useViewerPrefs()`. The formatters themselves stay pure
+ * functions of (timestamp, preference): same inputs, same output.
+ */
+function dateParts(): Intl.DateTimeFormatOptions {
+  switch (dates()) {
+    case "iso":
+      // 2026-06-15. `en-CA` is the locale whose numeric date IS ISO order,
+      // which is how this is spelled without hand-assembling the string and
+      // losing the runtime's own calendar handling.
+      return { year: "numeric", month: "2-digit", day: "2-digit" };
+    case "long":
+      return { year: "numeric", month: "long", day: "numeric" };
+    default:
+      return { year: "numeric", month: "short", day: "2-digit" };
+  }
+}
+
+/** The locale each date shape is written in. */
+function dateLocale(): string | undefined {
+  return dates() === "iso" ? "en-CA" : undefined;
+}
+
 export function fmtTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return "";
@@ -65,27 +101,41 @@ export function fmtTime(ts: string | null | undefined): string {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+    timeZone: zone(),
   });
 }
 
 export function fmtDateTime(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return "—";
-  return d.toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "2-digit",
+  return d.toLocaleString(dateLocale(), {
+    ...dateParts(),
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+    timeZone: zone(),
   });
 }
 
 export function fmtDate(ts: string | null | undefined): string {
   const d = parseUTC(ts);
   if (!d) return "—";
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
+  return d.toLocaleDateString(dateLocale(), { ...dateParts(), timeZone: zone() });
+}
+
+/**
+ * A timestamp's full identity, for a `title` on anything that shows a short
+ * one.
+ *
+ * NAMES THE ZONE, which is the whole point: a reader comparing a screenshot
+ * with a colleague's, or reading a log beside this screen, has no way to know
+ * which zone a bare `14:32` is in — and the answer differs per reader, which
+ * is exactly why it cannot be left implicit.
+ */
+export function fmtStamp(ts: string | null | undefined): string {
+  const full = fmtDateTime(ts);
+  return full === "—" ? full : `${full} (${zone()})`;
 }
 
 /**

@@ -24,10 +24,11 @@
  * how many that is, so an export never claims more than the page it has.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useParam } from "../router.tsx";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { Button, Empty, cx } from "~/ui/primitives.tsx";
+import { useKeyChords } from "~/lib/keys.ts";
 
 export interface GridColumn<T> {
   key: string;
@@ -161,34 +162,29 @@ export function DataGrid<T>({
 
   // `j` and `k` walk a cursor row; `enter` activates it. No selection, because
   // there is nothing to do with one.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent): void {
-      const el = document.activeElement;
-      const typing =
-        el instanceof HTMLElement &&
-        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "j" || e.key === "k") {
-        e.preventDefault();
-        setCursor((at) => {
-          const next = Math.max(0, Math.min(flat.length - 1, at + (e.key === "j" ? 1 : -1)));
-          body.current
-            ?.querySelector<HTMLElement>(`[data-row-index="${next}"]`)
-            ?.scrollIntoView({ block: "nearest" });
-          return next;
-        });
-      }
-      if (e.key === "Enter" && cursor >= 0 && cursor < flat.length) {
+  const step = useCallback(
+    (by: number) =>
+      setCursor((at) => {
+        const next = Math.max(0, Math.min(flat.length - 1, at + by));
+        body.current
+          ?.querySelector<HTMLElement>(`[data-row-index="${next}"]`)
+          ?.scrollIntoView({ block: "nearest" });
+        return next;
+      }),
+    [flat.length],
+  );
+  useKeyChords([
+    { key: "j", run: () => step(1) },
+    { key: "k", run: () => step(-1) },
+    {
+      key: "enter",
+      when: cursor >= 0 && cursor < flat.length && Boolean(onRowActivate),
+      run: (e) => {
         const row = flat[cursor];
-        if (row && onRowActivate) {
-          e.preventDefault();
-          onRowActivate(row, e as unknown as React.KeyboardEvent);
-        }
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [flat, cursor, onRowActivate]);
+        if (row && onRowActivate) onRowActivate(row, e as unknown as React.KeyboardEvent);
+      },
+    },
+  ]);
 
   function headerClick(column: GridColumn<T>): void {
     if (!column.sortValue) return;

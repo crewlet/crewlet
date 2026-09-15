@@ -45,9 +45,10 @@ import { Badge, Segmented, cx } from "~/ui/primitives.tsx";
 import { useAgents, useClient, useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/theme.ts";
+import { useDensity, useTheme, type Density, type ThemeChoice } from "~/lib/prefs.ts";
 import { onTokenRequested } from "~/protocol/index.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
+import { useKeyChords } from "~/lib/keys.ts";
 
 /**
  * What a screen tells the frame about itself.
@@ -199,38 +200,18 @@ export function Shell({ children }: { children: ReactNode }) {
   // auth-gated answer on a screen the socket was never refused for.
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent): void {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      }
-      if (e.key === "Escape") setPaletteOpen(false);
-      const el = document.activeElement;
-      const typing =
-        el instanceof HTMLElement &&
-        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      // A bare "/" opens search the way every list-shaped tool does — but not
-      // while somebody is typing into a field.
-      if (e.key === "/" && !typing) {
-        e.preventDefault();
-        setPaletteOpen(true);
-      }
-      // `[` collapses the rail, which is the one piece of chrome a reader
-      // trades for width on a narrow laptop.
-      if (e.key === "[" && !typing && !e.metaKey && !e.ctrlKey) {
-        const peekOpen = route.query.has("peek");
-        // `[` steps the peek when one is open — the rail is not what the
-        // reader means by it there.
-        if (!peekOpen) {
-          e.preventDefault();
-          toggleRail();
-        }
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [toggleRail, route.query]);
+  useKeyChords([
+    { key: "k", meta: true, run: () => setPaletteOpen((v) => !v), whileTyping: true },
+    // ESCAPE REACHES THE PALETTE FROM ITS OWN INPUT, which is the only field
+    // the reader can be in when they want it closed.
+    { key: "escape", run: () => setPaletteOpen(false), whileTyping: true },
+    // A bare "/" opens search the way every list-shaped tool does.
+    { key: "/", run: () => setPaletteOpen(true) },
+    // `[` collapses the rail, which is the one piece of chrome a reader
+    // trades for width on a narrow laptop — EXCEPT while a peek is open,
+    // where `[` steps it and the rail is not what the reader means.
+    { key: "[", run: toggleRail, when: !route.query.has("peek") },
+  ]);
 
   const goTo = useCallback((path: string[]) => nav.to(path), [nav]);
   useWorkspaceChords(goTo);

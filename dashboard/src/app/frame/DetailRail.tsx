@@ -29,11 +29,12 @@
  * because it is one keystroke away.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useNavigator, useRoute, parseHash, buildHash } from "../router.tsx";
 import { KINDS, parseRef, pathOf, refToken, type ObjectRef } from "./objects.ts";
 import { href } from "../router.tsx";
 import { Button } from "~/ui/primitives.tsx";
+import { useKeyChords } from "~/lib/keys.ts";
 
 const WIDTH_KEY = "crewlet.peek.width";
 const MIN = 360;
@@ -116,29 +117,14 @@ export function DetailRail({
   const [width, setWidth] = useState(storedWidth);
   const dragging = useRef(false);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent): void {
-      const el = document.activeElement;
-      const typing =
-        el instanceof HTMLElement &&
-        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (typing) return;
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-      }
-      if (onStep && e.key === "[") {
-        e.preventDefault();
-        onStep(-1);
-      }
-      if (onStep && e.key === "]") {
-        e.preventDefault();
-        onStep(1);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [close, onStep]);
+  useKeyChords([
+    // ESCAPE CLOSES FROM INSIDE A FIELD TOO: the peek holds inputs, and a
+    // reader who has focused one and wants out means the rail rather than the
+    // field.
+    { key: "escape", run: close, whileTyping: true },
+    { key: "[", run: () => onStep?.(-1), when: Boolean(onStep) },
+    { key: "]", run: () => onStep?.(1), when: Boolean(onStep) },
+  ]);
 
   const startDrag = useCallback(() => {
     dragging.current = true;

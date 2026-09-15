@@ -13,11 +13,12 @@
  * trade for a preference.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { RAIL, type Workspace } from "../nav.ts";
 import { href } from "../router.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { cx } from "~/ui/primitives.tsx";
+import { useKeyChords } from "~/lib/keys.ts";
 
 const COLLAPSE_KEY = "crewlet.rail.collapsed";
 
@@ -137,37 +138,5 @@ export function AppRail({
  * so a stray `g` does not swallow the next key the reader meant for a field.
  */
 export function useWorkspaceChords(go: (path: string[]) => void): void {
-  useEffect(() => {
-    let armed = false;
-    let timer: number | undefined;
-    function disarm(): void {
-      armed = false;
-      if (timer) window.clearTimeout(timer);
-    }
-    function onKey(e: KeyboardEvent): void {
-      const el = document.activeElement;
-      const typing =
-        el instanceof HTMLElement &&
-        (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (armed) {
-        const row = RAIL.find((r) => r.chord === e.key.toLowerCase());
-        disarm();
-        if (row) {
-          e.preventDefault();
-          go(row.path);
-        }
-        return;
-      }
-      if (e.key.toLowerCase() === "g") {
-        armed = true;
-        timer = window.setTimeout(disarm, 1_000);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      disarm();
-    };
-  }, [go]);
+  useKeyChords(RAIL.map((row) => ({ after: "g", key: row.chord, run: () => go(row.path) })));
 }
