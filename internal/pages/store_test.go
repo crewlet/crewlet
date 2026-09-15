@@ -278,7 +278,7 @@ func TestEnsuringAContainerIsIdempotent(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	for range 3 {
-		if _, err := r.store.EnsureContainer(t.Context(), "ENG", "Engineering",
+		if _, _, err := r.store.EnsureContainer(t.Context(), "ENG", "Engineering",
 			"how we build"); err != nil {
 			t.Fatalf("ensure: %v", err)
 		}
