@@ -22,7 +22,7 @@ import { href } from "../router.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { Button, cx } from "~/ui/primitives.tsx";
 import { PAGE_ACTIONS_SLOT } from "./PageActions.tsx";
-import { MaxStars, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
+import { MaxStars, starredIn, useStarred, useToggleStar, type Star } from "~/lib/starred.ts";
 
 export interface Crumb {
   label: string;
@@ -112,8 +112,7 @@ export function StarPage({ path, label, workspace }: Omit<Star, "at">) {
   const stars = useStarred();
   const toggle = useToggleStar();
   const [said, setSaid] = useState("");
-  const key = path.join("/");
-  const kept = stars.some((s) => s.path.join("/") === key);
+  const kept = starredIn(stars, path);
   // A PAGE WITH NO IDENTITY CANNOT BE KEPT. The inbox and each workspace's
   // landing page are one click from the rail, and a star on one is a shortcut
   // to somewhere the reader is never more than one click from.

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MaxStars, forgetStars, isStarred, resetForTest, toggleStar } from "./starred.ts";
+import { MaxStars, isStarred, resetForTest, starredIn, toggleStar } from "./starred.ts";
 
 function stored(): { path: string[]; label: string }[] {
   const raw = localStorage.getItem("crewlet_starred");
@@ -58,10 +58,14 @@ describe("keeping a shortcut", () => {
     expect(stored()).toEqual([]);
   });
 
-  it("forgets everything on request", () => {
+  it("answers over a list the caller already holds, the same way", () => {
+    // `StarPage` subscribes to the list so its button fills the moment a star
+    // is kept; `isStarred` reads storage. They must not be able to disagree,
+    // which is why one is written in terms of the other.
     star("ENG-1", "work", "ENG-1");
-    forgetStars();
-    expect(stored()).toEqual([]);
+    const held = [{ path: ["work", "ENG-1"], label: "ENG-1", workspace: "work", at: 1 }];
+    expect(starredIn(held, ["work", "ENG-1"])).toBe(isStarred(["work", "ENG-1"]));
+    expect(starredIn(held, ["work", "ENG-2"])).toBe(isStarred(["work", "ENG-2"]));
   });
 });
 

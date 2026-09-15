@@ -92,10 +92,25 @@ function keyOf(path: string[]): string {
   return path.join("/");
 }
 
-/** Whether this path is starred. */
-export function isStarred(path: string[]): boolean {
+/**
+ * Whether this path is among these stars.
+ *
+ * THE PREDICATE TAKES THE LIST because the only component that asks already
+ * holds one: `StarPage` subscribes with [useStarred] so the button fills the
+ * moment the star is kept, and a predicate reading storage underneath it
+ * would answer from the same rows without subscribing to them. It had its own
+ * `stars.some(s => s.path.join("/") === key)` for exactly that reason — one
+ * rule written twice, and the copies agree only until somebody decides that a
+ * path compare should be case-insensitive.
+ */
+export function starredIn(stars: readonly Star[], path: string[]): boolean {
   const key = keyOf(path);
-  return read().some((s) => keyOf(s.path) === key);
+  return stars.some((s) => keyOf(s.path) === key);
+}
+
+/** Whether this path is starred, read straight from storage. */
+export function isStarred(path: string[]): boolean {
+  return starredIn(read(), path);
 }
 
 /**
@@ -128,11 +143,6 @@ export function toggleStar(entry: Omit<Star, "at">): "starred" | "unstarred" | "
   return "starred";
 }
 
-/** Drop everything. */
-export function forgetStars(): void {
-  write([]);
-}
-
 function subscribe(fn: () => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -148,7 +158,23 @@ export function useToggleStar(): (entry: Omit<Star, "at">) => "starred" | "unsta
   return useCallback(toggleStar, []);
 }
 
-/** Test seam: drop the in-process cache so a fresh read hits storage. */
+/**
+ * Test seam: drop the in-process cache so a fresh read hits storage.
+ *
+ * IT DOES NOT CLEAR STORAGE, which is the whole point of having it: a test
+ * that seeds `crewlet_starred` with what a previous build wrote calls this to
+ * make the module read that, and a reset that also emptied the key would
+ * delete the fixture it was called to load. A clean slate is
+ * `localStorage.clear()` beside it — one line, in the caller's own
+ * `beforeEach`, where the rest of that caller's storage is cleared too.
+ *
+ * There used to be a `forgetStars()` here for the clean-slate half, exported
+ * from the product module and called by nothing but tests — both of which
+ * already cleared storage themselves. Nothing in the product ever wanted it:
+ * the palette can clear RECENTS because recents accumulate by accident, and a
+ * star is a decision, so the only thing that drops one is the reader
+ * unstarring it.
+ */
 export function resetForTest(): void {
   cache = null;
 }

@@ -16,7 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { DESTINATIONS } from "./nav.ts";
 import { buildHash } from "./router.tsx";
-import { forgetStars, resetForTest as resetStarsForTest } from "~/lib/starred.ts";
+import { resetForTest as resetStarsForTest } from "~/lib/starred.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -181,7 +181,7 @@ describe("live state reaches the screen", () => {
   // comment promised "Copy link, star, open" and only Copy link existed, so
   // every workspace sidebar's Starred section was empty by construction.
   test("keeping a page puts it in this workspace's sidebar", async () => {
-    forgetStars();
+    localStorage.clear();
     resetStarsForTest();
     location.hash = "#/company/people/ceo";
     const { store, view } = mount();
