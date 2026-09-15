@@ -87,13 +87,6 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if coveredUntil.IsZero() {
-		// An unbounded top edge is "up to now", and the axis must run to
-		// now rather than to the newest record — a company that has been
-		// quiet for six hours has six empty buckets, not a chart that
-		// stops when the spending did.
-		coveredUntil = s.clock()
-	}
 	return tokens.Bucketed(records, tokens.SeriesOptions{
 		Group: group, Interval: interval,
 		Since: covered, Until: coveredUntil,

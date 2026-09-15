@@ -646,12 +646,42 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		AgentRole:   p.String("agent_role"),
 		RecentTurns: Clamp(p.Int("recent_turns", 0), tokens.DefaultRecentTurns, tokens.MaxRecentTurns),
 	}
+	// THE WINDOW AS TWO INSTANTS, which `since_days` cannot name: a
+	// time-range control produces two edges and they need not end at now.
+	// The same pair the series takes, and the same refusal, so a reader who
+	// scrubs to a window sees the chart and the figures above it move
+	// together rather than one of them staying anchored to this afternoon.
+	since, err := instantParam(p, "since")
+	if err != nil {
+		return nil, err
+	}
+	until, err := instantParam(p, "until")
+	if err != nil {
+		return nil, err
+	}
+	if !since.IsZero() && !until.IsZero() && !until.After(since) {
+		return nil, fmt.Errorf("%w: until (%s) is not after since (%s) — the "+
+			"window is half-open, so an empty one names no rows at all",
+			ErrBadParams, until.Format(time.RFC3339), since.Format(time.RFC3339))
+	}
 	live := livestate.LiveSpendWindowDays()
 	days := p.Int("since_days", live)
+	q := store.PhaseTokenQuery{
+		SinceDays: days,
+		Since:     since,
+		Until:     until,
+		AgentRole: opts.AgentRole,
+	}
+	// LABELLED WITH WHAT THE STORE WILL ACTUALLY COVER, never with what was
+	// asked for: `since` is floored at the retention window, so a request
+	// for a year answered over thirty days and headed "a year" is a lie
+	// about the numbers beside it.
+	opts.Since, opts.Until = q.Window(time.Now())
 
-	// The live window, unfiltered, is the one the projection can answer.
-	if days == live && opts.AgentRole == "" {
-		opts.SinceDays = live
+	// The live window, unfiltered, is the one the projection can answer —
+	// and only when the caller named no instants of their own, since the
+	// projection holds one rolling window and cannot look behind it.
+	if since.IsZero() && until.IsZero() && days == live && opts.AgentRole == "" {
 		return tokens.Aggregate(s.State.SpendRecords(), opts), nil
 	}
 	if s.Events == nil {
@@ -659,19 +689,12 @@ func (s Sources) tokens(ctx context.Context, p Params) (any, error) {
 		// see is an EMPTY rollup labelled with the window asked for, not
 		// the live one relabelled — which would put a week's heading over
 		// an hour's numbers.
-		opts.SinceDays = days
 		return tokens.Aggregate(nil, opts), nil
 	}
-	records, err := s.Events.PhaseTokens(ctx, store.PhaseTokenQuery{
-		SinceDays: days, AgentRole: opts.AgentRole,
-	})
+	records, err := s.Events.PhaseTokens(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	// Reported as the store CLAMPED it, not as asked: a request for a year
-	// answered over thirty days and labelled a year is a lie about the
-	// numbers beside it.
-	opts.SinceDays = Clamp(days, store.DefaultPhaseTokenDays, store.MaxPhaseTokenDays)
 	return tokens.Aggregate(records, opts), nil
 }
 

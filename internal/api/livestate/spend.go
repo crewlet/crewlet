@@ -113,12 +113,15 @@ func (s *LiveState) SpendRecords() []tokens.Record {
 	return out
 }
 
-// LiveSpendWindowDays is the live window expressed the way the dashboard
-// labels it.
+// LiveSpendWindowDays is the live window expressed as the `since_days` a
+// caller would ask for to get exactly it.
+//
+// NOT A LABEL any more — a rollup names its window with two instants — but
+// still the comparison that decides whether a request can be answered from the
+// projection in memory rather than by a scan of the event store.
 //
 // At LEAST one, because the window is measured in hours and a sub-day one
-// would round to zero — and "spend over the last 0 days" is a label that makes
-// a real number look like a bug.
+// would round to zero — and a fast path keyed on 0 would never be taken.
 func LiveSpendWindowDays() int {
 	days := int(LiveSpendWindow / (24 * time.Hour))
 	if days < 1 {

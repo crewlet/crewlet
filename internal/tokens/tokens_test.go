@@ -3,6 +3,7 @@ package tokens_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -22,7 +23,7 @@ func TestOneTurnFoldsIntoEveryDimension(t *testing.T) {
 		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
 		rec("CEO", "execute", "sonnet", "t1", "2026-06-14T12:00:05Z", 90, 30),
 		rec("CEO", "review", "haiku", "t1", "2026-06-14T12:00:09Z", 40, 10),
-	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, SinceDays: 1})
+	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until})
 
 	if got.Totals.TotalTokens != 250 || got.Totals.Calls != 3 {
 		t.Errorf("totals = %+v", got.Totals)
@@ -214,11 +215,18 @@ func TestTurnOrderIsByInstantNotByBytes(t *testing.T) {
 	}
 }
 
+// The window every case here reports, fixed so a rollup's label is a value a
+// test can compare rather than whatever the clock said.
+var (
+	since = time.Date(2026, 6, 14, 0, 0, 0, 0, time.UTC)
+	until = time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
+)
+
 func TestAnEmptyRollupMarshalsToArraysNotNulls(t *testing.T) {
 	t.Parallel()
 	// The client does `d.by_phase.length`, so a null throws in the browser
 	// rather than rendering an empty table.
-	raw, err := json.Marshal(tokens.Aggregate(nil, tokens.Options{SinceDays: 7}))
+	raw, err := json.Marshal(tokens.Aggregate(nil, tokens.Options{Since: since, Until: until}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -231,8 +239,12 @@ func TestAnEmptyRollupMarshalsToArraysNotNulls(t *testing.T) {
 			t.Errorf("%s marshalled as %T, want an array", key, body[key])
 		}
 	}
-	if body["since_days"] != float64(7) {
-		t.Errorf("since_days = %v", body["since_days"])
+	// THE WINDOW IS TWO INSTANTS, so an empty rollup still says what it is
+	// empty OF — a figure with no window beside it is unreadable, and "0
+	// days" was what the day count could say about a window that ended
+	// yesterday.
+	if body["since"] != "2026-06-14T00:00:00Z" || body["until"] != "2026-06-15T00:00:00Z" {
+		t.Errorf("window = %v .. %v", body["since"], body["until"])
 	}
 }
 
@@ -243,14 +255,14 @@ func TestTheWireKeysAreTheOnesTheClientReads(t *testing.T) {
 	// a renamed field here is a blank panel there, with no error anywhere.
 	raw, _ := json.Marshal(tokens.Aggregate([]tokens.Record{
 		rec("CEO", "plan", "sonnet", "t1", "2026-06-14T12:00:00Z", 60, 20),
-	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, SinceDays: 1}))
+	}, tokens.Options{Handles: map[string]string{"CEO": "ceo"}, Since: since, Until: until}))
 
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, key := range []string{
-		"since_days", "agent_role", "totals", "by_phase", "by_model",
+		"since", "until", "agent_role", "totals", "by_phase", "by_model",
 		"by_worker", "by_agent", "by_turn", "aggregated_through",
 	} {
 		if _, ok := body[key]; !ok {

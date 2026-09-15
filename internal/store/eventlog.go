@@ -905,6 +905,15 @@ type PhaseTokenQuery struct {
 // window that was asked for, over rows from the window that was served, is a
 // lie about the numbers beside it — and the clamp lives here, where the floor
 // is defined, rather than being re-derived at every surface.
+//
+// TOTAL IN BOTH EDGES: an unbounded top edge means "up to now", and what this
+// reports is now rather than the zero time. It answered the zero once and
+// every caller wrote the same three lines back — an axis must run to now
+// rather than to the newest record, so a company quiet for six hours has six
+// empty buckets rather than a chart that stops where the spending did, and a
+// rollup must say which instant it counted through. Two copies of one rule is
+// how the chart and the figures above it come to disagree about where a
+// window ends.
 func (q PhaseTokenQuery) Window(now time.Time) (since, until time.Time) {
 	floor := now.Add(-time.Duration(MaxPhaseTokenDays) * 24 * time.Hour)
 	since = q.Since
@@ -919,10 +928,13 @@ func (q PhaseTokenQuery) Window(now time.Time) (since, until time.Time) {
 		since = floor
 	}
 	until = q.Until
+	if until.IsZero() {
+		until = now
+	}
 	// An inverted window is a caller error that must not read as a quiet
 	// company: it collapses to an empty one at the later edge, so the
 	// answer covers nothing and SAYS it covers nothing.
-	if !until.IsZero() && until.Before(since) {
+	if until.Before(since) {
 		since = until
 	}
 	return since.UTC(), until.UTC()
@@ -1130,15 +1142,15 @@ const MaxPhasePage = 60
 func (l *EventLog) PhaseTokens(ctx context.Context, q PhaseTokenQuery) ([]tokens.Record, error) {
 	since, until := q.Window(now())
 
-	sql := phaseTokenSQL
-	args := []any{EncodeTime(since)}
-	if !until.IsZero() {
-		// EXCLUSIVE, matching the half-open window the bucketing folds
-		// over, so a record on the boundary belongs to exactly one of two
-		// adjacent windows.
-		sql += " AND event_time < ?"
-		args = append(args, EncodeTime(until))
-	}
+	// BOTH EDGES, ALWAYS, and the top one EXCLUSIVE — matching the
+	// half-open window the bucketing folds over, so a record on the
+	// boundary belongs to exactly one of two adjacent windows. Applied even
+	// for a caller that named no top edge, because [PhaseTokenQuery.Window]
+	// reports that as now and the rows have to be the rows the label
+	// claims: a phase stamped in the future by a skewed clock inside a
+	// window headed "counted through now" is a number with no window.
+	sql := phaseTokenSQL + " AND event_time < ?"
+	args := []any{EncodeTime(since), EncodeTime(until)}
 	if q.AgentRole != "" {
 		sql += " AND agent_role = ?"
 		args = append(args, q.AgentRole)

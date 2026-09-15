@@ -113,8 +113,13 @@ func TestAWindowBelowTheFloorIsRaisedAndSaidSo(t *testing.T) {
 	if !since.Equal(want) {
 		t.Errorf("since = %s, want the floor at %s", since, want)
 	}
-	if !until.IsZero() {
-		t.Errorf("until = %s, want unbounded", until)
+	// AN UNBOUNDED TOP EDGE IS REPORTED AS NOW, never as the zero time:
+	// that is the instant the query actually covers through, and every
+	// caller that got the zero wrote the same fixup back — which is how a
+	// chart and the figures above it came to disagree about where a window
+	// ends.
+	if !until.Equal(now) {
+		t.Errorf("until = %s, want now (%s)", until, now)
 	}
 
 	// A DAY COUNT STILL WORKS, and past the ceiling lands on the same floor.

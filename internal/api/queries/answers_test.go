@@ -212,7 +212,7 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	r := registryOver(t, queries.Sources{State: state})
 
 	// THE ROLLUP, not the records. store.js reads `.totals` off this and
-	// the spend view reads `.since_days`; a list of raw records fails the
+	// the spend view reads `.since`/`.until`; a list of raw records fails the
 	// first check and is discarded, which left the whole Spend room blank
 	// with the numbers sitting in memory the entire time.
 	got := askRaw(t, r, "tokens", nil).(tokens.Rollup)
@@ -225,8 +225,9 @@ func TestTokensAnswersTheLiveWindow(t *testing.T) {
 	// The window is reported, not assumed: a reader comparing this against
 	// a different window on the same screen has to be able to tell them
 	// apart, and a number with the wrong label is worse than no label.
-	if got.SinceDays != livestate.LiveSpendWindowDays() {
-		t.Errorf("since_days = %d, want the live window", got.SinceDays)
+	if width := windowWidth(t, got); width != livestate.LiveSpendWindow {
+		t.Errorf("window = %s .. %s (%s), want the live window %s",
+			got.Since, got.Until, width, livestate.LiveSpendWindow)
 	}
 	// The high-water mark the client folds live events onto. Without it an
 	// event that is both in this baseline and redelivered on the stream is
@@ -269,8 +270,9 @@ func TestTokensOverAnotherWindowReadsTheStore(t *testing.T) {
 	if got.Totals.TotalTokens != 36 || got.Totals.Calls != 3 {
 		t.Errorf("totals = %+v", got.Totals)
 	}
-	if got.SinceDays != 3 {
-		t.Errorf("since_days = %d, want the window asked for", got.SinceDays)
+	if width := windowWidth(t, got); width != 3*24*time.Hour {
+		t.Errorf("window = %s .. %s (%s), want the three days asked for",
+			got.Since, got.Until, width)
 	}
 	// Biggest first, and every dimension present.
 	if len(got.ByPhase) != 2 || got.ByPhase[0].Phase != "execute" {
@@ -318,8 +320,8 @@ func TestANodeWithNoEventStoreLabelsTheWindowItWasAsked(t *testing.T) {
 	// what a reader is looking at.
 	r := registryOver(t, queries.Sources{State: livestate.New()})
 	got := askRaw(t, r, "tokens", map[string]any{"since_days": 14}).(tokens.Rollup)
-	if got.SinceDays != 14 || got.Totals.Calls != 0 {
-		t.Errorf("rollup = %+v", got)
+	if width := windowWidth(t, got); width != 14*24*time.Hour || got.Totals.Calls != 0 {
+		t.Errorf("rollup = %+v (window %s)", got, width)
 	}
 	// Never nil: the client does `d.by_phase.length`, so a null throws in
 	// the browser rather than rendering an empty table.
@@ -923,5 +925,72 @@ func TestASeatWithNoFinishedPhasesAnswersRatherThanPanics(t *testing.T) {
 	// there, which is what makes a client stop paging.
 	if got["next"] != "" {
 		t.Errorf("next = %#v on an empty page, want the empty string", got["next"])
+	}
+}
+
+// windowWidth is how long a rollup says it covers.
+func windowWidth(t *testing.T, got tokens.Rollup) time.Duration {
+	t.Helper()
+	since, err := time.Parse(time.RFC3339, got.Since)
+	if err != nil {
+		t.Fatalf("since = %q: %v", got.Since, err)
+	}
+	until, err := time.Parse(time.RFC3339, got.Until)
+	if err != nil {
+		t.Fatalf("until = %q: %v", got.Until, err)
+	}
+	return until.Sub(since)
+}
+
+func TestTokensTakeTheSameTwoInstantsTheSeriesDoes(t *testing.T) {
+	t.Parallel()
+	// THE WHOLE POINT OF THE WINDOW BEING INSTANTS. A time-range control
+	// produces two edges, and a reader who names one that ended yesterday
+	// gets a chart over it and figures above the chart over this afternoon
+	// — two facts on one screen that cannot be compared — unless the
+	// breakdown takes the same pair.
+	db := openStore(t)
+	log := db.Events()
+	at := time.Now().UTC().Add(-5 * 24 * time.Hour)
+	write := func(id string, when time.Time, total int) {
+		payload, _ := json.Marshal(map[string]any{
+			"role": "Lead", "phase": "plan", "total_tokens": total, "turn_id": "tn-1",
+		})
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id, Type: "agent_phase_completed", Time: when,
+			Category: "system", Payload: payload,
+		}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	write("old", at.Add(-48*time.Hour), 100)
+	write("in", at.Add(time.Hour), 7)
+	write("new", time.Now().UTC(), 500)
+
+	r := registryOver(t, queries.Sources{State: livestate.New(), Events: log})
+	got := askRaw(t, r, "tokens", map[string]any{
+		"since": at.Format(time.RFC3339),
+		"until": at.Add(24 * time.Hour).Format(time.RFC3339),
+	}).(tokens.Rollup)
+
+	if got.Totals.TotalTokens != 7 {
+		t.Errorf("totals = %+v, want only the record inside the named window", got.Totals)
+	}
+	if width := windowWidth(t, got); width != 24*time.Hour {
+		t.Errorf("window = %s .. %s (%s), want the day that was named",
+			got.Since, got.Until, width)
+	}
+}
+
+func TestATokensWindowThatEndsWhereItBeginsIsRefused(t *testing.T) {
+	t.Parallel()
+	// Half-open, so an empty window names no rows at all. The same refusal
+	// the events and series questions give, in the same words, because a
+	// reader scrubbing a range hits all three.
+	r := registryOver(t, queries.Sources{State: livestate.New()})
+	at := time.Now().UTC().Format(time.RFC3339)
+	_, err := r.Answer(t.Context(), "tokens", map[string]any{"since": at, "until": at}, "")
+	if !errors.Is(err, queries.ErrBadParams) {
+		t.Fatalf("err = %v, want ErrBadParams", err)
 	}
 }
