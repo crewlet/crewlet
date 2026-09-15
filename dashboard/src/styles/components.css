@@ -39,11 +39,18 @@
 .panel-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border-subtle);
   min-height: var(--row-h-lg);
 }
+/* THE TITLE NEVER GIVES WAY FIRST. Both children carry `truncate`, and with
+   the default `flex: 0 1 auto` on each they shrank together — so a panel with
+   a long subtitle in the peek rail rendered its heading as "S…" beside a
+   readable sentence explaining a panel nobody could name. A subtitle is the
+   expendable one by construction: it restates in prose what the title says in
+   a word. */
 .panel-head > .panel-title {
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
@@ -53,10 +60,16 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  flex: 0 0 auto;
 }
+/* The basis is what makes the head WRAP rather than crush: at `auto` a long
+   subtitle claims its full text width and pushes the title out, and at 0 it
+   would never wrap at all. See `.int-row-identity`, which is the same rule. */
 .panel-head .panel-sub {
   font-size: var(--fs-2xs);
   color: var(--text-muted);
+  flex: 1 1 12rem;
+  min-width: 0;
 }
 .panel-body {
   padding: var(--space-4);
