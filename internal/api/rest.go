@@ -88,6 +88,11 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/work/people/{handle}", what: "work_person", path: map[string]string{"handle": "handle"}},
 	{method: "GET", pattern: "/work/{id}", what: "work_item", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/work", what: "work_items"},
+	// The page ACTIVITY and one REVISION's body. Both above /pages/{id},
+	// for the reason the work routes give: a literal segment beats the
+	// wildcard, so neither is read as a page whose id is "activity".
+	{method: "GET", pattern: "/pages/activity", what: "page_activity"},
+	{method: "GET", pattern: "/pages/{id}/revisions/{version}", what: "page_revision", path: map[string]string{"id": "page", "version": "version"}},
 	{method: "GET", pattern: "/pages/{id}", what: "page", path: map[string]string{"id": "id"}},
 	{method: "GET", pattern: "/pages", what: "pages"},
 	{method: "GET", pattern: "/containers", what: "containers"},
