@@ -21,6 +21,7 @@ import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState, recheck } from "./testState.ts";
+import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -32,8 +33,7 @@ function open(state: BuilderState, key: string, options: HarnessOptions = {}) {
 
 const deleteButton = () => screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement;
 /** The fixture's Datadog fallback is SRE, so a removal that takes SRE needs one. */
-const replaceFallback = (handle: string) =>
-  fireEvent.change(screen.getByLabelText("Datadog fallback"), { target: { value: handle } });
+const replaceFallback = (name: string) => pick(screen.getByLabelText("Datadog fallback"), name);
 
 describe("a unit", () => {
   test("counts what goes with it, lists the references it clears, and removes it on Delete", () => {
@@ -42,7 +42,7 @@ describe("a unit", () => {
       screen.getByText(/Deletes the unit Engineering with 1 unit and 3 seats inside it./),
     ).toBeDefined();
     expect(screen.getByText("CEO no longer manages Engineering.")).toBeDefined();
-    replaceFallback("ceo");
+    replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(view.state().log.ops[0]).toMatchObject({ type: "remove", target: "unit:Engineering" });
     expect(locate(view.state().draft, "unit:Engineering")).toBeUndefined();
@@ -59,7 +59,7 @@ describe("a unit", () => {
     expect(
       screen.getByText("Designer loses its unit reference to Platform and stays at the top level."),
     ).toBeDefined();
-    replaceFallback("ceo");
+    replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(locate(view.state().draft, "seat:designer")).toBeDefined();
     expect(getPath(toDocument(view.state().draft).document, ["roles"]) !== undefined).toBe(true);
@@ -68,7 +68,7 @@ describe("a unit", () => {
     const second = open(state, "unit:Platform");
     fireEvent.click(screen.getByRole("radio", { name: "Delete them too" }));
     expect(screen.getByText(/Deletes the unit Platform with 2 seats inside it./)).toBeDefined();
-    replaceFallback("ceo");
+    replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(locate(second.state().draft, "seat:designer")).toBeUndefined();
   });
@@ -86,7 +86,7 @@ describe("outside the chart", () => {
     const view = open(keyedState(fixtureCompany()), "seat:sre");
     expect(deleteButton().disabled).toBe(true);
     expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
-    fireEvent.change(screen.getByLabelText("Datadog fallback"), { target: { value: "dev" } });
+    replaceFallback("Dev");
     expect(deleteButton().disabled).toBe(false);
     fireEvent.click(deleteButton());
     expect(
@@ -119,12 +119,12 @@ describe("outside the chart", () => {
   // a fallback naming a seat this removal deletes, which the engine refuses.
   test("a replacement the removal then takes is no longer chosen", () => {
     const view = open(keyedState(fixtureCompany()), "unit:Platform");
-    replaceFallback("designer");
+    replaceFallback("Designer");
     expect(deleteButton().disabled).toBe(false);
     fireEvent.click(screen.getByRole("radio", { name: "Delete them too" }));
     expect((screen.getByLabelText("Datadog fallback") as HTMLSelectElement).value).toBe("");
     expect(deleteButton().disabled).toBe(true);
-    replaceFallback("ceo");
+    replaceFallback("CEO");
     fireEvent.click(deleteButton());
     expect(
       getPath(toDocument(view.state().draft).document, ["integrations", "datadog", "route_to"]),

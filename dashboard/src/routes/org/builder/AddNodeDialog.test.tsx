@@ -17,6 +17,7 @@ import type { AddKind } from "./BuilderContext.tsx";
 import type { BuilderState } from "./model/reducer.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
+import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -76,7 +77,7 @@ test("a unit is added with its type at the company root; its names are checked a
   fireEvent.change(nameBox(), { target: { value: "Sales" } });
   expect(screen.getByRole("button", { name: "Use Sales 2" })).toBeDefined();
   fireEvent.change(nameBox(), { target: { value: "Legal" } });
-  fireEvent.change(screen.getByLabelText("Type"), { target: { value: "department" } });
+  pick(screen.getByLabelText("Type"), "Department");
   fireEvent.click(screen.getByRole("button", { name: "Add unit" }));
   expect(view.state().log.ops[0]).toMatchObject({
     type: "addUnit",
@@ -96,7 +97,7 @@ test("choosing another kind moves an untouched default name along, and a human s
   const view = open(keyedState(fixtureCompany()), "unit:Engineering");
   fireEvent.click(screen.getByRole("radio", { name: "Human seat" }));
   expect(nameBox().value).toBe("New human seat");
-  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "pat" } });
   fireEvent.click(screen.getByRole("button", { name: "Add human seat" }));
   expect(view.state().log.ops[0]).toMatchObject({

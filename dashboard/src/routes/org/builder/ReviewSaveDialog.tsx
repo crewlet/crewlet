@@ -21,7 +21,7 @@
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
-import { Field } from "~/ui/Field.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
 import type { PlacedProblem } from "./model/problems.ts";
@@ -349,7 +349,7 @@ export function ReviewSaveDialog({
         />
       ))}
 
-      <Field
+      <ConfigField
         label="Audit summary"
         kind="multiline"
         rows={2}

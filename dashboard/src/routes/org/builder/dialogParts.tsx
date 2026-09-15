@@ -10,9 +10,9 @@
 import { createContext, useContext, useId, useState, type ReactNode } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
-import { Field, type FieldChoice } from "~/ui/Field.tsx";
+import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 
-import { Problems } from "~/ui/Problems.tsx";
+import { Problems } from "~/components/Problems.tsx";
 import type { Acknowledgement } from "./model/changes.ts";
 import type { Segment } from "./model/document.ts";
 import { CONTACT_IDENTITIES } from "./model/templates.ts";
@@ -203,7 +203,7 @@ export function UnitTypeField({
   ];
   return (
     <>
-      <Field
+      <ConfigField
         label="Type"
         kind="choice"
         choices={choices}
@@ -222,7 +222,7 @@ export function UnitTypeField({
         disabled={disabled}
       />
       {custom && (
-        <Field
+        <ConfigField
           label="Custom type"
           kind="id"
           value={value}
@@ -252,14 +252,14 @@ export function ContactField({
   const label = CONTACT_IDENTITIES.find((c) => c.key === identity)?.label ?? identity;
   return (
     <div className="builder-pair">
-      <Field
+      <ConfigField
         label="Contact"
         kind="choice"
         choices={CONTACT_IDENTITIES.map((c) => ({ value: c.key, label: c.label }))}
         value={identity}
         onChange={(next) => onIdentity(next as HumanContactKey)}
       />
-      <Field label={label} kind="id" value={value} onChange={onValue} error={error} />
+      <ConfigField label={label} kind="id" value={value} onChange={onValue} error={error} />
     </div>
   );
 }

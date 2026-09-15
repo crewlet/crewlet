@@ -23,7 +23,7 @@
 
 import { useState } from "react";
 import { plural } from "~/lib/format.ts";
-import { Field, type FieldChoice } from "~/ui/Field.tsx";
+import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -158,7 +158,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
     >
       {api.readOnly && <ReadOnlyNote />}
       <Refusal message={refusal} />
-      <Field
+      <ConfigField
         label="Move to"
         kind="choice"
         choices={choices}

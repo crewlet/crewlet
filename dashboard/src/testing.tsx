@@ -16,10 +16,24 @@
  * `routes/` or `components/` reaches for it.
  */
 
-import { createElement } from "react";
+import { fireEvent, screen } from "@testing-library/react";
+import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { act } from "react";
 import type { ComponentProps, ElementType } from "react";
+
+/**
+ * Pick an option, which is how every choice in this product is made.
+ *
+ * Every dropdown is the design system's listbox rather than the platform's
+ * own, so a choice is a press on the trigger and a press on a row, not a
+ * `change` event carrying a value. The row is named by its LABEL, because
+ * that is the only thing a reader ever sees; a suite that reached for the
+ * stored value was reaching past the control.
+ */
+export function pick(control: HTMLElement, option: string | RegExp): void {
+  fireEvent.click(control);
+  fireEvent.mouseDown(screen.getByRole("option", { name: option }));
+}
 
 /** The class list uilet draws one component with, for these props. */
 export function drawnClasses<T extends ElementType>(

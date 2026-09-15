@@ -23,7 +23,7 @@
  */
 
 import { useState } from "react";
-import { Field } from "~/ui/Field.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { ErrorGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Modal } from "@crewlethq/ui";
@@ -100,7 +100,7 @@ export function SecretDialog({
           Every node reads the same row, so nothing has to be copied anywhere.
         </p>
       ) : (
-        <Field
+        <ConfigField
           label="Name"
           value={name}
           onChange={setName}
@@ -110,7 +110,7 @@ export function SecretDialog({
         />
       )}
 
-      <Field
+      <ConfigField
         label={editing ? "New value" : "Value"}
         kind="secret"
         value={value}

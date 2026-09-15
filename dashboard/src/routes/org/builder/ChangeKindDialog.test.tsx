@@ -19,6 +19,7 @@ import { fixtureCompany } from "./model/testkit.ts";
 import { toDocument } from "./model/document.ts";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
+import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -105,7 +106,7 @@ test("what stays at the vendors and in the secret store is named, and nothing fo
 test("a human seat is not made without a contact identity, and the change records one operation", () => {
   const view = open(keyedState(withFields()), "seat:dev");
   expect(toHuman().disabled).toBe(true);
-  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "dev" } });
   expect(toHuman().disabled).toBe(false);
   fireEvent.click(toHuman());
@@ -127,11 +128,11 @@ test("a human seat is not made without a contact identity, and the change record
 
 test("the Datadog fallback cannot become a human seat without a replacement", () => {
   const view = open(keyedState(fixtureCompany()), "seat:sre");
-  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "sre" } });
   expect(toHuman().disabled).toBe(true);
   expect(screen.getByText(/SRE is the Datadog fallback/)).toBeDefined();
-  fireEvent.change(screen.getByLabelText("Datadog fallback"), { target: { value: "dev" } });
+  pick(screen.getByLabelText("Datadog fallback"), "Dev");
   fireEvent.click(toHuman());
   expect(
     getPath(toDocument(view.state().draft).document, ["integrations", "datadog", "route_to"]),
@@ -145,7 +146,7 @@ test("a seat named by a switched-off Datadog becomes human with no replacement",
   off.integrations = { ...off.integrations, datadog: { enabled: false, route_to: "sre" } };
   const view = open(keyedState(off), "seat:sre");
   expect(screen.queryByLabelText("Datadog fallback")).toBeNull();
-  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "sre" } });
   fireEvent.click(toHuman());
   expect(view.state().log.ops[0]).toMatchObject({ type: "changeKind", target: "seat:sre" });
@@ -167,7 +168,7 @@ test("the company's only agent seat is told why it cannot become human, not offe
       /It is the company's only agent seat, so add another before changing this one, or disconnect Datadog/,
     ),
   ).toBeDefined();
-  fireEvent.change(screen.getByLabelText("Contact"), { target: { value: "github_login" } });
+  pick(screen.getByLabelText("Contact"), "GitHub login");
   fireEvent.change(screen.getByLabelText("GitHub login"), { target: { value: "only" } });
   expect(toHuman().disabled).toBe(true);
 });

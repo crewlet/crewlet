@@ -16,7 +16,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { createRef } from "react";
+import { createRef, useState } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   AddGlyph,
@@ -38,7 +38,7 @@ import {
   Tag,
   tabId,
 } from "@crewlethq/ui";
-import { Checkbox, Kbd, keyGlyph } from "@crewlethq/ui";
+import { Announcer, Checkbox, Kbd, ListInput, TagsInput, keyGlyph } from "@crewlethq/ui";
 import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
@@ -485,4 +485,56 @@ test("a shortcut's caps are hidden, and one sentence is read instead", () => {
     "Z",
   ]);
   expect(container.textContent).toContain("Command plus Shift plus Z");
+});
+
+// A seat's responsibilities, a unit's goals and a company's policies are
+// ORDERED lists of sentences, and the order is meaning: the first policy is
+// read first. Each item is its own labelled control, so moving one is a press
+// rather than deleting and retyping it.
+test("an ordered list is a named group whose items are labelled controls", () => {
+  function Goals() {
+    const [value, setValue] = useState(["Ship the beta", "Hire two engineers"]);
+    return <ListInput label="Goals" itemName="goal" value={value} onChange={setValue} />;
+  }
+  render(<Goals />);
+  expect(screen.getByRole("group", { name: "Goals" })).toBeDefined();
+  const second = screen.getByLabelText("Goal 2 of 2") as HTMLInputElement;
+  expect(second.value).toBe("Hire two engineers");
+
+  fireEvent.click(screen.getByRole("button", { name: "Move goal 2 of 2 up" }));
+  expect((screen.getByLabelText("Goal 1 of 2") as HTMLInputElement).value).toBe(
+    "Hire two engineers",
+  );
+});
+
+// ONLY WHAT THE COMPANY HAS. A seat manages a seat or a unit that exists, and
+// a provider chain names providers the company declares: a typed name that
+// matches neither is a dangling reference the engine reports rather than a
+// value this form may invent.
+test("a chip field over options refuses a value the options do not offer", () => {
+  function Manages() {
+    const [value, setValue] = useState<string[]>([]);
+    return (
+      <>
+        <Announcer />
+        <TagsInput
+          aria-label="Manages"
+          label="Managed seats"
+          value={value}
+          onChange={setValue}
+          allowCustom={false}
+          options={[{ value: "SRE", label: "SRE" }]}
+        />
+      </>
+    );
+  }
+  render(<Manages />);
+  const box = screen.getByRole("combobox", { name: "Manages" });
+  fireEvent.change(box, { target: { value: "Nobody" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(screen.queryByRole("button", { name: "Remove Nobody" })).toBeNull();
+
+  fireEvent.change(box, { target: { value: "SR" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  expect(screen.getByRole("button", { name: "Remove SRE" })).toBeDefined();
 });

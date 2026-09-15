@@ -18,6 +18,7 @@ import { fixtureCompany } from "./model/testkit.ts";
 import { MoveDialog } from "./MoveDialog.tsx";
 import { renderInBuilder, type HarnessOptions } from "./viewTestkit.tsx";
 import { keyedState } from "./testState.ts";
+import { pick } from "~/testing.tsx";
 
 afterEach(cleanup);
 
@@ -27,11 +28,14 @@ function open(state: BuilderState, key: string, options: HarnessOptions = {}) {
   return { ...view, onClose };
 }
 
-const destination = () => screen.getByLabelText("Move to") as HTMLSelectElement;
-const choose = (label: string) => {
-  const option = [...destination().options].find((o) => o.textContent === label);
-  if (!option) throw new Error(`no destination ${label}`);
-  fireEvent.change(destination(), { target: { value: option.value } });
+const destination = () => screen.getByLabelText("Move to");
+const choose = (label: string) => pick(destination(), label);
+/** What the destination list offers, read from the list itself. */
+const destinations = () => {
+  fireEvent.click(destination());
+  const labels = screen.getAllByRole("option").map((option) => option.textContent);
+  fireEvent.keyDown(destination(), { key: "Escape" });
+  return labels;
 };
 const moveButton = () => screen.getByRole("button", { name: "Move" }) as HTMLButtonElement;
 
@@ -182,7 +186,7 @@ describe("a unit", () => {
       },
     });
     open(state, "unit:Engineering");
-    const labels = [...destination().options].map((o) => o.textContent);
+    const labels = destinations();
     expect(labels).not.toContain("Engineering");
     expect(labels).not.toContain("Engineering / Platform");
     expect(labels).toContain("Sales");

@@ -47,9 +47,7 @@ import { useState, type ReactNode } from "react";
 import { useLeaveGuard } from "~/app/router.tsx";
 import type { CompanyDocument, ConfigRole, ConfigUnit } from "~/protocol/index.ts";
 import { formatPhaseLLM, plural } from "~/lib/format.ts";
-import { Field, type FieldChoice } from "~/ui/Field.tsx";
-import { ListField } from "~/ui/ListField.tsx";
-import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
+import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import {
   keepsTheLens,
   useBuilder,
@@ -112,7 +110,18 @@ import {
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import { Button, Callout, Checkbox, EmptyState, Modal } from "@crewlethq/ui";
+import {
+  Button,
+  Callout,
+  Checkbox,
+  EmptyState,
+  FormField,
+  ListInput,
+  Modal,
+  TagsInput,
+} from "@crewlethq/ui";
+import type { TagsInputOption } from "@crewlethq/ui";
+import { withProblems } from "~/components/Problems.tsx";
 
 export function NodeEditor({
   nodeKey,
@@ -411,7 +420,7 @@ function Owns({
       hint={`Where unrouted work for this ${who} goes. Not a permission.`}
     >
       {isConnected(company, "jira") ? (
-        <Field
+        <ConfigField
           label="Jira project"
           kind="id"
           value={jira}
@@ -424,7 +433,7 @@ function Owns({
         <NotConnected tool="jira" />
       )}
       {isConnected(company, "confluence") ? (
-        <Field
+        <ConfigField
           label="Confluence space"
           kind="id"
           value={confluence}
@@ -486,7 +495,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
       onApply={() => apply(companyParts(initial, form))}
       onClose={onClose}
     >
-      <Field
+      <ConfigField
         label="Company name"
         value={form.name}
         onChange={(name) => set({ name })}
@@ -504,7 +513,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
           disabled={disabled}
         />
       )}
-      <Field
+      <ConfigField
         label="Mission"
         kind="multiline"
         value={form.mission}
@@ -513,7 +522,7 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         disabled={disabled}
         error={errorFor(["mission"])}
       />
-      <Field
+      <ConfigField
         label="Vision"
         kind="multiline"
         value={form.vision}
@@ -522,15 +531,15 @@ function CompanyEditor({ onClose }: { onClose: () => void }) {
         disabled={disabled}
         error={errorFor(["vision"])}
       />
-      <ListField
+      <ListInput
         label="Policies"
         itemName="policy"
         multiline
         value={form.policies}
         onChange={(policies) => set({ policies })}
-        required={false}
+        optional
         disabled={disabled}
-        error={errorFor(["policies"])}
+        error={withProblems(errorFor(["policies"]))}
       />
     </EditorShell>
   );
@@ -623,7 +632,7 @@ function UnitEditor({
       onApply={() => apply(unitParts(key, initial, form))}
       onClose={onClose}
     >
-      <Field
+      <ConfigField
         label="Name"
         value={form.name}
         onChange={(name) => set({ name })}
@@ -638,7 +647,7 @@ function UnitEditor({
         error={errorFor(["type"])}
         disabled={disabled}
       />
-      <Field
+      <ConfigField
         label="Purpose"
         kind="multiline"
         value={form.purpose}
@@ -647,19 +656,19 @@ function UnitEditor({
         disabled={disabled}
         error={errorFor(["purpose"])}
       />
-      <ListField
+      <ListInput
         label="Goals"
         itemName="goal"
         multiline
         value={form.goals}
         onChange={(goals) => set({ goals })}
-        required={false}
+        optional
         disabled={disabled}
-        error={errorFor(["goals"])}
+        error={withProblems(errorFor(["goals"]))}
       />
 
       <EditorSection title="Leadership">
-        <Field
+        <ConfigField
           label="Lead"
           kind="choice"
           choices={leadChoices}
@@ -670,7 +679,7 @@ function UnitEditor({
           help="The lead manages the unit's direct members, and a unit below that names no lead inherits this one."
           error={errorFor(["lead"])}
         />
-        <Field
+        <ConfigField
           label="Channel"
           value={form.channel}
           onChange={(channel) => set({ channel })}
@@ -686,15 +695,15 @@ function UnitEditor({
         />
       </EditorSection>
 
-      <ListField
+      <ListInput
         label="Knowledge"
         itemName="reference"
         value={form.knowledge}
         onChange={(knowledge) => set({ knowledge })}
-        required={false}
+        optional
         disabled={disabled}
-        help="Free-text references, not a read scope."
-        error={errorFor(["knowledge"])}
+        helper="Free-text references, not a read scope."
+        error={withProblems(errorFor(["knowledge"]))}
       />
 
       <Owns
@@ -826,7 +835,7 @@ function SeatEditor({
       onApply={() => apply(seatParts(key, data, initial, form, { editableHandle: minted }))}
       onClose={onClose}
     >
-      <Field
+      <ConfigField
         label="Name"
         value={form.name}
         onChange={(name) => set({ name })}
@@ -835,7 +844,7 @@ function SeatEditor({
         error={errorFor(["name"])}
       />
       {minted ? (
-        <Field
+        <ConfigField
           label="Handle"
           kind="id"
           value={form.handle}
@@ -862,7 +871,7 @@ function SeatEditor({
         </ReadOnlyFact>
       )}
       <KindFact seatKey={key} human={human} dirty={dirty} onClose={onClose} />
-      <Field
+      <ConfigField
         label="Email"
         kind="email"
         value={form.email}
@@ -871,7 +880,7 @@ function SeatEditor({
         disabled={disabled}
         error={errorFor(["email"])}
       />
-      <Field
+      <ConfigField
         label="Goal"
         kind="multiline"
         value={form.goal}
@@ -880,7 +889,7 @@ function SeatEditor({
         disabled={disabled}
         error={errorFor(["goal"])}
       />
-      <Field
+      <ConfigField
         label="Backstory"
         kind="multiline"
         value={form.backstory}
@@ -889,26 +898,26 @@ function SeatEditor({
         disabled={disabled}
         error={errorFor(["backstory"])}
       />
-      <ListField
+      <ListInput
         label="Responsibilities"
         itemName="responsibility"
         multiline
         value={form.responsibilities}
         onChange={(responsibilities) => set({ responsibilities })}
-        required={false}
+        optional
         disabled={disabled}
-        error={errorFor(["responsibilities"])}
+        error={withProblems(errorFor(["responsibilities"]))}
       />
       {!human && (
-        <ListField
+        <ListInput
           label="Behavioral guidelines"
           itemName="guideline"
           multiline
           value={form.guidelines}
           onChange={(guidelines) => set({ guidelines })}
-          required={false}
+          optional
           disabled={disabled}
-          error={errorFor(["behavioral_guidelines"])}
+          error={withProblems(errorFor(["behavioral_guidelines"]))}
         />
       )}
 
@@ -927,7 +936,7 @@ function SeatEditor({
           hint="A human seat needs at least one contact identity, which is how the organization reaches the person."
         >
           {CONTACT_IDENTITIES.map(({ key: identity, label }) => (
-            <Field
+            <ConfigField
               key={identity}
               label={label}
               kind="id"
@@ -942,7 +951,7 @@ function SeatEditor({
               {errorFor(["contact"])}
             </Callout>
           )}
-          <Field
+          <ConfigField
             label="Availability"
             value={form.availability}
             onChange={(availability) => set({ availability })}
@@ -1061,7 +1070,7 @@ function Reports({
 }) {
   const { state } = useBuilder();
   const seatNames = new Set<string>();
-  const options: PickerOption[] = [];
+  const options: TagsInputOption[] = [];
   for (const { seat: other } of allSeats(state.draft)) {
     if (other.key === seat.key || seatNames.has(other.data.name)) continue;
     seatNames.add(other.data.name);
@@ -1075,7 +1084,7 @@ function Reports({
       value: unit.data.name,
       label: unit.data.name,
       group: "Units",
-      hint: "every seat in it",
+      description: "every seat in it",
     });
   }
 
@@ -1091,17 +1100,30 @@ function Reports({
 
   return (
     <EditorSection title="Reports">
-      <MultiPicker
+      <FormField
         label="Manages"
-        options={options}
-        value={value}
-        onChange={onChange}
-        required={false}
-        disabled={disabled}
-        help="The seats this seat manages, or a unit to manage every seat in it."
-        error={error}
-        autoFocus={autoFocus}
-      />
+        optional
+        helper="The seats this seat manages, or a unit to manage every seat in it."
+        error={withProblems(error)}
+      >
+        {(field) => (
+          <TagsInput
+            id={field.id}
+            label="Managed seats and units"
+            value={[...value]}
+            onChange={onChange}
+            options={options}
+            // ONLY WHAT THE COMPANY HAS. A seat manages a seat or a unit that
+            // exists; a typed name that matches neither is a dangling
+            // reference the engine reports rather than a value to accept here.
+            allowCustom={false}
+            disabled={disabled}
+            focusOnMount={autoFocus}
+            aria-describedby={field.describedBy}
+            aria-invalid={field.invalid}
+          />
+        )}
+      </FormField>
       {groups.map((g) => (
         <ReadOnlyFact
           key={g.unit}
@@ -1156,24 +1178,39 @@ function ModelSection({
           </ul>
         </ReadOnlyFact>
       ) : (
-        <MultiPicker
+        <FormField
           label="Model"
-          options={providers.map((key) => ({ value: key, label: key }))}
-          value={chain}
-          onChange={onChain}
-          required={false}
-          disabled={disabled}
-          help={
+          optional
+          helper={
             chain.length > 0
-              ? `Tried in this order: ${chain.join(", then ")}. To change the order, remove a provider and choose it again.`
+              ? `Tried in this order: ${chain.join(", then ")}.`
               : unpinned
                 ? `Runs on ${unpinned}, the provider a seat that names none runs on.`
                 : "The company has no model provider yet. Add one in the configuration document."
           }
-          error={chainError}
-        />
+          error={withProblems(chainError)}
+        >
+          {(field) => (
+            <TagsInput
+              id={field.id}
+              label="Model providers"
+              value={[...chain]}
+              onChange={onChain}
+              options={providers.map((key) => ({ value: key, label: key }))}
+              allowCustom={false}
+              // THE ORDER IS THE FALLBACK CHAIN, read first to last, so it is
+              // moved rather than retyped. The help line used to end "to change
+              // the order, remove a provider and choose it again", which was a
+              // workaround for a control that could not reorder.
+              ordered
+              disabled={disabled}
+              aria-describedby={field.describedBy}
+              aria-invalid={field.invalid}
+            />
+          )}
+        </FormField>
       )}
-      <Field
+      <ConfigField
         label="Token budget"
         kind="id"
         value={budget}
@@ -1236,7 +1273,7 @@ function IntegrationsSection({
                 <code className="inline">{appSlug}</code>
               </ReadOnlyFact>
             )}
-            <Field
+            <ConfigField
               label="Access tier"
               kind="choice"
               choices={GITHUB_TIERS}
@@ -1245,16 +1282,16 @@ function IntegrationsSection({
               disabled={disabled}
               error={errorFor(GITHUB_TIER)}
             />
-            <ListField
+            <ListInput
               label="Repositories"
               itemName="repository"
               value={form.githubRepos}
               onChange={(githubRepos) => set({ githubRepos })}
-              required={false}
+              optional
               disabled={disabled}
               placeholder="owner/name"
-              help="Empty means every repository the installation covers."
-              error={errorFor(GITHUB_REPOS)}
+              helper="Empty means every repository the installation covers."
+              error={withProblems(errorFor(GITHUB_REPOS))}
             />
             {enrolling && (
               <Callout variant="info">
@@ -1277,7 +1314,7 @@ function IntegrationsSection({
         {!isConnected(company, "slack") ? (
           <NotConnected tool="slack" />
         ) : isRecord(slack) ? (
-          <Field
+          <ConfigField
             label="Slack channel ID"
             kind="id"
             value={form.slackChannel}
@@ -1300,7 +1337,7 @@ function IntegrationsSection({
           <NotConnected tool="mattermost" />
         ) : isRecord(mattermost) ? (
           <>
-            <Field
+            <ConfigField
               label="Mattermost channel"
               value={form.mattermostChannel}
               onChange={(mattermostChannel) => set({ mattermostChannel })}
@@ -1317,7 +1354,7 @@ function IntegrationsSection({
                 <code className="inline">{form.mattermostUsername || defaultUsername}</code>
               </ReadOnlyFact>
             ) : (
-              <Field
+              <ConfigField
                 label="Bot username"
                 kind="id"
                 value={form.mattermostUsername}
@@ -1350,7 +1387,7 @@ function IntegrationsSection({
             <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
           </p>
         ) : (
-          <Field
+          <ConfigField
             label="Access level"
             kind="choice"
             choices={[

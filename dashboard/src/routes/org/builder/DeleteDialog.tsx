@@ -32,7 +32,7 @@
 
 import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
-import { Field } from "~/ui/Field.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -315,7 +315,7 @@ function OutsideTheChart({
           <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
         </Callout>
       ) : (
-        <Field
+        <ConfigField
           key="datadog"
           label="Datadog fallback"
           kind="choice"

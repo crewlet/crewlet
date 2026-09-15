@@ -1,12 +1,12 @@
 /**
- * A labelled input, with the help line and the error line beside it.
+ * One field of the company's configuration.
  *
- * The dashboard had `SearchInput` and `Select` and nothing else: a filter box
- * and a dropdown, both for narrowing a read. A form that collects a credential
- * needs a label bound to its control, a line saying where the value comes
- * from, and a line saying why the engine refused the last one, and every one
- * of those is a thing that gets forgotten when each screen writes its own
- * `<label>` next to its own `<input>`.
+ * The design system supplies the row (a label bound to its control, a line
+ * saying where the value comes from, a line saying why the engine refused the
+ * last one) and every control it draws. What is here is what the CONFIG means,
+ * and only that: which kinds of value this document holds, which of them may
+ * be a pointer into the sealed store, and what a field is allowed to do to a
+ * value on its way through.
  *
  * A SECRET FIELD IS A PASSWORD FIELD, and that is not decoration: `type` is
  * what keeps the value out of an autofill store, out of a screenshot, and out
@@ -42,13 +42,19 @@
  * model's prompt rather than an identifier the check would only mark wrong.
  * It offers no `${NAME}` completion, because a reference is a whole value and
  * prose is never one.
+ *
+ * A CHOICE IS THE DESIGN SYSTEM'S LISTBOX, never the platform's own dropdown.
+ * A native list is drawn by the operating system: it takes none of the theme,
+ * none of the density and none of the tokens, so a dark dialog opened a light
+ * grey menu in the middle of itself. The listbox is also the only one that can
+ * carry a second line under an option, which is where a choice's hint belongs.
  */
 
 import { useId, useRef, useState, type ReactNode } from "react";
 
-import { Problems } from "./Problems.tsx";
-import { complete, rank, referenceAt, type Typing } from "./secretref.ts";
-import { useListbox } from "@crewlethq/ui";
+import { withProblems } from "./Problems.tsx";
+import { complete, rank, referenceAt, type Typing } from "~/lib/secretref.ts";
+import { Combobox, FormField, InputAffix, Select, Textarea } from "@crewlethq/ui";
 
 export type FieldKind =
   "text" | "multiline" | "secret" | "url" | "id" | "choice" | "handle" | "email";
@@ -60,7 +66,7 @@ export interface FieldChoice {
   hint?: string;
 }
 
-export function Field({
+export function ConfigField({
   label,
   kind = "text",
   value,
@@ -121,8 +127,6 @@ export function Field({
   rows?: number;
 }) {
   const id = useId();
-  const helpID = `${id}-help`;
-  const errorID = `${id}-error`;
   const affixID = `${id}-affix`;
   const picker = kind === "choice" || kind === "handle";
 
@@ -162,48 +166,34 @@ export function Field({
   const refBase = own === "" && value.trimStart().startsWith("$");
   const affix = kind === "url" && own !== "http://" && !refBase ? "https://" : "";
   const shown = affix ? value.slice(own.length) : value;
-  const describedBy = [affix ? affixID : "", help ? helpID : "", error ? errorID : ""]
-    .filter(Boolean)
-    .join(" ");
 
   // --- completing a ${NAME} ------------------------------------------- //
   //
-  // WIRED TO THE PLAIN INPUT ONLY. A url field wears an affix, so the box
+  // WIRED TO THE PLAIN FIELD ONLY. A url field wears an affix, so the box
   // holds a different string from the value and every caret offset would
   // have to be translated through it; every field a reference actually goes
   // in (a secret, an id, an email, a token) is a plain one.
   const box = useRef<HTMLInputElement>(null);
   const [typing, setTyping] = useState<Typing | null>(null);
   const offered = typing && secrets?.length ? rank(secrets, typing.query) : [];
-  const open = offered.length > 0;
-  // The keys are the shared listbox's (`useListbox`): arrows wrap, the
-  // highlight is clamped rather than reset as the list narrows, Enter takes a
-  // name without submitting the form, and Escape closes the list and not the
-  // dialog around it.
-  const listbox = useListbox({
-    id,
-    open,
-    count: offered.length,
-    // TAB TAKES THE HIGHLIGHTED NAME rather than leaving the field, which is
-    // what it means in every other completion list.
-    tabCommits: true,
-    onCommit: (index) => choose(offered[index] ?? ""),
-    // Escape means "not this", and the field keeps what was typed.
-    onClose: () => setTyping(null),
-  });
 
   /** Re-reads what is under the caret after anything that can move it. */
-  function reconsider(target: HTMLInputElement) {
+  function reconsider(text: string, caretAt: number | null) {
     // A MASKED BOX REPORTS NO CARET. Browsers refuse selectionStart on a
     // password input, so the offer waits for the value to become a
     // reference, which unmasks it, or for the field to hold nothing but what
     // is being typed.
-    const caret = masked ? target.value.length : (target.selectionStart ?? target.value.length);
-    const next = referenceAt(target.value, caret);
+    const caret = masked || caretAt === null ? text.length : caretAt;
+    const next = referenceAt(text, caret);
     // ON THE WAY IN ONLY. The list is about to be shown, which is the moment
     // its being current matters and the only moment worth a request.
     if (next && !typing) onSecretsNeeded?.();
     setTyping(next);
+  }
+
+  /** Re-reads the caret from the element, for every move that is not typing. */
+  function reconsiderFrom(input: HTMLInputElement) {
+    reconsider(input.value, masked ? null : (input.selectionStart ?? null));
   }
 
   /** Writes the chosen name in and puts the caret after it. */
@@ -213,7 +203,6 @@ export function Field({
     const caret = masked ? input.value.length : (input.selectionStart ?? input.value.length);
     const next = complete(input.value, caret, typing, name);
     setTyping(null);
-    listbox.setActive(0);
     onChange(next.value);
     // AFTER REACT HAS WRITTEN THE VALUE, or the caret is placed in the old
     // string and lands wherever the new one happens to put it.
@@ -225,136 +214,103 @@ export function Field({
 
   // What the box holds becomes the whole value again, with a scheme somebody
   // typed or pasted taken as said rather than doubled onto the affix.
-  function changed(raw: string) {
+  function changed(raw: string): string {
     const typed = tight ? raw.replace(/\s+/g, "") : raw;
-    if (!affix) return onChange(typed);
+    if (!affix) {
+      onChange(typed);
+      return typed;
+    }
     const carried = schemeOf(typed);
     // The same two escapes the affix itself makes: a value that carries its
     // own scheme, and one that is becoming a `${VAR}`. `own` is empty here
     // exactly when the affix is OFFERING a scheme rather than carrying one,
     // which is the only state where a leading `$` means a reference.
     if (carried === "http://" || (own === "" && typed.trimStart().startsWith("$"))) {
-      return onChange(typed);
+      onChange(typed);
+      return typed;
     }
-    onChange(affix + typed.slice(carried.length));
+    const next = affix + typed.slice(carried.length);
+    onChange(next);
+    return next;
   }
 
-  return (
-    <div className="field">
-      <label htmlFor={id}>
-        {label}
-        {required === false && <span className="muted"> (optional)</span>}
-        {/* AND REQUIRED IS MARKED ONLY WHERE IT IS NEWS.
-            
-            The convention on this form is that required is the default and
-            the exception is marked, which is right: most fields are required,
-            so marking them all is noise that teaches a reader to skip the
-            note entirely.
-            
-            A field that just APPEARED because of an answer is the exception
-            to that. Its requiredness is new information: it was not on
-            screen a moment ago and is now the one thing standing between the
-            answer above it and its working, so the caller that knows it is
-            gated asks for the mark. See SetupDialog's `required_when`. */}
-        {required === true && markRequired && <span className="muted"> (required)</span>}
-      </label>
-      {picker ? (
-        <select
-          id={id}
-          className="input"
-          value={value}
-          disabled={disabled}
-          autoFocus={autoFocus}
-          aria-describedby={describedBy || undefined}
-          aria-invalid={error ? true : undefined}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          {/* NO "CHOOSE ONE" OVER AN ANSWER THAT EXISTS.
-              
-              It was rendered unconditionally, so every dropdown opened with a
-              placeholder above the value it was already showing: a question
-              mark over a field that had been answered, on every integration
-              form. Every choice this product declares carries a default, so
-              the empty option is only ever honest in two cases, and both are
-              handled rather than papered over.
-              
-              NOTHING CHOSEN AT ALL is the first, and there the placeholder is
-              the truth. It should not be reachable (a requirement with
-              choices and no default would be one), and if it ever is, a
-              silent first-option selection is a form answering somebody's
-              question for them.
+  // EB01. THE CHOSEN OPTION'S HINT IS PART OF THE HELP LINE. Every vendor's
+  // setup declares one per choice (`internal/github/setup.go`,
+  // `internal/atlassian/setup.go`) and the field accepted them and drew none
+  // of them, so the sentence explaining what the selected mode DOES reached
+  // nobody. It is also carried under each option in the list, which is what
+  // the listbox can do and a native dropdown cannot: one says what you are
+  // about to pick, the other what you have picked.
+  const chosen = picker ? (choices ?? []).find((choice) => choice.value === value) : undefined;
+  const helper: ReactNode =
+    chosen?.hint && help ? (
+      <>
+        {help} {chosen.hint}
+      </>
+    ) : (
+      (chosen?.hint ?? help)
+    );
 
-              UNLESS "NOTHING" IS ITSELF A CHOICE. A unit's lead offers "No
-              lead (inherits the parent's)" as the empty value, and a
-              placeholder drawn above that option would be a second, unlabelled
-              spelling of the same answer, selected in its place. */}
-          {value === "" && !(choices ?? []).some((c) => c.value === "") && (
-            <option value="">Choose one</option>
-          )}
-          {/* AND A STORED ANSWER THIS LIST DOES NOT OFFER keeps its own
-              option, rather than vanishing into a selection it is not.
-              
-              A form may narrow its choices (GitHub's coverage question now
-              offers two of the three modes its config accepts), and a company
-              already holding the dropped one must not open the dialog to find
-              a different answer selected, then save it. The value is shown as
-              itself, so what is on screen is what is stored until somebody
-              deliberately changes it. */}
-          {value !== "" && !(choices ?? []).some((c) => c.value === value) && (
-            <option value={value}>{value}</option>
-          )}
-          {(choices ?? []).map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
-            </option>
-          ))}
-        </select>
-      ) : kind === "multiline" ? (
-        <textarea
-          id={id}
-          className="textarea"
-          rows={rows}
-          value={value}
-          placeholder={placeholder}
-          disabled={disabled}
-          autoComplete="off"
-          // ON, unlike every other kind: see the module doc.
-          spellCheck
-          autoFocus={autoFocus}
-          aria-describedby={describedBy || undefined}
-          aria-invalid={error ? true : undefined}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      ) : affix ? (
-        <div className="input-affixed">
-          <span className="input-affix" id={affixID} aria-hidden="true">
-            {affix}
-          </span>
-          <input
-            id={id}
-            className={reference ? "input is-reference" : "input"}
-            inputMode="url"
-            value={shown}
+  return (
+    <FormField
+      htmlFor={id}
+      label={label}
+      // REQUIRED IS THE UNMARKED DEFAULT on this form, and the exception is
+      // marked: most fields are required, so marking them all is noise that
+      // teaches a reader to skip the note. A field that just APPEARED because
+      // of an answer is the exception to that, and its caller says so. See
+      // SetupDialog's `required_when`.
+      optional={required === false}
+      requiredNews={required === true && markRequired === true}
+      helper={helper}
+      error={withProblems(error)}
+      describedBy={affix ? affixID : undefined}
+    >
+      {(field) =>
+        picker ? (
+          <Select
+            id={field.id}
+            value={value}
+            onChange={(next) => onChange(String(next))}
+            options={choiceOptions(choices, value)}
+            // NO "CHOOSE ONE" OVER AN ANSWER THAT EXISTS. The placeholder is
+            // drawn only where nothing is chosen, and empty counts as chosen
+            // wherever the list offers it: a unit's lead offers "No lead
+            // (inherits the parent's)" as the empty value, and a placeholder
+            // over that option would be a second, unlabelled spelling of the
+            // same answer, selected in its place.
+            placeholder="Choose one"
+            disabled={disabled}
+            autoFocus={autoFocus}
+            error={field.invalid}
+            required={required === true}
+            aria-describedby={field.describedBy}
+          />
+        ) : kind === "multiline" ? (
+          <Textarea
+            id={field.id}
+            rows={rows}
+            value={value}
             placeholder={placeholder}
             disabled={disabled}
             autoComplete="off"
-            spellCheck={false}
+            // ON, unlike every other kind: see the module doc.
+            spellCheck
             autoFocus={autoFocus}
-            aria-describedby={describedBy || undefined}
-            aria-invalid={error ? true : undefined}
-            onChange={(e) => changed(e.target.value)}
+            aria-describedby={field.describedBy}
+            aria-required={required === true || undefined}
+            error={field.invalid}
+            onChange={(event) => onChange(event.target.value)}
           />
-        </div>
-      ) : (
-        <div className="input-suggests" ref={listbox.anchorRef}>
-          <input
-            id={id}
+        ) : (
+          <Combobox
+            id={field.id}
             ref={box}
             // A REFERENCE READS AS A NAME, not as the value it stands in for,
             // and the Secrets screen already sets what a stored entry's name
             // looks like. The same face here is what says the two are the same
             // kind of thing.
-            className={reference ? "input is-reference" : "input"}
+            appearance={reference ? "reference" : "default"}
             // A secret is a password field unless it holds a reference. See
             // the note above: the type is what keeps a CREDENTIAL out of
             // autofill and out of a screenshot, and a name is neither.
@@ -366,84 +322,78 @@ export function Field({
             // without asserting a shape.
             type={masked ? "password" : "text"}
             inputMode={kind === "email" ? "email" : kind === "url" ? "url" : undefined}
-            value={value}
+            value={shown}
             placeholder={placeholder}
             disabled={disabled}
-            // Off for every field here, not only the secrets: a browser
-            // offering a saved password for a webhook token is offering the
-            // wrong credential to the wrong vendor.
-            autoComplete="off"
-            spellCheck={false}
             autoFocus={autoFocus}
-            aria-describedby={describedBy || undefined}
-            aria-invalid={error ? true : undefined}
-            role={open ? "combobox" : undefined}
-            aria-expanded={open || undefined}
-            aria-controls={open ? listbox.listId : undefined}
-            aria-activedescendant={open ? listbox.optionId(listbox.active) : undefined}
-            onChange={(e) => {
-              changed(e.target.value);
-              reconsider(e.target);
+            error={field.invalid}
+            aria-describedby={field.describedBy}
+            aria-required={required === true || undefined}
+            leading={
+              affix ? (
+                // The affix is decoration to a sighted reader and part of the
+                // value to everybody else, so it is said once rather than read
+                // out as punctuation before the box.
+                <InputAffix text={affix} id={affixID} />
+              ) : undefined
+            }
+            label="Secrets"
+            mono
+            // TAB TAKES THE HIGHLIGHTED NAME rather than leaving the field,
+            // which is what it means in every other completion list.
+            tabCommits
+            options={offered.map((name) => ({ value: name }))}
+            onCommit={(option) => choose(option.value)}
+            open={offered.length > 0}
+            onOpenChange={(open) => {
+              // Escape means "not this", and the field keeps what was typed.
+              if (!open) setTyping(null);
+            }}
+            onValueChange={(raw) => {
+              const next = changed(raw);
+              reconsider(next, box.current?.selectionStart ?? null);
             }}
             // EVERY WAY THE CARET MOVES, not only typing: clicking into an
             // existing `${NAME}` or arrowing back over one is how somebody
             // edits the reference they already have.
-            onKeyUp={(e) => reconsider(e.currentTarget)}
-            onClick={(e) => reconsider(e.currentTarget)}
-            onKeyDown={listbox.onKeyDown}
-            // CLOSED ON THE WAY OUT, and after the click that chose a name:
+            onKeyUp={(event) => reconsiderFrom(event.currentTarget)}
+            onClick={(event) => reconsiderFrom(event.currentTarget)}
+            // CLOSED ON THE WAY OUT, and after the press that chose a name:
             // blur fires before the list's own mousedown, so the choice is
-            // taken on mousedown below rather than on click.
+            // taken on mousedown rather than on click.
             onBlur={() => setTyping(null)}
           />
-          {open && (
-            <ul
-              className="input-suggest-list"
-              ref={listbox.listRef}
-              id={listbox.listId}
-              role="listbox"
-              aria-label="Secrets"
-            >
-              {offered.map((name, i) => (
-                <li
-                  key={name}
-                  id={listbox.optionId(i)}
-                  role="option"
-                  aria-selected={i === listbox.active}
-                  className={i === listbox.active ? "input-suggest is-active" : "input-suggest"}
-                  // Taken on mousedown: see `useListbox`.
-                  {...listbox.optionHandlers(i)}
-                >
-                  {name}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-      {affix && (
-        // The affix is decoration to a sighted reader and part of the value
-        // to everybody else, so it is said once rather than read out as
-        // punctuation before the box.
-        <span className="sr-only" id={affixID}>
-          Begins with {affix}
-        </span>
-      )}
-      {help && (
-        <span className="hint" id={helpID}>
-          {help}
-        </span>
-      )}
-      {error && (
-        <span className="hint field-error" id={errorID} role="alert">
-          {/* THE SAME FACES the banner gives a refusal: a field's own error
-              is one problem out of the same set, and a config path or a
-              `${VAR}` in it is the same kind of thing here. */}
-          <Problems detail={error} />
-        </span>
-      )}
-    </div>
+        )
+      }
+    </FormField>
   );
+}
+
+/**
+ * The options a choice field offers, and the two rules that are not obvious.
+ *
+ * A STORED ANSWER THIS LIST DOES NOT OFFER keeps its own row, rather than
+ * vanishing into a selection it is not. A form may narrow its choices
+ * (GitHub's coverage question now offers two of the three modes its config
+ * accepts), and a company already holding the dropped one must not open the
+ * dialog to find a different answer selected, then save it. The design
+ * system's listbox keeps an unoffered value on the TRIGGER by itself; what is
+ * added here is the row, so the reader can see what they have and leave it.
+ *
+ * A CHOICE'S HINT IS ITS OPTION'S SECOND LINE, which is what it was written
+ * to be: a sentence saying what picking this one does.
+ */
+function choiceOptions(choices: FieldChoice[] | undefined, value: string) {
+  const all = choices ?? [];
+  const rows = all.map((choice) => ({
+    value: choice.value,
+    label: choice.label,
+    description: choice.hint,
+  }));
+  if (value !== "" && !all.some((choice) => choice.value === value)) {
+    return [{ value, label: value }, ...rows];
+  }
+  return rows;
 }
 
 /**

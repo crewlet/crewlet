@@ -29,7 +29,7 @@
 
 import { useState } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
-import { Field } from "~/ui/Field.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   ContactField,
@@ -226,7 +226,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
             <ScreenLink to={["integrations"]}>Open Integrations</ScreenLink>
           </Callout>
         ) : (
-          <Field
+          <ConfigField
             label="Datadog fallback"
             kind="choice"
             choices={replacements}

@@ -1,15 +1,17 @@
 /**
- * The url field's scheme affix.
+ * What the config field decides, which is not how any of it is drawn.
  *
- * Every config field of this kind is refused without a scheme, so the affix
- * is not decoration: it is the difference between a value that saves and one
- * the engine rejects after the fact.
+ * The design system draws the row and every control in it, so nothing here
+ * asserts a look: what is checked is which kind of value a field holds, what
+ * it does to a value on its way through, and what it offers from the sealed
+ * store. The url affix is the one to read first, because it is the difference
+ * between a value that saves and one the engine rejects after the fact.
  */
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { useState } from "react";
-import { Field } from "./Field.tsx";
+import { ConfigField } from "./ConfigField.tsx";
 import { Modal } from "@crewlethq/ui";
 
 afterEach(cleanup);
@@ -23,7 +25,7 @@ test("autoFocus focuses the field's control, a choice included", () => {
     render(
       <>
         <input aria-label="Before" autoFocus />
-        <Field
+        <ConfigField
           label="Target"
           kind={kind}
           value="a"
@@ -40,7 +42,7 @@ test("autoFocus focuses the field's control, a choice included", () => {
 
 test("a url field supplies the scheme the config requires", () => {
   const onChange = vi.fn();
-  render(<Field label="Jira site" kind="url" value="" onChange={onChange} />);
+  render(<ConfigField label="Jira site" kind="url" value="" onChange={onChange} />);
 
   const input = screen.getByLabelText("Jira site") as HTMLInputElement;
   fireEvent.change(input, { target: { value: "acme.atlassian.net" } });
@@ -52,7 +54,12 @@ test("a url field supplies the scheme the config requires", () => {
 // read as https://https://acme.atlassian.net.
 test("a stored url is shown without the scheme the affix carries", () => {
   render(
-    <Field label="Jira site" kind="url" value="https://acme.atlassian.net" onChange={() => {}} />,
+    <ConfigField
+      label="Jira site"
+      kind="url"
+      value="https://acme.atlassian.net"
+      onChange={() => {}}
+    />,
   );
   expect((screen.getByLabelText("Jira site") as HTMLInputElement).value).toBe("acme.atlassian.net");
 });
@@ -61,7 +68,7 @@ test("a stored url is shown without the scheme the affix carries", () => {
 // all. Doubling it onto the affix would produce a value nothing accepts.
 test("a pasted https url is not doubled onto the affix", () => {
   const onChange = vi.fn();
-  render(<Field label="Jira site" kind="url" value="" onChange={onChange} />);
+  render(<ConfigField label="Jira site" kind="url" value="" onChange={onChange} />);
 
   fireEvent.change(screen.getByLabelText("Jira site"), {
     target: { value: "HTTPS://acme.atlassian.net" },
@@ -74,14 +81,18 @@ test("a pasted https url is not doubled onto the affix", () => {
 // point the engine at a port nothing answers on.
 test("a value carrying http keeps it, and the affix steps aside", () => {
   const onChange = vi.fn();
-  const { rerender } = render(<Field label="Jira site" kind="url" value="" onChange={onChange} />);
+  const { rerender } = render(
+    <ConfigField label="Jira site" kind="url" value="" onChange={onChange} />,
+  );
 
   fireEvent.change(screen.getByLabelText("Jira site"), {
     target: { value: "http://jira.internal" },
   });
   expect(onChange).toHaveBeenCalledWith("http://jira.internal");
 
-  rerender(<Field label="Jira site" kind="url" value="http://jira.internal" onChange={onChange} />);
+  rerender(
+    <ConfigField label="Jira site" kind="url" value="http://jira.internal" onChange={onChange} />,
+  );
   const input = screen.getByLabelText("Jira site") as HTMLInputElement;
   expect(input.value).toBe("http://jira.internal");
   expect(screen.queryByText("https://")).toBeNull();
@@ -94,7 +105,7 @@ test("a value carrying http keeps it, and the affix steps aside", () => {
 // it wrote `https://${VAR}`, which no resolver can read.
 test("a reference typed into a url field is left alone", () => {
   const onChange = vi.fn();
-  render(<Field label="Public base" kind="url" value="" onChange={onChange} />);
+  render(<ConfigField label="Public base" kind="url" value="" onChange={onChange} />);
 
   fireEvent.change(screen.getByLabelText("Public base"), {
     target: { value: "${CREWLET_PUBLIC_BASE}" },
@@ -108,7 +119,7 @@ test("a reference typed into a url field is left alone", () => {
 // keystroke and never take it off again.
 test("a reference still being typed into a url field is left alone", () => {
   const onChange = vi.fn();
-  render(<Field label="Public base" kind="url" value="" onChange={onChange} />);
+  render(<ConfigField label="Public base" kind="url" value="" onChange={onChange} />);
 
   for (const typed of ["$", "${", "${CREWLET_PUBLIC"]) {
     fireEvent.change(screen.getByLabelText("Public base"), { target: { value: typed } });
@@ -122,7 +133,12 @@ test("a reference still being typed into a url field is left alone", () => {
 test("a stored reference is shown whole, with no affix", () => {
   const onChange = vi.fn();
   render(
-    <Field label="Public base" kind="url" value="${CREWLET_PUBLIC_BASE}" onChange={onChange} />,
+    <ConfigField
+      label="Public base"
+      kind="url"
+      value="${CREWLET_PUBLIC_BASE}"
+      onChange={onChange}
+    />,
   );
   const input = screen.getByLabelText("Public base") as HTMLInputElement;
   expect(input.value).toBe("${CREWLET_PUBLIC_BASE}");
@@ -136,7 +152,9 @@ test("a stored reference is shown whole, with no affix", () => {
 // keep working: the affix is carrying the scheme there, so it belongs.
 test("a scheme followed by a reference keeps the affix", () => {
   const onChange = vi.fn();
-  render(<Field label="Jira site" kind="url" value="https://${JIRA_HOST}" onChange={onChange} />);
+  render(
+    <ConfigField label="Jira site" kind="url" value="https://${JIRA_HOST}" onChange={onChange} />,
+  );
   const input = screen.getByLabelText("Jira site") as HTMLInputElement;
   expect(input.value).toBe("${JIRA_HOST}");
 
@@ -148,7 +166,7 @@ test("a scheme followed by a reference keeps the affix", () => {
 // nonsense, and the affix rewrites what it is attached to.
 test("no other kind of field wears a scheme", () => {
   const onChange = vi.fn();
-  render(<Field label="API token" kind="text" value="" onChange={onChange} />);
+  render(<ConfigField label="API token" kind="text" value="" onChange={onChange} />);
 
   fireEvent.change(screen.getByLabelText("API token"), { target: { value: "abc" } });
   expect(onChange).toHaveBeenCalledWith("abc");
@@ -158,7 +176,7 @@ test("no other kind of field wears a scheme", () => {
 // it. The field held `${JIRA_TOKEN}` and rendered sixteen dots, which is the
 // same thing an operator saw before the engine sent the reference at all.
 test("a secret holding a reference is readable", () => {
-  render(<Field label="API token" kind="secret" value="${JIRA_TOKEN}" onChange={() => {}} />);
+  render(<ConfigField label="API token" kind="secret" value="${JIRA_TOKEN}" onChange={() => {}} />);
   const input = screen.getByLabelText("API token") as HTMLInputElement;
   expect(input.type).toBe("text");
   expect(input.value).toBe("${JIRA_TOKEN}");
@@ -170,7 +188,7 @@ test("a secret holding anything else stays masked", () => {
   const cases = ["ATATT-real-credential", "", "${HOST}/x", "${}", "prefix ${NAME}"];
   for (const value of cases) {
     cleanup();
-    render(<Field label="API token" kind="secret" value={value} onChange={() => {}} />);
+    render(<ConfigField label="API token" kind="secret" value={value} onChange={() => {}} />);
     expect((screen.getByLabelText("API token") as HTMLInputElement).type).toBe("password");
   }
 });
@@ -181,7 +199,7 @@ test("a single-token field drops whitespace as it is typed or pasted", () => {
   for (const kind of ["url", "id", "email"] as const) {
     cleanup();
     const onChange = vi.fn();
-    render(<Field label="Value" kind={kind} value="" onChange={onChange} />);
+    render(<ConfigField label="Value" kind={kind} value="" onChange={onChange} />);
     fireEvent.change(screen.getByLabelText("Value"), {
       target: { value: "  acme.example.com  " },
     });
@@ -196,7 +214,7 @@ test("a single-token field drops whitespace as it is typed or pasted", () => {
 // the vendor has no record of.
 test("free text keeps the spaces it is given", () => {
   const onChange = vi.fn();
-  render(<Field label="Role" kind="text" value="" onChange={onChange} />);
+  render(<ConfigField label="Role" kind="text" value="" onChange={onChange} />);
   fireEvent.change(screen.getByLabelText("Role"), {
     target: { value: "Datadog Read Only Role" },
   });
@@ -211,7 +229,7 @@ test("free text keeps the spaces it is given", () => {
 // engine resolves correctly. The shape is checked where the value is used.
 test("an email field never asserts a shape the browser enforces", () => {
   render(
-    <Field
+    <ConfigField
       label="Account email"
       kind="email"
       value="${ATLASSIAN_USER_ACCOUNT_EMAIL}"
@@ -238,7 +256,13 @@ const held = ["GITHUB_TOKEN", "GH_WEBHOOK_SECRET", "DATADOG_APP_KEY"];
 function Editable({ secrets = held }: { secrets?: string[] }) {
   const [value, setValue] = useState("");
   return (
-    <Field label="Webhook secret" kind="id" value={value} onChange={setValue} secrets={secrets} />
+    <ConfigField
+      label="Webhook secret"
+      kind="id"
+      value={value}
+      onChange={setValue}
+      secrets={secrets}
+    />
   );
 }
 
@@ -348,7 +372,7 @@ test("Escape closes the list without clearing the field", () => {
 // operator makes to dismiss it cannot also throw away the form it sits in.
 test("a press on the dialog's veil with the list open closes only the list", () => {
   const closed = vi.fn();
-  const { container } = render(
+  render(
     <Modal open stackBody title="Connect GitHub" onClose={closed}>
       <Editable />
     </Modal>,
@@ -358,7 +382,7 @@ test("a press on the dialog's veil with the list open closes only the list", () 
   fireEvent.keyUp(input, { key: "H" });
   expect(screen.getByRole("listbox")).toBeTruthy();
 
-  const veil = document.querySelector(".crewlet-modal-overlay")!;
+  const veil = screen.getByRole("dialog").parentElement!;
   fireEvent.pointerDown(veil);
   fireEvent.click(veil);
   expect(screen.queryByRole("listbox")).toBeNull();
@@ -377,7 +401,7 @@ test("the caller is asked to refresh when the list opens", () => {
   function Asking() {
     const [value, setValue] = useState("");
     return (
-      <Field
+      <ConfigField
         label="Webhook secret"
         kind="id"
         value={value}
@@ -432,7 +456,7 @@ test("no list where there is nothing to offer", () => {
 // same way as a refusal beside a name.
 test("a multiline field is a labelled textarea bound to its help and error", () => {
   render(
-    <Field
+    <ConfigField
       label="Goal"
       kind="multiline"
       value=""
@@ -457,7 +481,13 @@ test("a multiline field keeps newlines and spaces, and offers no reference compl
   function Prose() {
     const [value, setValue] = useState("");
     return (
-      <Field label="Backstory" kind="multiline" value={value} onChange={setValue} secrets={held} />
+      <ConfigField
+        label="Backstory"
+        kind="multiline"
+        value={value}
+        onChange={setValue}
+        secrets={held}
+      />
     );
   }
   render(<Prose />);
@@ -474,7 +504,7 @@ test("a choice whose empty value is a real answer is shown by its own label, wit
   function Lead() {
     const [value, setValue] = useState("");
     return (
-      <Field
+      <ConfigField
         label="Lead"
         kind="choice"
         value={value}
@@ -487,10 +517,66 @@ test("a choice whose empty value is a real answer is shown by its own label, wit
     );
   }
   render(<Lead />);
-  const select = screen.getByLabelText("Lead") as HTMLSelectElement;
-  expect([...select.options].map((o) => o.textContent)).toEqual([
+  const trigger = screen.getByLabelText("Lead");
+  // NOT "Choose one" over an answer that exists: empty is a real answer on
+  // this list, so the option's own label is what the trigger reads.
+  expect(trigger.textContent).toBe("No lead (inherits Chief Executive)");
+
+  fireEvent.click(trigger);
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
     "No lead (inherits Chief Executive)",
     "Engineering Manager",
   ]);
-  expect(select.selectedOptions[0]?.textContent).toBe("No lead (inherits Chief Executive)");
+  expect(
+    screen.getAllByRole("option").map((option) => option.getAttribute("aria-selected")),
+  ).toEqual(["true", "false"]);
+});
+
+// EB01. A CHOICE'S HINT REACHES THE READER, twice over: under each option
+// while they are choosing, and on the help line once they have. Every vendor's
+// setup declares one per choice and the field accepted them and drew none.
+test("a choice's hint is drawn under its option and joins the help line", () => {
+  render(
+    <ConfigField
+      label="Coverage"
+      kind="choice"
+      value="all"
+      onChange={() => {}}
+      help="Which repositories the app is installed on."
+      choices={[
+        { value: "all", label: "Every repository", hint: "Including ones created later." },
+        { value: "selected", label: "Only the ones I pick", hint: "You choose them at GitHub." },
+      ]}
+    />,
+  );
+  const trigger = screen.getByLabelText("Coverage");
+  const described = document.getElementById(trigger.getAttribute("aria-describedby") ?? "");
+  expect(described?.textContent).toBe(
+    "Which repositories the app is installed on. Including ones created later.",
+  );
+
+  fireEvent.click(trigger);
+  expect(screen.getByText("You choose them at GitHub.")).toBeDefined();
+});
+
+// A STORED ANSWER THIS LIST DOES NOT OFFER keeps its own row. A form may
+// narrow its choices, and a company already holding the dropped one must not
+// open the dialog to find a different answer selected, then save it.
+test("a stored answer the list no longer offers is kept and shown as itself", () => {
+  render(
+    <ConfigField
+      label="Coverage"
+      kind="choice"
+      value="retired_mode"
+      onChange={() => {}}
+      choices={[{ value: "all", label: "Every repository" }]}
+    />,
+  );
+  const trigger = screen.getByLabelText("Coverage");
+  expect(trigger.textContent).toBe("retired_mode");
+  fireEvent.click(trigger);
+  expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+    "retired_mode",
+    "Every repository",
+  ]);
 });

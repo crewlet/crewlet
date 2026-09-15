@@ -72,9 +72,9 @@ describe("the ui/ boundary", () => {
   test("the scanner finds the imports it is meant to police", () => {
     // A scanner that silently matched nothing would pass the real test below
     // forever. These are imports the tree is known to hold.
-    const field = readFileSync(join(UI, "Field.tsx"), "utf8");
-    expect(specifiers(field)).toContain("./Problems.tsx");
-    expect(specifiers(field)).toContain("react");
+    const canvas = readFileSync(join(UI, "Canvas.tsx"), "utf8");
+    expect(specifiers(canvas)).toContain("./viewport.ts");
+    expect(specifiers(canvas)).toContain("react");
     expect(specifiers('import { a } from "~/lib/format.ts";')).toEqual(["~/lib/format.ts"]);
     expect(
       specifiers('import {\n  a,\n  type B,\n} from "../protocol/index.ts";\nimport "./x.css";'),

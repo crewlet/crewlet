@@ -19,7 +19,7 @@
 
 import { useState } from "react";
 import type { ConfigRole, ConfigUnit, HumanContactKey } from "~/protocol/index.ts";
-import { Field } from "~/ui/Field.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import { useBuilder, type AddKind } from "./BuilderContext.tsx";
 import {
   ContactField,
@@ -153,7 +153,7 @@ export function AddNodeDialog({
         options={KINDS}
         onValueChange={chooseKind}
       />
-      <Field
+      <ConfigField
         label="Name"
         value={name}
         onChange={(next) => {

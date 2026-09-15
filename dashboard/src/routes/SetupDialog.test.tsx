@@ -21,6 +21,7 @@ import {
   vendorLink,
 } from "./SetupDialog.tsx";
 import type { SetupRequirement, SetupToolState } from "~/protocol/index.ts";
+import { pick } from "~/testing.tsx";
 
 function req(over: Partial<SetupRequirement>): SetupRequirement {
   return {
@@ -113,6 +114,13 @@ afterEach(() => {
   localStorage.clear();
   vi.restoreAllMocks();
 });
+
+/**
+ * The form row a label belongs to: the element the label and its control
+ * share, found through the label rather than through a class the design
+ * system owns.
+ */
+const rowOf = (label: string) => screen.getByText(label).closest("label")!.parentElement!;
 
 // EVERY WORD COMES FROM THE ENGINE. Nothing about any third-party app is in the
 // component, which is what makes adding one a Go change and no screen work.
@@ -642,8 +650,12 @@ test("connecting and managing render one identical form", () => {
       label: "Fallback seat",
       kind: "handle",
       present,
-      value: present ? "sre-lead" : undefined,
-      // THE DEFAULT THE ENGINE DECLARES. Both picker kinds ship one —
+      // THE SAME ANSWER ON BOTH SIDES, which is what the region field above
+      // does too: a connect form seeds the default and a settings form the
+      // stored value, so a fixture whose stored value differs from its
+      // default describes two forms in two STATES rather than one form.
+      value: present ? "none" : undefined,
+      // THE DEFAULT THE ENGINE DECLARES. Both picker kinds ship one --
       // TestEveryChoiceOpensOnAnAnswer pins it across every vendor — and
       // without it the connect side of this comparison opens on a "Choose
       // one" the settings side does not have, which is precisely the "the
@@ -739,13 +751,11 @@ test("only the connect fields are open, the rest are folded away", () => {
 
   // The connect fields are in the form itself, not behind the disclosure.
   for (const label of ["Datadog region", "API key"]) {
-    const field = screen.getByText(label).closest(".field");
-    expect(more.contains(field)).toBe(false);
+    expect(more.contains(rowOf(label))).toBe(false);
   }
   // And everything that configures what happens over the connection is.
   for (const label of ["Accept deliveries", "Fallback seat"]) {
-    const field = screen.getByText(label).closest(".field");
-    expect(more.contains(field)).toBe(true);
+    expect(more.contains(rowOf(label))).toBe(true);
   }
 });
 
@@ -809,7 +819,7 @@ test("a stored setting is what the form opens on", () => {
       onDone={() => {}}
     />,
   );
-  expect((screen.getByLabelText(/Fallback seat/) as HTMLInputElement).value).toBe("sre-lead");
+  expect(screen.getByLabelText(/Fallback seat/).textContent).toBe("SRE Lead (sre-lead)");
 });
 
 // AND A CREDENTIAL LEFT ALONE IS NOT SENT.
@@ -880,15 +890,15 @@ test("the toggle opens on what the app is set to", () => {
         onDone={() => {}}
       />,
     );
-    const got = (screen.getByLabelText(/Accept deliveries/) as HTMLSelectElement).value;
+    const got = screen.getByLabelText(/Accept deliveries/).textContent;
     view.unmount();
     return got;
   };
   // Nothing configured: on, whatever an unset block reports.
-  expect(open(false, "false")).toBe("true");
+  expect(open(false, "false")).toBe("On");
   // Configured and paused: paused.
-  expect(open(true, "false")).toBe("false");
-  expect(open(true, "true")).toBe("true");
+  expect(open(true, "false")).toBe("Off");
+  expect(open(true, "true")).toBe("On");
 });
 
 // NOTHING TO JUDGE IS NOT "UNCONFIGURED".
@@ -1015,7 +1025,7 @@ test("a field with a default opens holding it", () => {
       onDone={() => {}}
     />,
   );
-  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("datadoghq.com");
+  expect(screen.getByRole("combobox").textContent).toBe("datadoghq.com");
 });
 
 // AND NOT OVER AN ANSWER THIS COMPANY ALREADY GAVE. Offering the common value
@@ -1051,9 +1061,9 @@ test("a field this company has answered keeps its answer", () => {
       onDone={() => {}}
     />,
   );
-  // Empty: the form sends only what was touched, so an untouched field
-  // carrying a stored value must not arrive pre-filled with the default.
-  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe("");
+  // Nothing chosen: the form sends only what was touched, so an untouched
+  // field carrying a stored value must not arrive pre-filled with the default.
+  expect(screen.getByRole("combobox").textContent).toBe("Choose one");
 });
 
 // The description quotes the value, so it has to follow the value. A tag key
@@ -1946,7 +1956,16 @@ test("saving a connected app does not say it connected", async () => {
               ...tool,
               configured: true,
               requirements: [
-                req({ field: "route_to", label: "Fallback seat", kind: "handle", present: true }),
+                req({
+                  field: "route_to",
+                  label: "Fallback seat",
+                  kind: "handle",
+                  present: true,
+                  choices: [
+                    { value: "none", label: "None: dismiss alerts nobody owns" },
+                    { value: "sre-lead", label: "SRE Lead (sre-lead)" },
+                  ],
+                }),
               ],
             },
           },
@@ -1957,7 +1976,7 @@ test("saving a connected app does not say it connected", async () => {
       />
     </ToastProvider>,
   );
-  fireEvent.change(screen.getByLabelText("Fallback seat"), { target: { value: "sre-lead" } });
+  pick(screen.getByLabelText("Fallback seat"), "SRE Lead (sre-lead)");
   fireEvent.click(screen.getByRole("button", { name: /Save|Connect/ }));
   await vi.waitFor(() => expect(spy).toHaveBeenCalled());
 
@@ -2049,7 +2068,7 @@ test("a refusal opens the fold hiding the field it names", async () => {
   const after = baseElement.querySelector("details.int-form-more") as HTMLDetailsElement;
   expect(after.open).toBe(true);
   // AND THE FIELD IT NAMES IS THE ONE NOW REACHABLE.
-  expect(after.contains(screen.getByText("Fallback seat").closest(".field"))).toBe(true);
+  expect(after.contains(rowOf("Fallback seat"))).toBe(true);
 });
 
 // AND A REFUSAL ABOUT SOMETHING ON THE FORM LEAVES IT SHUT, or "open it
@@ -2188,8 +2207,10 @@ test("choosing the gated answer reveals its field", () => {
   );
   expect(screen.queryByText("Organization token")).toBeNull();
 
-  const choice = screen.getByLabelText(/Which GitHub activity/);
-  fireEvent.change(choice, { target: { value: "true" } });
+  pick(
+    screen.getByLabelText(/Which GitHub activity/),
+    "Every repository in acme, including new ones",
+  );
 
   // VISIBLE, not merely present in the requirement list: a field revealed
   // into a collapsed fold is a field somebody still cannot see.
@@ -2213,10 +2234,11 @@ test("a dropdown holding an answer offers no placeholder", () => {
       onDone={() => {}}
     />,
   );
-  for (const select of baseElement.querySelectorAll("select")) {
-    expect(select.value).not.toBe("");
-    const empty = [...select.options].filter((o) => o.value === "");
-    expect(empty).toHaveLength(0);
+  for (const choice of screen.getAllByRole("combobox")) {
+    expect(choice.textContent).not.toBe("Choose one");
+    fireEvent.click(choice);
+    expect(screen.queryByRole("option", { name: "Choose one" })).toBeNull();
+    fireEvent.keyDown(choice, { key: "Escape" });
   }
 });
 
@@ -2256,8 +2278,7 @@ test("a value the choices do not contain is shown as itself", () => {
       onDone={() => {}}
     />,
   );
-  const select = baseElement.querySelector("select");
-  expect(select?.value).toBe("auto");
+  expect(screen.getByRole("combobox").textContent).toBe("auto");
 });
 
 // A GATED FIELD SAYS IT IS REQUIRED, AND SITS UNDER THE ANSWER THAT REVEALED
@@ -2297,7 +2318,7 @@ test("a revealed field is marked required and follows its question", () => {
       onDone={() => {}}
     />,
   );
-  fireEvent.change(baseElement.querySelector("select")!, { target: { value: "true" } });
+  pick(screen.getByLabelText(/Which GitHub activity/), "Every repository");
 
   const labels = [...baseElement.querySelectorAll("label")].map((l) => l.textContent ?? "");
   const token = labels.findIndex((t) => t.startsWith("Organization token"));

@@ -40,8 +40,8 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Field, type FieldKind } from "~/ui/Field.tsx";
-import { marked, paths, Problems } from "~/ui/Problems.tsx";
+import { ConfigField, type FieldKind } from "~/components/ConfigField.tsx";
+import { marked, paths, Problems } from "~/components/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/index.ts";
 import { href } from "~/app/router.tsx";
@@ -137,7 +137,7 @@ export function vendorLink(
   return resolved;
 }
 
-/** Whether a value is wholly a `${NAME}` reference. See ui/Field.tsx. */
+/** Whether a value is wholly a `${NAME}` reference. See components/ConfigField.tsx. */
 function isReference(value: string): boolean {
   return /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim());
 }
@@ -1191,7 +1191,7 @@ export function SetupDialog({
     return (
       <div key={key} className="col gap-1">
         {editable(section, r) ? (
-          <Field
+          <ConfigField
             label={r.label}
             kind={r.kind === "toggle" ? "choice" : (r.kind as FieldKind)}
             value={values[key] ?? ""}

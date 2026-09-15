@@ -17,7 +17,7 @@
  */
 
 import { useState } from "react";
-import { marked } from "~/ui/Problems.tsx";
+import { marked } from "~/components/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 import { Avatar, Button, Checkbox, Modal } from "@crewlethq/ui";

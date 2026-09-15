@@ -22,7 +22,7 @@
 
 import { useState } from "react";
 import { href } from "~/app/router.tsx";
-import { Field } from "~/ui/Field.tsx";
+import { ConfigField } from "~/components/ConfigField.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
@@ -106,8 +106,14 @@ export function CreateCompany({
         <Card.Title>Create the company</Card.Title>
       </Card.Header>
       <div className="col gap-4 measure">
-        <Field label="Company name" value={name} onChange={setName} autoFocus disabled={disabled} />
-        <Field
+        <ConfigField
+          label="Company name"
+          value={name}
+          onChange={setName}
+          autoFocus
+          disabled={disabled}
+        />
+        <ConfigField
           label="Mission"
           kind="multiline"
           rows={2}
@@ -160,14 +166,14 @@ export function CreateCompany({
         />
         {ownSeat && (
           <div className="col gap-3">
-            <Field
+            <ConfigField
               label="Your seat's name"
               value={seatName}
               onChange={setSeatName}
               disabled={disabled}
               help="The seat is named for the role, not the person: it outlives whoever holds it."
             />
-            <Field
+            <ConfigField
               label="How agents reach you"
               kind="choice"
               value={identity}
@@ -175,7 +181,7 @@ export function CreateCompany({
               disabled={disabled}
               choices={CONTACT_IDENTITIES.map((c) => ({ value: c.key, label: c.label }))}
             />
-            <Field
+            <ConfigField
               label={CONTACT_IDENTITIES.find((c) => c.key === identity)!.label}
               value={value}
               onChange={setValue}

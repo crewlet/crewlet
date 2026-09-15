@@ -10,6 +10,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test } from "vitest";
 
+import { InlineCode } from "@crewlethq/ui";
+import { isDrawnAs } from "~/testing.tsx";
 import { Problems, marked, paths, split } from "./Problems.tsx";
 
 afterEach(cleanup);
@@ -60,7 +62,9 @@ test("values, routes, references and links are picked out of a sentence", () => 
   // screen: it names something in the store, not a path in the document.
   const ref = screen.getByText("${ATLASSIAN_ORG_ID}");
   expect(ref.tagName).toBe("CODE");
-  expect(ref.className).toContain("is-reference");
+  // The claim is the VARIANT, so the chip is compared against the one the
+  // design system draws for a reference rather than against a class name.
+  expect(isDrawnAs(ref, InlineCode, { variant: "reference" }, {})).toBe(true);
 
   expect(screen.getByText("/webhooks/confluence").tagName).toBe("CODE");
   expect(screen.getByText('"auto"').tagName).toBe("CODE");
@@ -69,7 +73,7 @@ test("values, routes, references and links are picked out of a sentence", () => 
   // A LINK IS SOMEWHERE TO GO, and it opens in a new tab: this sits in a
   // dialog holding a half-filled form, and following it in place would throw
   // the form away to read a page about how to fill it in.
-  const link = screen.getByRole("link", { name: "https://example.com/docs" });
+  const link = screen.getByRole("link", { name: /^https:\/\/example\.com\/docs/ });
   expect(link.getAttribute("href")).toBe("https://example.com/docs");
   expect(link.getAttribute("target")).toBe("_blank");
 });
@@ -89,7 +93,7 @@ test("a sentence carries its own link and its own literals", () => {
     </span>,
   );
 
-  const link = screen.getByRole("link", { name: "Create a legacy personal token" });
+  const link = screen.getByRole("link", { name: /^Create a legacy personal token/ });
   expect(link.getAttribute("href")).toBe(
     "https://gitlab.com/-/user_settings/personal_access_tokens/legacy/new",
   );

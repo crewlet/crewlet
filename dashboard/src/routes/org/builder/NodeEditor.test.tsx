@@ -54,6 +54,25 @@ const labelled = (label: string) =>
 const field = (label: string) => screen.getByLabelText(labelled(label));
 const type = (label: string, value: string) =>
   fireEvent.change(field(label), { target: { value } });
+/** Pick an option, which is how every choice on this form is made. */
+const choose = (label: string, option: string | RegExp) => {
+  fireEvent.click(field(label));
+  fireEvent.mouseDown(screen.getByRole("option", { name: option }));
+};
+/**
+ * The alert a control's own description points at, or null.
+ *
+ * The contract rather than the markup: a field's refusal is the one a screen
+ * reader reads after its name, so what is asserted is that the control points
+ * at it, not which element happens to hold it.
+ */
+function errorOf(control: HTMLElement): HTMLElement | null {
+  for (const id of (control.getAttribute("aria-describedby") ?? "").split(" ")) {
+    const node = id ? document.getElementById(id) : null;
+    if (node?.getAttribute("role") === "alert") return node;
+  }
+  return null;
+}
 const apply = () => fireEvent.click(screen.getByRole("button", { name: "Apply" }));
 const seatData = (state: BuilderState, key: NodeKey): ConfigRole => {
   const found = locate(state.draft, key);
@@ -192,13 +211,7 @@ describe("the unsaved-changes prompt", () => {
         fireEvent.mouseDown(screen.getByRole("option", { name: /SRE/ }));
       },
     ],
-    [
-      "a choice",
-      () =>
-        fireEvent.change(field("Access level"), {
-          target: { value: "maintainer" },
-        }),
-    ],
+    ["a choice", () => choose("Access level", "Maintainer")],
     [
       "a model chain",
       () => {
@@ -367,15 +380,22 @@ describe("seat fields", () => {
     ).toBeDefined();
   });
 
-  test("a model chain says the order it is tried in, and how to change it", () => {
+  // THE ORDER IS THE CHAIN, read first to last, so it is MOVED rather than
+  // retyped. The help line used to end "to change the order, remove a provider
+  // and choose it again", which was a workaround for a control that could not
+  // reorder its own chips.
+  test("a model chain says the order it is tried in, and is reordered in place", () => {
     const doc = connected();
     doc.units![0]!.roles![1]!.llm = ["smart", "fast"];
-    edit(keyedState(doc), "seat:dev");
-    expect(
-      screen.getByText(
-        "Tried in this order: smart, then fast. To change the order, remove a provider and choose it again.",
-      ),
-    ).toBeDefined();
+    const view = edit(keyedState(doc), "seat:dev");
+    expect(screen.getByText("Tried in this order: smart, then fast.")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Move fast earlier" }));
+    expect(screen.getByText("Tried in this order: fast, then smart.")).toBeDefined();
+
+    apply();
+    expect(view.state().log.ops).toHaveLength(1);
+    expect(seatData(view.state(), "seat:dev").llm).toEqual(["fast", "smart"]);
   });
 
   test("a GitLab block without provisioning has no access level to set, and says so", () => {
@@ -581,7 +601,7 @@ describe("integrations", () => {
     // Already enrolled: its block exists, so a tier says nothing about enrolling.
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
 
-    fireEvent.change(field("Access tier"), { target: { value: "full_access" } });
+    choose("Access tier", "Full access");
     expect(
       screen.getByText(
         "The app's permissions were fixed when it was created. Raise them at GitHub as well.",
@@ -621,7 +641,7 @@ describe("integrations", () => {
     const doc = connected();
     edit(keyedState(doc), "seat:sre");
     expect(screen.queryByText(/This enrols the seat in GitHub/)).toBeNull();
-    fireEvent.change(field("Access tier"), { target: { value: "review" } });
+    choose("Access tier", "Review");
     expect(
       screen.getByText(/This enrols the seat in GitHub. Create its app from Integrations./),
     ).toBeDefined();
@@ -763,7 +783,7 @@ describe("problems", () => {
     edit(warned, "unit:Platform");
     const lead = field("Lead");
     expect(lead.getAttribute("aria-invalid")).toBeNull();
-    expect(lead.closest(".field")?.querySelector(".field-error")).toBeNull();
+    expect(errorOf(lead)).toBeNull();
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
     const caution = screen.getByText(/names no seat/).closest(".crewlet-callout") as HTMLElement;
     expect(caution.classList.contains("crewlet-callout--warning")).toBe(true);
@@ -778,12 +798,18 @@ describe("problems", () => {
       ),
     ]);
     edit(state, "seat:dev");
-    const goal = field("Goal").closest(".field") as HTMLElement;
-    expect(within(goal).getByRole("alert").textContent).toContain("too vague to act on");
+    expect(errorOf(field("Goal"))?.textContent).toContain("too vague to act on");
+    // AND THE REST ARE LISTED AT THE TOP: an alert no field points at.
     const top = screen
       .getAllByRole("alert")
-      .find((el) => el.textContent?.includes("names no template"));
-    expect(top?.closest(".field")).toBeNull();
+      .find((alert) => alert.textContent?.includes("names no template"));
+    expect(top).toBeDefined();
+    const controls = [...document.querySelectorAll("[aria-describedby]")];
+    expect(
+      controls.some((control) =>
+        (control.getAttribute("aria-describedby") ?? "").split(" ").includes(top!.id),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -791,9 +817,8 @@ describe("a unit", () => {
   test("the lead shows the lead it would inherit, and a lead change applies with the rest", () => {
     const state = keyedState(fixtureCompany());
     const view = edit(state, "unit:Platform");
-    const lead = field("Lead") as HTMLSelectElement;
-    expect(lead.options[0]!.textContent).toBe("No lead (inherits VP Engineering from Engineering)");
-    fireEvent.change(lead, { target: { value: "SRE" } });
+    expect(field("Lead").textContent).toBe("No lead (inherits VP Engineering from Engineering)");
+    choose("Lead", "SRE");
     type("Purpose", "Keep it running");
     apply();
     expect(view.state().log.ops).toHaveLength(1);
@@ -806,7 +831,7 @@ describe("a unit", () => {
 
   test("a custom unit type is typed in its own box and applied", () => {
     const view = edit(keyedState(fixtureCompany()), "unit:Platform");
-    fireEvent.change(field("Type"), { target: { value: "__custom__" } });
+    choose("Type", "Custom type");
     type("Custom type", "tribe");
     apply();
     const found = locate(view.state().draft, "unit:Platform");

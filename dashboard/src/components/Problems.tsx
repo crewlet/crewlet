@@ -16,6 +16,7 @@
  */
 
 import type { ReactNode } from "react";
+import { InlineCode, Link, List } from "@crewlethq/ui";
 
 /** One problem: where it is, and what to do about it. */
 export interface Problem {
@@ -75,9 +76,10 @@ export function split(detail: string): Problem[] {
  * paths finds every config path a refusal names, wherever it sits in the line.
  *
  * NOT [split]'s `path`, WHICH IS ONLY THE HEAD. A problem line sometimes opens
- * with `some.config.path: ` and sometimes carries the path inside its sentence
- * — `integrations.datadog.route_to required value missing: …` is the engine's
- * commonest shape — and the head pattern sees only the first of those. The
+ * with `some.config.path: ` and sometimes carries the path inside its
+ * sentence (`integrations.datadog.route_to required value missing: …` is the
+ * engine's commonest shape), and the head pattern sees only the first of
+ * those. The
  * renderer never cared, because [marked] picks a path out of the prose either
  * way; a caller that wants to ACT on one does.
  *
@@ -143,33 +145,33 @@ export function marked(text: string): ReactNode[] {
     // away to read a page about how to fill it in.
     if (linked && href) {
       out.push(
-        <a key={key++} href={href} target="_blank" rel="noreferrer">
+        <Link key={key++} href={href} external>
           {linked}
-        </a>,
+        </Link>,
       );
     } else if (ticked) {
       out.push(
-        <code key={key++} className="inline">
+        <InlineCode key={key++} tone="inherit">
           {ticked}
-        </code>,
+        </InlineCode>,
       );
     } else if (url) {
       out.push(
-        <a key={key++} href={url} target="_blank" rel="noreferrer">
+        <Link key={key++} href={url} external>
           {url}
-        </a>,
+        </Link>,
       );
     } else if (ref) {
       out.push(
-        <code key={key++} className="inline is-reference">
+        <InlineCode key={key++} variant="reference" tone="inherit">
           {ref}
-        </code>,
+        </InlineCode>,
       );
     } else {
       out.push(
-        <code key={key++} className="inline">
+        <InlineCode key={key++} tone="inherit">
           {route ?? quoted ?? path}
-        </code>,
+        </InlineCode>,
       );
     }
     last = at + whole.length;
@@ -188,21 +190,34 @@ export function Problems({ detail }: { detail: string }) {
     if (!only) return null;
     return (
       <span>
-        {only.path && <code className="inline">{only.path}</code>}
+        {only.path && <InlineCode tone="inherit">{only.path}</InlineCode>}
         {only.path && " "}
         {marked(only.text)}
       </span>
     );
   }
   return (
-    <ul className="problems">
-      {problems.map((p, i) => (
-        <li key={i}>
-          {p.path && <code className="inline">{p.path}</code>}
-          {p.path && " "}
-          {marked(p.text)}
-        </li>
+    <List variant="bulleted">
+      {problems.map((problem, i) => (
+        <List.Item key={i}>
+          {problem.path && <InlineCode tone="inherit">{problem.path}</InlineCode>}
+          {problem.path && " "}
+          {marked(problem.text)}
+        </List.Item>
       ))}
-    </ul>
+    </List>
   );
+}
+
+/**
+ * A refusal as a field's error line, or nothing at all.
+ *
+ * The design system's form row takes a NODE for its error, so every caller
+ * would otherwise spell the same ternary: a refusal is a list of problems
+ * rather than a sentence, and a field that rendered its error as plain text
+ * would be the one place in the product where a config path does not read as
+ * one.
+ */
+export function withProblems(detail: string | undefined): ReactNode {
+  return detail ? <Problems detail={detail} /> : undefined;
 }
