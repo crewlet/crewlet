@@ -57,7 +57,9 @@ node the same `stream.cluster.name`, a `stream.cluster.port` to route on,
 and the other members' route URLs in `stream.cluster.peers` — or point them
 all at an external cluster with `stream.type: nats` and `stream.url`. It is
 the same client code either way; embedded versus external is a connection
-choice, not a second backend.
+choice, not a second backend — and it really is either/or: `stream.cluster`
+configures the embedded server's own membership, so writing one against
+`stream.type: nats` is refused rather than accepted and read by nobody.
 
 **`stream.replicas: 3` on a clustered fleet.** Replication is what makes a
 publish a quorum commit before it returns, so "published" means "survives

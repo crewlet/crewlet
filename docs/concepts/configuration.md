@@ -103,7 +103,9 @@ peers divide the seats by; counting it would strand the difference.
 
 Free-form facts about where this process runs, matched by a seat's
 [`role.placement`](../guides/fleet.md#placement) selector. Values are
-strings and are compared exactly. They are advertised to peers on this
+strings and are compared exactly — so both the key and the value are
+trimmed of the whitespace around them before anything reads them, and two
+keys that are one key once trimmed are refused rather than collapsed. They are advertised to peers on this
 node's presence lease, so a label change takes effect one heartbeat after
 the restart that made it — not at the next config activation.
 

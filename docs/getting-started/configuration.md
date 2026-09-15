@@ -412,7 +412,11 @@ stream:
                                     #   reads none of these fields from an
                                     #   unnamed cluster, so a block without it
                                     #   starts a solo node that forms no cluster
-                                    #   at all, and Tier A refuses that
+                                    #   at all, and Tier A refuses that. EMBEDDED
+                                    #   ONLY: an external cluster is formed by
+                                    #   its own operator's config, so this whole
+                                    #   block is REFUSED against `type: nats`
+                                    #   rather than accepted and read by nobody
   #   port: 6222                    #   `node.id` is
   #   peers:                        #   the member name, so it must survive a
   #     - "nats://node-1:6222"      #   restart — a name minted at boot orphans
