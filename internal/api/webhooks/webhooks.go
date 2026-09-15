@@ -492,6 +492,7 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 			ID: id, Type: d.label, Source: d.source, Time: at,
 			Category: "webhook", Summary: d.summary, Actor: d.source,
 			TraceID: trace.TraceID, SpanID: trace.SpanID,
+			Tags:    deliveryTags(d),
 			Payload: json.RawMessage(d.raw),
 		}); err != nil {
 			log.WarnContext(ctx, "event_store_write_failed", "source", d.source, "error", err)
@@ -510,6 +511,40 @@ func (r *Receiver) record(ctx context.Context, d delivery, trace events.TraceCon
 		Topic:   "crewlet.webhooks." + d.source,
 		Payload: d.body,
 	})
+}
+
+// deliveryTags are the filterable dimensions of one delivery.
+//
+// WHO IT WAS FOR, on the ROW rather than only inside the payload. The row is
+// what a listing returns — the payload deliberately is not — so without this a
+// deliveries screen could say a delivery arrived and not which seat it was
+// addressed to, and answering that for a page of rows meant fetching a payload
+// per row.
+//
+// `recipient` rather than a name of this package's own: it is one of the four
+// keys the event store indexes as a PARTY, so tagging it here is also what
+// makes `events?agent=<handle>` return what reached that seat from outside —
+// the one question the party index exists for, and the one class of event it
+// was blind to.
+//
+// A nil map for a delivery that is neither addressed nor keyed, because an
+// empty tag is not the same as an absent one: a row carrying `recipient: ""`
+// reads as a delivery addressed to a seat whose handle went missing.
+func deliveryTags(d delivery) map[string]string {
+	tags := map[string]string{}
+	if d.handle != "" {
+		tags["recipient"] = d.handle
+	}
+	// The PROVIDER'S own delivery id, which is what an operator has in
+	// front of them in the provider's console when they come here asking
+	// what this engine did with it. Empty for the providers that send none.
+	if d.key != "" {
+		tags["delivery_key"] = d.key
+	}
+	if len(tags) == 0 {
+		return nil
+	}
+	return tags
 }
 
 // --- request plumbing ------------------------------------------------------

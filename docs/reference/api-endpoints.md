@@ -291,7 +291,7 @@ by a process that can reach the [coordination store](../concepts/coordination.md
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on |
+| `GET` | `/setup/integrations` | What every integration this build can set up still needs, plus the address third-party apps reach this deployment on. `public_base_url` answers `present` and `resolved` separately — set and set to something are different facts, and a `${VAR}` nobody exported is `present: true, resolved: false` with the variable named in `reference` |
 | `GET` | `/setup/integrations/{kind}` | One integration's requirement list and state |
 | `POST` | `/setup/integrations/{kind}/inputs` | Supply or generate those values: credentials are sealed, the rest is patched into the company |
 | `DELETE` | `/setup/integrations/{kind}` | Disconnect: remove what the integration holds at the third-party app, then its block |
@@ -2543,6 +2543,27 @@ Notes:
   reports `since` as what it drew: a cost explorer is read from its
   right-hand edge, and dropping the oldest silently would put a year's
   heading over a month of bars.
+
+---
+
+## Webhook Deliveries
+
+Every verified delivery writes one row to the event log under
+`category: "webhook"`, so the listing answers "what has been arriving" without
+reading a payload:
+
+| Field | What it carries |
+|---|---|
+| `type` | `webhook:<event>`, or `forge:<event>` for an Atlassian Cloud relay |
+| `source` | The integration the **payload** belongs to — the route for six of the seven, and the relayed product for Forge |
+| `summary` | The delivery in one sentence |
+| `tags.recipient` | The seat a per-seat delivery was addressed to, absent for a company-wide one. It is one of the four keys the log indexes as a **party**, so `GET /events?agent=<handle>` also returns what reached that seat from outside |
+| `tags.delivery_key` | The provider's own delivery id, absent for the providers that send none — what an operator has in front of them in the provider's console |
+| `payload` | The **raw body the provider sent**, on `GET /events/{event_id}` only. A listing never carries a payload, so a deliveries screen is one request rather than one per row |
+
+Note that a row exists only for a delivery that was **verified, claimed and
+queued**. A refusal — a bad signature, an unset secret, a body too large — is
+answered at the edge and appears in the engine's log rather than here.
 
 ---
 

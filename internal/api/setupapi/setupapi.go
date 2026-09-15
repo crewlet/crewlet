@@ -39,6 +39,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/confluence"
 	"github.com/crewlet/crewlet/internal/datadog"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -519,8 +520,30 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 		"public_base_url": map[string]any{
 			"value": base, "present": present, "resolved": resolved,
 			"config_path": "integrations.public_base_url",
+			// WHICH VARIABLE, when the setting is a whole reference.
+			//
+			// `resolved: false` says the address is configured and
+			// resolves to nothing, which is a misconfiguration the screen
+			// has to NAME to be actionable: "set it" is advice, "export
+			// PUBLIC_BASE_URL" is an instruction. The variable's name is
+			// not the value, and this surface is guarded in full anyway.
+			// Empty for a literal, which by definition resolves.
+			"reference": wholeRef(company.Integrations.PublicBaseURL),
 		},
 	})
+}
+
+// wholeRef is the variable a setting points at, or empty when it is a literal.
+//
+// Only a WHOLE reference, which is what [setup.Resolution] decides `resolved`
+// on: a value with a reference embedded in a longer string resolves per
+// segment and naming one of them would be advice about the wrong half.
+func wholeRef(stored string) string {
+	name, ok := envref.Whole(stored)
+	if !ok {
+		return ""
+	}
+	return name
 }
 
 // activeRevision is the revision this node is serving, or empty when it

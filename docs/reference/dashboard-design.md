@@ -240,7 +240,7 @@ because every single-modifier combination worth having is already the browser's.
 | `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1\|7\|30` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` | **Infrastructure** — nodes, leases, duties, replication *(operator)* | |
-| `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** *(operator)* | |
+| `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** — the catalogue, and one tool with what has actually been arriving on each of its surfaces *(operator)* | |
 | `#/admin/tools` | **Tools** *(operator)* | `q=` · `origin=` |
 | `#/admin/config` · `#/admin/config/revisions/{id}` | **Configuration** *(operator)* | `lens=active\|history\|diff` |
 | `#/admin/credentials` | **Credentials** — names and provenance, never values *(operator)* | |

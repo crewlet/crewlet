@@ -23,8 +23,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, Empty, Skeleton } from "~/ui/primitives.tsx";
+import { QueryState, SeatChip } from "~/components/common.tsx";
+import { Avatar, Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { DataTable } from "~/ui/DataTable.tsx";
+import { href, useNavigator } from "~/app/router.tsx";
+import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
@@ -32,7 +36,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { SetupDialog } from "./SetupDialog.tsx";
 import { DisconnectDialog } from "./DisconnectDialog.tsx";
 import { onTokenChanged, requestToken, rest, RestError } from "~/protocol/index.ts";
-import type { IntegrationRow, ReconcileFinding, ReconcileStatus } from "~/protocol/types.ts";
+import type {
+  EventRecord,
+  IntegrationRow,
+  ReconcileFinding,
+  ReconcileStatus,
+} from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
@@ -1650,6 +1659,138 @@ function stuckDisconnecting(entry: Entry, rows: Map<string, IntegrationRow>): st
   return "";
 }
 
+/**
+ * What actually arrived on one surface, newest first.
+ *
+ * FROM THE LISTING, never one payload per row. The event list returns a row's
+ * summary, source, type and tags and deliberately NOT its payload — so a page
+ * of deliveries is one request, and the raw body an operator wants for exactly
+ * one of them is a click to the event's own page. The `#/model` screen fetched
+ * a payload per row and paid sixty-one round trips for one screen.
+ */
+function SurfaceDeliveries({ surface, name }: { surface: string; name: string }) {
+  const nav = useNavigator();
+  const now = useNow();
+  // Not pushed — a webhook row reaches the live stream, but this is a page of
+  // history and a delivery arrives on the provider's schedule rather than
+  // this screen's. A minute is the cadence "is anything arriving at all" is
+  // asked at, which is the same one the traffic counters use.
+  const deliveries = useQuery(
+    "events",
+    { category: "webhook", source: surface, limit: DELIVERY_PAGE },
+    { pollMs: 60_000, refetchOnFocus: true },
+  );
+  const rows = deliveries.data?.events ?? [];
+
+  return (
+    <Panel
+      title={`${name} deliveries`}
+      icon="inbox"
+      count={rows.length}
+      subtitle="what the provider actually sent, newest first"
+      padding="none"
+    >
+      <QueryState
+        error={deliveries.error}
+        loading={deliveries.loading}
+        empty={
+          deliveries.data && rows.length === 0
+            ? {
+                title: `Nothing has arrived on ${name}`,
+                hint: "A verified delivery writes a row here. Nothing at all means either the provider is not sending, or it is being refused before it is recorded — the engine's own log is where a refusal appears.",
+              }
+            : undefined
+        }
+      >
+        {rows.length > 0 && (
+          <DataTable<EventRecord>
+            rows={rows}
+            rowKey={(e) => e.id}
+            defaultSort={{ key: "at", dir: "desc" }}
+            onRowClick={(e) => nav.to(["activity", "events", e.id])}
+            empty={{ title: "No delivery matches" }}
+            columns={[
+              {
+                key: "at",
+                header: "Arrived",
+                shrink: true,
+                sortValue: (e) => tsKey(e.timestamp),
+                cell: (e) => (
+                  <span className="t-caption" title={fmtDateTime(e.timestamp)}>
+                    {relTime(e.timestamp, now)}
+                  </span>
+                ),
+              },
+              {
+                key: "event",
+                header: "Event",
+                shrink: true,
+                sortValue: (e) => e.type,
+                // `webhook:` and `forge:` are the engine's own filing
+                // prefixes, and the provider's event name is what an
+                // operator is matching against their own console.
+                cell: (e) => (
+                  <code className="inline nowrap">{e.type.replace(/^(webhook|forge):/, "")}</code>
+                ),
+              },
+              {
+                key: "summary",
+                header: "What it said",
+                cell: (e) => <span className="t-caption">{e.summary}</span>,
+              },
+              {
+                key: "for",
+                header: "Addressed to",
+                shrink: true,
+                sortValue: (e) => e.tags?.recipient ?? "",
+                cell: (e) =>
+                  e.tags?.recipient ? (
+                    <SeatChip name={e.tags.recipient} handle={e.tags.recipient} />
+                  ) : (
+                    // NOT "nobody": a company-wide delivery is routed by
+                    // the notification spine rather than addressed in the
+                    // URL, and calling that unaddressed would read as a
+                    // delivery that reached no one.
+                    <span className="faint t-caption">the company</span>
+                  ),
+              },
+              {
+                key: "key",
+                header: "Provider id",
+                shrink: true,
+                sortValue: (e) => e.tags?.delivery_key ?? "",
+                cell: (e) =>
+                  e.tags?.delivery_key ? (
+                    <code className="inline nowrap">{e.tags.delivery_key}</code>
+                  ) : (
+                    <span className="faint t-caption">none sent</span>
+                  ),
+              },
+            ]}
+          />
+        )}
+      </QueryState>
+      {rows.length >= DELIVERY_PAGE && (
+        <footer className="panel-foot">
+          <span className="t-caption">
+            The newest {DELIVERY_PAGE}. Older deliveries are in the{" "}
+            <a href={href(["activity", "events"], { category: "webhook" })}>event log</a>, which
+            pages.
+          </span>
+        </footer>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * One page of deliveries.
+ *
+ * Sized to a screen rather than to the log: this is "what has been arriving",
+ * and the event log is where a reader goes to page through history.
+ */
+const DELIVERY_PAGE = 50;
+
 export function Integrations({ kind }: { kind?: string }) {
   // Traffic counters are not pushed, and they move slowly; a minute is the
   // right cadence for "is anything arriving at all".
@@ -1716,6 +1857,15 @@ export function Integrations({ kind }: { kind?: string }) {
     appPath?: string;
   } | null>(null);
   const rows = new Map((data?.integrations ?? []).map((r) => [r.key, r]));
+  // THE SEGMENT IS A DESTINATION, not decoration. `kind` was accepted and
+  // never read, so `#/admin/integrations/github` rendered the whole catalogue
+  // — every link into one integration landed on the list it came from. It
+  // matches an entry by its own key OR by any surface it covers, because a
+  // finding and a webhook route both name the SURFACE (`jira`), while the
+  // card is the tool (`atlassian`).
+  const focus = kind
+    ? CATALOG.find((e) => e.key === kind || e.surfaces.some((s) => s.key === kind))
+    : undefined;
   // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
   // engine mid-flight, and the screen's job while that is true is to keep
   // looking. Derived from what arrived rather than from what was clicked, so
@@ -1754,11 +1904,38 @@ export function Integrations({ kind }: { kind?: string }) {
           </span>
         </div>
       )}
-      {setup.base?.present && (
+      {/* SET AND SET TO SOMETHING ARE DIFFERENT FACTS, which is why the
+          engine answers `resolved` beside `present` as a three-valued field.
+          The banner read `present` alone, so a `${VAR}` pointing at an
+          environment variable nobody exported rendered as "Third-party apps
+          reach this engine at" followed by an empty code span — the one
+          screen that exists to say where deliveries land, saying nothing, on
+          exactly the misconfiguration it should name. */}
+      {setup.base?.present && setup.base.resolved !== false && (
         <div className="banner neutral">
           <Icon name="link" size="sm" />
           <span>
             Third-party apps reach this engine at <code className="inline">{setup.base.value}</code>
+          </span>
+        </div>
+      )}
+      {setup.base?.present && setup.base.resolved === false && (
+        <div className="banner caution">
+          <Icon name="alert" size="sm" />
+          <span className="col" style={{ gap: 4 }}>
+            <span>
+              The public address is configured as a reference that resolves to nothing, so no
+              third-party app can deliver to this engine.
+            </span>
+            <span className="t-caption">
+              <code className="inline">{setup.base.config_path}</code> is set to{" "}
+              <code className="inline">
+                {setup.base.reference ? `\${${setup.base.reference}}` : "a reference"}
+              </code>
+              , which resolves to nothing. Export it, or seal it as a secret, and re-activate the
+              revision — a reference is resolved from the snapshot taken when the revision is
+              applied.
+            </span>
           </span>
         </div>
       )}
@@ -1838,9 +2015,20 @@ export function Integrations({ kind }: { kind?: string }) {
             refresh fixed it. The skeleton above says the same thing honestly.
             A REFUSED setup read is not waiting: it answers, the banner says
             so, and the cards render without their writes. */}
-        {!setup.loading && (
+        {kind && !focus && (
+          <Empty
+            icon="plug"
+            title={`This build serves no integration called “${kind}”`}
+            hint="The link that brought you here names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
+          />
+        )}
+        {/* A KIND THAT NAMES NOTHING LISTS NOTHING, rather than falling back
+            to the catalogue: the empty state above already says the link is
+            dead, and printing every integration under it answers a question
+            nobody asked while burying the one that was. */}
+        {!setup.loading && !(kind && !focus) && (
           <div className="int-list">
-            {[...CATALOG].sort(byConfiguredThenName(rows)).map((entry) => (
+            {(focus ? [focus] : [...CATALOG].sort(byConfiguredThenName(rows))).map((entry) => (
               <EntryRow
                 key={entry.key}
                 entry={entry}
@@ -1901,7 +2089,24 @@ export function Integrations({ kind }: { kind?: string }) {
             ))}
           </div>
         )}
-        {data && configured.length === 0 && (
+        {/* WHAT ACTUALLY ARRIVED, one panel per surface the tool covers.
+            Per surface rather than per tool because the event rows carry the
+            SURFACE as their source — Atlassian is an organization and two
+            products, and a Jira delivery and a Confluence one are different
+            answers to "is this working". A silent surface says so rather
+            than being left out, which is the fact an operator came for. */}
+        {focus &&
+          focus.surfaces
+            // `forge` is a relay rather than a source: it hands Jira and
+            // Confluence events on in its own shape and the rows are filed
+            // under the product they belong to, so a panel for it could
+            // only ever be empty.
+            .filter((surface) => surface.key !== "forge")
+            .map((surface) => (
+              <SurfaceDeliveries key={surface.key} surface={surface.key} name={surface.name} />
+            ))}
+
+        {data && !kind && configured.length === 0 && (
           <Empty
             icon="plug"
             title="No integration is connected yet"

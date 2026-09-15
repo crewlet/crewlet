@@ -269,6 +269,69 @@ func TestThePublicBaseIsAnsweredOnce(t *testing.T) {
 	}
 }
 
+// SET AND SET TO SOMETHING ARE DIFFERENT FACTS, and the answer says which.
+//
+// `present` alone is what a screen read, so a `${VAR}` pointing at a variable
+// nobody exported rendered as "third-party apps reach this engine at" followed
+// by nothing — the one banner that exists to say where deliveries land, saying
+// nothing, on exactly the misconfiguration it should have named.
+//
+// The VARIABLE is what makes it actionable: "set it" is advice, "export
+// PUBLIC_BASE_URL" is an instruction. It is a name rather than a value, and
+// this surface is guarded in full.
+func TestAnUnresolvedPublicBaseNamesItsVariable(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+  "name": "Acme",
+  "integrations": {"public_base_url": "${PUBLIC_BASE_URL}"},
+  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
+}`, map[string]string{"X-Summary": "pointing at a variable"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	body := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))
+	base, _ := body["public_base_url"].(map[string]any)
+	if base["present"] != true {
+		t.Errorf("present = %v on a company that names one", base["present"])
+	}
+	if base["resolved"] != false {
+		t.Errorf("resolved = %v, want a positive no — the variable is unset",
+			base["resolved"])
+	}
+	if base["reference"] != "PUBLIC_BASE_URL" {
+		t.Errorf("reference = %v, want the variable to export", base["reference"])
+	}
+	if base["value"] != "" {
+		t.Errorf("value = %v, want nothing — it resolves to nothing", base["value"])
+	}
+}
+
+// AND A LITERAL NAMES NO VARIABLE, because there is none to export.
+func TestALiteralPublicBaseNamesNoVariable(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	res := s.do(t, http.MethodPut, "/config", `{
+  "name": "Acme",
+  "integrations": {"public_base_url": "https://engine.example.com"},
+  "providers": {"llm": {"zulu": {"type": "anthropic", "model": "claude-sonnet-5", "api_keys": ["${K}"]}}},
+  "roles": [{"name": "CTO", "handle": "cto", "llm": "zulu"}]
+}`, map[string]string{"X-Summary": "a literal"})
+	if res.Code != http.StatusCreated {
+		t.Fatalf("import = %d: %s", res.Code, res.Body)
+	}
+
+	base, _ := decode(t, s.do(t, http.MethodGet, "/setup/integrations", "", nil))["public_base_url"].(map[string]any)
+	if base["resolved"] != true || base["value"] != "https://engine.example.com" {
+		t.Errorf("base = %v, want a literal that resolves to itself", base)
+	}
+	if base["reference"] != "" {
+		t.Errorf("reference = %v on a literal", base["reference"])
+	}
+}
+
 func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
