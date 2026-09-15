@@ -293,6 +293,11 @@ func Register(r *Registry, s Sources) {
 		// can span several turns and one turn several traces. See the
 		// answer, and migration 0014 which made it askable at all.
 		r.Register("turn", s.turn)
+		// AND THE LIST OF THEM, which did not exist: a turn is the unit
+		// of work this engine does and every other surface is a
+		// projection of one. The dashboard faked it by paging the raw
+		// feed sixty-one times and folding in the browser.
+		r.Register("turns", s.turns)
 		// The company's phase records, with their payloads. `events` cannot
 		// serve this: its listing never selects the payload, and a phase
 		// record without one has no prompts, no response and no decision.

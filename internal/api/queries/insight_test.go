@@ -667,3 +667,87 @@ func TestAnInvertedWindowIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 		t.Errorf("an unparseable since answered %v, want bad params", err)
 	}
 }
+
+// `failed` IS THREE-VALUED, and the third value is the default.
+//
+// nil is every turn, true is the ones that carried a failure, false is the
+// ones that did not. Folding the absent case into `false` would make an
+// unparameterised list hide every failing turn — which is the one an operator
+// opens this screen for.
+func TestTheTurnListsFailedFilterIsThreeValued(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	log := db.Events()
+	base := time.Now().UTC().Add(-time.Hour)
+
+	seed := func(id string, failed bool) {
+		t.Helper()
+		tags := map[string]string{"turn_id": id, "agent_role": "PM"}
+		if failed {
+			tags["failed"] = "true"
+		}
+		if err := log.Append(t.Context(), store.EventRecord{
+			ID: id + "-p0", Type: "agent_phase_completed", Time: base,
+			Category: "lifecycle", Actor: "PM", Tags: tags,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("t-ok", false)
+	seed("t-bad", true)
+
+	src := queries.Sources{Events: log}
+	ids := func(params map[string]any) []string {
+		t.Helper()
+		got := asMap(t, answer(t, src, "turns", params))
+		out := []string{}
+		for _, row := range rows(t, got["turns"]) {
+			out = append(out, fmt.Sprint(row["turn_id"]))
+		}
+		slices.Sort(out)
+		return out
+	}
+
+	if got := ids(nil); !slices.Equal(got, []string{"t-bad", "t-ok"}) {
+		t.Errorf("the default gave %v, want every turn — an absent filter is "+
+			"not `false`", got)
+	}
+	if got := ids(map[string]any{"failed": "true"}); !slices.Equal(got, []string{"t-bad"}) {
+		t.Errorf("failed=true gave %v", got)
+	}
+	if got := ids(map[string]any{"failed": "false"}); !slices.Equal(got, []string{"t-ok"}) {
+		t.Errorf("failed=false gave %v", got)
+	}
+	// A VALUE THAT IS NEITHER is refused rather than read as one of them.
+	if _, err := askNative(t, src, "turns", map[string]any{"failed": "maybe"}); !errors.Is(
+		err, queries.ErrBadParams) {
+
+		t.Errorf("failed=maybe answered %v, want bad params", err)
+	}
+}
+
+// THE CURSOR IS ECHOED, not left for a client to assemble — the rule the event
+// list already follows, because a client building it from the last row's
+// fields would be reimplementing the one thing that must not drift.
+func TestTheTurnListEchoesItsCursor(t *testing.T) {
+	t.Parallel()
+	log := openStore(t).Events()
+	base := time.Now().UTC().Add(-time.Hour)
+	if err := log.Append(t.Context(), store.EventRecord{
+		ID: "t-1-p0", Type: "agent_phase_completed", Time: base,
+		Category: "lifecycle", Actor: "PM",
+		Tags: map[string]string{"turn_id": "t-1", "agent_role": "PM"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := asMap(t, answer(t, queries.Sources{Events: log}, "turns", nil))
+	if got["next"] == nil || got["next"] == "" {
+		t.Fatalf("next = %#v on a page with a turn on it", got["next"])
+	}
+	// AND NOTHING TO RESUME FROM AT THE END, so a client walking the list
+	// stops rather than re-asking for the same page for ever.
+	empty := asMap(t, answer(t, queries.Sources{Events: openStore(t).Events()}, "turns", nil))
+	if empty["next"] != nil {
+		t.Errorf("next = %#v on an empty page", empty["next"])
+	}
+}

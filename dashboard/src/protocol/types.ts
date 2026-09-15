@@ -2742,6 +2742,44 @@ export interface WorkRoutingAnswer {
   incomplete?: WorkIncomplete;
 }
 
+/** One unit of agent work, as a list row. */
+export interface TurnRow {
+  turn_id: string;
+  agent_id?: string;
+  role?: string;
+  /** The span of the turn's own EVENTS, which is not its duration: the span
+   *  covers the reflection pass that publishes after the turn ends. */
+  started_at: string;
+  ended_at: string;
+  /** The turn's OWN measurement, and zero for one that has not finished —
+   *  which `complete` is what tells apart. */
+  duration_ms: number;
+  /** Whether a completion record exists. A turn with none is either running
+   *  or died mid-flight, and those look identical from a list. */
+  complete: boolean;
+  phases: number;
+  rounds: number;
+  /** Whether ANY event of the turn was a failure, which is a different
+   *  question from its outcome: a turn can recover from a failed provider
+   *  call and still end well. */
+  failed: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  /** Every distinct model the turn used, comma-joined — a turn routinely uses
+   *  two, a cheap one for the extension judge and the seat's own. */
+  models?: string;
+  summary?: string;
+  trigger?: string;
+  task_id?: string;
+}
+
+export interface TurnsAnswer {
+  turns: TurnRow[];
+  /** The cursor to resume from, on the turn's START. */
+  next: string | null;
+}
+
 /** Who the presented credential belongs to — see `lib/viewer.ts`. */
 export interface Viewer {
   /** The operator id the token resolves to, or "" for an anonymous caller. */
@@ -2764,6 +2802,7 @@ export interface QueryMap {
   event: EventRecord;
   trace: TraceAnswer;
   turn: TurnAnswer;
+  turns: TurnsAnswer;
   phases: PhasesPage;
   tokens: Rollup;
   stream: EngineHealth;

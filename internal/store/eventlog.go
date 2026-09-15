@@ -940,8 +940,7 @@ const AgentPhaseLimit = 50
 const agentPhaseSQL = `
 SELECT ` + listColumns + `, payload
 FROM crewlet_events
-WHERE event_type = 'agent_phase_completed' AND event_time >= ?
-  AND (agent_id = ? OR agent_role = ?)`
+WHERE event_type = 'agent_phase_completed' AND event_time >= ?`
 
 // agentPhaseCursorSQL is the same read, one page older.
 //
@@ -974,7 +973,17 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 		return nil, nil
 	}
 	query := agentPhaseSQL
-	args := []any{EncodeTime(now().Add(-EventHistory)), agentID, agentRole}
+	args := []any{EncodeTime(now().Add(-EventHistory))}
+	// ONLY THE IDENTIFIERS THE CALLER ACTUALLY HAS.
+	//
+	// It was `(agent_id = ? OR agent_role = ?)` with both bound
+	// unconditionally, so an EMPTY one matched every row that carries
+	// none: a handle the roster could not resolve to a role asked for that
+	// seat's phases and was answered every non-agent event in the window.
+	// The guard above catches only the case where BOTH are empty.
+	clause, ids := seatClause(agentID, agentRole)
+	query += clause
+	args = append(args, ids...)
 	if before != nil && before.ID != "" {
 		query += agentPhaseCursorSQL
 		args = append(args, EncodeTime(before.Time), before.ID)
@@ -982,6 +991,30 @@ func (l *EventLog) AgentPhases(ctx context.Context, agentID, agentRole string, b
 	query += agentPhaseOrderSQL
 	args = append(args, AgentPhaseLimit)
 	return l.scanPayloads(ctx, query, args...)
+}
+
+// seatClause narrows to a seat by whichever identifier the caller holds.
+//
+// A caller passes the handle-derived agent id, the role name, or both — the
+// roster carries one and the projection keys on the other — and binding an
+// EMPTY one is how a filter turns into a match on every row that has none.
+// Returns an empty clause when the caller holds neither, which its own callers
+// treat as "no seat named" rather than "every seat".
+func seatClause(agentID, agentRole string) (string, []any) {
+	var terms []string
+	var args []any
+	if agentID != "" {
+		terms = append(terms, "agent_id = ?")
+		args = append(args, agentID)
+	}
+	if agentRole != "" {
+		terms = append(terms, "agent_role = ?")
+		args = append(args, agentRole)
+	}
+	if len(terms) == 0 {
+		return "", nil
+	}
+	return " AND (" + strings.Join(terms, " OR ") + ")", args
 }
 
 // phasesSQL is AgentPhases without the seat filter.
