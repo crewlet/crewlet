@@ -2929,3 +2929,72 @@ a.work-cal-chip:hover {
   opacity: 0.55;
   z-index: 1;
 }
+
+/* ---- "Change this with your assistant" ---------------------------------
+   Closed by default and quiet when closed: it is the answer to a question a
+   reader has occasionally, not a control the screen is about. */
+.toolcall {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+.toolcall-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-align: left;
+}
+.toolcall-toggle:hover {
+  color: var(--text);
+}
+.toolcall-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.toolcall-note {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.toolcall-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+/* A DASHED EDGE ON THE IRREVERSIBLE ONE, not a red fill: it is still just
+   text on a page, and a block that shouted would be a delete button. */
+.toolcall-row.is-destructive {
+  border-style: dashed;
+  border-color: var(--critical-ink);
+}
+.toolcall-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.toolcall-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--text);
+}
+.toolcall-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}

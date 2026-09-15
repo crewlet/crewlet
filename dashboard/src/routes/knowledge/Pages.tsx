@@ -47,6 +47,8 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import type { PageRevision } from "~/protocol/index.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { useViewer } from "~/lib/viewer.ts";
+import { ToolCallBlock } from "~/components/ToolCall.tsx";
 
 const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
   published: "positive",
@@ -278,6 +280,7 @@ export function Pages({ container: fromPath }: { container?: string }) {
  */
 export function PageView({ container, title }: { container: string; title: string }) {
   const org = useOrg();
+  const viewer = useViewer();
   const index = useMemo(() => indexOrg(org), [org]);
   const now = useNow();
   const id = `${container}/${title}`;
@@ -387,6 +390,13 @@ export function PageView({ container, title }: { container: string; title: strin
             />
 
             <PageChanges pageID={page.id} seatName={seatName} now={now} />
+            {/* WHAT IT WOULD TAKE TO EDIT THIS, since the dashboard does not.
+                The save states the version it edited, because a page has no
+                per-field merge that makes overwriting prose safe. */}
+            <ToolCallBlock
+              subject={{ kind: "page", id: page.id, version: page.version }}
+              viewer={viewer.handle}
+            />
           </>
         )}
       </QueryState>

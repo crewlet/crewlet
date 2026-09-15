@@ -37,6 +37,8 @@ import { useNow } from "~/lib/clock.ts";
 import type { WorkGoal, WorkGoalTarget } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { useViewer } from "~/lib/viewer.ts";
+import { ToolCallBlock } from "~/components/ToolCall.tsx";
 
 /** The health values, and their tone. A closed set, so one the engine adds
  *  later renders as itself rather than vanishing. */
@@ -293,6 +295,7 @@ function targetRight(target: WorkGoalTarget): string {
  */
 export function Goal({ id }: { id: string }) {
   const now = useNow();
+  const viewer = useViewer();
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const seatName = (handle: string) => index.byHandle.get(handle)?.name ?? handle;
@@ -367,6 +370,7 @@ export function Goal({ id }: { id: string }) {
                 </div>
               )}
             </Panel>
+            <ToolCallBlock subject={{ kind: "goal", id }} viewer={viewer.handle} />
           </>
         )}
       </QueryState>
