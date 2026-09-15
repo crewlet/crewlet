@@ -6,10 +6,11 @@
 // makes the assets and the server that answers their queries the same artifact
 // by construction.
 //
-// The tree is the zero-build ES-module app itself — no bundler, no transpile
-// step, no build output. What is embedded is what a browser receives, which is
-// also what makes the dashboard's own test suite meaningful: it runs against
-// these files, unchanged.
+// The tree is a BUILD OUTPUT, written by Vite from dashboard/ and committed,
+// because `go build ./...` and `go install ...@latest` have to work on a clean
+// checkout with no Node on the machine, and an embed directive cannot run a
+// bundler. CI rebuilds it and diffs the tree, so a committed bundle that does
+// not match its source is a red build rather than a silent lie.
 package static
 
 import (
@@ -24,7 +25,7 @@ import (
 // be missing from the binary with nothing failing until a browser asked for it.
 //
 // THE ICON IS NOT UNDER dashboard/ AND MUST STILL BE NAMED. The shell asks
-// for it at /static/crewlet-icon.svg (the tab icon and the sidebar brand) —
+// for it at /static/crewlet-icon.svg (the tab icon and the sidebar brand),
 // one directory above the rest of the app, because it is the product's mark
 // rather than the dashboard's asset. Embedding only `dashboard` left it
 // 404ing from the binary while every module and stylesheet served perfectly,
@@ -33,7 +34,7 @@ import (
 // asks for unprompted lives under dashboard/ and rides the `all:` pattern.)
 //
 // A NEW TOP-LEVEL ASSET NEEDS A NEW PATTERN HERE, and TestEveryStaticFileIsInTheBinary
-// is what says so — it walks this directory on disk and fails on anything the
+// is what says so: it walks this directory on disk and fails on anything the
 // embed did not take.
 //
 //go:embed all:dashboard
