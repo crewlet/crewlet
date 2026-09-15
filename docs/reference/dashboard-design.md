@@ -502,18 +502,20 @@ What replaced it:
 - **The counts moved into the header badges**, and the failure count became
   the control that filters to failures. It used to be an inert tile reading
   "4 failed" beside an unrelated chip that did the filtering, so a reader who
-  saw the number had to go find the pill that acted on it. `Badge` renders as
-  a real `<button>` with `aria-pressed` when given an action — a `<span>`
+  saw the number had to go find the pill that acted on it. `Tag` renders as
+  a real `<button>` with `aria-pressed` when given an action: a `<span>`
   with a click handler is neither focusable nor announced, and looks
-  identical to the inert badges next to it.
+  identical to the inert tags next to it. A tag that is ON keeps the ground
+  its label was measured on, because the press is carried by its boundary;
+  the badge this replaces repainted the ground with its own ink, which is a
+  contrast ratio of 1:1 on the one control whose state has to be readable.
 - **The seat filter became a picker.** It was a text box, but the match is
   exact on both sides of the wire — the server query and the in-memory
   filter both compare for equality — so typing a prefix returned nothing
-  while looking exactly like a search that found no matches. `Select` is a
-  native `<select>`: keyboard navigation, type-ahead and the platform's own
-  overlay come free, and a hand-built listbox would have to earn all three
-  back. It also scales past the ten seats at which the chip row silently
-  disappeared.
+  while looking exactly like a search that found no matches. `Select` is the
+  design system's listbox, and it searches once the roster passes eight,
+  which no native dropdown can do at all. It also scales past the ten seats
+  at which the chip row silently disappeared.
 - **The spend panel is a link.** It was Spend's panel on Spend's data at
   Spend's window; the screens are split by question, and duplicating one
   screen's answer at the bottom of another is how the two come to disagree.
@@ -521,14 +523,14 @@ What replaced it:
 Three rows of buttons, and a table, that behaved differently from a keyboard
 than they looked:
 
-- **A section row activates manually.** `Tabs`, and a `Segmented` with
-  `semantics="tabs"` (a lens, a window, a grouping), are one tab stop: the
+- **A section row activates manually.** `Tabs`, and a `SegmentedControl`
+  with `semantics="tabs"` (a lens, a window, a grouping), are one tab stop: the
   arrow keys and Home and End move focus along the row, and Enter or Space
   selects. A section pushes a history entry, and a row that selected as focus
   moved left one entry per keypress for Back to walk through. Each tab names
   the `TabPanel` it controls.
 - **A setting is a radio group.** The theme and density controls are
-  `Segmented` with `semantics="radio"`: announced as a choice rather than as
+  `SegmentedControl` with `semantics="radio"`: announced as a choice rather than as
   tabs with no panel, and the arrows select as they move, because changing a
   setting costs nothing on every keypress. The same applies to a filter that
   replaces the history entry.
@@ -544,7 +546,7 @@ Three more controls that looked like something they were not:
   a secure context, so `navigator.clipboard` is simply undefined at the
   `http://<node-ip>:8000` anyone reads the dashboard of a machine that is not
   their laptop at. `navigator.clipboard?.writeText(x)` swallowed that. The
-  `CopyButton` primitive falls back to the deprecated `execCommand` path,
+  design system's `CopyButton` falls back to the deprecated `execCommand` path,
   which is the only one that works there, and then says `Copied` or
   `Copy failed` — announced as well as drawn.
 - **A caption-sized link is still a link.** `.t-caption` on an `<a>` sets the
@@ -556,7 +558,7 @@ Three more controls that looked like something they were not:
 - **Select-all is a local verb on a record.** ⌘A / Ctrl+A is a *document*
   gesture, so on a screen whose point is one JSON record — a turn's record,
   the active configuration — it took the nav, the stat row and every phase
-  card along with it. A `Code selectable` block is focusable and owns the
+  card along with it. A `CodeBlock selectable` block is focusable and owns the
   chord while it holds focus; everywhere else the browser keeps it. The
   focus ring is not decoration: a keyboard verb that changes meaning on
   click is a secret without one.
@@ -724,16 +726,16 @@ the built bundle in a browser — with 6000px of injected content and an
 explicit `window.scrollTo(0, 5000)`, `window.scrollY` stays 0 and the rail
 stays at the top, at every viewport from 600×900 to 1854×890.
 
-### A panel has one left edge
+### A card has one left edge
 
-`.panel-body.tight` reduced the horizontal padding as well as the vertical
-one, so a tight panel's content sat on a different vertical line from its own
-heading — visibly closer to the border than the title above it — and a code
-block inside one was pushed hard against the panel's right edge with nowhere
-for its scrollbar. What `tight` is for is a panel whose rows carry their own
-vertical rhythm (a stack of cards, a footer strip), and that is a claim about
-height. It is vertical-only now, on the `--space-4` inset the head sets, and
-all five tight panels in the product align with their own titles.
+A tight body used to reduce the horizontal padding as well as the vertical
+one, so its content sat on a different vertical line from its own heading,
+visibly closer to the border than the title above it, and a code block inside
+one was pushed hard against the card's right edge with nowhere for its
+scrollbar. What `tight` is for is a card whose rows carry their own vertical
+rhythm (a stack of cards, a footer strip), and that is a claim about height.
+It is vertical-only in `Card.Body`, on the inset the header sets, and all four
+tight bodies in the product align with their own titles.
 
 ### A fact that moves is a fact nobody can scan
 
@@ -747,7 +749,7 @@ facts are in the same places always. That is what lets a reader scan a list
 down a column instead of hunting each row, and a source is exactly the kind of
 thing somebody scans.
 
-### `KeyValue` is a metadata list, not a panel layout
+### A description list is a metadata list, not a panel layout
 
 Its grid is `minmax(120px, max-content) 1fr`, sized for compact pairs — an id,
 a timestamp, a key. Used for a panel's actual content it puts everything in a
@@ -762,8 +764,8 @@ far end of a full-width row**, behind a `.spacer`, with the heading naming the
 unit once rather than every row repeating it — a bare "134 B" beside a label
 says nothing about what was measured.
 
-`KeyValue` keeps the one thing it is for on this screen: the conversation key,
-which really is a label and a value.
+`DescriptionList` keeps the one thing it is for on this screen: the
+conversation key, which really is a term and its detail.
 
 And **a chip must not repeat the sentence beside it.** The trigger's summary
 is built by the vendor's own summariser and already opens with who wrote it
@@ -985,15 +987,17 @@ rendered idle from the first phase to the last.
   `className` and `style`, so the variants stay the only way to style it.
   `ButtonLink` is the same recipe on an anchor, for an action that goes
   somewhere, and its `external` form opens a new tab without the referrer or
-  the opener. `dashboard/src/ui/recipes.test.ts` fails on a `btn` class list
-  spelled anywhere but `ui/primitives.tsx`.
-- **A shortcut hint is `ui/Kbd.tsx`, never a hand-written `<kbd>`.** The
+  the opener. A control drawn as a glyph ALONE is `IconButton`, whose name is
+  required: an icon-only button with none is announced as "button".
+  `designSystem.test.ts` fails on a `btn` class list spelled anywhere at all,
+  because that recipe has no owner in this tree any more.
+- **A shortcut hint is `Kbd`, never a hand-written `<kbd>`.** The
   command key is Command on Apple platforms and Control everywhere else, so a
   literal "⌘K" tells most readers to press a key they do not have. The glyphs
   are hidden from assistive technology, which reads the key names instead
   ("Control plus K"), because a screen reader reads "⌘" as "place of interest
   sign". The shell's search button and the search footer use it too, and the
-  same scan fails on a `<kbd>` drawn anywhere but `ui/Kbd.tsx`.
+  same scan fails on a `<kbd>` drawn anywhere at all.
 - **A key an input method is composing with belongs to the input method.**
   Somebody typing Japanese, Chinese or Korean walks candidates with the
   arrows, accepts a word with Enter and abandons it with Escape, and every one
@@ -1017,22 +1021,32 @@ rendered idle from the first phase to the last.
   neither scales nor clips them; the canvas tells that layer whenever the
   content beneath it moves, so an open surface follows what it is anchored to. Fullscreen belongs to the screen,
   which must take its dialogs and toasts into the fullscreen element with it.
-- **There is one hand-built listbox, and it is for choosing many.** A single
-  choice stays a native `<select>` (`Field kind="choice"`) for the reasons in
-  "Controls that mean what they look like". `ui/MultiPicker.tsx` exists
-  because a multiple select cannot be searched and loses its selection to a
-  stray click, and its keys are the design system's `useListbox`, the same ones
-  the secret completion in `Field` uses, so the two lists cannot drift apart. Search's
-  results take those keys too: its input is a combobox naming the highlighted
-  result, and the list is the modal's whole body rather than a popup over it
-  (`popup: false`), so Escape and the veil stay the modal's. The one single
-  choice that is not a `<select>` is a value picked IN PLACE from a menu an
-  item already opens, such as a unit's lead chosen from its chart card: a
-  select there would be a second control inside the item and a second click
-  after the first. Its answers are `menuitemradio` entries (a `checked` item of
-  the design system's `Menu`) that say which one is current, nested in one `group`
-  apart from the menu's actions so a screen reader counts them among
-  themselves, and the form that edits the same value still uses the select.
+- **Every dropdown is the design system's own, and no screen draws a native
+  one.** A platform dropdown is painted by the operating system: it takes none
+  of the theme, none of the density and none of the tokens, so a dark dialog
+  opened a light grey menu in the middle of itself, and the product read as
+  two products in one surface. What a reader used to get free from the
+  platform, `Select` earns back and shares with every other list in the
+  package: type-ahead, Home and End, disabled rows stepped over, the highlight
+  announced through `aria-activedescendant`, Tab closing the list and carrying
+  on, and a stored value the options no longer offer kept rather than swapped.
+  It is also the only control that can do what several of these surfaces need
+  at all: a search over dozens, a group heading, and a second line under an
+  option, which is where a choice's hint belongs. Choosing MANY is `TagsInput`
+  over the same keys, because a multiple select cannot be searched and loses
+  its selection to a stray click, and completing a `${NAME}` inside a longer
+  value is `Combobox`, which filters on the name under the caret rather than
+  on the whole field. Search's results take those keys too: its input is a
+  combobox naming the highlighted result, and the list is the modal's whole
+  body rather than a popup over it (`popup: false`), so Escape and the veil
+  stay the modal's. The one choice that is not a `Select` is a value picked IN
+  PLACE from a menu an item already opens, such as a unit's lead chosen from
+  its chart card: a list there would be a second control inside the item and a
+  second click after the first. Its answers are `menuitemradio` entries (a
+  `checked` item of the design system's `Menu`) that say which one is current,
+  nested in one `group` apart from the menu's actions so a screen reader
+  counts them among themselves, and the form that edits the same value still
+  uses the list.
 - **The layout is measured, never assumed.** A chart card's width is the
   `--crewlet-tree-canvas-card-width` knob, declared on the builder's own root; its height is measured in the browser
   (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout
@@ -1309,8 +1323,11 @@ to.
 10. **Every screen, section and filter is in the URL**, and obeys the
     push/replace table above.
 11. **A screen subscribes to the slices it reads and no others.**
-12. **Numbers are tabular**, and an absent number is an em dash rather than a
-    zero — zero is a measurement.
+12. **Numbers are tabular**, and an absent number is a MARKED absence rather
+    than a zero: zero is a measurement. `EmptyValue` draws the mark and says
+    what the absence means ("Not reported", "Not measured"), because a bare
+    dash is read aloud as "dash" or skipped, and a value still arriving is a
+    different fact again, which a tile reports by being busy.
 13. **A control reports its own outcome**, especially an invisible one. A copy,
     a write, a revoke — if the reader cannot see the result, the control says
     it, in text a screen reader reaches as well as an icon.
