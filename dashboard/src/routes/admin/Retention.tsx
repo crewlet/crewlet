@@ -38,6 +38,7 @@
 import { useState } from "react";
 import { Badge, Banner, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { Dash, DateCell, KeyCell, StatusCell } from "~/app/frame/cells.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtBytes, fmtDateTime, fmtDuration, relTime } from "~/lib/format.ts";
@@ -121,7 +122,14 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
         <Panel title="Alarms" icon="alert" count={data?.alarms.length}>
           <div className="col gap-2">
             {data?.alarms.map((a) => (
-              <div key={a.kind} className="banner caution">
+              // THE KIND IS NOT THE IDENTITY. `trim_blocked` is raised PER
+              // DOMAIN — the tracker's log, the vectors' and the pages' — and
+              // `statelog.Alarm` carries only `{kind, detail, remedy}`, so
+              // three genuinely different alarms arrive under one kind and
+              // React kept ONE of them. Caught by running a node with no
+              // backup: three blocked trims, one banner. The pair is what
+              // identifies the alarm, and the detail is where the domain is.
+              <div key={`${a.kind}:${a.detail}`} className="banner caution">
                 <Icon name="alert" size="sm" />
                 <span>
                   <code className="inline">{a.kind}</code> — {a.detail}{" "}
@@ -145,7 +153,14 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sortValue: (n) => n.node_id,
               cell: (n) => (
                 <span className="row wrap gap-1">
-                  <code className="inline">{n.node_id}</code>
+                  {/* A LINK NOW, because the id finally has somewhere to go:
+                      a node's page says what it is running, what it holds and
+                      which revision it applied, and every one of those is the
+                      next question after "this one is behind". The row itself
+                      is deliberately NOT a peek row — it carries the evict
+                      gesture, and a button inside a link is markup no browser
+                      agrees about. */}
+                  <KeyCell value={n.node_id} path={["admin", "fleet", n.node_id]} />
                   {n.node_id === thisNode && <Badge tone="accent">this one</Badge>}
                   {n.counted && !n.live && <Badge tone="caution">counted · not live</Badge>}
                   {/* THE FENCE WINDOW IS THE POINT. An eviction is not
@@ -181,8 +196,21 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               header: "Counted",
               shrink: true,
               sortValue: (n) => (n.counted ? 1 : 0),
-              cell: (n) =>
-                n.counted ? <Badge tone="positive">yes</Badge> : <span className="faint">no</span>,
+              // ONE STATE IN ONE SPELLING. A badge on the yes branch and
+              // faint prose on the no branch read as two different kinds of
+              // fact, and this is one: whether the trim waits for this node.
+              cell: (n) => (
+                <StatusCell
+                  glyph={n.counted ? "●" : "○"}
+                  label={n.counted ? "yes" : "no"}
+                  tone={n.counted ? "positive" : "neutral"}
+                  title={
+                    n.counted
+                      ? "the trim waits for this node's position"
+                      : "the trim no longer waits for this node"
+                  }
+                />
+              ),
             },
             {
               key: "reported",
@@ -191,9 +219,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sortValue: (n) => n.at ?? "",
               cell: (n) =>
                 n.at ? (
-                  <span className="t-caption" title={fmtDateTime(n.at)}>
-                    {relTime(n.at, now)}
-                  </span>
+                  <DateCell at={n.at} now={now} />
                 ) : (
                   // NOT A ZERO AND NOT AN EM-DASH. A live node that has
                   // never published a position is COUNTED — the trim waits
@@ -248,7 +274,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               key: "node",
               header: "Node",
               sortValue: (s) => s.node_id,
-              cell: (s) => <code className="inline">{s.node_id}</code>,
+              cell: (s) => <KeyCell value={s.node_id} path={["admin", "fleet", s.node_id]} />,
             },
             {
               key: "at",
@@ -256,9 +282,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               sortValue: (s) => s.at ?? "",
               cell: (s) =>
                 s.at ? (
-                  <span className="t-caption" title={fmtDateTime(s.at)}>
-                    {relTime(s.at, now)}
-                  </span>
+                  <DateCell at={s.at} now={now} />
                 ) : (
                   // THE LOOP'S OWN REASON, never an empty cell: "node-4
                   // none" is not an answer, and `lagging`, `unhydrated`,
@@ -271,12 +295,16 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
               key: "size",
               header: "Size",
               align: "right",
-              sortValue: (s) => s.bytes ?? 0,
+              // ABSENT RATHER THAN ZERO, on the sort as well as in the cell:
+              // a node holding no snapshot is not a node holding an empty one,
+              // and `s.bytes ?` would have rendered a real zero — the shape of
+              // a snapshot that failed mid-write — as "none at all".
+              sortValue: (s) => s.bytes ?? null,
               cell: (s) =>
-                s.bytes ? (
-                  <span className="t-num t-caption">{fmtBytes(s.bytes)}</span>
+                s.bytes == null ? (
+                  <Dash title="this node holds no snapshot" />
                 ) : (
-                  <span className="faint">—</span>
+                  <span className="t-num t-caption">{fmtBytes(s.bytes)}</span>
                 ),
             },
             {
@@ -290,7 +318,7 @@ export function RetentionPanels({ thisNode }: { thisNode?: string }) {
                       {domain} @{seq}
                     </Badge>
                   ))}
-                  {!s.domains && <span className="faint">—</span>}
+                  {!s.domains && <Dash title="this node holds no snapshot" />}
                 </span>
               ),
             },
@@ -431,7 +459,7 @@ export function NodePositions({ node }: { node: RetentionNode }) {
     // ABSENT IS NOT ZERO. This node has published nothing for any domain,
     // which the "Reported" column explains; a 0 here would read as a node
     // that has applied nothing, which is a different claim.
-    return <span className="faint">—</span>;
+    return <Dash title="this node has published no position for any domain" />;
   }
   return (
     <span className="col gap-1">

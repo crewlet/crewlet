@@ -7,8 +7,9 @@
 
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, Panel, Skeleton } from "~/ui/primitives.tsx";
-import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import { Badge, Button, Code, CopyButton, Disclosure, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { PropertiesRail, type Property } from "~/app/frame/PropertiesRail.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
@@ -16,6 +17,100 @@ import { useNow } from "~/lib/clock.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import type { EventRecord } from "~/protocol/index.ts";
+
+/** What an id that resolves to nothing means, on the page and in the rail. */
+const NO_EVENT_HINT =
+  "The event store keeps 30 days. An id older than that, or from a different node's store, will not resolve.";
+
+/**
+ * What an event IS — the five facts, in one order, for the page and the rail.
+ *
+ * ONE BUILDER, which is `ObjectHeader`'s own rule and the only thing that
+ * keeps the two frames honest with each other: an event is read by scanning
+ * WHAT happened, in which part of the engine, WHO it happened to, WHEN, and
+ * whether the causal chain it belongs to was recorded. A page that led with
+ * the category and a rail that led with the actor would make a reader
+ * re-learn the same record every time it changed frame.
+ */
+function eventFacts(event: EventRecord, now: number): Fact[] {
+  return [
+    { label: "Type", value: <code className="inline">{event.type}</code> },
+    { label: "Category", value: humanize(event.category) || "system" },
+    {
+      // A WORDED EMPTY, not a dash: an event with no actor was published by
+      // the engine rather than by anybody, which is a fact rather than a
+      // blank — and only a real actor carries a link out to its seat.
+      label: "Actor",
+      value: event.actor || <span className="faint">the engine itself</span>,
+      path: event.actor ? ["company", "people", event.actor] : undefined,
+    },
+    {
+      label: "When",
+      // Relative in the line and absolute on hover, the way `DateCell` reads
+      // in every grid: a reader who has the record open asks "how long ago"
+      // first and "at what instant" only once they are writing it down.
+      value: <span title={fmtDateTime(event.timestamp)}>{relTime(event.timestamp, now)}</span>,
+    },
+    {
+      label: "Trace",
+      value: event.trace_id ? (
+        <code className="inline">{event.trace_id}</code>
+      ) : (
+        <span className="faint">not traced</span>
+      ),
+      path: event.trace_id ? ["activity", "traces", event.trace_id] : undefined,
+    },
+  ];
+}
+
+/**
+ * The half of the envelope the facts above do NOT carry.
+ *
+ * Shared, for the same reason the facts are: the page and the rail draw one
+ * rail of properties out of one list, so a row that is dropped on one of them
+ * cannot survive on the other.
+ *
+ * The id is absent on purpose — it is the header's own identifier, and a
+ * record that repeated it immediately underneath would be spending the
+ * widest row in the rail on the one string already above it.
+ */
+function envelopeProperties(event: EventRecord): Property[] {
+  return [
+    { label: "Source", value: event.source },
+    { label: "Topic", value: event.topic ? <code className="inline">{event.topic}</code> : "" },
+    {
+      label: "Span",
+      value: event.span_id ? (
+        <span className="mono t-caption">
+          {event.span_id}
+          {event.parent_span_id && ` (parent ${event.parent_span_id})`}
+        </span>
+      ) : (
+        ""
+      ),
+    },
+  ];
+}
+
+/**
+ * The failure mark, and the one thing about an event that is a STATE.
+ *
+ * `failed` is derived server-side from the type plus the stored tag and rides
+ * on the record as well as on the feed row, precisely so that the two agree —
+ * and this screen read neither. A turn that failed rendered red in the feed
+ * and entirely clean on its own page, which is the single worst place for the
+ * two to disagree: the page is where somebody goes to find out what went
+ * wrong.
+ */
+function eventStatus(event: EventRecord) {
+  if (!event.failed) return undefined;
+  return (
+    <Badge tone="critical" icon="alert">
+      failed
+    </Badge>
+  );
+}
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
@@ -29,12 +124,6 @@ export function EventScreen({ eventId }: { eventId: string }) {
   return (
     <>
       <PageActions>
-        {data ? (
-          <>
-            <Badge outline>{humanize(data.category) || "system"}</Badge>
-            {data.source && <Badge outline>{data.source}</Badge>}
-          </>
-        ) : undefined}
         {
           <>
             {data?.trace_id && (
@@ -67,70 +156,41 @@ export function EventScreen({ eventId }: { eventId: string }) {
           </>
         }
       </PageActions>
-      <PageNote>{data ? <code className="inline">{data.type}</code> : eventId}</PageNote>
+      {/* WHAT THE SCREEN ANSWERS, which is what a note is for. It used to
+          hold the event's own type — identity, in the one line on the screen
+          that is not about identity, and now the header's first fact. */}
+      <PageNote>One stored event, exactly as the engine wrote it.</PageNote>
 
       {loading && <Skeleton rows={5} />}
+
+      {/* THE CATEGORY AND THE SOURCE WERE TWO BADGES IN THE PAGE BAR, which
+          is where a screen's CONTROLS live — so the record's identity was
+          drawn in the one strip that is not about the object, and the rail
+          would have had to spell it a second way. Nothing is lost: the
+          summary is the title, the failure is the status, the category is the
+          fact it always was and the source is a row of the record below. */}
+      {data && (
+        <ObjectHeader
+          kind="Event"
+          icon="activity"
+          identifier={data.id}
+          title={data.summary || data.type}
+          status={eventStatus(data)}
+          facts={eventFacts(data, now)}
+        />
+      )}
+
       <QueryState
         error={error === "not_found" ? null : error}
         loading={loading}
         empty={
-          !loading && !data
-            ? {
-                title: "No event with that id",
-                hint: "The event store keeps 30 days. An id older than that, or from a different node's store, will not resolve.",
-              }
-            : undefined
+          !loading && !data ? { title: "No event with that id", hint: NO_EVENT_HINT } : undefined
         }
       >
         {data && (
           <>
             <Panel title="Envelope" icon="file">
-              <PropertiesRail
-                groups={[
-                  {
-                    properties: [
-                      { label: "Id", value: <code className="inline">{data.id}</code> },
-                      { label: "Type", value: <code className="inline">{data.type}</code> },
-                      {
-                        label: "When",
-                        value: `${fmtDateTime(data.timestamp)} · ${relTime(data.timestamp, now)}`,
-                      },
-                      // A WORDED EMPTY, not a dash: an event with no actor was
-                      // published by the engine rather than by anybody, which
-                      // is a fact rather than a blank.
-                      {
-                        label: "Actor",
-                        value: data.actor || <span className="faint">the engine itself</span>,
-                      },
-                      { label: "Source", value: data.source },
-                      { label: "Category", value: humanize(data.category) || "system" },
-                      {
-                        label: "Topic",
-                        value: data.topic ? (
-                          <code className="inline">{data.topic}</code>
-                        ) : undefined,
-                      },
-                      {
-                        label: "Trace",
-                        value: data.trace_id ? (
-                          <code className="inline">{data.trace_id}</code>
-                        ) : (
-                          <span className="faint">not traced</span>
-                        ),
-                      },
-                      {
-                        label: "Span",
-                        value: data.span_id ? (
-                          <span className="mono t-caption">
-                            {data.span_id}
-                            {data.parent_span_id && ` (parent ${data.parent_span_id})`}
-                          </span>
-                        ) : undefined,
-                      },
-                    ],
-                  },
-                ]}
-              />
+              <PropertiesRail groups={[{ properties: envelopeProperties(data) }]} />
             </Panel>
 
             {phase && (
@@ -178,6 +238,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                     {
                       properties: Object.entries(data.tags).map(([k, v]) => ({
                         label: k,
+                        code: true,
                         value: <code className="inline">{v}</code>,
                       })),
                     },
@@ -188,6 +249,111 @@ export function EventScreen({ eventId }: { eventId: string }) {
           </>
         )}
       </QueryState>
+    </>
+  );
+}
+
+/**
+ * One event, beside the feed it was found in.
+ *
+ * # Why the payload is folded here and open on the page
+ *
+ * The page's whole point is the record: a reader who navigated to one event
+ * wants the JSON, and it is the last thing on the screen. The rail's question
+ * is the other one — is this the event I meant, and what does it say — and a
+ * forty-line dump answers it by pushing the answer off the top of a 420 px
+ * column. So the disclosure is shut, with its size on the head, and one click
+ * opens it without leaving the list.
+ *
+ * # The phase card is the page's
+ *
+ * An `agent_phase_completed` event carries a whole turn phase — the prompt,
+ * the rounds, the tool calls — and `PhaseCard` draws it at a width the rail
+ * does not have. The rail names what the event IS and ends at `Open ↗`, which
+ * is one click to the frame that can draw it.
+ */
+export function EventPeek({ eventId }: { eventId: string }) {
+  const now = useNow();
+  const { data, loading, error } = useQuery("event", { id: eventId }, { enabled: eventId !== "" });
+
+  // NOT AN EMPTY RAIL. `peek=event:` is reached from a pasted id as often as
+  // from a row — the search box takes one — so an id that resolves to nothing
+  // says so, and says why an id can stop resolving.
+  const missing = !loading && !data;
+  const payload = data?.payload;
+
+  return (
+    <>
+      {data && (
+        <ObjectHeader
+          size="peek"
+          kind="Event"
+          icon="activity"
+          identifier={data.id}
+          title={data.summary || data.type}
+          status={eventStatus(data)}
+          facts={eventFacts(data, now)}
+        />
+      )}
+      <div className="col gap-3">
+        {loading && !data && <Skeleton rows={6} />}
+        <QueryState
+          // `not_found` is an ANSWER here rather than a refusal: the store was
+          // reached and has no such row, which the empty state below states
+          // precisely. Every other code is the engine failing to answer.
+          error={error === "not_found" ? null : error}
+          loading={loading}
+          empty={missing ? { title: "No event with that id", hint: NO_EVENT_HINT } : undefined}
+        >
+          {data && (
+            <>
+              <Panel title="Record" icon="file">
+                <PropertiesRail
+                  groups={[
+                    { properties: envelopeProperties(data) },
+                    ...(data.tags && Object.keys(data.tags).length > 0
+                      ? [
+                          {
+                            name: "Tags",
+                            properties: Object.entries(data.tags).map(([k, v]) => ({
+                              label: k,
+                              code: true,
+                              value: <code className="inline">{v}</code>,
+                            })),
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
+              </Panel>
+
+              {payload ? (
+                <Disclosure
+                  label="Payload"
+                  // WHAT IS INSIDE, on the closed head. A fold with no count
+                  // is a fold nobody opens: the reader cannot tell a record
+                  // with two fields from one with forty without clicking.
+                  count={Object.keys(payload).length}
+                  actions={
+                    <CopyButton
+                      text={() => JSON.stringify(payload, null, 2)}
+                      title="this event's payload, as JSON"
+                    />
+                  }
+                >
+                  <Code plain selectable label="The event payload, as JSON">
+                    {JSON.stringify(payload, null, 2)}
+                  </Code>
+                </Disclosure>
+              ) : (
+                <p className="t-caption faint">
+                  This event carries no payload — its type and summary are the whole record.
+                </p>
+              )}
+            </>
+          )}
+        </QueryState>
+      </div>
     </>
   );
 }

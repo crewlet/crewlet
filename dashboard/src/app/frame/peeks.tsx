@@ -40,6 +40,9 @@ import { UnitPeek } from "~/routes/company/Company.tsx";
 import { TurnPeek } from "~/routes/activity/Turn.tsx";
 import { RunPeek } from "~/routes/activity/Runs.tsx";
 import { ChannelPeek } from "~/routes/activity/Conversations.tsx";
+import { EventPeek } from "~/routes/activity/Event.tsx";
+import { SchedulePeek } from "~/routes/activity/Schedules.tsx";
+import { NodePeek } from "~/routes/admin/Fleet.tsx";
 
 /**
  * What every peek is handed.
@@ -67,6 +70,9 @@ export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.React
   turn: ({ id }) => <TurnPeek turnId={id} />,
   run: ({ id }) => <RunPeek turnId={id} />,
   channel: ({ id }) => <ChannelPeek id={id} />,
+  event: ({ id }) => <EventPeek eventId={id} />,
+  schedule: ({ id }) => <SchedulePeek scope={id} />,
+  node: ({ id }) => <NodePeek id={id} />,
 };
 
 /** Whether this kind can be peeked at all. */
