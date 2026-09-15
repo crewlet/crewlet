@@ -335,7 +335,7 @@ export function FakeCanvas({ chart }: { chart: ChartKind }) {
 export const fakeSurfaces: BuilderSurfaces = {
   ...builderSurfaces,
   canvas: FakeCanvas,
-  outline: FakeView,
+  table: FakeView,
 };
 
 /** Mounts the Builder lens against the scripted engine. */
@@ -343,7 +343,7 @@ export function mountBuilder({
   engine,
   org = null,
   connected = true,
-  hash = "#/org?lens=builder&view=canvas",
+  hash = "#/org?lens=builder&view=visualization",
   surfaces = fakeSurfaces,
   storage,
   keys,

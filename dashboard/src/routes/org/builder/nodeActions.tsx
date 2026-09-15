@@ -40,27 +40,13 @@ import { Kbd, isApplePlatform, type MenuEntry } from "@crewlethq/ui";
 /** Where "Open seat" goes: the seat's own screen. */
 export type OpenScreen = (path: string[]) => void;
 
-/** What a node's keys asked for. */
-export type NodeKeyAction = "edit" | "delete" | "menu";
-
-/**
- * The action a key press on a focused node asks for, or `null`.
- *
- * Enter edits; Delete and Backspace both delete, because the key labelled
- * Delete on a Mac keyboard sends Backspace; the ContextMenu key and Shift+F10
- * open the node's menu, which is where every other action lives. A chord
- * with Ctrl, Command or Alt is an application shortcut (Undo is the Builder's)
- * and is never a node action.
+/*
+ * WHAT A NODE'S KEYS ASK FOR is the design system's `treeItemAction`, not this
+ * module's. It was written out here as well, character for character, when the
+ * chart and the outline each had their own copy of the tree pattern; the chart
+ * is `TreeCanvas` now and the outline is a table, so the one reading of Enter,
+ * Delete, Backspace, ContextMenu and Shift+F10 is the package's.
  */
-export function nodeKeyAction(e: KeyboardEvent): NodeKeyAction | null {
-  if (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) return "menu";
-  if (e.ctrlKey || e.metaKey || e.altKey) return null;
-  if (e.key === "ContextMenu") return "menu";
-  if (e.shiftKey) return null;
-  if (e.key === "Enter") return "edit";
-  if (e.key === "Delete" || e.key === "Backspace") return "delete";
-  return null;
-}
 
 /** Whether a node can be deleted: every seat and unit, never the company. */
 export function isDeletable(view: NodeView): boolean {

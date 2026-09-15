@@ -16,10 +16,11 @@
  * `routes/` or `components/` reaches for it.
  */
 
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import type { ComponentProps, ElementType } from "react";
+import { TreeCanvas, type TreeCardContext } from "@crewlethq/ui";
 
 /**
  * Pick an option, which is how every choice in this product is made.
@@ -78,6 +79,88 @@ export function isDrawnAs<T extends ElementType>(
   base: ComponentProps<T>,
 ): boolean {
   return distinguishing(component, props, base).every((name) => element.classList.contains(name));
+}
+
+/**
+ * The parts of the design system's tree canvas, asked of the design system.
+ *
+ * A CHART SUITE HAS TO REACH FOR THREE ELEMENTS THE PACKAGE DRAWS, and no prop
+ * and no role names any of them: the CARD a node is drawn in (which a jsdom
+ * harness has to report a size for, because jsdom has no layout), the probe the
+ * gaps are measured from, and the drawing of the connectors. Spelling their
+ * classes in a screen suite is what this file exists to prevent, so the names
+ * are taken from a reference chart rendered here instead: one place that knows
+ * them, and it learns them from the component rather than from a comment.
+ *
+ * Rendered with no ResizeObserver, which is what jsdom has: the component then
+ * draws every card with nothing measured yet, which is all that is needed to
+ * read a class off each.
+ */
+export function treeCanvasParts(): {
+  card: string;
+  gap: string;
+  links: string;
+  /** What a card gains when it stands for somebody outside the system. */
+  outlined: string;
+} {
+  const plain = referenceChart(false);
+  const marked = referenceChart(true);
+  const names = {
+    ...plain,
+    outlined: marked.cardClasses.filter((name) => !plain.cardClasses.includes(name))[0] ?? "",
+  };
+  for (const [part, name] of Object.entries(names)) {
+    if (typeof name === "string" && !name) {
+      throw new Error(`the tree canvas draws no ${part} this harness can find`);
+    }
+  }
+  return names;
+}
+
+/** One chart rendered to be read: what it calls each part it draws. */
+function referenceChart(outline: boolean): {
+  card: string;
+  gap: string;
+  links: string;
+  cardClasses: string[];
+} {
+  // RENDERED THE WAY EVERY SUITE RENDERS, into the document, because this one
+  // is a whole chart rather than a single element: it holds a layer host that
+  // portals into a node it has to be able to find, and a viewport whose layout
+  // effects read the element they are on.
+  const { container: host, unmount } = render(
+    createElement(TreeCanvas, {
+      label: "Reference chart",
+      nodes: [{ id: "a", label: "A" }],
+      cards: () => [{ id: "a", children: [] }],
+      cardOf: (id: string) => id,
+      cardOutline: () => outline,
+      renderCard: (id: string, card: TreeCardContext) => createElement("div", card.item(id), "A"),
+    }),
+  );
+  const item = host.querySelector("[role='treeitem']");
+  const tree = host.querySelector("[role='tree']");
+  const svg = host.querySelector("svg");
+  // The treeitem is the caller's own element here, drawn with no class, so the
+  // card is simply what holds it.
+  const card = item?.parentElement ?? null;
+  // The probe is the one element the tree's own parent holds that is neither
+  // the tree nor the connectors: it has no content and no role, by design.
+  const probe = [...(tree?.parentElement?.children ?? [])].find((el) => el !== tree && el !== svg);
+  const read = {
+    card: className(card),
+    gap: className(probe ?? null),
+    links: className(svg),
+    cardClasses: [...(card?.classList ?? [])],
+  };
+  unmount();
+  return read;
+}
+
+/** An element's first class, or "" when it has none. */
+function className(el: Element | null | undefined): string {
+  const first = el?.classList[0];
+  return first ?? "";
 }
 
 /**

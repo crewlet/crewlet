@@ -110,12 +110,10 @@
 /* THE CARD WIDTH IS A KNOB THE CONSUMER SETS. `--crewlet-tree-canvas-card-width`
    is the design system's own variable for a tree card, and the design system
    reads it with a fallback because a component has to draw without a consumer.
-   Nothing here does: the builder's chart and its outline both read it bare,
-   and an undeclared custom property takes the whole declaration with it, so
-   the cards went to `width: auto` and the outline's sideways scroller lost its
-   minimum. One declaration, on the builder's own root, is what both views
-   read, and it is what will retint the design system's TreeCanvas the day the
-   builder renders one. */
+   This declaration is what the builder's chart is drawn at: the component now
+   renders every card itself, so this one line is the whole of what this
+   application says about how wide they are, and the cards, the rows measured
+   inside them and the connectors between them all lay out against it. */
 
 .org-builder {
   --crewlet-tree-canvas-card-width: 15rem;
@@ -214,11 +212,19 @@
 }
 
 /* ---- Org builder: canvas ------------------------------------------------
-   The builder's charts (`routes/org/builder/CanvasView.tsx`). Every card is
-   the card-width token wide and as tall as its content, measured, and placed
-   by the tidy tree layout with a transform. Nothing here is a per-entity
-   colour: a card is neutral whatever it holds, and a human seat is drawn with
-   the dashed edge every human seat on the dashboard has. */
+   The builder's charts (`routes/org/builder/CanvasView.tsx`).
+
+   THE CHART IS THE DESIGN SYSTEM'S `TreeCanvas`, so almost nothing about it
+   is here any more. The card's surface, boundary, radius and lift, the dashed
+   edge a human seat wears, the inset on each node, the focus ring, the accent
+   ring on the selection, the connectors, the gap probe and the reveal of every
+   pointer-only control are all drawn by the package. What is left below is
+   what the ENGINE says inside a card, which the package could not know: a
+   seat's name and handle, a unit's lead, and the seats stacked in a unit.
+
+   Nothing here is a per-entity colour: a card is neutral whatever it holds,
+   and what marks a human seat is the boundary the package draws, so the mark
+   reads to somebody who cannot separate the hue at all. */
 
 .bchart {
   display: flex;
@@ -254,83 +260,8 @@
   pointer-events: none;
 }
 
-.bchart-tree,
-.bchart-box,
-.bchart-links,
-.bchart-gap-probe {
-  position: absolute;
-  top: 0;
-  left: 0;
-}
-
-.bchart-box {
-  width: var(--crewlet-tree-canvas-card-width);
-}
-
-/* The gaps between cards, as tokens: measured like a card, so density scales
-   the space between cards with the space inside them. */
-
-.bchart-gap-probe {
-  width: var(--spacing-6);
-  height: var(--spacing-7);
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.bchart-links {
-  overflow: visible;
-  pointer-events: none;
-}
-
-.bchart-links path {
-  fill: none;
-  stroke: var(--color-border-hover);
-  stroke-width: 1;
-}
-
-.bchart-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xs);
-}
-
-.bchart-card.human {
-  border-style: dashed;
-  border-color: var(--color-border-default);
-}
-
-.bchart-card.group {
-  background: var(--color-surface-subtle);
-}
-
-.bchart-head,
-.bchart-row-item {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-  padding: var(--spacing-2) var(--spacing-3);
-  border-radius: var(--radius-lg);
-  cursor: default;
-}
-
-/* Inset, because the ring sits on the card's own edge. */
-
-.bchart-head:focus-visible,
-.bchart-row-item:focus-visible {
-  outline-offset: -2px;
-}
-
-/* The selection is where the reader is, so it takes the accent. */
-
-.bchart-head[aria-selected="true"],
-.bchart-row-item[aria-selected="true"] {
-  box-shadow: inset 0 0 0 1px var(--color-brand-accent);
-}
+/* WHAT A CARD SAYS. The stack a node's lines sit in is the package's; these
+   are the lines themselves. */
 
 .bchart-line {
   display: flex;
@@ -367,14 +298,12 @@
   display: none;
 }
 
-.bchart-actions {
-  display: flex;
-  align-items: center;
-  padding: var(--spacing-1);
-}
+/* A UNIT'S LEAD STAYS DRAWN, where the controls that edit the card do not:
+   who leads a unit is a fact about the organization rather than a tool for
+   changing it, and a chart that hid it until the pointer arrived would be a
+   chart you could not read the leads off. */
 
 .bchart-lead {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: var(--spacing-1);
@@ -385,7 +314,6 @@
 }
 
 .bchart-rows {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1);
@@ -393,17 +321,9 @@
   border-top: 1px solid var(--color-border-default);
 }
 
-.bchart-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-}
-
 .bchart-row.human {
-  border-style: dashed;
-  border-color: var(--color-border-default);
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
 }
 
 /* A LIVE STATE OR A CHECK NEVER RESIZES A CARD. The live state and the
@@ -421,99 +341,38 @@
   white-space: nowrap;
 }
 
-/* ---- Org builder: outline -----------------------------------------------
-   The builder's treegrid (`routes/org/builder/OutlineView.tsx`). Each row is
-   a grid on one column template, so the cells of every row line up without
-   a table (a table row cannot be a focusable treegrid row with a level). The
-   grid is at least three chart cards wide and scrolls sideways in its own
-   box below that, so a phone-width screen keeps every column readable and
-   the page never scrolls sideways. A box that scrolls on one axis clips on
-   both, so the rows' menus open in a `.popup-layer` over the frame rather
-   than under their triggers, where the last rows' menus would be cut off
-   and scroll the grid down. */
+/* ---- Org builder: table -------------------------------------------------
+   The builder's table (`routes/org/builder/TableView.tsx`).
 
-.boutline-frame {
-  position: relative;
-}
+   THE TABLE IS THE DESIGN SYSTEM'S `DataView`, so the toolbar, the sortable
+   headers, the row shapes, the settings frame, the pager and the count are
+   all drawn by it and none of them are here. What is left is the one cell
+   this screen composes: a node's icon, its name and the marks it carries.
 
-/* THE SCROLLER IS THE CONTAINING BLOCK OF WHAT IT HOLDS. A box that scrolls
-   clips only the descendants whose containing block is inside it, so an
-   absolutely positioned one (the Actions header's screen-reader text, far
-   right in a phone-width grid) was placed against the frame instead, escaped
-   the scroller, and gave `.screen` a sideways overflow of the grid's width:
-   hidden, but scrolled by a focus or a find in page, which pushed the whole
-   page sideways. Positioned, the scroller keeps all of it. */
+   It replaced a treegrid drawn by hand, whose column template, row grid,
+   sideways scroller and popup layer were ninety lines of this file doing what
+   one component already does on every other screen. */
 
-.boutline-wrap {
-  position: relative;
-  overflow-x: auto;
-  overscroll-behavior-x: contain;
-}
-
-.boutline {
-  min-width: calc(3 * var(--crewlet-tree-canvas-card-width));
-  font-size: var(--font-size-compact);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-subtle);
-}
-
-.boutline-row {
-  display: grid;
-  grid-template-columns:
-    minmax(0, 3fr) minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 2fr) minmax(0, 1fr)
-    var(--size-control-md);
-  align-items: center;
-  min-height: var(--size-row-md);
-  border-top: 1px solid var(--color-border-default);
-}
-
-.boutline-head .boutline-row {
-  border-top: 0;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-tertiary);
-}
-
-.boutline-row > [role="columnheader"],
-.boutline-row > [role="gridcell"] {
+.btable-name {
   display: flex;
   align-items: center;
   gap: var(--spacing-2);
   min-width: 0;
-  padding: 0 var(--spacing-2);
 }
 
-/* The indent is the row's level, set on the row as `--depth`. */
+/* The icon or avatar keeps its size whatever the name does: a name that wraps
+   onto a second line must not squeeze the mark that says what kind of node it
+   is, which is the one part of the cell a reader scans down the column. */
 
-.boutline-name,
-.boutline-row.add > [role="gridcell"]:first-child {
-  padding-inline-start: calc(var(--spacing-5) * var(--depth, 0));
-}
-
-.boutline-row.add > [role="gridcell"]:first-child {
-  margin-inline-start: var(--size-control-sm);
-}
-
-.boutline-toggle {
-  display: inline-flex;
+.btable-name > :first-child {
   flex: none;
-  width: var(--size-control-sm);
 }
 
-.boutline-actions {
-  justify-content: flex-end;
-}
+/* The name is what takes the width the marks beside it leave, and what wraps
+   when there is not enough of it. */
 
-.boutline-row:focus-visible,
-.boutline-row > [role="gridcell"]:focus-visible {
-  outline-offset: -2px;
-}
-
-/* The selection is where the reader is, so it takes the accent. */
-
-.boutline-row[aria-selected="true"] {
-  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+.btable-label {
+  min-width: 0;
 }
 
 /* ---- Org builder: the node editor and its dialogs ------------------------
@@ -576,22 +435,4 @@
   grid-template-columns: 1fr 1fr;
   gap: var(--spacing-3);
   min-width: 0;
-}
-
-/* ---- The outline's own layer host ---------------------------------------
-   A surface anchored to a row inside a box that scrolls sideways is a surface
-   that box clips, so the outline gives its own host this class and the rows'
-   menus open into it. The canvas needs the same thing and has it built in:
-   its viewport, its panned world, its overlay and its controls are all the
-   design system's now, and so are the rules that used to live here. */
-
-.popup-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-}
-
-.popup-layer > * {
-  pointer-events: auto;
 }

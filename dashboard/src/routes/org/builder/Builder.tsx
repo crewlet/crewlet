@@ -182,7 +182,7 @@ export interface AddDialogProps {
  */
 export interface BuilderSurfaces {
   canvas: ComponentType<{ chart: ChartKind }>;
-  outline: ComponentType;
+  table: ComponentType;
   editor: ComponentType<EditorDialogProps>;
   add: ComponentType<AddDialogProps>;
   move: ComponentType<NodeDialogProps>;
@@ -429,8 +429,8 @@ function useLiveRegion(): { text: string; announce: (message: string) => void } 
 
 /**
  * Below this width the drawer takes the whole window and
- * a canvas has no room beside it, so a lens opened with no `view` starts on
- * the outline.
+ * a visualization has no room beside it, so a lens opened with no `view`
+ * starts on the table.
  */
 const NARROW_QUERY = "(max-width: 860px)";
 
@@ -438,7 +438,7 @@ const NARROW_QUERY = "(max-width: 860px)";
 const UNDO_KEYS = ["Mod", "z"] as const;
 const REDO_KEYS = ["Mod", "Shift", "z"] as const;
 
-function prefersOutline(): boolean {
+function prefersTable(): boolean {
   try {
     return globalThis.matchMedia?.(NARROW_QUERY).matches ?? false;
   } catch {
@@ -508,9 +508,13 @@ function Lens({
   const { connected, authRejected } = useConnection();
   const agents = useAgents();
   const sandboxes = useSandboxes();
-  const [narrowDefault] = useState(prefersOutline);
-  const [viewParam, setView] = useParam("view", narrowDefault ? "outline" : "canvas", "section");
-  const view = viewParam === "outline" ? "outline" : "canvas";
+  const [narrowDefault] = useState(prefersTable);
+  const [viewParam, setView] = useParam(
+    "view",
+    narrowDefault ? "table" : "visualization",
+    "section",
+  );
+  const view = viewParam === "table" ? "table" : "visualization";
   const [chartParam, setChart] = useParam("chart", "structure", "section");
   const chart: ChartKind = chartParam === "reporting" ? "reporting" : "structure";
   const [unitParam] = useParam("unit", "", "filter");
@@ -523,16 +527,16 @@ function Lens({
   stateRef.current = state;
   const [loaded, setLoaded] = useState(false);
 
-  /* THE CHART LENS TAKES THE WINDOW. A canvas fills the box its screen gives
-     it and clips, so the application frame's scroller has to stop being one
-     while this lens is on: a wheel turned over a page that scrolls otherwise
-     lands in a canvas half off screen. The outline lens is an ordinary column
-     and gives the scroller straight back, and so does the posture screen this
-     lens draws instead of either until the engine has answered.
+  /* THE VISUALIZATION TAKES THE WINDOW. A canvas fills the box its screen
+     gives it and clips, so the application frame's scroller has to stop being
+     one while this view is on: a wheel turned over a page that scrolls
+     otherwise lands in a canvas half off screen. The table is an ordinary
+     column and gives the scroller straight back, and so does the posture
+     screen this lens draws instead of either until the engine has answered.
 
      ABOVE THAT POSTURE RETURN, because a hook below one runs on some renders
      and not others. */
-  useFillScreen(loaded && view === "canvas");
+  useFillScreen(loaded && view === "visualization");
   const live = useLiveRegion();
   const { announce } = live;
 
@@ -1152,8 +1156,8 @@ function Lens({
   const startingCompany = creating && !templateApplied;
   const pending = state.update;
   const Canvas = surfaces.canvas;
-  const Outline = surfaces.outline;
-  const fill = view === "canvas";
+  const Table = surfaces.table;
+  const fill = view === "visualization";
   const providers = state.base.document?.providers;
   const llm = isRecord(providers) ? providers.llm : undefined;
   // THE COMPANY RUNS AND ITS AGENTS WAIT. The engine applies a company with no
@@ -1203,14 +1207,20 @@ function Lens({
       disabled: !canRedo,
       hint: <Kbd keys={REDO_KEYS} />,
     },
-    { kind: "separator", key: "s1" },
-    { key: "expand", label: "Expand all", icon: <AddGlyph />, onSelect: handlers.expandAll },
-    {
-      key: "collapse",
-      label: "Collapse all",
-      icon: <RemoveGlyph />,
-      onSelect: handlers.collapseAll,
-    },
+    // The narrow toolbar's menu offers the same two, and leaves them out on
+    // the same view, for the same reason.
+    ...(view === "visualization"
+      ? ([
+          { kind: "separator", key: "s1" },
+          { key: "expand", label: "Expand all", icon: <AddGlyph />, onSelect: handlers.expandAll },
+          {
+            key: "collapse",
+            label: "Collapse all",
+            icon: <RemoveGlyph />,
+            onSelect: handlers.collapseAll,
+          },
+        ] satisfies MenuEntry[])
+      : []),
     { kind: "separator", key: "s2" },
     {
       key: "discard",
@@ -1235,11 +1245,13 @@ function Lens({
               onValueChange={setView}
               size="sm"
               options={[
-                { value: "canvas", label: "Canvas", icon: <AccountTreeGlyph /> },
-                { value: "outline", label: "Outline", icon: <ListGlyph /> },
+                { value: "visualization", label: "Visualization", icon: <AccountTreeGlyph /> },
+                // `ListGlyph` rather than a table glyph: `@crewlethq/icons`
+                // ships none, and a rows-of-records mark is what this one is.
+                { value: "table", label: "Table", icon: <ListGlyph /> },
               ]}
             />
-            {view === "canvas" && (
+            {view === "visualization" && (
               <SegmentedControl
                 label="Chart"
                 semantics="tabs"
@@ -1270,12 +1282,22 @@ function Lens({
                 disabled={!canRedo}
                 aria-keyshortcuts="Shift+Control+Z Shift+Meta+Z"
               />
-              <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
-                Expand all
-              </Button>
-              <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
-                Collapse all
-              </Button>
+              {/* THE TWO THAT BELONG TO THE VISUALIZATION. Expanding and
+                  collapsing act on the chart's cards, and the table has no
+                  such thing: every node is a row of its own and nothing is
+                  ever closed. Offered there they were two buttons that did
+                  nothing, on the one view where a reader would try them
+                  first. */}
+              {view === "visualization" && (
+                <>
+                  <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
+                    Expand all
+                  </Button>
+                  <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
+                    Collapse all
+                  </Button>
+                </>
+              )}
             </span>
             <span className="org-builder-narrow">
               <Menu label="More builder actions" items={more} />
@@ -1526,12 +1548,12 @@ function Lens({
           />
         ) : (
           <TabPanel id={viewPanel} value={view}>
-            {view === "canvas" ? (
+            {view === "visualization" ? (
               <TabPanel id={chartPanel} value={chart}>
                 <Canvas chart={chart} />
               </TabPanel>
             ) : (
-              <Outline />
+              <Table />
             )}
           </TabPanel>
         )}

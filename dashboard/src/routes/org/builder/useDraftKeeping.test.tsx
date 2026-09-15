@@ -288,16 +288,16 @@ test("a draft this browser cannot keep asks before the lens is left, not before 
   const start = location.hash;
 
   act(() => {
-    location.hash = "#/org?lens=builder&view=outline";
+    location.hash = "#/org?lens=builder&view=table";
   });
-  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=outline"));
+  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=table"));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 
   act(() => {
     location.hash = "#/people";
   });
   const asked = await screen.findByRole("dialog", { name: "Leave the builder?" });
-  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=outline"));
+  await waitFor(() => expect(location.hash).toBe("#/org?lens=builder&view=table"));
   fireEvent.click(within(asked).getByRole("button", { name: "Stay" }));
   expect(screen.queryByRole("dialog", { name: "Leave the builder?" })).toBeNull();
 

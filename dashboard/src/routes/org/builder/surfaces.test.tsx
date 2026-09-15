@@ -2,10 +2,10 @@
  * The Org screen's Builder lens is assembled from the real views and dialogs.
  *
  * Every other Builder suite stands a view in with a fake, so nothing there
- * notices a lens whose canvas or outline was never bound: it rendered "not
+ * notices a lens whose visualization or table was never bound: it rendered "not
  * part of this build" for both until this binding existed. These tests mount
  * the lens with the surfaces the screen hands it and hold it to drawing the
- * canvas's tree, the outline's treegrid and the node editor.
+ * canvas's tree, the table's rows and the node editor.
  */
 
 import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -40,20 +40,46 @@ test("the canvas view draws the structure chart and the reporting chart", async 
   expect(await screen.findByRole("tree", { name: "Reporting chart" })).toBeDefined();
 });
 
-test("the outline view draws the treegrid, and a row's Enter opens the node editor", async () => {
+test("the table view draws a row per node, and a row's Edit opens the node editor", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=outline",
+    hash: "#/org?lens=builder&view=table",
   });
-  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
   await screen.findByText("No problems");
-  const row = within(grid)
-    .getAllByRole("row")
-    .find((r) => r.getAttribute("data-row-id") === "seat:ceo")!;
-  fireEvent.keyDown(row, { key: "Enter" });
+  await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
 });
+
+/**
+ * The table row whose NAME cell says `name`.
+ *
+ * The name cell rather than the row, because a unit's lead is a seat's name in
+ * another cell: "Dev" matches Engineering's row too, on the column that says
+ * who leads it.
+ */
+async function tableRow(name: string): Promise<HTMLElement> {
+  const rows = await screen.findAllByRole("row");
+  const row = rows.find((r) =>
+    [...r.querySelectorAll<HTMLElement>(".btable-name")].some(
+      (cell) => within(cell).queryAllByText(name, { exact: true }).length > 0,
+    ),
+  );
+  if (!row) throw new Error(`no table row named ${name}`);
+  return row as HTMLElement;
+}
+
+/** Opens the CEO's editor from its row's own actions menu. */
+async function openTheEditorFromTheTable(): Promise<void> {
+  const row = await tableRow("CEO");
+  fireEvent.click(within(row).getByRole("button", { name: "Row actions" }));
+  const menu = await screen.findByRole("menu", { name: "Row actions" });
+  fireEvent.click(
+    within(menu)
+      .getAllByRole("menuitem")
+      .find((m) => menuEntryLabel(m) === "Edit")!,
+  );
+}
 
 // A dialog the lens opens is a component the model never sees, so the one
 // thing a suite can hold is that the screen hands in the dialog each action
@@ -69,7 +95,7 @@ test("the toolbar's Delete opens the delete dialog for the selected seat", async
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=outline&seat=ceo",
+    hash: "#/org?lens=builder&view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
@@ -96,7 +122,7 @@ test("the toolbar offers the selected seat's own card menu: its entries, order a
   const { view } = mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=canvas&seat=ceo",
+    hash: "#/org?lens=builder&view=visualization&seat=ceo",
   });
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
@@ -127,16 +153,12 @@ test("the toolbar offers no screen for a seat that exists only in the draft", as
   fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "Analyst" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Add agent seat" }));
   // The new seat is selected by the focus the Builder moves to it; select it
-  // through the outline, whose rows take the selection with focus.
+  // through the table, where pressing a row selects the node it holds.
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   // Minted from the lens's one key source, which a suite injects.
   await waitFor(() => expect(sessionStorage.getItem(DRAFT_STORAGE_KEY)).toContain('"new:lens1"'));
-  fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
-  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
-  const row = within(grid)
-    .getAllByRole("row")
-    .find((r) => r.textContent?.includes("Analyst"))!;
-  fireEvent.click(row);
+  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
+  fireEvent.click(await tableRow("Analyst"));
   fireEvent.click(await screen.findByRole("button", { name: "Analyst" }));
   const menu = await screen.findByRole("menu", { name: "Actions for Analyst" });
   const labels = entries(menu).map((e) => e.label);
@@ -150,7 +172,7 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=outline&seat=ceo",
+    hash: "#/org?lens=builder&view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   fireEvent.click(await screen.findByRole("button", { name: "CEO" }));
@@ -162,13 +184,9 @@ test("Edit reports opens the seat's editor at Manages", async () => {
   );
 });
 
-/** Opens the CEO's editor from its outline row and types a goal into it. */
+/** Opens the CEO's editor from its table row and types a goal into it. */
 async function typeIntoTheEditor(): Promise<HTMLElement> {
-  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
-  const row = within(grid)
-    .getAllByRole("row")
-    .find((r) => r.getAttribute("data-row-id") === "seat:ceo")!;
-  fireEvent.keyDown(row, { key: "Enter" });
+  await openTheEditorFromTheTable();
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
   fireEvent.change(within(editor).getByLabelText(/^Goal/), { target: { value: "Grow" } });
   return editor;
@@ -185,28 +203,28 @@ test("Back off the lens over a changed editor asks first, and keeping the change
     hash: "#/org?lens=chart",
   });
   act(() => {
-    location.hash = "#/org?lens=builder&view=outline";
+    location.hash = "#/org?lens=builder&view=table";
   });
   await screen.findByText("No problems");
-  const onOutline = location.hash;
+  const onTable = location.hash;
   const editor = await typeIntoTheEditor();
 
   act(() => history.back());
   const asked = await screen.findByRole("dialog", { name: "Discard your changes?" });
   expect(asked.textContent).toContain("you are leaving the builder");
-  await waitFor(() => expect(location.hash).toBe(onOutline));
+  await waitFor(() => expect(location.hash).toBe(onTable));
   fireEvent.click(within(asked).getByRole("button", { name: "Keep editing" }));
   expect((within(editor).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("Grow");
 });
 
 // A MOVE WITHIN THE LENS LOSES NOTHING. The Builder keeps the editor open,
-// form and all, when Back only turns the outline back into the canvas, so
+// form and all, when Back only turns the table back into the visualization, so
 // asking first would be a question about nothing, worded as a departure.
 test("Back within the lens asks nothing, and the editor keeps what was typed", async () => {
   mountBuilder({ engine: new Engine(company()), surfaces: builderSurfaces });
   await screen.findByText("No problems");
   const onCanvas = location.hash;
-  fireEvent.click(screen.getByRole("tab", { name: "Outline" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Table" }));
   const editor = await typeIntoTheEditor();
 
   act(() => history.back());
@@ -229,13 +247,9 @@ test("an editor opened before the engine described the company keeps its node", 
           answer = () => resolve(e.answer(r));
         })
       : null;
-  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/org?lens=builder&view=outline" });
-  const grid = await screen.findByRole("treegrid", { name: "Organization outline" });
+  mountBuilder({ engine, surfaces: builderSurfaces, hash: "#/org?lens=builder&view=table" });
   await waitFor(() => expect(engine.checks()).toHaveLength(1));
-  const row = within(grid)
-    .getAllByRole("row")
-    .find((r) => r.getAttribute("data-row-id") === "seat@roles[0]")!;
-  fireEvent.keyDown(row, { key: "Enter" });
+  await openTheEditorFromTheTable();
   expect(await screen.findByRole("dialog", { name: "Edit CEO" })).toBeDefined();
 
   const editor = await screen.findByRole("dialog", { name: "Edit CEO" });
@@ -255,14 +269,18 @@ test("every opening of the editor builds its own node's form", async () => {
   mountBuilder({
     engine: new Engine(company()),
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=outline",
+    hash: "#/org?lens=builder&view=table",
   });
   await screen.findByText("No problems");
   await typeIntoTheEditor();
-  const dev = within(screen.getByRole("treegrid", { name: "Organization outline" }))
-    .getAllByRole("row")
-    .find((r) => r.getAttribute("data-row-id") === "seat:dev")!;
-  fireEvent.keyDown(dev, { key: "Enter" });
+  const dev = await tableRow("Dev");
+  fireEvent.click(within(dev).getByRole("button", { name: "Row actions" }));
+  const menu = await screen.findByRole("menu", { name: "Row actions" });
+  fireEvent.click(
+    within(menu)
+      .getAllByRole("menuitem")
+      .find((m) => menuEntryLabel(m) === "Edit")!,
+  );
   const next = await screen.findByRole("dialog", { name: "Edit Dev" });
   expect((within(next).getByLabelText(/^Goal/) as HTMLTextAreaElement).value).toBe("");
 });
@@ -276,7 +294,7 @@ test("a colleague's save leaves an open editor and its typed form, which then ap
   const { store } = mountBuilder({
     engine,
     surfaces: builderSurfaces,
-    hash: "#/org?lens=builder&view=outline&seat=ceo",
+    hash: "#/org?lens=builder&view=table&seat=ceo",
   });
   await screen.findByText("No problems");
   const editor = await typeIntoTheEditor();

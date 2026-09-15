@@ -356,7 +356,7 @@ describe("the selection in the URL", () => {
 
   test("a link naming a seat selects it, and the toolbar offers that seat's actions", async () => {
     const engine = new Engine(company());
-    mountBuilder({ engine, hash: "#/org?lens=builder&view=canvas&seat=ceo" });
+    mountBuilder({ engine, hash: "#/org?lens=builder&view=visualization&seat=ceo" });
     await screen.findByText("No problems");
     const actions = await screen.findByRole("button", { name: "CEO" });
     expect(actions.getAttribute("aria-haspopup")).toBe("menu");
@@ -569,7 +569,7 @@ describe("the lens that fills the window", () => {
   }
 
   test("the chart lens asks the frame for the window's height", async () => {
-    const calls = asked("#/org?lens=builder&view=canvas");
+    const calls = asked("#/org?lens=builder&view=visualization");
     // Not before the engine has answered: until then the lens draws a posture
     // screen, which is an ordinary column and scrolls like one.
     expect(calls).not.toContain(true);
@@ -577,7 +577,7 @@ describe("the lens that fills the window", () => {
   });
 
   test("the outline lens asks for nothing and leaves the scroller alone", async () => {
-    const calls = asked("#/org?lens=builder&view=outline");
+    const calls = asked("#/org?lens=builder&view=table");
     // The toolbar is what both lenses draw once the engine has answered, so
     // waiting for it is waiting for the same moment the case above measures.
     await screen.findByRole("toolbar", { name: "Organization builder" });

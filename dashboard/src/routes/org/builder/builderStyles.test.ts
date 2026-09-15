@@ -1,8 +1,9 @@
 // @vitest-environment node
 /**
- * The builder's stylesheet keeps the two promises its views rely on and a
- * browser-free suite cannot observe: a live state badge never resizes the
- * card it sits in, and no builder card or row is coloured by what it holds.
+ * The builder's stylesheet keeps the promises its views rely on and a
+ * browser-free suite cannot observe: a live state badge never resizes the card
+ * it sits in, no builder card or row is coloured by what it holds, and nothing
+ * here redraws what the design system's chart and table already draw.
  *
  * The canvas lays cards out by their MEASURED size. A badge whose slot could
  * shrink, wrap or push the seat's name onto a second line would change a
@@ -43,27 +44,36 @@ test("the live state and problem count slots neither shrink nor wrap, and the na
   expect(rule(".bchart-line")).toMatch(/min-width:\s*0/);
 });
 
-// A scroll box clips only descendants whose containing block is inside it:
-// the outline's screen-reader column header, absolutely positioned against the
-// frame, escaped the grid's sideways scroller and gave the page a sideways
-// overflow as wide as the grid, which a focus or a find in page then scrolled.
-test("the outline scrolls sideways in its own box, which contains everything it holds", () => {
-  expect(rule(".boutline-wrap")).toMatch(/overflow-x:\s*auto/);
-  expect(rule(".boutline-wrap")).toMatch(/position:\s*relative/);
+// The chart reads the design system's own tree-card variable, and it reads it
+// with a fallback, because a component has to draw without a consumer. This
+// application IS the consumer, and the one declaration it writes is what every
+// card, every row measured inside one and every connector lays out against.
+// Nothing in jsdom computes a custom property, so the declaration is read from
+// the stylesheet.
+test("the card width the chart is drawn at is declared", () => {
+  expect(rule(".org-builder")).toMatch(/--crewlet-tree-canvas-card-width:\s*\S/);
 });
 
-// Both views read the design system's own tree-card variable, and they read it
-// BARE: the fallback in `var(--x, 15rem)` belongs to a component that must draw
-// without a consumer, and this application is the consumer. An undeclared
-// custom property is invalid at computed-value time and takes its whole
-// declaration with it, so a missing declaration is not a wrong width but no
-// width at all: cards at `width: auto` and an outline whose sideways scroller
-// has no minimum. Nothing in jsdom computes a custom property, so the
-// declaration is read from the stylesheet.
-test("the card width the chart and the outline both read is declared", () => {
-  expect(rule(".org-builder")).toMatch(/--crewlet-tree-canvas-card-width:\s*\S/);
-  expect(rule(".bchart-box")).toMatch(/width:\s*var\(--crewlet-tree-canvas-card-width\)/);
-  expect(rule(".boutline")).toMatch(/var\(--crewlet-tree-canvas-card-width\)/);
+/*
+ * THE CHART'S FRAME IS NOT DRAWN HERE ANY MORE, and the chart's whole shape
+ * went with it. The card, its dashed variant, the inset on each node, the focus
+ * ring, the accent ring on the selection, the connectors and the reveal of the
+ * pointer's controls are the design system's `TreeCanvas`, so a rule here that
+ * drew one again would be this screen quietly disagreeing with every other
+ * chart in the product. The same holds for the treegrid this file used to draw
+ * by hand, which is `DataView` now.
+ */
+test("no builder rule redraws what the design system's chart and table draw", () => {
+  const redrawn = rules(css)
+    .filter(([selector]) => /^\.(bchart|btable)/.test(selector.trim()))
+    .filter(([, body]) =>
+      /box-shadow|border-radius:\s*var\(--radius-lg\)|grid-template-columns/.test(body),
+    )
+    .map(([selector]) => selector);
+  expect(redrawn).toEqual([]);
+  // And nothing names the elements the component owns.
+  expect(css).not.toMatch(/\.bchart-(card|box|links|gap-probe|actions|head|row-item)\b/);
+  expect(css).not.toMatch(/\.boutline/);
 });
 
 /**
@@ -77,8 +87,8 @@ test("the card width the chart and the outline both read is declared", () => {
 const CARRIED_HUE = /var\(--color-(feedback|data|phase)-[-\w]*\)/;
 
 test("a builder card or row takes no status or data hue, only the accent for the selection", () => {
-  const builder = rules(css).filter(([selector]) => /\.(bchart|boutline|bnode)/.test(selector));
-  expect(builder.length).toBeGreaterThan(10);
+  const builder = rules(css).filter(([selector]) => /\.(bchart|btable|bnode)/.test(selector));
+  expect(builder.length).toBeGreaterThan(8);
   const hues = builder.filter(([, body]) => CARRIED_HUE.test(body)).map(([selector]) => selector);
   expect(hues).toEqual([]);
 });

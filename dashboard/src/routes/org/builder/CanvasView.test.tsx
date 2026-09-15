@@ -35,7 +35,11 @@ import {
   LayoutObserver,
   builderSpies,
   canvasWorld,
+  chartCard,
+  chartCards,
+  chartLinks,
   harnessProbe,
+  isOutlinedCard,
   type BuilderSpies,
   type HarnessProbe,
 } from "./viewTestkit.tsx";
@@ -114,11 +118,11 @@ const nameOf = (el: HTMLElement) => el.querySelector(".bchart-name")!.textConten
 describe("which chart", () => {
   test("the chart the lens hands in is the one drawn, whatever the URL says", () => {
     // The Builder owns the `chart` param; a second reading here could disagree.
-    location.hash = "#/org?lens=builder&view=canvas&chart=reporting";
+    location.hash = "#/org?lens=builder&view=visualization&chart=reporting";
     mount();
     expect(screen.getByRole("tree", { name: "Structure chart" })).toBeDefined();
     cleanup();
-    location.hash = "#/org?lens=builder&view=canvas&chart=structure";
+    location.hash = "#/org?lens=builder&view=visualization&chart=structure";
     mount(undefined, { chart: "reporting" });
     expect(screen.getByRole("tree", { name: "Reporting chart" })).toBeDefined();
   });
@@ -190,7 +194,10 @@ describe("the tree", () => {
     const doc = fixtureCompany();
     doc.roles![0] = { name: "CEO", kind: "human", contact: { slack: "U0CEO" } };
     mount(checkedEdit(doc));
-    expect(item("CEO").closest(".bchart-card")!.classList.contains("human")).toBe(true);
+    // The mark is the CARD's boundary, which the design system draws, so the
+    // claim is "drawn as the chart draws somebody outside the system" rather
+    // than the name of a class that belongs to the package.
+    expect(isOutlinedCard(chartCard(item("CEO")))).toBe(true);
     expect(item("Dev").closest(".bchart-row")!.classList.contains("human")).toBe(false);
     expect(within(item("CEO")).getByText(/Human seat/)).toBeDefined();
   });
@@ -417,6 +424,11 @@ describe("keys", () => {
     expect(spies.openDelete).not.toHaveBeenCalled();
     press("Enter");
     expect(spies.openEditor).toHaveBeenCalledWith(seatKey("dev"));
+    // AND THE BRANCH CARRIES NOTHING. The Add under a card is the one control
+    // whose whole purpose is a change, so on a draft nobody may change it is
+    // absent rather than present and refusing: there is no reading of it to
+    // keep, unlike Delete in a menu, where the entry says the action exists.
+    expect(screen.queryByRole("button", { name: /^Add to /, hidden: true })).toBeNull();
   });
 
   test("the ContextMenu key and Shift+F10 open the node's menu in the overlay, and Escape returns", () => {
@@ -541,7 +553,7 @@ describe("menus", () => {
     const doc = fixtureCompany();
     doc.units![1]!.lead = "CEO";
     const { spies } = mount(checkedEdit(doc));
-    const sales = within(item("Sales").closest<HTMLElement>(".bchart-card")!);
+    const sales = within(chartCard(item("Sales")));
     fireEvent.click(sales.getByRole("button", { name: "CEO", hidden: true }));
     expect(
       screen
@@ -563,7 +575,7 @@ describe("menus", () => {
     fireEvent.click(screen.getByRole("button", { name: "VP Engineering", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "VP Engineering" }));
     expect(screen.queryByRole("menu")).toBeNull();
-    const sales = within(item("Sales").closest<HTMLElement>(".bchart-card")!);
+    const sales = within(chartCard(item("Sales")));
     fireEvent.click(sales.getByRole("button", { name: "No lead", hidden: true }));
     fireEvent.click(screen.getByRole("menuitemradio", { name: "No lead" }));
     expect(spies.dispatched).toEqual([]);
@@ -665,7 +677,7 @@ describe("the reporting chart", () => {
 });
 
 describe("focus", () => {
-  const boxOf = (name: string) => item(name).closest<HTMLElement>(".bchart-box")!;
+  const boxOf = (name: string) => chartCard(item(name));
 
   test("focusing a node inside a collapsed unit opens it and never scrolls", () => {
     const { probe } = mount();
@@ -787,12 +799,9 @@ describe("live state", () => {
   test("an agents push changes a badge and never the layout", () => {
     const { rerender, container } = mount();
     const layout = () => ({
-      boxes: [...container.querySelectorAll<HTMLElement>(".bchart-box")].map((b) => [
-        b,
-        b.style.transform,
-      ]),
+      boxes: chartCards(container).map((b) => [b, b.style.transform]),
       world: canvasWorld(container).style.transform,
-      links: container.querySelector(".bchart-links")!.innerHTML,
+      links: chartLinks(container).innerHTML,
     });
     const before = layout();
     expect(within(item("Dev")).getByText("offline")).toBeDefined();

@@ -1,6 +1,6 @@
 /**
- * The org builder's canvas: the draft drawn as a chart on a pannable,
- * zoomable surface, in two arrangements.
+ * The org builder's canvas: the draft drawn as a chart on the design system's
+ * tree canvas, in two arrangements.
  *
  * - STRUCTURE: the company card at the root, root seats as cards beneath it,
  *   units as cards with their seats stacked inside as rows and their child
@@ -13,51 +13,29 @@
  *   reporting line is not written anywhere as such: it follows from `manages`,
  *   `lead` and the unit tree, which a seat's editor changes ("Edit reports").
  *
+ * THE CHART ITSELF IS `TreeCanvas` FROM `@crewlethq/ui`, and this module is
+ * what the engine's own model puts into it. The layout, the connectors, the
+ * ARIA tree pattern, focus and the reveal of every pointer-only control are
+ * the design system's; a card's CONTENT, what a key does to a seat and what an
+ * Add offers under a unit are the engine's, because only the engine knows what
+ * a seat, a unit and a reporting cycle are. Everything above was a copy of
+ * that component living here, which is how the two came to draw different
+ * charts in the same product.
+ *
+ * WHAT THE READER SEES FIRST IS THE ORGANIZATION, not the tools for editing
+ * it. A card says its name with the whole card's width, and the controls (the
+ * expander, the actions menu, and the Add that hangs on the branch below a
+ * card that can take a child) appear when the card is reached, by pointer, by
+ * focus or by being the selected node. The keyboard reaches all of them
+ * without any of that: Enter edits, Delete or Backspace deletes, the
+ * ContextMenu key or Shift+F10 opens the node's menu, and the toolbar mirrors
+ * the selected node.
+ *
  * The chart's reading of the draft is `chartModel.ts` and every action is
- * `nodeActions.tsx`; this module is the wiring from them to the canvas, the
- * tree pattern and the layout.
- *
- * THE KEYBOARD PATTERN IS A TREE, AND ITS ITEMS HOLD NOTHING FOCUSABLE. Each
- * card's header and each seat row is a `treeitem` with its treeLevel, position
- * and expansion, and focus moves among them by a roving tab stop: arrows
- * walk the treeVisible order, Right and Left open, close and climb, Home and End
- * jump, and typing finds a node by name (the design system's tree model). A
- * keys act on it: Enter edits, Delete or Backspace deletes, the ContextMenu
- * key or Shift+F10 opens its menu. The buttons a pointer uses (expand, add,
- * more, the lead chip) sit BESIDE the treeitem in a strip hidden from
- * assistive technology and out of the tab order, because a control inside a
- * treeitem is a control a screen reader cannot reach and a keyboard user
- * would Tab through by the hundred; the menu they open is the same one the
- * ContextMenu key opens, and the toolbar mirrors the focused node. A press on
- * that strip never leaves focus in it: the treeitem takes the focus, so what
- * holds it is always a node a screen reader can announce and the arrows can
- * move from.
- *
- * FOCUS NEVER SCROLLS BEHIND THE TRANSFORM'S BACK. A node is focused with
- * `preventScroll` and then revealed by panning the canvas, and a node inside
- * a collapsed unit has its treeAncestors opened first. The Builder decides which
- * node is focused after an operation, an undo or a redo; this view performs
- * it through the handle it registers (`useBuilderView`).
- *
- * THE LAYOUT IS MEASURED. Every card is rendered at the card-width token and
- * measured (`useMeasuredSizes`), the gaps between cards are read from a
- * probe drawn with spacing tokens (so density scales them with everything
- * else), and the tidy tree layout (`layoutForest`) places them. A relayout
- * keeps the node the operator acted on still on screen. Live state is not an
- * input to any of it: a push changes a badge's text inside a slot that never
- * changes size, and nothing is laid out again.
+ * `nodeActions.tsx`.
  */
 
-import {
-  useCallback,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-  type ReactNode,
-} from "react";
+import { useCallback, useMemo, useRef, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { useBuilder, useBuilderView, type BuilderApi, type ChartKind } from "./BuilderContext.tsx";
 import {
@@ -75,10 +53,8 @@ import {
   leadLabel,
   leadMenu,
   leadSentence,
-  nodeKeyAction,
   nodeMenu,
   reportingMenu,
-  type NodeKeyAction,
   type OpenScreen,
 } from "./nodeActions.tsx";
 import {
@@ -102,30 +78,19 @@ import {
 } from "@crewlethq/icons/glyphs";
 import {
   Avatar,
-  Canvas,
-  type CanvasHandle,
-  type CanvasPoint,
-  type CanvasRect,
   cx,
   EmptyState,
-  type ForestLayout,
   IconButton,
-  layoutForest,
-  type LayoutNode,
   Menu,
   type MenuEntry,
   Tag,
-  treeAncestors,
-  treeExpandable,
+  TreeCanvas,
+  type TreeCardContext,
+  type TreeCardInput,
   type TreeInput,
-  treeLevel,
+  type TreeItemAction,
   type TreeModel,
-  treePosInSet,
-  treeSetSize,
-  treeStep,
-  useLayoutAnchor,
-  useMeasuredSizes,
-  useTreeState,
+  type TreeViewHandle,
   VisuallyHidden,
 } from "@crewlethq/ui";
 
@@ -161,16 +126,16 @@ function StructureChart({
 }) {
   // A seat drawn inside a unit is a ROW of that unit's card; every other node
   // is a card of its own.
-  const boxOf = useCallback(
+  const cardOf = useCallback(
     (id: string) => {
       const view = structure.nodes.get(id);
       return view?.type === "seat" && view.parent !== COMPANY_KEY ? view.parent : id;
     },
     [structure],
   );
-  const boxes = useCallback(
-    (model: TreeModel, expanded: ReadonlySet<string>): BoxInput[] => {
-      const card = (id: string): BoxInput => {
+  const cards = useCallback(
+    (model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
+      const card = (id: string): TreeCardInput => {
         const view = structure.nodes.get(id);
         const shown = expanded.has(id);
         if (view?.type === "company") {
@@ -183,12 +148,12 @@ function StructureChart({
     },
     [structure],
   );
-  const act = useCallback(
-    (id: string, action: NodeKeyAction): boolean => {
+  const onNodeKey = useCallback(
+    (id: string, action: Exclude<TreeItemAction, "menu">): boolean => {
       const view = structure.nodes.get(id);
       if (!view) return false;
-      if (action === "edit") api.openEditor(id);
-      else if (action === "delete") {
+      if (action === "activate") api.openEditor(id);
+      else {
         if (!isDeletable(view) || api.readOnly) return false;
         api.openDelete(id);
       }
@@ -197,17 +162,32 @@ function StructureChart({
     [api, structure],
   );
   return (
-    <TreeCanvas
+    <Chart
       label="Structure chart"
-      tree={structure.tree}
-      boxes={boxes}
-      boxOf={boxOf}
-      act={act}
+      nodes={structure.tree}
+      cards={cards}
+      cardOf={cardOf}
+      onNodeKey={onNodeKey}
       isNode={(id) => structure.nodes.has(id)}
-      hasMenu={(id) => structure.nodes.has(id)}
-      render={(id, ctx) => (
-        <StructureCard api={api} structure={structure} id={id} ctx={ctx} open={open} />
+      hasNodeMenu={(id) => structure.nodes.has(id)}
+      // A HUMAN SEAT WEARS THE DASHED EDGE every human seat on this dashboard
+      // wears, and it is the card's frame, so the design system draws it.
+      cardOutline={(id) => {
+        const view = structure.nodes.get(id);
+        return view?.type === "seat" && view.kind === "human";
+      }}
+      renderCard={(id, card) => (
+        <StructureCard api={api} structure={structure} id={id} card={card} open={open} />
       )}
+      // THE ADD IS ON THE BRANCH, under the card whose children it makes. It
+      // used to be a third button crowding the card's own name, where "add a
+      // unit under Engineering" was a menu on Engineering's top right corner
+      // rather than a control on the line its units hang from.
+      renderUnder={(id) => {
+        const view = structure.nodes.get(id);
+        if (!view || view.type === "seat" || api.readOnly) return null;
+        return <AddButton api={api} view={view} />;
+      }}
     />
   );
 }
@@ -222,8 +202,8 @@ function ReportingChart({
   open: OpenScreen;
 }) {
   const chart = useReporting(api.state);
-  const boxes = useCallback((model: TreeModel, expanded: ReadonlySet<string>): BoxInput[] => {
-    const card = (id: string): BoxInput => ({
+  const cards = useCallback((model: TreeModel, expanded: ReadonlySet<string>): TreeCardInput[] => {
+    const card = (id: string): TreeCardInput => ({
       id,
       children: expanded.has(id) ? (model.children.get(id) ?? []).map(card) : [],
     });
@@ -234,10 +214,10 @@ function ReportingChart({
     const view = item?.key ? structure.nodes.get(item.key) : undefined;
     return view?.type === "seat" ? view : undefined;
   };
-  const act = (id: string, action: NodeKeyAction): boolean => {
+  const onNodeKey = (id: string, action: Exclude<TreeItemAction, "menu">): boolean => {
     const seat = seatOf(id);
     // Enter on the reporting chart is its menu's first entry, Edit reports.
-    if (action === "edit" && seat) {
+    if (action === "activate" && seat) {
       api.openEditor(seat.key, "reports");
       return true;
     }
@@ -264,9 +244,9 @@ function ReportingChart({
   }
   const stale = api.state.check.generation !== api.state.generation;
   return (
-    <TreeCanvas
+    <Chart
       label="Reporting chart"
-      note={
+      overlay={
         // Over the canvas rather than above it: a note that came and went
         // with every check would resize the viewport under the operator.
         stale && (
@@ -276,26 +256,112 @@ function ReportingChart({
           </p>
         )
       }
-      tree={chart.tree}
-      boxes={boxes}
-      boxOf={(id) => id}
-      act={act}
+      nodes={chart.tree}
+      cards={cards}
+      cardOf={(id) => id}
+      onNodeKey={onNodeKey}
       isNode={(id) => seatOf(id) !== undefined}
-      hasMenu={(id) => seatOf(id) !== undefined}
-      render={(id, ctx) =>
+      hasNodeMenu={(id) => seatOf(id) !== undefined}
+      cardOutline={(id) => chart.items.get(id)?.kind === "human"}
+      renderCard={(id, card) =>
         id === CYCLE_GROUP ? (
-          <CycleGroupCard ctx={ctx} count={chart.cycles.length} />
+          <CycleGroupCard card={card} count={chart.cycles.length} />
         ) : (
           <ReportingCard
             api={api}
             item={chart.items.get(id)!}
             seat={seatOf(id)}
-            ctx={ctx}
+            card={card}
             open={open}
           />
         )
       }
     />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The chart: the design system's, wired to the Builder
+// ---------------------------------------------------------------------------
+
+/**
+ * The design system's tree canvas, holding the Builder's selection, its
+ * anchor and its view handle.
+ *
+ * It is a component of its own rather than four props repeated at each chart,
+ * because the three things wired here are the same on both and each was a
+ * defect the first time it was written twice: which node a relayout keeps
+ * still, which ids a selection may hold, and the handle the toolbar's Expand
+ * all, Collapse all and focus-a-node go through.
+ */
+function Chart({
+  label,
+  nodes,
+  cards,
+  cardOf,
+  renderCard,
+  renderUnder,
+  cardOutline,
+  onNodeKey,
+  hasNodeMenu,
+  isNode,
+  overlay,
+}: {
+  label: string;
+  nodes: readonly TreeInput[];
+  cards: (model: TreeModel, expanded: ReadonlySet<string>) => TreeCardInput[];
+  cardOf: (id: string) => string;
+  renderCard: (id: string, card: TreeCardContext) => ReactNode;
+  renderUnder?: (id: string, card: TreeCardContext) => ReactNode;
+  cardOutline?: (id: string) => boolean;
+  onNodeKey: (id: string, action: Exclude<TreeItemAction, "menu">) => boolean;
+  hasNodeMenu: (id: string) => boolean;
+  /** Whether an id names a node of the draft, which is what a selection can hold. */
+  isNode: (id: string) => boolean;
+  overlay?: ReactNode;
+}) {
+  const api = useBuilder();
+  const view = useRef<TreeViewHandle>(null);
+
+  // ONE IDENTITY FOR THE LENS'S LIFETIME, read through a ref: the Builder
+  // registers a view in an effect, and a handle that changed identity would
+  // register the mounted view again after every edit and every answer.
+  const handle = useMemo(
+    () => ({
+      focusNode: (key: string) => view.current?.focusNode(key),
+      expandAll: () => view.current?.expandAll(),
+      collapseAll: () => view.current?.collapseAll(),
+    }),
+    [],
+  );
+  useBuilderView(handle);
+
+  return (
+    <div className="bchart">
+      <TreeCanvas
+        className="bchart-canvas"
+        ref={view}
+        label={label}
+        nodes={nodes}
+        cards={cards}
+        cardOf={cardOf}
+        renderCard={renderCard}
+        renderUnder={renderUnder}
+        cardOutline={cardOutline}
+        onNodeKey={onNodeKey}
+        hasNodeMenu={hasNodeMenu}
+        // SELECTION FOLLOWS FOCUS, for nodes of the draft: the selection is
+        // what the toolbar acts on and what the URL names, and a group heading
+        // is neither.
+        selectedId={api.selection.key}
+        onSelect={(id) => {
+          if (isNode(id)) api.selection.select(id);
+        }}
+        // THE NODE THE OPERATOR ACTED ON stays where it was across a relayout.
+        anchorNode={api.state.last?.focus ?? null}
+        overlay={overlay}
+      />
+    </div>
   );
 }
 
@@ -307,34 +373,34 @@ function StructureCard({
   api,
   structure,
   id,
-  ctx,
+  card,
   open,
 }: {
   api: BuilderApi;
   structure: Structure;
   id: string;
-  ctx: CardContext;
+  card: TreeCardContext;
   open: OpenScreen;
 }) {
   const view = structure.nodes.get(id);
   if (!view) return null;
   if (view.type === "seat") {
     return (
-      <div className={cx("bchart-card", "seat", view.kind === "human" && "human")}>
-        <div {...ctx.item(id)} className="bchart-head">
+      <>
+        <div {...card.item(id)} className="bchart-head">
           <SeatBody api={api} view={view} />
         </div>
-        <CardActions ctx={ctx} id={id}>
-          <MoreMenu ctx={ctx} id={id} label={view.name} items={nodeMenu(api, view, open)} />
-        </CardActions>
-      </div>
+        <div {...card.actions(id)}>
+          <MoreMenu card={card} id={id} label={view.name} items={nodeMenu(api, view, open)} />
+        </div>
+      </>
     );
   }
-  const expanded = ctx.expanded(id);
+  const expanded = card.expanded(id);
   if (view.type === "company") {
     return (
-      <div className="bchart-card company">
-        <div {...ctx.item(id)} className="bchart-head">
+      <>
+        <div {...card.item(id)} className="bchart-head">
           <span className="bchart-line">
             <ApartmentGlyph size="sm" />
             <span className="bchart-text">
@@ -347,22 +413,21 @@ function StructureCard({
             <ProblemCount api={api} nodeKey={id} />
           </span>
         </div>
-        <CardActions ctx={ctx} id={id}>
-          <ToggleButton ctx={ctx} id={id} name={view.name || "the company"} />
-          <AddMenu ctx={ctx} view={view} api={api} />
+        <div {...card.actions(id)}>
+          <ToggleButton card={card} id={id} name={view.name || "the company"} />
           <MoreMenu
-            ctx={ctx}
+            card={card}
             id={id}
             label={view.name || "the company"}
             items={nodeMenu(api, view, open)}
           />
-        </CardActions>
-      </div>
+        </div>
+      </>
     );
   }
   return (
-    <div className="bchart-card unit">
-      <div {...ctx.item(id)} className="bchart-head">
+    <>
+      <div {...card.item(id)} className="bchart-head">
         <span className="bchart-line">
           <FolderGlyph size="sm" />
           <span className="bchart-text">
@@ -378,12 +443,11 @@ function StructureCard({
           <UnitMarks view={view} />
         </span>
       </div>
-      <CardActions ctx={ctx} id={id}>
-        <ToggleButton ctx={ctx} id={id} name={view.name} />
-        <AddMenu ctx={ctx} view={view} api={api} />
-        <MoreMenu ctx={ctx} id={id} label={view.name} items={nodeMenu(api, view, open)} />
-      </CardActions>
-      <LeadChip api={api} structure={structure} unit={view} ctx={ctx} />
+      <div {...card.actions(id)}>
+        <ToggleButton card={card} id={id} name={view.name} />
+        <MoreMenu card={card} id={id} label={view.name} items={nodeMenu(api, view, open)} />
+      </div>
+      <LeadChip api={api} structure={structure} unit={view} card={card} />
       {expanded && view.seats.length > 0 && (
         <div role="none" className="bchart-rows">
           {view.seats.map((key) => {
@@ -395,23 +459,23 @@ function StructureCard({
                 key={key}
                 className={cx("bchart-row", seat.kind === "human" && "human")}
               >
-                <div {...ctx.item(key)} className="bchart-row-item">
+                <div {...card.item(key)} className="bchart-row-item">
                   <SeatBody api={api} view={seat} />
                 </div>
-                <CardActions ctx={ctx} id={key}>
+                <div {...card.actions(key)}>
                   <MoreMenu
-                    ctx={ctx}
+                    card={card}
                     id={key}
                     label={seat.name}
                     items={nodeMenu(api, seat, open)}
                   />
-                </CardActions>
+                </div>
               </div>
             );
           })}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -446,18 +510,18 @@ function ReportingCard({
   api,
   item,
   seat,
-  ctx,
+  card,
   open,
 }: {
   api: BuilderApi;
   item: ReportingItem;
   seat: SeatView | undefined;
-  ctx: CardContext;
+  card: TreeCardContext;
   open: OpenScreen;
 }) {
   return (
-    <div className={cx("bchart-card", "seat", item.kind === "human" && "human")}>
-      <div {...ctx.item(item.id)} className="bchart-head">
+    <>
+      <div {...card.item(item.id)} className="bchart-head">
         <span className="bchart-line">
           <Avatar
             name={item.name}
@@ -483,25 +547,25 @@ function ReportingCard({
           )}
         </span>
       </div>
-      <CardActions ctx={ctx} id={item.id}>
-        {item.reports.length > 0 && <ToggleButton ctx={ctx} id={item.id} name={item.name} />}
+      <div {...card.actions(item.id)}>
+        {item.reports.length > 0 && <ToggleButton card={card} id={item.id} name={item.name} />}
         {seat && (
           <MoreMenu
-            ctx={ctx}
+            card={card}
             id={item.id}
             label={item.name}
             items={reportingMenu(api, seat, open)}
           />
         )}
-      </CardActions>
-    </div>
+      </div>
+    </>
   );
 }
 
-function CycleGroupCard({ ctx, count }: { ctx: CardContext; count: number }) {
+function CycleGroupCard({ card, count }: { card: TreeCardContext; count: number }) {
   return (
-    <div className="bchart-card group">
-      <div {...ctx.item(CYCLE_GROUP)} className="bchart-head">
+    <>
+      <div {...card.item(CYCLE_GROUP)} className="bchart-head">
         <CycleGlyph size="sm" />
         <span className="bchart-text">
           <span className="bchart-name">Reporting cycle</span>
@@ -511,36 +575,16 @@ function CycleGroupCard({ ctx, count }: { ctx: CardContext; count: number }) {
           </span>
         </span>
       </div>
-      <CardActions ctx={ctx} id={CYCLE_GROUP}>
-        <ToggleButton ctx={ctx} id={CYCLE_GROUP} name="the reporting cycles" />
-      </CardActions>
-    </div>
+      <div {...card.actions(CYCLE_GROUP)}>
+        <ToggleButton card={card} id={CYCLE_GROUP} name="the reporting cycles" />
+      </div>
+    </>
   );
 }
 
-/**
- * The pointer's buttons for a card or row: beside the treeitem, out of the
- * tab order and hidden from assistive technology, whose way to the same
- * actions is the treeitem's own keys (see the module doc).
- *
- * THE PRESS LANDS ON THE NODE, NOT ON THE BUTTON. A press is stopped from
- * focusing the button it lands on and focuses the treeitem instead, because
- * focus inside a subtree hidden from assistive technology is focus nowhere:
- * a screen reader would have nothing to announce, and the menu the press
- * opens would hand focus back there when it closed. Focused on the node, the
- * arrows carry on from the card the operator pressed.
- */
-function CardActions({ ctx, id, children }: { ctx: CardContext; id: string; children: ReactNode }) {
-  return (
-    <div className="bchart-actions" aria-hidden="true" {...ctx.press(id)}>
-      {children}
-    </div>
-  );
-}
-
-function ToggleButton({ ctx, id, name }: { ctx: CardContext; id: string; name: string }) {
-  if (!ctx.expandable(id)) return null;
-  const expanded = ctx.expanded(id);
+function ToggleButton({ card, id, name }: { card: TreeCardContext; id: string; name: string }) {
+  if (!card.expandable(id)) return null;
+  const expanded = card.expanded(id);
   return (
     <IconButton
       label={expanded ? `Collapse ${name}` : `Expand ${name}`}
@@ -549,31 +593,43 @@ function ToggleButton({ ctx, id, name }: { ctx: CardContext; id: string; name: s
       tabIndex={-1}
       onClick={(e) => {
         e.stopPropagation();
-        ctx.toggle(id);
+        card.toggle(id);
       }}
     />
   );
 }
 
-function AddMenu({ ctx, view, api }: { ctx: CardContext; view: NodeView; api: BuilderApi }) {
+/**
+ * The Add on a card's branch: the three kinds a company or a unit can take,
+ * under the card their children hang from.
+ *
+ * The same entries the node's own menu and the toolbar offer, because there is
+ * one list of what can be added under a parent and three places that ask for
+ * it. It is absent on a read-only draft rather than present and refusing.
+ *
+ * A MARK RATHER THAN A WORD, and it is named after the card it belongs to. A
+ * visible "Add" is its own accessible name, so nine of them on one chart are
+ * nine controls called "Add" and which card each belongs to is read off the
+ * geometry. Named, each says the card it adds to, which is also its tooltip.
+ */
+function AddButton({ api, view }: { api: BuilderApi; view: NodeView }) {
   return (
     <Menu
       label={`Add to ${view.name || "the company"}`}
       icon={<AddGlyph />}
       items={addMenu(api, view)}
       triggerTabIndex={-1}
-      onOpenChange={(opened) => opened && ctx.activate(view.key)}
     />
   );
 }
 
 function MoreMenu({
-  ctx,
+  card,
   id,
   label,
   items,
 }: {
-  ctx: CardContext;
+  card: TreeCardContext;
   id: string;
   label: string;
   items: MenuEntry[];
@@ -583,26 +639,34 @@ function MoreMenu({
       label={`Actions for ${label}`}
       items={items}
       triggerTabIndex={-1}
-      open={ctx.menuOpen(id)}
-      onOpenChange={(opened) => ctx.setMenuOpen(id, opened)}
+      open={card.menuOpen(id)}
+      onOpenChange={(opened) => card.setMenuOpen(id, opened)}
     />
   );
 }
 
-/** A unit's lead, as a chip that opens the lead choice in place. */
+/**
+ * A unit's lead, as a chip along the card's bottom edge.
+ *
+ * IT STAYS DRAWN, unlike the controls that edit the card, because who leads a
+ * unit is a FACT ABOUT THE ORGANIZATION rather than a tool for changing it: a
+ * chart that hid it until the pointer arrived would be a chart you could not
+ * read the leads off. What it opens is still a menu, and the press on it lands
+ * on the unit's own node.
+ */
 function LeadChip({
   api,
   structure,
   unit,
-  ctx,
+  card,
 }: {
   api: BuilderApi;
   structure: Structure;
   unit: UnitView;
-  ctx: CardContext;
+  card: TreeCardContext;
 }) {
   return (
-    <div className="bchart-lead" aria-hidden="true" {...ctx.press(unit.key)}>
+    <div className="bchart-lead" aria-hidden="true" {...card.press(unit.key)}>
       <CrownGlyph size="xs" />
       {api.readOnly ? (
         <span className="truncate">{leadLabel(unit)}</span>
@@ -612,362 +676,10 @@ function LeadChip({
           icon={<KeyboardArrowDownGlyph />}
           items={leadMenu(api, structure, unit)}
           triggerTabIndex={-1}
-          onOpenChange={(opened) => opened && ctx.activate(unit.key)}
+          onOpenChange={(opened) => opened && card.activate(unit.key)}
           trigger={leadLabel(unit)}
         />
       )}
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// The tree on a canvas
-// ---------------------------------------------------------------------------
-
-/** A card of the layout: its id and its child cards. */
-interface BoxInput {
-  id: string;
-  children: BoxInput[];
-}
-
-/** What a card needs from the tree it is drawn in. */
-interface CardContext {
-  /** The props that make an element the treeitem of `id`. */
-  item(id: string): TreeItemProps;
-  expanded(id: string): boolean;
-  expandable(id: string): boolean;
-  toggle(id: string): void;
-  /** Makes `id` the tree's current node without moving focus, as a pointer action on its card does. */
-  activate(id: string): void;
-  /** The props that make a press anywhere in a hidden strip land on `id` rather than on the button. */
-  press(id: string): { onMouseDown(e: MouseEvent<HTMLElement>): void };
-  menuOpen(id: string): boolean;
-  setMenuOpen(id: string, open: boolean): void;
-}
-
-interface TreeItemProps {
-  role: "treeitem";
-  tabIndex: number;
-  "aria-level": number;
-  "aria-setsize": number;
-  "aria-posinset": number;
-  "aria-expanded": boolean | undefined;
-  "aria-selected": boolean;
-  "data-tree-id": string;
-  ref: (el: HTMLElement | null) => void;
-  onClick: (e: MouseEvent<HTMLElement>) => void;
-  onDoubleClick: () => void;
-}
-
-/** The id of the probe the gaps between cards are measured from. */
-const GAP_PROBE = "bchart:gap";
-
-function TreeCanvas({
-  label,
-  tree: forest,
-  boxes,
-  boxOf,
-  act,
-  isNode,
-  hasMenu,
-  render,
-  note,
-}: {
-  label: string;
-  /** Drawn over the canvas without the transform. */
-  note?: ReactNode;
-  tree: readonly TreeInput[];
-  boxes: (model: TreeModel, expanded: ReadonlySet<string>) => BoxInput[];
-  /** The card a node is drawn in: itself, or the card holding its row. */
-  boxOf: (id: string) => string;
-  /** Carries out Enter or Delete on a node; false when the node has no such action. */
-  act: (id: string, action: NodeKeyAction) => boolean;
-  /** Whether an id names a node of the draft, which is what a selection can hold. */
-  isNode: (id: string) => boolean;
-  hasMenu: (id: string) => boolean;
-  render: (id: string, ctx: CardContext) => ReactNode;
-}) {
-  const api = useBuilder();
-  const tree = useTreeState(forest, api.selection.key);
-  const { model, expanded, active, setActive, toggle } = tree;
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-
-  // ---- measuring and layout -----------------------------------------------
-  const { measure, sizes, measured } = useMeasuredSizes();
-  const boxForest = useMemo(() => boxes(model, expanded), [boxes, model, expanded]);
-  const boxIds = useMemo(() => {
-    const out: string[] = [];
-    const walk = (b: BoxInput) => {
-      out.push(b.id);
-      b.children.forEach(walk);
-    };
-    boxForest.forEach(walk);
-    return out;
-  }, [boxForest]);
-
-  const previousLayout = useRef<ForestLayout | null>(null);
-  const layout = useMemo(() => {
-    if (!measured([...boxIds, GAP_PROBE])) return previousLayout.current;
-    const size = (id: string) => sizes.get(id)!;
-    const gap = size(GAP_PROBE);
-    const toTree = (b: BoxInput): LayoutNode => ({
-      id: b.id,
-      width: size(b.id).width,
-      height: size(b.id).height,
-      children: b.children.map(toTree),
-    });
-    return layoutForest(boxForest.map(toTree), { gapX: gap.width, gapY: gap.height });
-  }, [boxForest, boxIds, measured, sizes]);
-  previousLayout.current = layout;
-
-  const positions = useMemo(
-    () =>
-      layout
-        ? new Map<string, CanvasPoint>(layout.nodes.map((n) => [n.id, { x: n.x, y: n.y }]))
-        : null,
-    [layout],
-  );
-
-  const canvas = useRef<CanvasHandle>(null);
-  const shownPositions = useRef<ReadonlyMap<string, CanvasPoint> | null>(null);
-  // THE NODE THE OPERATOR ACTED ON stays where it was: the last operation's
-  // node, else the node with focus. A node that did not exist before the
-  // relayout (one just added) has no position to keep, so its nearest
-  // ancestor's card is kept still instead.
-  const anchorId = useMemo(() => {
-    const was = shownPositions.current;
-    if (!was) return null;
-    for (const candidate of [api.state.last?.focus, active]) {
-      if (!candidate || !model.parent.has(candidate)) continue;
-      for (const id of [candidate, ...treeAncestors(model, candidate).reverse()]) {
-        const box = boxOf(id);
-        if (was.has(box)) return box;
-      }
-    }
-    return null;
-  }, [api.state.last, active, model, boxOf]);
-  useLayoutAnchor(positions, anchorId, (before, after) => canvas.current?.anchor(before, after));
-  useLayoutEffect(() => {
-    shownPositions.current = positions;
-  }, [positions]);
-
-  // ---- focus ----------------------------------------------------------------
-  const items = useRef(new Map<string, HTMLElement>());
-  const itemRefs = useRef(new Map<string, (el: HTMLElement | null) => void>());
-  const refFor = (id: string) => {
-    let callback = itemRefs.current.get(id);
-    if (!callback) {
-      callback = (el) => {
-        if (el) items.current.set(id, el);
-        else if (items.current.get(id)?.isConnected === false) items.current.delete(id);
-      };
-      itemRefs.current.set(id, callback);
-    }
-    return callback;
-  };
-
-  const pendingFocus = useRef<string | null>(null);
-  const focusNow = useCallback(
-    (id: string): boolean => {
-      const el = items.current.get(id);
-      const placed = layout?.byId.get(boxOf(id));
-      if (!el || !el.isConnected || !placed) return false;
-      el.focus({ preventScroll: true });
-      // A row's rectangle is the card's, moved down to the row: `offsetTop`
-      // is a layout value, unaffected by the canvas's transform.
-      const box = el.closest<HTMLElement>(".bchart-box");
-      const top = box ? offsetWithin(el, box) : 0;
-      const rect: CanvasRect = {
-        x: placed.x,
-        y: placed.y + top,
-        width: placed.width,
-        height: el.offsetHeight > 0 && top > 0 ? el.offsetHeight : placed.height,
-      };
-      canvas.current?.reveal(rect);
-      return true;
-    },
-    [layout, boxOf],
-  );
-
-  const focusNode = useCallback(
-    (id: string) => {
-      if (!model.parent.has(id)) return;
-      const opened = tree.open(id);
-      setActive(id);
-      if (opened || !focusNow(id)) pendingFocus.current = id;
-    },
-    [model, tree, setActive, focusNow],
-  );
-
-  // A node that was not on screen yet (inside a unit just opened, or a card
-  // not measured yet) takes focus as soon as it is laid out.
-  useLayoutEffect(() => {
-    const id = pendingFocus.current;
-    if (id !== null && focusNow(id)) pendingFocus.current = null;
-  });
-
-  const focusRef = useRef(focusNode);
-  focusRef.current = focusNode;
-  const { expandAll, collapseAll } = tree;
-  const handle = useMemo(
-    () => ({ focusNode: (key: string) => focusRef.current(key), expandAll, collapseAll }),
-    [expandAll, collapseAll],
-  );
-  useBuilderView(handle);
-
-  // SELECTION FOLLOWS FOCUS, for nodes of the draft: the selection is what the
-  // toolbar acts on and what the URL names, and a group heading is neither.
-  const select = (id: string) => {
-    if (isNode(id)) api.selection.select(id);
-  };
-  const moveTo = (id: string | null) => {
-    if (id === null) return;
-    select(id);
-    focusNode(id);
-  };
-
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    const target = e.target as HTMLElement;
-    const id = target.getAttribute("data-tree-id");
-    if (id === null || !model.parent.has(id)) return;
-    const action = nodeKeyAction(e);
-    if (action === "menu") {
-      if (hasMenu(id)) {
-        e.preventDefault();
-        setMenuFor(id);
-      }
-      return;
-    }
-    if (action !== null) {
-      if (act(id, action)) e.preventDefault();
-      return;
-    }
-    const step = treeStep(tree, id, e);
-    if (step === undefined) return;
-    e.preventDefault();
-    if (step === null) return;
-    if ("toggle" in step) toggle(step.toggle);
-    else moveTo(step.focus);
-  }
-
-  const selectedId = api.selection.key;
-  const ctx: CardContext = {
-    item: (id) => ({
-      role: "treeitem",
-      tabIndex: id === active ? 0 : -1,
-      "aria-level": treeLevel(model, id),
-      "aria-setsize": treeSetSize(model, id),
-      "aria-posinset": treePosInSet(model, id),
-      "aria-expanded": treeExpandable(model, id) ? expanded.has(id) : undefined,
-      "aria-selected": id === selectedId,
-      "data-tree-id": id,
-      ref: refFor(id),
-      onClick: (e) => {
-        select(id);
-        setActive(id);
-        (e.currentTarget as HTMLElement).focus({ preventScroll: true });
-      },
-      onDoubleClick: () => act(id, "edit"),
-    }),
-    expanded: (id) => expanded.has(id),
-    expandable: (id) => treeExpandable(model, id),
-    toggle,
-    activate: (id) => setActive(id),
-    press: (id) => ({
-      onMouseDown: (e) => {
-        // The press must not focus the button it landed on: see CardActions.
-        e.preventDefault();
-        select(id);
-        setActive(id);
-        items.current.get(id)?.focus({ preventScroll: true });
-      },
-    }),
-    menuOpen: (id) => menuFor === id,
-    setMenuOpen: (id, open) => {
-      if (open) setActive(id);
-      setMenuFor((was) => (open ? id : was === id ? null : was));
-    },
-  };
-
-  const links = useMemo(() => (layout ? connectors(layout) : []), [layout]);
-
-  return (
-    <div className="bchart">
-      <Canvas
-        className="bchart-canvas"
-        label={label}
-        content={layout?.bounds ?? null}
-        ref={canvas}
-        overlay={note}
-      >
-        <div className="bchart-gap-probe" ref={measure(GAP_PROBE)} aria-hidden="true" />
-        {layout && (
-          <svg
-            className="bchart-links"
-            width={layout.bounds.width}
-            height={layout.bounds.height}
-            aria-hidden="true"
-          >
-            {links.map((d, i) => (
-              <path key={i} d={d} />
-            ))}
-          </svg>
-        )}
-        <div role="tree" aria-label={label} className="bchart-tree" onKeyDown={onKeyDown}>
-          {boxIds.map((id) => {
-            const placed = layout?.byId.get(id);
-            return (
-              <div
-                key={id}
-                role="none"
-                ref={measure(id)}
-                className="bchart-box"
-                style={
-                  placed
-                    ? { transform: `translate(${placed.x}px, ${placed.y}px)` }
-                    : { visibility: "hidden" }
-                }
-              >
-                {render(id, ctx)}
-              </div>
-            );
-          })}
-        </div>
-      </Canvas>
-    </div>
-  );
-}
-
-/** How far down `el` sits inside `container`, in layout pixels. */
-function offsetWithin(el: HTMLElement, container: HTMLElement): number {
-  let top = 0;
-  for (
-    let at: HTMLElement | null = el;
-    at && at !== container;
-    at = at.offsetParent as HTMLElement | null
-  ) {
-    top += at.offsetTop;
-  }
-  return top;
-}
-
-/**
- * The connector from each card to its parent, as SVG paths: down from the
- * parent's bottom centre to halfway through the gap, across, and down into
- * the child's top centre.
- */
-function connectors(layout: ForestLayout): string[] {
-  const out: string[] = [];
-  for (const node of layout.nodes) {
-    if (node.parent === null) continue;
-    const parent = layout.byId.get(node.parent);
-    if (!parent) continue;
-    const fromX = parent.x + parent.width / 2;
-    const fromY = parent.y + parent.height;
-    const toX = node.x + node.width / 2;
-    const toY = node.y;
-    const midY = fromY + (toY - fromY) / 2;
-    out.push(`M${fromX} ${fromY}V${midY}H${toX}V${toY}`);
-  }
-  return out;
 }

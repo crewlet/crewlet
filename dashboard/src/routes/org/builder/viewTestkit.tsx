@@ -19,6 +19,7 @@
  */
 
 import { act, render } from "@testing-library/react";
+import { treeCanvasParts } from "~/testing.tsx";
 import { useCallback, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import { vi } from "vitest";
 import { Router } from "~/app/router.tsx";
@@ -250,6 +251,8 @@ export class LayoutObserver {
     const real = globalThis.ResizeObserver;
     LayoutObserver.instances = [];
     LayoutObserver.sizer = defaultSizer;
+    // Before any suite render, for the reason `known` gives.
+    parts ??= treeCanvasParts();
     globalThis.ResizeObserver = LayoutObserver as unknown as typeof ResizeObserver;
     return () => {
       globalThis.ResizeObserver = real;
@@ -281,12 +284,59 @@ export function canvasWorld(container: HTMLElement): HTMLElement {
   return viewport.firstElementChild as HTMLElement;
 }
 
+/*
+ * The chart is the design system's `TreeCanvas`, and the two boxes it measures
+ * are ITS elements: a gap probe drawn from spacing tokens, and a card per node.
+ * Neither has a role or any content to find it by, so the harness asks the
+ * package what it draws (`treeCanvasParts`) rather than spelling its class
+ * names here, where a bump would leave them silently matching nothing and every
+ * chart suite reporting an unmeasured canvas. The VIEWPORT is found by what it
+ * IS: a focusable group announced as a canvas is a thing a reader meets.
+ *
+ * ASKED ONCE, BY `install`, AND NEVER LATER. Finding out means rendering a
+ * reference chart, and every later caller is inside an `act` of the suite's own
+ * render (the sizer is, being driven by `settle`); a render started there does
+ * not commit before the callback returns, so the reference chart would be read
+ * while it was still empty.
+ */
+let parts: ReturnType<typeof treeCanvasParts> | null = null;
+const known = (): ReturnType<typeof treeCanvasParts> => {
+  if (!parts)
+    throw new Error("LayoutObserver.install has not run, so the chart's parts are unknown");
+  return parts;
+};
+
 function defaultSizer(el: Element): { width: number; height: number } | null {
   if (isCanvasViewport(el)) return VIEWPORT;
-  if (el.classList.contains("bchart-gap-probe")) return { width: 24, height: 32 };
-  if (el.classList.contains("bchart-box")) {
+  const { card, gap } = known();
+  if (el.classList.contains(gap)) return { width: 24, height: 32 };
+  if (el.classList.contains(card)) {
     const items = el.querySelectorAll("[role='treeitem']").length;
     return { width: CARD_WIDTH, height: Math.max(1, items) * ROW_HEIGHT };
   }
   return null;
+}
+
+/** The card a node is drawn in, which the chart suites measure and compare. */
+export function chartCard(el: Element): HTMLElement {
+  const card = el.closest<HTMLElement>(`.${known().card}`);
+  if (!card) throw new Error("this element is not drawn in a chart card");
+  return card;
+}
+
+/** Every card on the chart, in the order the layout placed them. */
+export function chartCards(container: HTMLElement): HTMLElement[] {
+  return [...container.querySelectorAll<HTMLElement>(`.${known().card}`)];
+}
+
+/** Whether a card carries the mark the chart draws for somebody outside the system. */
+export function isOutlinedCard(card: HTMLElement): boolean {
+  return card.classList.contains(known().outlined);
+}
+
+/** The drawing of the connectors between the cards. */
+export function chartLinks(container: HTMLElement): HTMLElement {
+  const links = container.querySelector<HTMLElement>(`.${known().links}`);
+  if (!links) throw new Error("the chart draws no connectors");
+  return links;
 }

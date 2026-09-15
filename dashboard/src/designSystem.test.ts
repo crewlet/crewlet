@@ -428,11 +428,15 @@ const LIGATURE = /material-symbols/;
 /** An `<svg>` element written by hand. */
 const SVG_ELEMENT = /<svg[\s>]/;
 /**
- * The one drawing in this tree, and the reason it is not a glyph: the
- * builder's chart draws the connectors between its cards, which is data with
- * a shape rather than an icon with a name.
+ * The drawings in this tree: none.
+ *
+ * There was one, and it is gone rather than forgotten. The builder's chart drew
+ * the connectors between its cards, which is data with a shape rather than an
+ * icon with a name and was a fair exception; the chart is the design system's
+ * `TreeCanvas` now and the package draws them. A drawing this application makes
+ * itself is a decision again, so the list stays and is empty.
  */
-const DRAWINGS = ["routes/org/builder/CanvasView.tsx"];
+const DRAWINGS: string[] = [];
 
 test("the glyph scans recognise what they police", () => {
   expect(LIGATURE.test('<span className="material-symbols-outlined">add</span>')).toBe(true);
@@ -448,7 +452,7 @@ test("no source reaches for an icon font", () => {
   expect(offenders).toEqual([]);
 });
 
-test("nothing draws an icon by hand, and the one real drawing says it is one", () => {
+test("nothing draws an icon by hand, and a real drawing says it is one", () => {
   const offenders = files(/\.tsx$/)
     .filter(({ name }) => !/\.test\.tsx$/.test(name))
     .filter(({ text }) => SVG_ELEMENT.test(code(text)))
