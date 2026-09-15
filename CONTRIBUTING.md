@@ -397,8 +397,13 @@ worth knowing:
   as the react-dom half did. Minors were never the problem (8.2.2 → 8.3.0
   landed on its own), so the group buys nothing until the major and then it
   buys all of it. It costs something in the meantime, and the cost is real: a
-  `vitest`-only bump now arrives titled for the group, with the packages it
-  actually moved in the body rather than the subject.
+  `vitest`-only bump — the ordinary week, since most releases move one member
+  — has ` in the vite group` appended to the subject Dependabot would have
+  written anyway, so grouping *lengthens* it:
+  `build(deps): Bump vitest from 5.0.0 to 5.1.0 in /dashboard in the vite group`
+  is 76 characters against the 72 this file asks of every other commit. Only
+  the many-member case is shorter. Nothing enforces the limit — `main` already
+  carries a 76-character bump — so it is a cost to know, not a failure.
 - **Nothing else is grouped, and that is the rule rather than today's state.**
   The only other *required* edges a bump there could split are
   `@testing-library/react`'s — on react and react-dom at `^18.0.0 || ^19.0.0`,
@@ -407,9 +412,8 @@ worth knowing:
   (`@vitest/mocker`'s, vite's own on `@types/node` and the bundlers) is
   optional, and npm does not fail on an unsatisfied optional peer. A group
   raises whichever
-  members have an update together, under a title naming the group rather than
-  any package in it — so it costs a vaguer subject on every bump, and it puts
-  one member's bad release in front of the rest. Pay that where a split bump is
+  members have an update together, and puts one member's bad release in front
+  of the rest — on top of the subject cost above. Pay that where a split bump is
   genuinely broken — not for neatness, and not to batch unrelated noise.
 - **A dashboard runtime bump needs a rebuilt bundle, so it will not auto-merge.**
   `static/dashboard` is committed and the `dashboard` job rebuilds and diffs it,

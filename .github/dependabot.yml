@@ -149,9 +149,22 @@ updates:
     commit-message:
       prefix: "build(deps)"
     groups:
-      # The identifier names the branch and the pull request title, so it is
-      # short on purpose: it has to leave the generated subject under the
-      # 72-character limit CONTRIBUTING.md sets for every other commit.
+      # The identifier names the branch and the pull request subject, and the
+      # subject is where grouping's real cost lands. Dependabot writes two
+      # different shapes, and only one of them is shorter:
+      #
+      #   many members  build(deps): Bump the react group in /dashboard with 4 updates
+      #   ONE member    build(deps): Bump vitest from 5.0.0 to 5.1.0 in /dashboard in the vite group
+      #
+      # The second is the ORDINARY case — most weeks only one member has a
+      # release — and it appends ` in the <group> group` to the subject
+      # Dependabot would have written anyway, so grouping LENGTHENS it past
+      # the 72 characters CONTRIBUTING.md asks of every other commit. A short
+      # identifier does not save it; nothing enforces the limit, and `main`
+      # already carries a 76-character bump subject. So this is a cost to know
+      # about when reading a release note, not a build failure — and it is the
+      # reason a group has to be earned by a broken split rather than taken
+      # for tidiness.
       react:
         patterns:
           - "react"
