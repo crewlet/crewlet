@@ -231,13 +231,13 @@ because every single-modifier combination worth having is already the browser's.
 | `#/knowledge` | **Knowledge** — live search over the backend | `q=` |
 | `#/knowledge/{CONTAINER}` | **Container** — browse the tree | `kind=prose\|skills\|all` |
 | `#/knowledge/{CONTAINER}/{Title}` | **Page** | |
-| `#/activity` | **Live now** — what the company is doing at this moment | |
+| `#/activity` | **Live now** — what the company is doing at this moment | `window=15m\|1h\|6h` |
 | `#/activity/turns` · `#/activity/turns/{id}` | **Turns** — every phase, round by round | |
 | `#/activity/runs` · `#/activity/runs/{turn_id}` | **Coding runs** — live and durable | |
 | `#/activity/schedules` | **Schedules** | |
 | `#/activity/a2a` | **Agent-to-agent** | |
 | `#/activity/events` · `#/activity/events/{id}` | **Event log** | `category=` · `actor=` · `q=` |
-| `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1\|7\|30` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
+| `#/cost` | **Spend** — over time, then by phase, model, seat and turn | `window=1d\|7d\|30d\|90d\|<from>/<to>` · `group=phase\|model\|seat\|unit\|worker\|turn` · `compare=previous` |
 | `#/cost/budgets` | **Budgets** — caps, the durable counter, what is refused | |
 | `#/admin/fleet` · `#/admin/fleet/{node}` | **Infrastructure** — nodes, leases, duties, replication *(operator)* | |
 | `#/admin/integrations` · `#/admin/integrations/{kind}` | **Integrations** — the catalogue, and one tool with what has actually been arriving on each of its surfaces *(operator)* | |
@@ -264,6 +264,39 @@ say why. And a seat's **Conversations** tab is its own thread ledger — the onl
 account of what a seat said on a surface this engine does not own. Every one of
 those readers was written, tested and swept on a retention horizon before any
 of them reached a screen.
+
+### `window=` — one vocabulary for every time range
+
+Every screen with a range had its own. Spend's picker counted whole days, the
+live strip was a `STRIP_MINUTES` constant nobody could change, and the event log
+showed "whatever happens to be loaded". Three screens showing the same hour
+disagreed about how long an hour was, and a link from one to another carried no
+range at all.
+
+There is now **one key and one control**. The value is a duration from a closed
+set — `15m` `1h` `6h` `1d` `7d` `30d` `90d` — or an explicit interval written as
+ISO 8601's own `<from>/<to>`, so a custom window is still one value a reader can
+copy out of the address bar.
+
+**The offered set is the screen's, not the vocabulary's.** A spend chart has
+nothing useful to say about fifteen minutes; a strip folded from the events the
+browser is holding has nothing to say about ninety days, and no honest answer at
+all for an interval that ended last Tuesday. Each screen declares which windows
+it has and whether an interval is one of them, and a URL naming anything else
+gets that screen's own default — because a value the control cannot show would
+put a heading nobody chose over the rows, and a reader who then touched the
+control could never get back to it. The control renders the offered set in the
+vocabulary's order either way, so `1d` reads the same on every screen.
+
+`window=` is a **section**, not a filter: a reader who widened the range and
+pressed Back means the narrower one.
+
+The two edges reach the engine as the half-open `since`/`until` pair every
+windowed question takes. A chart's edges are rounded **up to the bucket it
+draws**, so the hour in progress is on the chart while it is still being spent
+and the query changes once per column rather than once per second; a list's are
+not. An interval never moves at all — it is the one window that is stable to
+link to.
 
 ### The four frame-level keys
 

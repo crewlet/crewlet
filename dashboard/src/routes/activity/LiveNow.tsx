@@ -43,11 +43,33 @@ import { awaitingPerson, indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
+import { cutInto, spanOf, spanWords, useTimeRange, windowLabel } from "~/lib/range.ts";
+import type { Offer } from "~/lib/range.ts";
+import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 
-/** How far back the activity strip reaches, and how finely it is cut. */
-const STRIP_MINUTES = 60;
+/**
+ * WHICH WINDOWS THE STRIP HAS.
+ *
+ * The short end of the shared vocabulary, and NO CUSTOM INTERVAL — this strip
+ * is drawn from the events THIS TAB is holding, which is the last
+ * [MAX_EVENTS] and nothing older, so a window ending last Tuesday could only
+ * ever render as empty. Cost's picker offers the long end of the same
+ * vocabulary, so `1d` means one thing on both screens even though neither
+ * offers it to the other's reader.
+ */
+const STRIP_OFFER: Offer = { ranges: ["15m", "1h", "6h"], custom: false, fallback: "1h" };
+
+/**
+ * The most cells the strip is ever cut into.
+ *
+ * A CAP rather than a fixed count, and [cutInto] is where both halves are
+ * decided: sixty is what an hour of minute cells already drew and what the
+ * stylesheet is sized for, and a wider window widens the cell rather than
+ * adding slivers past it.
+ */
+const STRIP_CELLS = 60;
 
 export function LiveNow() {
   const nav = useNavigator();
@@ -60,6 +82,9 @@ export function LiveNow() {
   const { connected, authRejected } = useConnection();
   const now = useNow();
   const { data: engine } = useQuery("stream", undefined, { pollMs: 15_000 });
+  // NOT ALIGNED to a bucket: the strip's cell is its own, finer than either of
+  // the engine's, and its newest cell is the minute in progress.
+  const range = useTimeRange(now, STRIP_OFFER, false);
 
   const index = useMemo(() => indexOrg(org), [org]);
   const attention = useMemo(
@@ -89,28 +114,28 @@ export function LiveNow() {
     [index.seats, agents, sandboxes],
   );
 
-  // The activity strip is bucketed by MINUTE and keyed by the bucket, never by
-  // index: keying 60 cells `p0..p59` over a window recomputed from the clock
-  // shifts every cell's content one position left on each minute roll, and
-  // rewrites the lot.
+  // The activity strip is keyed by the BUCKET, never by index: keying the cells
+  // `p0..p59` over a window recomputed from the clock shifts every cell's
+  // content one position left on each roll, and rewrites the lot.
+  const { cell, cells } = cutInto(spanOf(range.window), STRIP_CELLS);
   const strip = useMemo(() => {
-    const minute = 60_000;
-    const end = Math.floor(now / minute) * minute;
+    const end = Math.floor(now / cell) * cell;
     const buckets = new Map<number, number>();
-    for (let i = STRIP_MINUTES - 1; i >= 0; i--) buckets.set(end - i * minute, 0);
+    for (let t = end - (cells - 1) * cell; t <= end; t += cell) buckets.set(t, 0);
     for (const ev of events) {
-      const t = Math.floor(tsKey(ev.timestamp) / minute) * minute;
+      const t = Math.floor(tsKey(ev.timestamp) / cell) * cell;
       if (buckets.has(t)) buckets.set(t, (buckets.get(t) ?? 0) + 1);
     }
     return [...buckets.entries()].map(([t, v]) => ({ t, v }));
-  }, [events, now]);
+  }, [events, now, cell, cells]);
 
   // The feed's own retention is the limit of what this panel can HONESTLY
   // claim: 400 events fill in minutes on a busy company, so a strip covering
   // an hour has to say where the record actually starts rather than drawing
   // the gap as quiet.
   const oldestHeld = events.length ? tsKey(events[events.length - 1]!.timestamp) : 0;
-  const stripTruncated = events.length >= MAX_EVENTS && oldestHeld > now - STRIP_MINUTES * 60_000;
+  const covered = cells * cell;
+  const stripTruncated = events.length >= MAX_EVENTS && oldestHeld > now - covered;
 
   const seatCount = index.seats.filter((s) => s.kind === "agent").length;
   const humanCount = index.seats.length - seatCount;
@@ -153,6 +178,7 @@ export function LiveNow() {
           <>
             <Badge outline>{plural(seatCount, "agent seat")}</Badge>
             {humanCount > 0 && <Badge outline>{plural(humanCount, "human")}</Badge>}
+            <TimeRangePicker range={range} ariaLabel="Activity window" />
             <Button icon="brain" onClick={() => nav.to(["activity", "turns"])}>
               Turns
             </Button>
@@ -190,7 +216,7 @@ export function LiveNow() {
           />
           <Stat
             icon="activity"
-            label={`Events · last ${STRIP_MINUTES}m`}
+            label={`Events · last ${windowLabel(range.window)}`}
             value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
             sub={
               stripTruncated
@@ -200,7 +226,7 @@ export function LiveNow() {
           />
           <Stat
             icon="coin"
-            label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
+            label="Tokens"
             value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
             sub={
               tokens
@@ -243,7 +269,7 @@ export function LiveNow() {
         </Panel>
 
         <Panel
-          title={`Activity · last ${STRIP_MINUTES} minutes`}
+          title={`Activity · last ${windowLabel(range.window)}`}
           icon="activity"
           actions={
             <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
@@ -285,7 +311,7 @@ export function LiveNow() {
         <Panel
           title="Spend by phase"
           icon="coin"
-          subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
+          subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
           actions={
             <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
               Spend
@@ -317,7 +343,7 @@ export function LiveNow() {
         <Panel
           title="Top seats by spend"
           icon="users"
-          subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
+          subtitle={tokens ? spanWords(tokens.since, tokens.until) : undefined}
         >
           <BarList data={topSeats} emptyLabel="No seat has spent tokens in this window." />
         </Panel>

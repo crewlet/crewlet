@@ -11,44 +11,15 @@
  * at most the live window's records, so an axis folded client-side would be
  * correct for one range and absent for every other — which is the fourth copy
  * of an aggregation `internal/tokens` exists to have made one.
+ *
+ * The WINDOW is not here either any more. This file held Cost's own three-day
+ * vocabulary and its own `bucketFor`, which is how a screen showing the last
+ * hour of spend and a screen showing the last hour of events came to disagree
+ * about how long an hour was. `lib/range.ts` is the one vocabulary now.
  */
 
 import { VIZ_OTHER, vizColor } from "~/ui/charts.tsx";
 import type { SeriesPoint, TokenSeries } from "~/protocol/types.ts";
-
-/** The windows the Cost screen offers, in the order the control reads. */
-export const SPEND_WINDOWS = ["1", "7", "30"] as const;
-export type SpendWindow = (typeof SPEND_WINDOWS)[number];
-
-/**
- * The window a URL asked for, as one of the three the screen has.
- *
- * A SEGMENTED CONTROL'S VALUE IS A CLOSED SET, and reading it as a free-form
- * number is how a URL decides the shape of a request. `#/cost?window=` — which
- * a route transition can produce for one render — gave `Number("") === 0`, so
- * the screen asked the engine for a window whose two edges were the same
- * instant. That is refused (half-open, so an empty one names no rows at all)
- * and the chart rendered as "the engine refused this request", on a screen
- * whose data was fine.
- *
- * Anything that is not one of the three is the default, never a number derived
- * from it: `window=3` is not a window this screen has, and answering it with
- * three days would put a heading the control cannot show over the bars.
- */
-export function spendWindow(raw: string): SpendWindow {
-  return (SPEND_WINDOWS as readonly string[]).includes(raw) ? (raw as SpendWindow) : "1";
-}
-
-/**
- * A day of hours, or a longer range of days.
- *
- * Tied to the WINDOW rather than offered as a third control: 30 days of hourly
- * bars is 720 columns on a chart eight hundred pixels wide, and one day of
- * daily bars is a single column. The reader picks a range; the bucket follows.
- */
-export function bucketFor(window: SpendWindow): "hour" | "day" {
-  return window === "1" ? "hour" : "day";
-}
 
 export interface Band {
   /** The band's key in a point's `groups`. Empty on, and only on, the residual. */

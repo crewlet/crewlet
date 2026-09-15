@@ -23,16 +23,10 @@ import {
   phaseColor,
   vizColor,
 } from "~/ui/charts.tsx";
-import {
-  SPEND_WINDOWS,
-  bandsOf,
-  bucketFor,
-  columnsOf,
-  ghostHeights,
-  spendWindow,
-  unbandedTokens,
-} from "~/lib/spend.ts";
-import type { SpendWindow } from "~/lib/spend.ts";
+import { bandsOf, columnsOf, ghostHeights, unbandedTokens } from "~/lib/spend.ts";
+import { useTimeRange, windowLabel } from "~/lib/range.ts";
+import type { Offer, TimeRange } from "~/lib/range.ts";
+import { TimeRangePicker } from "~/ui/TimeRange.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -68,24 +62,21 @@ const GROUPS = [
 ] as const;
 
 /**
- * The window's two edges, ROUNDED TO THE BUCKET.
+ * WHICH WINDOWS THIS SCREEN HAS.
  *
- * A window computed from the ticking clock changes every second, and every
- * change is a new query — sixty round trips a minute for a chart whose newest
- * column moves once an hour. Rounding to the bucket the axis is drawn in means
- * the edges change exactly when a new column appears, which is also when the
- * answer actually differs.
+ * Days and up. A quarter of hourly bars is 2,160 columns and a spend chart has
+ * nothing useful to say about fifteen minutes — one model call lands in one
+ * bucket and the rest of the axis is empty. The live strip offers the short
+ * end of the same vocabulary, so `1d` means the same thing on both.
  *
- * The top edge is the END of the bucket in progress, so the current hour is on
- * the chart while it is still being spent rather than appearing once it ends.
+ * Declared ONCE and read by both the hook and the control, so the set the URL
+ * is checked against cannot differ from the set a reader can see.
  */
-function windowFor(edge: number, days: number, step: number): [string, string] {
-  const until = Math.ceil(edge / step) * step;
-  return [
-    new Date(until - days * 24 * 60 * 60 * 1000).toISOString(),
-    new Date(until).toISOString(),
-  ];
-}
+const SPEND_OFFER: Offer = {
+  ranges: ["1d", "7d", "30d", "90d"],
+  custom: true,
+  fallback: "1d",
+};
 
 /**
  * The spend, over time, split into bands.
@@ -96,16 +87,10 @@ function windowFor(edge: number, days: number, step: number): [string, string] {
  * most the live window's records, so an axis folded here would be right for a
  * day and absent for every other range.
  */
-function SpendOverTime({ window }: { window: SpendWindow }) {
-  const now = useNow();
+function SpendOverTime({ range }: { range: TimeRange }) {
   const [group, setGroup] = useParam("group", "phase", "section");
   const [compare, setCompare] = useParam("compare", "", "section");
-  const bucket = bucketFor(window);
-  // Rounded to the bucket, so the identity of the window — and therefore the
-  // query — changes once per column rather than once per second.
-  const step = bucket === "day" ? 24 * 60 * 60 * 1000 : 60 * 60 * 1000;
-  const edge = Math.ceil(now / step) * step;
-  const [since, until] = useMemo(() => windowFor(edge, Number(window), step), [edge, window, step]);
+  const { bucket, since, until } = range;
 
   const params = { group, bucket, since, until };
   const series = useQuery("token_series", params);
@@ -205,18 +190,22 @@ export function Spend() {
   const pushed = useTokens();
   const orgBudget = useOrgBudget();
   const now = useNow();
-  const [windowParam, setDays] = useParam("window", "1", "section");
-  // READ AS A MEMBER OF ITS OWN SET, never as a raw number: see [spendWindow].
-  const days = spendWindow(windowParam);
+  const range = useTimeRange(now, SPEND_OFFER);
 
-  // The pushed rollup covers the default window. Any other window is a query,
+  // The pushed rollup covers the live window. Any other window is a query,
   // and while it loads the pushed one stays on screen rather than blanking.
-  const custom = useQuery(
+  //
+  // THE SAME TWO INSTANTS THE CHART BELOW ASKS FOR. The breakdown used to take
+  // a day count, which can only name a window ending now — so a reader who
+  // scrubbed to a week in March got a chart over March with figures above it
+  // from this afternoon, two facts on one screen that cannot be compared.
+  const live = range.window === "1d";
+  const asked = useQuery(
     "tokens",
-    { since_days: Number(days), recent_turns: 100 },
-    { enabled: days !== "1" },
+    { since: range.since, until: range.until, recent_turns: 100 },
+    { enabled: !live },
   );
-  const tokens = days === "1" ? pushed : (custom.data ?? pushed);
+  const tokens = live ? pushed : (asked.data ?? pushed);
 
   const budgets = useQuery("budgets", undefined, { pollMs: 30_000 });
 
@@ -259,15 +248,8 @@ export function Spend() {
   return (
     <>
       <PageActions>
-        {tokens ? <Badge outline>{tokens.since_days}-day window</Badge> : undefined}
-        {
-          <Segmented
-            ariaLabel="Window"
-            value={days}
-            onChange={setDays}
-            options={SPEND_WINDOWS.map((d) => ({ value: d, label: `${d}d` }))}
-          />
-        }
+        <Badge outline>{windowLabel(range.window)}</Badge>
+        <TimeRangePicker range={range} ariaLabel="Window" />
       </PageActions>
       <PageNote>
         What the company's model calls actually cost, and how much headroom the budget gate has
@@ -278,7 +260,7 @@ export function Spend() {
         <StatRow cols={4}>
           <Stat
             icon="coin"
-            label={`Tokens · ${tokens?.since_days ?? "—"}d`}
+            label="Tokens"
             value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
             sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
           />
@@ -315,7 +297,7 @@ export function Spend() {
         </StatRow>
       </Panel>
 
-      <SpendOverTime window={days} />
+      <SpendOverTime range={range} />
 
       {org && org.max > 0 && (
         <Panel

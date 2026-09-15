@@ -330,7 +330,9 @@ export interface TurnSpendRow extends Bucket {
 }
 
 export interface Rollup {
-  since_days: number;
+  /** The window this covers, as two RFC3339 instants — `until` exclusive. */
+  since: string;
+  until: string;
   agent_role: string;
   totals: Bucket;
   by_phase: PhaseRow[];
