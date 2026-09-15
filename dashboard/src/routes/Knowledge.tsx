@@ -17,7 +17,7 @@ import { useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, Button, SearchInput } from "~/ui/primitives.tsx";
+import { Badge, SearchInput } from "~/ui/primitives.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -32,7 +32,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Card, EmptyState, Skeleton } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Skeleton } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -68,12 +68,13 @@ export function Knowledge() {
             placeholder="Search the knowledge base — plain text, not a query language"
           />
         </div>
-        <Button variant="primary" type="submit" icon={SearchGlyph}>
+        <Button variant="primary" type="submit" leadingIcon={<SearchGlyph />}>
           Search
         </Button>
         {q && (
           <Button
-            icon={CloseGlyph}
+            variant="secondary"
+            leadingIcon={<CloseGlyph />}
             onClick={() => {
               setDraft("");
               setQ("");

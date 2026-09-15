@@ -23,10 +23,9 @@
 
 import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Button } from "~/ui/primitives.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CheckGlyph, ErrorGlyph, KeyGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Button, Modal } from "@crewlethq/ui";
 
 export function RemoveSecretDialog({
   name,
@@ -77,7 +76,7 @@ export function RemoveSecretDialog({
       size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button

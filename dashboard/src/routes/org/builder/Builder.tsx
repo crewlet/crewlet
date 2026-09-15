@@ -54,7 +54,7 @@ import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hook
 import { apiToken, onTokenChanged, requestToken } from "~/protocol/index.ts";
 import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Badge, Button, ButtonLink, Segmented, TabPanel, type Tone } from "~/ui/primitives.tsx";
+import { Badge, Segmented, TabPanel, type Tone } from "~/ui/primitives.tsx";
 import {
   BuilderContext,
   keepsTheLens,
@@ -128,8 +128,11 @@ import {
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
 import {
+  Button,
+  ButtonLink,
   Callout,
   EmptyState,
+  IconButton,
   LayerHost,
   Menu,
   Modal,
@@ -1235,26 +1238,26 @@ function Lens({
               />
             )}
             <span className="org-builder-wide row gap-1">
-              <Button
+              <IconButton
+                label="Undo"
+                icon={<UndoGlyph />}
                 size="sm"
-                icon={UndoGlyph}
-                title="Undo"
                 onClick={handlers.undo}
                 disabled={!canUndo}
                 aria-keyshortcuts="Control+Z Meta+Z"
               />
-              <Button
+              <IconButton
+                label="Redo"
+                icon={<RedoGlyph />}
                 size="sm"
-                icon={RedoGlyph}
-                title="Redo"
                 onClick={handlers.redo}
                 disabled={!canRedo}
                 aria-keyshortcuts="Shift+Control+Z Shift+Meta+Z"
               />
-              <Button size="sm" variant="ghost" onClick={handlers.expandAll}>
+              <Button size="small" variant="tertiary" onClick={handlers.expandAll}>
                 Expand all
               </Button>
-              <Button size="sm" variant="ghost" onClick={handlers.collapseAll}>
+              <Button size="small" variant="tertiary" onClick={handlers.collapseAll}>
                 Collapse all
               </Button>
             </span>
@@ -1274,8 +1277,8 @@ function Lens({
             </Badge>
             <span className="org-builder-wide">
               <Button
-                size="sm"
-                variant="ghost"
+                size="small"
+                variant="tertiary"
                 onClick={handlers.discard}
                 disabled={readOnly || !changed}
               >
@@ -1283,9 +1286,9 @@ function Lens({
               </Button>
             </span>
             <Button
-              size="sm"
+              size="small"
               variant="primary"
-              icon={SaveGlyph}
+              leadingIcon={<SaveGlyph />}
               onClick={openReview}
               disabled={!rules.review || save.unsettled}
               title={rules.reason ?? undefined}
@@ -1300,7 +1303,7 @@ function Lens({
             variant="danger"
             icon={<KeyGlyph />}
             action={
-              <Button size="sm" onClick={askForToken}>
+              <Button variant="secondary" size="small" onClick={askForToken}>
                 Set token
               </Button>
             }
@@ -1322,7 +1325,7 @@ function Lens({
           <Callout
             variant="warning"
             action={
-              <Button size="sm" onClick={() => load()}>
+              <Button variant="secondary" size="small" onClick={() => load()}>
                 Retry
               </Button>
             }
@@ -1344,7 +1347,7 @@ function Lens({
             variant="warning"
             icon={<WarningGlyph />}
             action={
-              <Button size="sm" variant="primary" onClick={openExistingCompany}>
+              <Button size="small" variant="primary" onClick={openExistingCompany}>
                 Discard it and open the company
               </Button>
             }
@@ -1359,7 +1362,8 @@ function Lens({
             icon={<WarningGlyph />}
             action={
               <Button
-                size="sm"
+                variant="secondary"
+                size="small"
                 onClick={() => {
                   dispatchRaw({ type: "discard" });
                   load(true);
@@ -1385,8 +1389,8 @@ function Lens({
                     against the active one reads every change backwards. */}
                 {state.base.revision && conflict.currentRevisionId && (
                   <ButtonLink
-                    size="sm"
-                    variant="ghost"
+                    size="small"
+                    variant="tertiary"
                     href={href(["config"], {
                       lens: "diff",
                       revision: conflict.currentRevisionId,
@@ -1397,7 +1401,7 @@ function Lens({
                   </ButtonLink>
                 )}
                 <Button
-                  size="sm"
+                  size="small"
                   variant="primary"
                   disabled={updateNote.busy}
                   onClick={() => void beginUpdate(conflict.currentRevisionId)}
@@ -1423,10 +1427,10 @@ function Lens({
             icon={<SaveGlyph />}
             action={
               <span className="row gap-1 wrap">
-                <Button size="sm" onClick={keeping.discard}>
+                <Button variant="secondary" size="small" onClick={keeping.discard}>
                   Discard it
                 </Button>
-                <Button size="sm" variant="primary" onClick={keeping.keep}>
+                <Button size="small" variant="primary" onClick={keeping.keep}>
                   Keep the draft
                 </Button>
               </span>
@@ -1441,7 +1445,7 @@ function Lens({
           <Callout
             variant={keeping.notice.tone}
             action={
-              <Button size="sm" variant="ghost" onClick={keeping.dismissNotice}>
+              <Button size="small" variant="tertiary" onClick={keeping.dismissNotice}>
                 Dismiss
               </Button>
             }
@@ -1461,7 +1465,7 @@ function Lens({
           <Callout
             variant="warning"
             action={
-              <Button size="sm" variant="ghost" onClick={() => setRefusal(null)}>
+              <Button size="small" variant="tertiary" onClick={() => setRefusal(null)}>
                 Dismiss
               </Button>
             }
@@ -1478,13 +1482,13 @@ function Lens({
             variant="warning"
             action={
               <span className="row gap-1 wrap">
-                <Button size="sm" onClick={() => void save.checkAgain()}>
+                <Button variant="secondary" size="small" onClick={() => void save.checkAgain()}>
                   Check again
                 </Button>
                 {/* A save a previous visit sent has no draft on screen to
                     review: its log waits in storage until the save is known. */}
                 {changed && (
-                  <Button size="sm" variant="primary" onClick={openReview}>
+                  <Button size="small" variant="primary" onClick={openReview}>
                     Open the review
                   </Button>
                 )}
@@ -1554,7 +1558,9 @@ function Lens({
             onClose={() => setLeaving(null)}
             footer={
               <>
-                <Button onClick={() => setLeaving(null)}>Stay</Button>
+                <Button variant="secondary" onClick={() => setLeaving(null)}>
+                  Stay
+                </Button>
                 <Button
                   variant="danger"
                   onClick={() => {
@@ -1584,7 +1590,9 @@ function Lens({
             onClose={() => setCompanyExists(false)}
             footer={
               <>
-                <Button onClick={() => setCompanyExists(false)}>Keep my draft</Button>
+                <Button variant="secondary" onClick={() => setCompanyExists(false)}>
+                  Keep my draft
+                </Button>
                 <Button variant="danger" onClick={openExistingCompany}>
                   Discard it and open the company
                 </Button>
@@ -1724,7 +1732,9 @@ function DialogHost({
           onClose={onClose}
           footer={
             <>
-              <Button onClick={onClose}>Keep editing</Button>
+              <Button variant="secondary" onClick={onClose}>
+                Keep editing
+              </Button>
               <Button variant="danger" onClick={onDiscard}>
                 Discard changes
               </Button>
@@ -1807,7 +1817,11 @@ function PostureScreen({
   onRetry: () => void;
   onSetToken: () => void;
 }) {
-  const retry = <Button onClick={onRetry}>Retry</Button>;
+  const retry = (
+    <Button variant="secondary" onClick={onRetry}>
+      Retry
+    </Button>
+  );
   switch (posture.kind) {
     case "loading":
     case "edit":
@@ -1905,11 +1919,10 @@ function FullscreenToggle({ container }: { container: RefObject<HTMLDivElement |
   }, [container]);
   if (!supported) return null;
   return (
-    <Button
+    <IconButton
+      label={active ? "Leave fullscreen" : "Fullscreen"}
+      icon={active ? <FullscreenExitGlyph /> : <FullscreenGlyph />}
       size="sm"
-      variant="ghost"
-      icon={active ? FullscreenExitGlyph : FullscreenGlyph}
-      title={active ? "Leave fullscreen" : "Fullscreen"}
       onClick={() => {
         const el = container.current;
         if (!el) return;

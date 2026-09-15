@@ -26,7 +26,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Button, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
@@ -42,7 +42,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { Card, EmptyState, Meter, useNow } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Meter, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -175,10 +175,18 @@ export function Overview() {
         }
         actions={
           <>
-            <Button icon={GroupGlyph} onClick={() => nav.to(["people"])}>
+            <Button
+              variant="secondary"
+              leadingIcon={<GroupGlyph />}
+              onClick={() => nav.to(["people"])}
+            >
               People
             </Button>
-            <Button icon={NeurologyGlyph} onClick={() => nav.to(["model"])}>
+            <Button
+              variant="secondary"
+              leadingIcon={<NeurologyGlyph />}
+              onClick={() => nav.to(["model"])}
+            >
               Model activity
             </Button>
           </>
@@ -279,7 +287,7 @@ export function Overview() {
             icon={<GroupGlyph size="sm" />}
             count={live.length}
             actions={
-              <Button size="sm" variant="ghost" onClick={() => nav.to(["people"])}>
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["people"])}>
                 All seats
               </Button>
             }
@@ -310,7 +318,7 @@ export function Overview() {
           <Card.Header
             icon={<TimelineGlyph size="sm" />}
             actions={
-              <Button size="sm" variant="ghost" onClick={() => nav.to(["activity"])}>
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["activity"])}>
                 Event log
               </Button>
             }
@@ -353,7 +361,7 @@ export function Overview() {
             icon={<TokenGlyph size="sm" />}
             subtitle={tokens ? `${tokens.since_days}-day window` : undefined}
             actions={
-              <Button size="sm" variant="ghost" onClick={() => nav.to(["spend"])}>
+              <Button size="small" variant="tertiary" onClick={() => nav.to(["spend"])}>
                 Spend
               </Button>
             }

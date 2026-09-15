@@ -27,7 +27,6 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
-import { Button, ButtonLink, Code, CopyButton } from "~/ui/primitives.tsx";
 import { useRecheck } from "~/routes/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
@@ -38,7 +37,17 @@ import {
   ErrorGlyph,
   RefreshGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Callout, Modal, Skeleton } from "@crewlethq/ui";
+import {
+  Button,
+  ButtonLink,
+  Callout,
+  CodeBlock,
+  CopyButton,
+  IconButton,
+  Modal,
+  Skeleton,
+} from "@crewlethq/ui";
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /**
  * How often the two answers are read while the apply is still moving. The
@@ -190,8 +199,8 @@ export function AfterSaveStrip({
           <span className="row gap-1 wrap">
             {saved.parentRevisionId ? (
               <ButtonLink
-                size="sm"
-                variant="ghost"
+                size="small"
+                variant="tertiary"
                 href={href(["config"], {
                   lens: "diff",
                   revision: saved.revisionId,
@@ -203,25 +212,19 @@ export function AfterSaveStrip({
             ) : (
               // The company's first revision has no parent to differ from:
               // all of it is what the save wrote.
-              <ButtonLink size="sm" variant="ghost" href={href(["config"])}>
+              <ButtonLink size="small" variant="tertiary" href={href(["config"])}>
                 View the configuration
               </ButtonLink>
             )}
-            <Button size="sm" variant="ghost" onClick={() => setYaml(true)}>
+            <Button size="small" variant="tertiary" onClick={() => setYaml(true)}>
               Copy as YAML
             </Button>
             {state.showFleet && (
-              <ButtonLink size="sm" variant="ghost" href={href(["fleet"])}>
+              <ButtonLink size="small" variant="tertiary" href={href(["fleet"])}>
                 Open the fleet
               </ButtonLink>
             )}
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={CloseGlyph}
-              title="Dismiss"
-              onClick={onDismiss}
-            />
+            <IconButton label="Dismiss" icon={<CloseGlyph />} size="sm" onClick={onDismiss} />
           </span>
         }
       >
@@ -319,10 +322,17 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
       footer={
         <>
           {state.kind === "text" && (
-            <CopyButton text={state.text} label="Copy" title="the company as YAML" />
+            <CopyButton
+              variant="secondary"
+              text={state.text}
+              label="Copy"
+              title="the company as YAML"
+            />
           )}
           <span className="spacer" />
-          <Button onClick={onClose}>Close</Button>
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
         </>
       }
     >
@@ -350,9 +360,14 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
             as <code className="inline">__redacted__</code>, and a reference keeps its{" "}
             <code className="inline">${"{NAME}"}</code> form.
           </p>
-          <Code selectable label="The company as YAML">
-            {state.text}
-          </Code>
+          <CodeBlock
+            plain
+            wrap
+            selectable
+            label="The company as YAML"
+            code={state.text}
+            maxHeight={RECORD_MAX_HEIGHT}
+          />
         </>
       )}
     </Modal>

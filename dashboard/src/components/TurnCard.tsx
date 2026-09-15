@@ -13,12 +13,12 @@
  */
 
 import { useState } from "react";
-import { Badge, Button, PhaseTag } from "~/ui/primitives.tsx";
+import { Badge, PhaseTag } from "~/ui/primitives.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
-import { RelativeTime, cx, useNow } from "@crewlethq/ui";
+import { Button, RelativeTime, cx, useNow } from "@crewlethq/ui";
 import { ChevronRightGlyph, KeyboardArrowDownGlyph, LayersGlyph } from "@crewlethq/icons/glyphs";
 
 export function TurnCard({
@@ -127,8 +127,9 @@ export function TurnCard({
               read as its label. */}
           <footer className="phase-foot">
             <Button
-              size="sm"
-              icon={LayersGlyph}
+              variant="secondary"
+              size="small"
+              leadingIcon={<LayersGlyph />}
               onClick={() => nav.to(["turns", group.turnId])}
               title={`turn ${group.turnId}`}
             >

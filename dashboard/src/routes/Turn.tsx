@@ -49,18 +49,9 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
-import { EventRow, QueryState, SeatChip } from "~/components/common.tsx";
+import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import {
-  Badge,
-  Button,
-  Code,
-  CopyButton,
-  Disclosure,
-  KeyValue,
-  Stat,
-  StatRow,
-} from "~/ui/primitives.tsx";
+import { Badge, Disclosure, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -99,7 +90,7 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Card, Skeleton, cx } from "@crewlethq/ui";
+import { Button, Card, CodeBlock, CopyButton, Skeleton, cx } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -563,19 +554,30 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         actions={
           <>
             {role && (
-              <Button size="sm" icon={PersonGlyph} onClick={() => nav.to(["seats", role])}>
+              <Button
+                variant="secondary"
+                size="small"
+                leadingIcon={<PersonGlyph />}
+                onClick={() => nav.to(["seats", role])}
+              >
                 The seat
               </Button>
             )}
             {traceId && (
-              <Button size="sm" icon={ForkRightGlyph} onClick={() => nav.to(["traces", traceId])}>
+              <Button
+                variant="secondary"
+                size="small"
+                leadingIcon={<ForkRightGlyph />}
+                onClick={() => nav.to(["traces", traceId])}
+              >
                 Trace
               </Button>
             )}
             <CopyButton
+              variant="secondary"
               text={turnJSON}
               label="Copy turn"
-              title="the whole turn as JSON — its record, its phases and everything else it published"
+              title="the whole turn as JSON, its record and its phases and everything else it published"
             />
           </>
         }
@@ -794,24 +796,34 @@ export function TurnScreen({ turnId }: { turnId: string }) {
                   <Disclosure
                     label="agent_turn_completed, the dashboard's summary"
                     actions={
-                      <CopyButton text={summaryJSON} variant="ghost" title="copy this record" />
+                      <CopyButton text={summaryJSON} variant="tertiary" title="copy this record" />
                     }
                   >
-                    <Code selectable label="agent_turn_completed, as JSON">
-                      {summaryJSON}
-                    </Code>
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label="agent_turn_completed, as JSON"
+                      code={summaryJSON}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                   </Disclosure>
                 )}
                 {rec.learning && (
                   <Disclosure
                     label="turn_completed, the learning subsystem's record"
                     actions={
-                      <CopyButton text={learningJSON} variant="ghost" title="copy this record" />
+                      <CopyButton text={learningJSON} variant="tertiary" title="copy this record" />
                     }
                   >
-                    <Code selectable label="turn_completed, as JSON">
-                      {learningJSON}
-                    </Code>
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label="turn_completed, as JSON"
+                      code={learningJSON}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                   </Disclosure>
                 )}
               </div>

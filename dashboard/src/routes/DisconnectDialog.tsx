@@ -18,11 +18,11 @@
 
 import { useState } from "react";
 import { Checkbox } from "~/ui/Checkbox.tsx";
-import { Avatar, Button } from "~/ui/primitives.tsx";
+import { Avatar } from "~/ui/primitives.tsx";
 import { marked } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { CableGlyph, ErrorGlyph, OpenInNewGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Button, Modal } from "@crewlethq/ui";
 
 /**
  * How long one surface is waited out while something else is writing at it.
@@ -283,7 +283,7 @@ export function DisconnectDialog({
       size="md"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="danger" onClick={() => void submit(false)} disabled={busy}>
@@ -380,7 +380,12 @@ export function DisconnectDialog({
                 becomes yours to remove there.
               </span>
               <span>
-                <Button size="sm" variant="ghost" onClick={() => void submit(true)} disabled={busy}>
+                <Button
+                  size="small"
+                  variant="tertiary"
+                  onClick={() => void submit(true)}
+                  disabled={busy}
+                >
                   Disconnect anyway
                 </Button>
               </span>

@@ -24,12 +24,12 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, SearchInput } from "~/ui/primitives.tsx";
+import { Badge, Chip, SearchInput } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { CloseGlyph } from "@crewlethq/icons/glyphs";
-import { Card, Skeleton } from "@crewlethq/ui";
+import { Button, Card, Skeleton } from "@crewlethq/ui";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -142,8 +142,9 @@ export function Activity() {
         actions={
           filtered ? (
             <Button
-              icon={CloseGlyph}
-              size="sm"
+              variant="secondary"
+              leadingIcon={<CloseGlyph />}
+              size="small"
               onClick={() => {
                 setCategory("");
                 setActor("");
@@ -230,7 +231,12 @@ export function Activity() {
             <span>That is the beginning of the retained history.</span>
           ) : (
             <>
-              <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
+              <Button
+                variant="secondary"
+                size="small"
+                onClick={() => void loadOlder()}
+                disabled={paging}
+              >
                 {paging ? "Loading…" : `Load ${PAGE} older`}
               </Button>
               <span className="spacer" />

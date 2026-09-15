@@ -26,7 +26,7 @@ import {
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Badge, Button, ButtonLink, Segmented } from "~/ui/primitives.tsx";
+import { Badge, Segmented } from "~/ui/primitives.tsx";
 import {
   useAgents,
   useClient,
@@ -39,6 +39,9 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import {
+  Button,
+  ButtonLink,
+  IconButton,
   cx,
   focusables,
   isComposing,
@@ -274,11 +277,10 @@ export function Shell({ children }: { children: ReactNode }) {
               shell's own grid, which took the sidebar's column and pushed
               the whole app into the next row. */}
           <span className="drawer-toggle" ref={drawerToggle}>
-            <Button
-              icon={MenuGlyph}
-              variant="ghost"
+            <IconButton
+              label="Sections"
+              icon={<MenuGlyph />}
               size="sm"
-              title="Sections"
               onClick={() => setDrawer((v) => !v)}
             />
           </span>
@@ -308,7 +310,7 @@ export function Shell({ children }: { children: ReactNode }) {
             <KeyGlyph size="sm" />
             <span>The engine refused this browser's API token.</span>
             <span className="spacer" />
-            <Button size="sm" onClick={() => setTokenOpen(true)}>
+            <Button variant="secondary" size="small" onClick={() => setTokenOpen(true)}>
               Set token
             </Button>
           </div>
@@ -337,7 +339,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 Configuration screen, which reads and cannot write, so the
                 banner reporting the problem sent the reader somewhere that
                 could not fix it. */}
-            <ButtonLink size="sm" href={href(["org"], { lens: "builder" })}>
+            <ButtonLink variant="secondary" size="small" href={href(["org"], { lens: "builder" })}>
               Create the company
             </ButtonLink>
           </div>

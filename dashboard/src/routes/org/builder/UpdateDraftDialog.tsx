@@ -25,14 +25,14 @@
  */
 
 import { configValueKind, plural } from "~/lib/format.ts";
-import { Button, Segmented } from "~/ui/primitives.tsx";
+import { Segmented } from "~/ui/primitives.tsx";
 import type { Choice, RebaseEntry } from "./model/history.ts";
 import { isRecord, jsonEqual } from "./model/json.ts";
 import { COMPANY_KEY, type NodeKey } from "./model/keys.ts";
 import { fieldName, type Conflict, type Operation } from "./model/operations.ts";
 import type { PendingUpdate } from "./model/reducer.ts";
 import { RefreshGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Button, Modal } from "@crewlethq/ui";
 
 /** A node's name for its key, or `null` when no draft at hand holds it. */
 export type NameOf = (key: NodeKey) => string | null;
@@ -182,7 +182,7 @@ export function UpdateDraftDialog({
             <span className="t-caption muted">Choose for {plural(pending, "conflict")} first.</span>
           )}
           <span className="spacer" />
-          <Button onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel}>
             {update.restoring ? "Discard the kept draft" : "Not now"}
           </Button>
           <Button variant="primary" onClick={onConfirm} disabled={pending > 0}>

@@ -19,11 +19,11 @@
  */
 
 import { useRef } from "react";
-import { Badge, Button, KeyValue } from "~/ui/primitives.tsx";
+import { Badge, KeyValue } from "~/ui/primitives.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { EmptyValue, Modal, RelativeTime, useNow } from "@crewlethq/ui";
+import { Button, EmptyValue, Modal, RelativeTime, useNow } from "@crewlethq/ui";
 import {
   CloseGlyph,
   InfoGlyph,
@@ -78,7 +78,7 @@ export function EnginePanel({
           <span style={{ flex: 1 }}>
             This browser's API token was refused. Reads and writes are both blocked.
           </span>
-          <Button size="sm" onClick={onSetToken}>
+          <Button variant="secondary" size="small" onClick={onSetToken}>
             Set token
           </Button>
         </div>

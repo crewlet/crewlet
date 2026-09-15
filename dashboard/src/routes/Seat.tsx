@@ -21,16 +21,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import {
-  Avatar,
-  Badge,
-  Button,
-  KeyValue,
-  Stat,
-  StatRow,
-  TabPanel,
-  Tabs,
-} from "~/ui/primitives.tsx";
+import { Avatar, Badge, KeyValue, Stat, StatRow, TabPanel, Tabs } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -64,7 +55,16 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
-import { Card, EmptyState, EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  EmptyValue,
+  Meter,
+  RelativeTime,
+  Skeleton,
+  useNow,
+} from "@crewlethq/ui";
 import {
   AccountTreeGlyph,
   ArrowForwardGlyph,
@@ -244,16 +244,18 @@ export function SeatScreen({ handle }: { handle: string }) {
                 handle this engine did not report cannot be named there. */}
             {seat.handle && (
               <Button
-                icon={AccountTreeGlyph}
-                size="sm"
+                variant="secondary"
+                leadingIcon={<AccountTreeGlyph />}
+                size="small"
                 onClick={() => nav.to(["org"], { seat: seat.handle })}
               >
                 In the org chart
               </Button>
             )}
             <Button
-              icon={TimelineGlyph}
-              size="sm"
+              variant="secondary"
+              leadingIcon={<TimelineGlyph />}
+              size="small"
               onClick={() => nav.to(["activity"], { actor: seat.name })}
             >
               Its events
@@ -294,7 +296,11 @@ export function SeatScreen({ handle }: { handle: string }) {
           <span>
             A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
           </span>
-          <Button size="sm" onClick={() => nav.to(["runs"], { run: sandbox.turn_id })}>
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={() => nav.to(["runs"], { run: sandbox.turn_id })}
+          >
             The run
           </Button>
         </div>
@@ -635,7 +641,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                       Showing the most recent phases the engine holds for this seat.
                     </span>
                     <span className="spacer" />
-                    <Button size="sm" onClick={() => nav.to(["model"], { role: seat.name })}>
+                    <Button
+                      variant="secondary"
+                      size="small"
+                      onClick={() => nav.to(["model"], { role: seat.name })}
+                    >
                       All model activity for {seat.name}
                     </Button>
                   </div>

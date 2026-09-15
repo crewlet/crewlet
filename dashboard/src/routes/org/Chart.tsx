@@ -27,9 +27,9 @@ import { seatPath, type OrgIndex, type Seat, type Unit } from "~/lib/seats.ts";
 import { useAgents, useSandboxes } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import type { AgentRow, SandboxEntry } from "~/protocol/index.ts";
-import { Avatar, Badge, ButtonLink } from "~/ui/primitives.tsx";
+import { Avatar, Badge } from "~/ui/primitives.tsx";
 import { AccountTreeGlyph, CrownGlyph, FolderGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, Card, EmptyState, cx } from "@crewlethq/ui";
+import { ButtonLink, Callout, Card, EmptyState, cx } from "@crewlethq/ui";
 
 /** The DOM id a unit block carries, which is what a reveal scrolls to. */
 export const unitElementId = (unit: Unit) => `org-unit-${unit.key}`;

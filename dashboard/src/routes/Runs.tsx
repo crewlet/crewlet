@@ -14,13 +14,13 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Button, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
-import { Card, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Button, Card, IconButton, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   CloseGlyph,
   ErrorGlyph,
@@ -244,19 +244,26 @@ export function Runs() {
             actions={
               <>
                 {detail.trace_id && (
-                  <Button size="sm" onClick={() => nav.to(["traces", detail.trace_id])}>
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    onClick={() => nav.to(["traces", detail.trace_id])}
+                  >
                     Trace
                   </Button>
                 )}
-                <Button size="sm" onClick={() => nav.to(["turns", detail.turn_id])}>
+                <Button
+                  variant="secondary"
+                  size="small"
+                  onClick={() => nav.to(["turns", detail.turn_id])}
+                >
                   Turn
                 </Button>
-                <Button
+                <IconButton
+                  label="Close"
+                  icon={<CloseGlyph />}
                   size="sm"
-                  variant="ghost"
-                  icon={CloseGlyph}
                   onClick={() => setSelected("")}
-                  title="Close"
                 />
               </>
             }

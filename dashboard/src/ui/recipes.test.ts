@@ -1,14 +1,15 @@
 // @vitest-environment node
 /**
- * A recipe a primitive owns is spelled by that primitive alone.
+ * A recipe the design system owns is spelled nowhere else.
  *
- * `ui/primitives.tsx` owns the `.btn` class list (`Button` and `ButtonLink`)
- * and `ui/Kbd.tsx` owns the `<kbd>` element. Each used to be written by hand
- * beside its primitive as well: a menu trigger and a list's Move buttons
+ * The `.btn` class list has no owner in this tree at all now: it was
+ * `ui/primitives.tsx`, and every button on every screen is uilet's. The
+ * `<kbd>` element still has one, `ui/Kbd.tsx`. Each used to be written by
+ * hand beside its primitive as well: a menu trigger and a list's Move buttons
  * spelled `btn ghost sm icon` themselves, three links spelled `btn primary`,
- * and the shell drew "⌘K" in a bare `<kbd>` that told every reader not on a
- * Mac to press a key they do not have. A copy of a recipe is where the two
- * drift apart, and nothing but a scan notices one being added, so the rule in
+ * and the shell drew a bare `<kbd>` that told every reader not on a Mac to
+ * press a key they do not have. A copy of a recipe is where the two drift
+ * apart, and nothing but a scan notices one being added, so the rule in
  * `docs/reference/dashboard-design.md` is asserted here.
  *
  * Sources are read as TEXT, in the idiom of `ui/boundary.test.ts`, with
@@ -42,7 +43,7 @@ const BTN_CLASS = /(["'`])(?:[^"'`\n]*\s)?btn(?:\s[^"'`\n]*)?\1/;
 /** A `<kbd>` element in JSX. */
 const KBD_ELEMENT = /<kbd[\s>]/;
 
-function offenders(pattern: RegExp, owner: string): string[] {
+function offenders(pattern: RegExp, owner?: string): string[] {
   return sources(SRC)
     .map((file) => relative(SRC, file).split(sep).join("/"))
     .filter((file) => file !== owner)
@@ -56,13 +57,12 @@ test("the scan recognises the recipes it polices", () => {
   expect(BTN_CLASS.test("className={`btn ${tone}`}")).toBe(true);
   expect(BTN_CLASS.test('className="btn-group"')).toBe(false);
   expect(BTN_CLASS.test('className="subtn"')).toBe(false);
-  expect(KBD_ELEMENT.test("<kbd>⌘K</kbd>")).toBe(true);
-  expect(code(readFileSync(join(SRC, "ui/primitives.tsx"), "utf8"))).toMatch(BTN_CLASS);
+  expect(KBD_ELEMENT.test("<kbd>Command K</kbd>")).toBe(true);
   expect(code(readFileSync(join(SRC, "ui/Kbd.tsx"), "utf8"))).toMatch(KBD_ELEMENT);
 });
 
-test("only ui/primitives.tsx spells the button class list", () => {
-  expect(offenders(BTN_CLASS, "ui/primitives.tsx")).toEqual([]);
+test("nothing spells the button class list, which no longer has an owner", () => {
+  expect(offenders(BTN_CLASS)).toEqual([]);
 });
 
 test("only ui/Kbd.tsx draws a kbd element", () => {

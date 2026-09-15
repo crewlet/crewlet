@@ -34,7 +34,7 @@ import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Button, Segmented } from "~/ui/primitives.tsx";
+import { Segmented } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -56,7 +56,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from "./preflight.ts";
 import { DeleteGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, Modal } from "@crewlethq/ui";
+import { Button, Callout, Modal } from "@crewlethq/ui";
 
 type PlacedChoice = "keep" | "remove";
 
@@ -76,7 +76,11 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         stackBody
         title="Delete"
         onClose={onClose}
-        footer={<Button onClick={onClose}>Close</Button>}
+        footer={
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        }
       >
         <p className="t-body">This node is no longer in the draft.</p>
       </Modal>
@@ -154,7 +158,7 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
       onSubmit={remove}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="tertiary" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="danger" type="submit" disabled={blocked}>

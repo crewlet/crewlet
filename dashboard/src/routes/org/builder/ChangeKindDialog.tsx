@@ -30,7 +30,6 @@
 import { useState } from "react";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import { Field } from "~/ui/Field.tsx";
-import { Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   ContactField,
@@ -51,7 +50,7 @@ import { datadogFallback } from "./chartModel.ts";
 import { isWorking, referenceNames, vendorIdentities } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { PersonGlyph, SmartToyGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, Modal } from "@crewlethq/ui";
+import { Button, Callout, Modal } from "@crewlethq/ui";
 
 export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -69,7 +68,11 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
         stackBody
         title="Change the kind of seat"
         onClose={onClose}
-        footer={<Button onClick={onClose}>Close</Button>}
+        footer={
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        }
       >
         <p className="t-body">This seat is no longer in the draft.</p>
       </Modal>
@@ -151,7 +154,7 @@ export function ChangeKindDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClo
       onSubmit={change}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="tertiary" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={blocked}>

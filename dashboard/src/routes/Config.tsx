@@ -23,21 +23,23 @@
 import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
-import {
-  Badge,
-  Button,
-  ButtonLink,
-  Code,
-  CopyButton,
-  Segmented,
-  TabPanel,
-} from "~/ui/primitives.tsx";
+import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { Badge, Segmented, TabPanel } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
-import { Card, EmptyState, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import {
+  ButtonLink,
+  Card,
+  CodeBlock,
+  CopyButton,
+  EmptyState,
+  EmptyValue,
+  RelativeTime,
+  Skeleton,
+  useNow,
+} from "@crewlethq/ui";
 import {
   DescriptionGlyph,
   DifferenceGlyph,
@@ -106,14 +108,25 @@ export function ConfigScreen() {
                   <Card.Header
                     icon={<DescriptionGlyph size="sm" />}
                     subtitle="as the engine resolved it"
-                    actions={<CopyButton text={pretty} title="the active revision, as JSON" />}
+                    actions={
+                      <CopyButton
+                        variant="secondary"
+                        text={pretty}
+                        title="the active revision, as JSON"
+                      />
+                    }
                   >
                     <Card.Title>Active revision</Card.Title>
                   </Card.Header>
                   <div className="col gap-1">
-                    <Code plain selectable label="The active company configuration, as JSON">
-                      {pretty}
-                    </Code>
+                    <CodeBlock
+                      plain
+                      wrap
+                      selectable
+                      label="The active company configuration, as JSON"
+                      code={pretty}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                     <span className="t-caption">
                       Click into the revision, and ⌘A / Ctrl+A selects it alone rather than the
                       page.

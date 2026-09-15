@@ -40,7 +40,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button } from "~/ui/primitives.tsx";
+import { Badge } from "~/ui/primitives.tsx";
 import { Field, type FieldKind } from "~/ui/Field.tsx";
 import { marked, paths, Problems } from "~/ui/Problems.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
@@ -55,7 +55,7 @@ import {
   LinkGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Modal, useToast } from "@crewlethq/ui";
+import { Button, Modal, useToast } from "@crewlethq/ui";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -893,7 +893,7 @@ export function SetupDialog({
       footer={
         <>
           <span className="spacer" />
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={busy}>
@@ -1025,8 +1025,9 @@ export function SetupDialog({
                           so an operator who only wanted the text got the
                           forty lines they were copying instead of it. */}
                       <Button
-                        size="sm"
-                        icon={ContentCopyGlyph}
+                        variant="secondary"
+                        size="small"
+                        leadingIcon={<ContentCopyGlyph />}
                         onClick={(e) => {
                           e.preventDefault();
                           void navigator.clipboard?.writeText(seat.manifest ?? "");

@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Code, Disclosure, PhaseTag } from "~/ui/primitives.tsx";
+import { Badge, Disclosure, PhaseTag } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -53,7 +53,8 @@ import {
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-import { RelativeTime, cx, useNow } from "@crewlethq/ui";
+import { CodeBlock, RelativeTime, cx, useNow } from "@crewlethq/ui";
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import {
   ChevronRightGlyph,
   ErrorGlyph,
@@ -90,9 +91,9 @@ function ToolRow({
       >
         <div className="col gap-1">
           <div className="t-label">Arguments</div>
-          <Code plain>{args || "{}"}</Code>
+          <CodeBlock plain wrap code={args || "{}"} maxHeight={RECORD_MAX_HEIGHT} />
           <div className="t-label">{failed ? "Error" : "Result"}</div>
-          <Code>{result || "(empty)"}</Code>
+          <CodeBlock plain wrap code={result || "(empty)"} maxHeight={RECORD_MAX_HEIGHT} />
         </div>
       </Disclosure>
     </div>
@@ -453,13 +454,18 @@ export function PhaseCard({
                 {record.systemPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">System</div>
-                    <Code>{record.systemPrompt}</Code>
+                    <CodeBlock
+                      plain
+                      wrap
+                      code={record.systemPrompt}
+                      maxHeight={RECORD_MAX_HEIGHT}
+                    />
                   </div>
                 )}
                 {record.userPrompt && (
                   <div className="col gap-1">
                     <div className="t-label">User</div>
-                    <Code>{record.userPrompt}</Code>
+                    <CodeBlock plain wrap code={record.userPrompt} maxHeight={RECORD_MAX_HEIGHT} />
                   </div>
                 )}
               </div>

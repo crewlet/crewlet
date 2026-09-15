@@ -12,7 +12,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -24,7 +24,7 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Card, Skeleton } from "@crewlethq/ui";
+import { Button, Card, Skeleton } from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -97,8 +97,9 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         }
         actions={
           <Button
-            size="sm"
-            icon={TimelineGlyph}
+            variant="secondary"
+            size="small"
+            leadingIcon={<TimelineGlyph />}
             onClick={() => nav.to(["activity"], { q: traceId })}
           >
             In the log

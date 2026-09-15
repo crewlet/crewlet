@@ -60,7 +60,7 @@ import {
 } from "react";
 import { plural } from "~/lib/format.ts";
 import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Avatar, Badge, Button } from "~/ui/primitives.tsx";
+import { Avatar, Badge } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
   ancestors,
@@ -114,7 +114,7 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
-import { EmptyState, Menu, cx, type MenuEntry } from "@crewlethq/ui";
+import { EmptyState, IconButton, Menu, cx, type MenuEntry } from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.
@@ -519,11 +519,10 @@ function ToggleButton({ ctx, id, name }: { ctx: CardContext; id: string; name: s
   if (!ctx.expandable(id)) return null;
   const expanded = ctx.expanded(id);
   return (
-    <Button
+    <IconButton
+      label={expanded ? `Collapse ${name}` : `Expand ${name}`}
+      icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
       size="sm"
-      variant="ghost"
-      icon={expanded ? KeyboardArrowDownGlyph : ChevronRightGlyph}
-      title={expanded ? `Collapse ${name}` : `Expand ${name}`}
       tabIndex={-1}
       onClick={(e) => {
         e.stopPropagation();

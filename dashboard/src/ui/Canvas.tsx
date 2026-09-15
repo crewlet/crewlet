@@ -67,7 +67,6 @@ import {
   type ReactNode,
   type Ref,
 } from "react";
-import { Button } from "./primitives.tsx";
 import { LayerNode } from "./layerNode.tsx";
 import {
   IDENTITY,
@@ -91,7 +90,7 @@ import {
   type View,
 } from "./viewport.ts";
 import { FitScreenGlyph, ZoomInGlyph, ZoomOutGlyph } from "@crewlethq/icons/glyphs";
-import { LAYER_REPOSITION_EVENT, LayerHost } from "@crewlethq/ui";
+import { Button, IconButton, LAYER_REPOSITION_EVENT, LayerHost } from "@crewlethq/ui";
 
 /** What a screen can ask of a canvas it holds a ref to. */
 export interface CanvasHandle {
@@ -486,32 +485,32 @@ export function Canvas({
       {(controls || touchActive) && (
         <div className="canvas-controls">
           {touchActive && (
-            <Button size="sm" onClick={() => setTouchActive(false)}>
+            <Button variant="secondary" size="small" onClick={() => setTouchActive(false)}>
               Done
             </Button>
           )}
           {controls && (
             <>
-              <Button
+              <IconButton
+                label="Zoom out"
+                icon={<ZoomOutGlyph />}
                 size="sm"
-                variant="ghost"
-                icon={ZoomOutGlyph}
                 title="Zoom out"
                 onClick={() => centreZoom(1 / ZOOM_STEP)}
                 disabled={!ready}
               />
-              <Button
+              <IconButton
+                label="Zoom in"
+                icon={<ZoomInGlyph />}
                 size="sm"
-                variant="ghost"
-                icon={ZoomInGlyph}
                 title="Zoom in"
                 onClick={() => centreZoom(ZOOM_STEP)}
                 disabled={!ready}
               />
-              <Button
+              <IconButton
+                label="Fit to view"
+                icon={<FitScreenGlyph />}
                 size="sm"
-                variant="ghost"
-                icon={FitScreenGlyph}
                 title="Fit to view"
                 onClick={() => content && apply(fit(content, sizeNow.current), true)}
                 disabled={!ready}

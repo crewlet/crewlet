@@ -49,7 +49,7 @@ import {
 } from "react";
 import type { Derived } from "~/protocol/index.ts";
 
-import { Avatar, Button } from "~/ui/primitives.tsx";
+import { Avatar } from "~/ui/primitives.tsx";
 
 import {
   isExpandable,
@@ -92,7 +92,7 @@ import {
   KeyboardArrowDownGlyph,
   PersonAddGlyph,
 } from "@crewlethq/icons/glyphs";
-import { LAYER_REPOSITION_EVENT, LayerHost, Menu } from "@crewlethq/ui";
+import { Button, IconButton, LAYER_REPOSITION_EVENT, LayerHost, Menu } from "@crewlethq/ui";
 import { LayerNode } from "~/ui/layerNode.tsx";
 
 /** The columns, in order. Their positions are the cells' `aria-colindex`. */
@@ -497,9 +497,11 @@ export function OutlineView() {
                         >
                           <span data-cell-widget="">
                             <Button
-                              size="sm"
-                              variant="ghost"
-                              icon={b.kind === "unit" ? CreateNewFolderGlyph : PersonAddGlyph}
+                              size="small"
+                              variant="tertiary"
+                              leadingIcon={
+                                b.kind === "unit" ? <CreateNewFolderGlyph /> : <PersonAddGlyph />
+                              }
                               tabIndex={stop(id, i + 1) ? 0 : -1}
                               onClick={() =>
                                 api.openAdd(parent === COMPANY_KEY ? null : parent, b.kind)
@@ -647,11 +649,10 @@ function NameCell({
         }}
       >
         {expandable && (
-          <Button
+          <IconButton
+            label={expanded ? `Collapse ${name}` : `Expand ${name}`}
+            icon={expanded ? <KeyboardArrowDownGlyph /> : <ChevronRightGlyph />}
             size="sm"
-            variant="ghost"
-            icon={expanded ? KeyboardArrowDownGlyph : ChevronRightGlyph}
-            title={expanded ? `Collapse ${name}` : `Expand ${name}`}
             tabIndex={-1}
             onClick={onToggle}
           />

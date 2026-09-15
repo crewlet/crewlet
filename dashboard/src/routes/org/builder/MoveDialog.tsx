@@ -25,7 +25,6 @@ import { useState } from "react";
 import { plural } from "~/lib/format.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
-import { Button } from "~/ui/primitives.tsx";
 import { useBuilder } from "./BuilderContext.tsx";
 import {
   EditorSection,
@@ -42,7 +41,7 @@ import { movePreview, type MovePreview } from "./movePreview.ts";
 import { isWorking, unitsLedBy } from "./nodeFacts.ts";
 import { newlyStranded, simulate } from "./preflight.ts";
 import { MoveItemGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Button, Modal } from "@crewlethq/ui";
 
 export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
@@ -59,7 +58,11 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
         stackBody
         title="Move"
         onClose={onClose}
-        footer={<Button onClick={onClose}>Close</Button>}
+        footer={
+          <Button variant="secondary" onClick={onClose}>
+            Close
+          </Button>
+        }
       >
         <p className="t-body">This node is no longer in the draft.</p>
       </Modal>
@@ -145,7 +148,7 @@ export function MoveDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: ()
       onSubmit={move}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="tertiary" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit" disabled={!chosen || sameSpot || api.readOnly}>

@@ -16,10 +16,9 @@
  */
 
 import { useId, useState } from "react";
-import { Button } from "~/ui/primitives.tsx";
 import { apiToken, clearToken, storeToken } from "~/protocol/index.ts";
 import { ErrorGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Button, Modal } from "@crewlethq/ui";
 
 export function TokenDialog({
   onClose,
@@ -80,7 +79,7 @@ export function TokenDialog({
             </Button>
           )}
           <span className="spacer" />
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="tertiary" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" type="submit">

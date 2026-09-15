@@ -9,9 +9,8 @@
  */
 
 import { Component, type ReactNode } from "react";
-import { LayerHost, ToastProvider } from "@crewlethq/ui";
+import { Button, CodeBlock, LayerHost, ToastProvider } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
-import { Button, Code } from "~/ui/primitives.tsx";
 import { useRoute } from "./router.tsx";
 import { Overview } from "~/routes/Overview.tsx";
 import { People } from "~/routes/People.tsx";
@@ -35,6 +34,7 @@ import { TurnScreen } from "~/routes/Turn.tsx";
 import { NotFound } from "~/routes/NotFound.tsx";
 import { ErrorGlyph } from "@crewlethq/icons/glyphs";
 import { EmptyState } from "@crewlethq/ui";
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 function Screen() {
   const route = useRoute();
@@ -133,8 +133,15 @@ export class ScreenBoundary extends Component<BoundaryProps, BoundaryState> {
         description="Something it received did not have the shape it expects. The rest of the dashboard keeps working, and the message below is what to include in a report."
         action={
           <div className="col gap-3" style={{ alignItems: "center" }}>
-            <Code plain>{error.message || error.name}</Code>
-            <Button onClick={() => this.setState({ error: null })}>Try again</Button>
+            <CodeBlock
+              plain
+              wrap
+              code={error.message || error.name}
+              maxHeight={RECORD_MAX_HEIGHT}
+            />
+            <Button variant="secondary" onClick={() => this.setState({ error: null })}>
+              Try again
+            </Button>
           </div>
         }
       />

@@ -25,7 +25,7 @@
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, ButtonLink } from "~/ui/primitives.tsx";
+import { Avatar, Badge } from "~/ui/primitives.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,7 +48,7 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
-import { EmptyState, Skeleton } from "@crewlethq/ui";
+import { Button, ButtonLink, EmptyState, Skeleton } from "@crewlethq/ui";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -1144,7 +1144,7 @@ export function SeatStep({
       // that build a seat's app and they are the same kind of thing — the one
       // control on the row a person is meant to press — so drawing the second
       // as an ordinary button made the finished half look optional.
-      <ButtonLink size="sm" variant="primary" href={seat.action_url} external>
+      <ButtonLink size="small" variant="primary" href={seat.action_url} external>
         Install on {app}
       </ButtonLink>
     );
@@ -1153,7 +1153,7 @@ export function SeatStep({
 
   return (
     <>
-      <Button size="sm" variant="primary" disabled={busy} onClick={() => void create()}>
+      <Button size="small" variant="primary" disabled={busy} onClick={() => void create()}>
         {busy ? `Opening ${app}` : `Create app on ${app}`}
       </Button>
       {refused && (
@@ -1264,12 +1264,12 @@ export function EntryRow({
         </Badge>
       )}
       {action && onConnect && (
-        <Button size="sm" variant="primary" onClick={() => onConnect()}>
+        <Button size="small" variant="primary" onClick={() => onConnect()}>
           {action.label}
         </Button>
       )}
       {!absent && onDisconnect && (
-        <Button size="sm" variant="ghost" onClick={onDisconnect}>
+        <Button size="small" variant="tertiary" onClick={onDisconnect}>
           Disconnect
         </Button>
       )}
@@ -1737,7 +1737,12 @@ export function Integrations() {
               anonymous reads allowed the socket is never refused, so a banner
               that only NAMES the missing credential leaves the reader with
               nothing on the page that can supply it. */}
-          <Button size="sm" icon={KeyGlyph} onClick={requestToken}>
+          <Button
+            variant="secondary"
+            size="small"
+            leadingIcon={<KeyGlyph />}
+            onClick={requestToken}
+          >
             Set token
           </Button>
         </div>

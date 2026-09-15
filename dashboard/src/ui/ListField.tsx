@@ -40,7 +40,6 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Button } from "./primitives.tsx";
 import { Problems } from "./Problems.tsx";
 import {
   AddGlyph,
@@ -48,7 +47,7 @@ import {
   ArrowUpwardGlyph,
   DeleteGlyph,
 } from "@crewlethq/icons/glyphs";
-import { isComposing } from "@crewlethq/ui";
+import { Button, IconButton, isComposing } from "@crewlethq/ui";
 
 let minted = 0;
 const mint = () => `item-${++minted}`;
@@ -248,11 +247,10 @@ export function ListField({
                   },
                 })}
                 <span className="list-field-actions">
-                  <Button
-                    variant="ghost"
+                  <IconButton
+                    label={`Move ${itemName} ${position} up`}
+                    icon={<ArrowUpwardGlyph />}
                     size="sm"
-                    icon={ArrowUpwardGlyph}
-                    aria-label={`Move ${itemName} ${position} up`}
                     title="Move up"
                     disabled={disabled || index === 0}
                     onClick={() => move(index, -1, "up")}
@@ -261,11 +259,10 @@ export function ListField({
                       else ups.current.delete(key);
                     }}
                   />
-                  <Button
-                    variant="ghost"
+                  <IconButton
+                    label={`Move ${itemName} ${position} down`}
+                    icon={<ArrowDownwardGlyph />}
                     size="sm"
-                    icon={ArrowDownwardGlyph}
-                    aria-label={`Move ${itemName} ${position} down`}
                     title="Move down"
                     disabled={disabled || index === count - 1}
                     onClick={() => move(index, 1, "down")}
@@ -274,11 +271,10 @@ export function ListField({
                       else downs.current.delete(key);
                     }}
                   />
-                  <Button
-                    variant="ghost"
+                  <IconButton
+                    label={`Remove ${itemName} ${position}`}
+                    icon={<DeleteGlyph />}
                     size="sm"
-                    icon={DeleteGlyph}
-                    aria-label={`Remove ${itemName} ${position}`}
                     title="Remove"
                     disabled={disabled}
                     onClick={() => remove(index)}
@@ -304,7 +300,13 @@ export function ListField({
             addBox.current = el;
           },
         })}
-        <Button size="sm" icon={AddGlyph} onClick={add} disabled={disabled || draft.trim() === ""}>
+        <Button
+          variant="secondary"
+          size="small"
+          leadingIcon={<AddGlyph />}
+          onClick={add}
+          disabled={disabled || draft.trim() === ""}
+        >
           Add
         </Button>
       </div>

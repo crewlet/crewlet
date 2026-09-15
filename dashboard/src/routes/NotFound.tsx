@@ -1,6 +1,5 @@
 import { ScreenHead } from "~/app/Shell.tsx";
-import { Button } from "~/ui/primitives.tsx";
-import { EmptyState } from "@crewlethq/ui";
+import { Button, EmptyState } from "@crewlethq/ui";
 import { useNavigator, useRoute } from "~/app/router.tsx";
 import { ExploreGlyph } from "@crewlethq/icons/glyphs";
 

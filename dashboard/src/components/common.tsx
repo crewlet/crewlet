@@ -9,7 +9,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Badge, Button } from "~/ui/primitives.tsx";
+import { Avatar, Badge } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -24,7 +24,7 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { RelativeTime, cx, formatRelative, useNow } from "@crewlethq/ui";
+import { Button, RelativeTime, cx, formatRelative, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   ErrorGlyph,
@@ -33,6 +33,17 @@ import {
   KeyGlyph,
   ScheduleGlyph,
 } from "@crewlethq/icons/glyphs";
+
+/**
+ * How tall a record block grows before it scrolls itself, in px.
+ *
+ * Twenty-five lines of the mono face at the size a block is set in, which is
+ * about as much of a record as a reader takes in before scrolling anyway.
+ * uilet's CodeBlock is unbounded without a ceiling, and the records these hold
+ * are a whole turn, a whole configuration and a whole event payload: one of
+ * them at nine hundred lines pushes everything under it off the screen.
+ */
+export const RECORD_MAX_HEIGHT = 460;
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
@@ -274,7 +285,7 @@ export function QueryState({
             With anonymous reads allowed the socket is never refused, so the
             dialog's only other doors — a refusal, and the engine panel — both
             stay shut on exactly the screen that needs it. */}
-        <Button size="sm" icon={KeyGlyph} onClick={requestToken}>
+        <Button variant="secondary" size="small" leadingIcon={<KeyGlyph />} onClick={requestToken}>
           Set token
         </Button>
       </div>

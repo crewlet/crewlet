@@ -7,13 +7,22 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, KeyValue } from "~/ui/primitives.tsx";
+import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
+import { Badge, KeyValue } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
-import { Card, EmptyValue, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  CodeBlock,
+  CopyButton,
+  EmptyValue,
+  RelativeTime,
+  Skeleton,
+  useNow,
+} from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   DescriptionGlyph,
@@ -50,8 +59,9 @@ export function EventScreen({ eventId }: { eventId: string }) {
           <>
             {data?.trace_id && (
               <Button
-                size="sm"
-                icon={ForkRightGlyph}
+                variant="secondary"
+
+                leadingIcon={<ForkRightGlyph />}
                 onClick={() => nav.to(["traces", data.trace_id])}
               >
                 Trace
@@ -59,15 +69,21 @@ export function EventScreen({ eventId }: { eventId: string }) {
             )}
             {data?.payload?.turn_id != null && (
               <Button
-                size="sm"
-                icon={LayersGlyph}
+                variant="secondary"
+
+                leadingIcon={<LayersGlyph />}
                 onClick={() => nav.to(["turns", String(data.payload!.turn_id)])}
               >
                 Turn
               </Button>
             )}
             {data?.actor && (
-              <Button size="sm" icon={PersonGlyph} onClick={() => nav.to(["seats", data.actor])}>
+              <Button
+                variant="secondary"
+
+                leadingIcon={<PersonGlyph />}
+                onClick={() => nav.to(["seats", data.actor])}
+              >
                 {data.actor}
               </Button>
             )}
@@ -171,6 +187,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 actions={
                   data.payload ? (
                     <CopyButton
+                      variant="secondary"
                       text={() => JSON.stringify(data.payload, null, 2)}
                       title="this event's payload, as JSON"
                     />
@@ -184,9 +201,14 @@ export function EventScreen({ eventId }: { eventId: string }) {
                 // point is one JSON record, so the record owns select-all
                 // rather than the page taking it.
                 <div className="col gap-1">
-                  <Code plain selectable label="The event payload, as JSON">
-                    {JSON.stringify(data.payload, null, 2)}
-                  </Code>
+                  <CodeBlock
+                    plain
+                    wrap
+                    selectable
+                    label="The event payload, as JSON"
+                    code={JSON.stringify(data.payload, null, 2)}
+                    maxHeight={RECORD_MAX_HEIGHT}
+                  />
                   <span className="t-caption">
                     Click into the payload, and ⌘A / Ctrl+A selects it alone rather than the page.
                   </span>

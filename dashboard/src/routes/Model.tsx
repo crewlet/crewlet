@@ -22,7 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, PhaseTag, Select } from "~/ui/primitives.tsx";
+import { Badge, Chip, PhaseTag, Select } from "~/ui/primitives.tsx";
 import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -38,7 +38,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
-import { EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { Button, EmptyState, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
@@ -303,8 +303,9 @@ export function ModelActivity() {
         ))}
         {filtering && (
           <Button
-            size="sm"
-            icon={CloseGlyph}
+            variant="secondary"
+            size="small"
+            leadingIcon={<CloseGlyph />}
             onClick={() => {
               setRole("");
               setPhase("");
@@ -391,7 +392,12 @@ export function ModelActivity() {
           <span className="t-caption">That is the beginning of the retained record.</span>
         ) : (
           <>
-            <Button size="sm" onClick={() => void loadOlder()} disabled={paging}>
+            <Button
+              variant="secondary"
+              size="small"
+              onClick={() => void loadOlder()}
+              disabled={paging}
+            >
               {paging ? "Loading…" : `Load ${PAGE} older phases`}
             </Button>
             <span className="t-caption">the event store keeps 30 days</span>

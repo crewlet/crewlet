@@ -26,14 +26,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
-import { Card, EmptyValue, RelativeTime, Skeleton, useNow, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  EmptyValue,
+  IconButton,
+  RelativeTime,
+  Skeleton,
+  useNow,
+  useToast,
+} from "@crewlethq/ui";
 import {
   AddGlyph,
   CloseGlyph,
@@ -155,7 +164,11 @@ export function Secrets() {
         sub="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
         badges={<Badge outline>{plural(list.length, "credential")} held</Badge>}
         actions={
-          <Button icon={AddGlyph} variant="primary" onClick={() => setWriting({ editing: "" })}>
+          <Button
+            leadingIcon={<AddGlyph />}
+            variant="primary"
+            onClick={() => setWriting({ editing: "" })}
+          >
             Store a secret
           </Button>
         }
@@ -268,18 +281,16 @@ export function Secrets() {
                 shrink: true,
                 cell: (s) => (
                   <span className="row gap-1">
-                    <Button
+                    <IconButton
+                      label={`Edit ${s.name}`}
+                      icon={<EditGlyph />}
                       size="sm"
-                      variant="ghost"
-                      icon={EditGlyph}
-                      title={`Edit ${s.name}`}
                       onClick={() => setWriting({ editing: s.name })}
                     />
-                    <Button
+                    <IconButton
+                      label={`Remove ${s.name}`}
+                      icon={<CloseGlyph />}
                       size="sm"
-                      variant="ghost"
-                      icon={CloseGlyph}
-                      title={`Remove ${s.name}`}
                       onClick={() => setRemoving(s.name)}
                     />
                   </span>

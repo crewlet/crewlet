@@ -23,7 +23,6 @@ import { plural } from "~/lib/format.ts";
 import type { ConfigWarning } from "~/protocol/index.ts";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Button } from "~/ui/primitives.tsx";
 import { ACKNOWLEDGEMENT_TEXT } from "./dialogParts.tsx";
 import type { Acknowledgement, ChangeSet, EntityRef, OnboardingCause } from "./model/changes.ts";
 import type { PlacedProblem } from "./model/problems.ts";
@@ -32,7 +31,7 @@ import type { BuilderMode } from "./model/transport.ts";
 import { signedSummary } from "./model/writes.ts";
 import type { SavePhase } from "./useSave.ts";
 import { CableGlyph, RefreshGlyph, SaveGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, Modal } from "@crewlethq/ui";
+import { Button, Callout, Modal } from "@crewlethq/ui";
 
 /** Why a group of seats onboards again, agreeing with how many there are. */
 const ONBOARDING_CAUSE: Record<OnboardingCause, (one: boolean) => string> = {
@@ -223,12 +222,12 @@ export function ReviewSaveDialog({
       footer={
         <>
           {unknown && (
-            <Button onClick={onCheckAgain} disabled={busy}>
+            <Button variant="secondary" onClick={onCheckAgain} disabled={busy}>
               Check again
             </Button>
           )}
           <span className="spacer" />
-          <Button onClick={onClose} disabled={busy}>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button variant="primary" disabled={!canSave} onClick={() => onSave(summary)}>

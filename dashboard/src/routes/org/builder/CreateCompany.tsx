@@ -24,13 +24,14 @@ import { useState } from "react";
 import { href } from "~/app/router.tsx";
 import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field } from "~/ui/Field.tsx";
-import { Button, ButtonLink, Code, Segmented } from "~/ui/primitives.tsx";
+import { Segmented } from "~/ui/primitives.tsx";
 import type { HumanContactKey } from "~/protocol/index.ts";
 import type { KeySource } from "./model/keys.ts";
 import type { Intent, TemplateId } from "./model/operations.ts";
 import { CONTACT_IDENTITIES, templateIntent, type LeadsAre } from "./model/templates.ts";
 import { AccountTreeGlyph, CheckGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, Card } from "@crewlethq/ui";
+import { Button, ButtonLink, Callout, Card, CodeBlock } from "@crewlethq/ui";
+import { RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 
 /** What each starting point gives the operator, in one line. */
 const TEMPLATES: readonly { id: TemplateId; label: string; hint: string }[] = [
@@ -206,7 +207,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
         icon={<CheckGlyph size="sm" />}
         subtitle="two steps the dashboard cannot take for you"
         actions={
-          <Button size="sm" variant="ghost" onClick={onDismiss}>
+          <Button size="small" variant="tertiary" onClick={onDismiss}>
             Dismiss
           </Button>
         }
@@ -220,7 +221,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
             Agents reach people and work through the company's integrations.
           </span>
           <div className="row">
-            <ButtonLink size="sm" href={href(["integrations"])}>
+            <ButtonLink variant="secondary" size="small" href={href(["integrations"])}>
               Open Integrations
             </ButtonLink>
           </div>
@@ -234,7 +235,7 @@ export function NextSteps({ onDismiss }: { onDismiss: () => void }) {
             <code className="inline">crewlet secrets set ANTHROPIC_API_KEY</code>, then either
             import a company file or patch the configuration:
           </span>
-          <Code>{PROVIDER_SNIPPET}</Code>
+          <CodeBlock plain wrap code={PROVIDER_SNIPPET} maxHeight={RECORD_MAX_HEIGHT} />
         </div>
       </div>
     </Card>

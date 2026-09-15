@@ -23,11 +23,10 @@
  */
 
 import { useState } from "react";
-import { Button } from "~/ui/primitives.tsx";
 import { Field } from "~/ui/Field.tsx";
 import { rest, RestError } from "~/protocol/index.ts";
 import { ErrorGlyph, InfoGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Button, Modal } from "@crewlethq/ui";
 
 export function SecretDialog({
   /** The name being edited, or "" to store a new one. */
@@ -86,7 +85,7 @@ export function SecretDialog({
       onSubmit={() => void submit()}
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="tertiary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>

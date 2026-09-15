@@ -51,7 +51,6 @@ import { Checkbox } from "~/ui/Checkbox.tsx";
 import { Field, type FieldChoice } from "~/ui/Field.tsx";
 import { ListField } from "~/ui/ListField.tsx";
 import { MultiPicker, type PickerOption } from "~/ui/MultiPicker.tsx";
-import { Button } from "~/ui/primitives.tsx";
 import {
   keepsTheLens,
   useBuilder,
@@ -114,7 +113,7 @@ import {
 } from "./nodeFacts.ts";
 import { RenameUnitPreflight } from "./RenameUnitPreflight.tsx";
 import { EditGlyph, WarningGlyph } from "@crewlethq/icons/glyphs";
-import { Callout, EmptyState, Modal } from "@crewlethq/ui";
+import { Button, Callout, EmptyState, Modal } from "@crewlethq/ui";
 
 export function NodeEditor({
   nodeKey,
@@ -260,7 +259,7 @@ function EditorShell({
         footer={
           <>
             {blocked && !readOnly && <span className="t-caption spacer">{blocked}</span>}
-            <Button variant="ghost" onClick={requestClose}>
+            <Button variant="tertiary" onClick={requestClose}>
               Cancel
             </Button>
             <Button variant="primary" type="submit" disabled={disabled}>
@@ -287,7 +286,7 @@ function EditorShell({
           onClose={() => setConfirming(null)}
           footer={
             <>
-              <Button variant="ghost" onClick={() => setConfirming(null)}>
+              <Button variant="tertiary" onClick={() => setConfirming(null)}>
                 Keep editing
               </Button>
               <Button variant="danger" onClick={discard}>
@@ -1025,7 +1024,8 @@ function KindFact({
       <div className="row wrap">
         <span>{human ? "Human seat" : "Agent seat"}</span>
         <Button
-          size="sm"
+          variant="secondary"
+          size="small"
           disabled={dirty || api.readOnly}
           onClick={() => {
             onClose();
