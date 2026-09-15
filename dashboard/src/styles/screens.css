@@ -293,7 +293,7 @@
   font-family: var(--font-sans);
   font-size: var(--fs-xs);
   line-height: var(--lh-relaxed);
-  color: var(--text-primary);
+  color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-width: 78ch;
@@ -2374,7 +2374,7 @@ a.work-cal-chip:hover {
 .prose.md h6 {
   font-weight: 600;
   line-height: var(--lh-tight);
-  color: var(--text-primary);
+  color: var(--heading);
 }
 /* A heading opens a section, so it gets more air above it than a paragraph —
    except the first one, which has the panel's own padding above it already. */
@@ -2585,15 +2585,15 @@ a.work-cal-chip:hover {
 }
 .tl-band-count {
   font-size: var(--fs-xs);
-  color: var(--ink-muted);
+  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 .tl-none {
   font-size: var(--fs-sm);
-  color: var(--ink-muted);
+  color: var(--text-muted);
   padding: var(--space-3);
   border: 1px dashed var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--r-md);
 }
 
 /* THE SCROLLER holds the axis; the names are laid over its left edge and
@@ -2603,8 +2603,8 @@ a.work-cal-chip:hover {
   overflow-x: auto;
   overflow-y: hidden;
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
 }
 .tl-inner {
   position: relative;
@@ -2623,7 +2623,7 @@ a.work-cal-chip:hover {
   position: absolute;
   top: 5px;
   font-size: var(--fs-xs);
-  color: var(--ink-muted);
+  color: var(--text-muted);
   padding-left: 4px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -2677,7 +2677,7 @@ a.work-cal-chip:hover {
   height: 22px;
   display: flex;
   align-items: center;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   padding: 0 var(--space-2);
   font-size: var(--fs-xs);
   overflow: hidden;
@@ -2698,9 +2698,9 @@ a.work-cal-chip:hover {
   text-overflow: ellipsis;
 }
 .tl-bar[data-tone="planned"] {
-  background: var(--surface-raised);
+  background: var(--surface-2);
   border-color: var(--border-strong);
-  color: var(--ink);
+  color: var(--text);
 }
 .tl-bar[data-tone="active"] {
   background: var(--info-soft);
@@ -2745,7 +2745,7 @@ a.work-cal-chip:hover {
   left: 0;
   top: 24px;
   z-index: 3;
-  background: var(--surface);
+  background: var(--surface-1);
   border-right: 1px solid var(--border-subtle);
 }
 .tl-name {
@@ -2755,7 +2755,7 @@ a.work-cal-chip:hover {
   height: 30px;
   padding: 0 var(--space-2);
   font-size: var(--fs-xs);
-  color: var(--ink);
+  color: var(--text);
   text-decoration: none;
   min-width: 0;
 }
@@ -2778,7 +2778,7 @@ a.work-cal-chip:hover {
 }
 .tl-aside-note {
   font-size: var(--fs-xs);
-  color: var(--ink-muted);
+  color: var(--text-muted);
 }
 .tl-chips {
   display: flex;
@@ -2792,9 +2792,9 @@ a.work-cal-chip:hover {
   max-width: 28ch;
   padding: 2px var(--space-2);
   border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
   font-size: var(--fs-xs);
-  color: var(--ink);
+  color: var(--text);
   text-decoration: none;
 }
 .tl-chip:hover {
