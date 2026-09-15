@@ -23,10 +23,10 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState, recordTable } from "~/components/common.tsx";
 import { PhaseTag } from "~/components/PhaseTag.tsx";
-import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
+import { useAgents, useClient, useEngineHealth, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, plural, tsKey } from "~/lib/format.ts";
+import { eventHistoryLabel, fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
   decisionLabel,
@@ -68,6 +68,7 @@ const PHASES = ["execute", "review", "onboarding", "subagent", "auxiliary", "jud
 export function ModelActivity() {
   const { socket } = useClient();
   const agents = useAgents();
+  const { data: engine } = useEngineHealth();
   const [phase, setPhase] = useParam("phase", "");
   const [role, setRole] = useParam("role", "");
   const [onlyFailed, setOnlyFailed] = useParam("failed", "");
@@ -437,7 +438,7 @@ export function ModelActivity() {
               >
                 {paging ? "Loading older phases" : `Load ${PAGE} older phases`}
               </Button>
-              <span>the event store keeps 30 days</span>
+              <span>{eventHistoryLabel(engine?.event_history_seconds)}</span>
             </>
           )
         }

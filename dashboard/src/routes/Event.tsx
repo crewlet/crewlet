@@ -10,7 +10,8 @@ import { useNavigator } from "~/app/router.tsx";
 import { QueryState, RECORD_MAX_HEIGHT } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, humanize } from "~/lib/format.ts";
+import { useEngineHealth } from "~/lib/store-hooks.ts";
+import { eventHistoryLabel, fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
 import {
   Button,
@@ -38,6 +39,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
   const now = useNow();
   const { data, loading, error } = useQuery("event", { id: eventId });
+  const { data: engine } = useEngineHealth();
 
   // A phase event has a first-class rendering; everything else gets its
   // payload shown honestly rather than being squeezed into a shape it is not.
@@ -100,7 +102,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
           !loading && !data
             ? {
                 title: "No event with that id",
-                hint: "The event store keeps 30 days. An id older than that, or from a different node's store, will not resolve.",
+                hint: `An id older than the retained record, or from a different node's store, will not resolve: ${eventHistoryLabel(engine?.event_history_seconds)}.`,
               }
             : undefined
         }

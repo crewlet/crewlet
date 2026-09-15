@@ -12,6 +12,7 @@ import { describe, expect, test } from "vitest";
 import {
   configValueKind,
   elapsedMs,
+  eventHistoryLabel,
   formatPhaseLLM,
   REDACTED,
   fmtCount,
@@ -201,5 +202,24 @@ describe("a value read from the redacted document", () => {
     expect(configValueKind("")).toBe("empty");
     expect(configValueKind(undefined)).toBe("empty");
     expect(configValueKind("U0FOUNDER")).toBe("literal");
+  });
+});
+
+describe("how far back the log goes", () => {
+  test("the floor is the engine's own, said in days", () => {
+    expect(eventHistoryLabel(30 * 24 * 3600)).toBe("the store keeps 30 days");
+    expect(eventHistoryLabel(24 * 3600)).toBe("the store keeps 1 day");
+    expect(eventHistoryLabel(6 * 3600)).toBe("the store keeps 6 hours");
+  });
+
+  test("an engine that did not report it says so rather than guessing", () => {
+    // An operator told the wrong floor stops paging early, so the honest
+    // answer to "I do not know" is that sentence, never a number this client
+    // picked.
+    for (const absent of [undefined, null, 0, -1, Number.NaN]) {
+      expect(eventHistoryLabel(absent)).toBe(
+        "this engine did not report how far back the log goes",
+      );
+    }
   });
 });

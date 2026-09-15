@@ -556,6 +556,13 @@ export interface EngineHealth {
   engine_started_at?: string;
   queue?: string;
   clients?: number;
+  /**
+   * How far back the event log can be read, in seconds: the hard bottom of
+   * paging, past which every page is empty for ever. Three screens restated
+   * it as literal copy while nothing on the wire carried it, so it is read
+   * from the engine now and named in one place (`lib/format.ts`).
+   */
+  event_history_seconds?: number;
   in_flight?: number;
   shutting_down?: boolean;
   posture?: string;

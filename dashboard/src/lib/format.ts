@@ -284,3 +284,23 @@ export function configValueKind(
   if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(value.trim())) return "reference";
   return secret ? "hidden" : "literal";
 }
+
+/**
+ * How far back the event log can be read, as a sentence, from what the engine
+ * reported.
+ *
+ * NOT A LITERAL. Three screens said "the store keeps 30 days" in their own
+ * copy while `store.EventHistory` was the only thing that decided it, so a
+ * change to the retention would have left all three lying with nothing to
+ * catch it. An engine that did not report the floor says so rather than
+ * guessing: an operator told the wrong floor stops paging early.
+ */
+export function eventHistoryLabel(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) {
+    return "this engine did not report how far back the log goes";
+  }
+  const days = Math.round(seconds / 86_400);
+  if (days >= 1) return `the store keeps ${plural(days, "day")}`;
+  const hours = Math.max(1, Math.round(seconds / 3_600));
+  return `the store keeps ${plural(hours, "hour")}`;
+}

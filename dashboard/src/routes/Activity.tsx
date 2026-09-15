@@ -31,9 +31,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { useClient, useEvents } from "~/lib/store-hooks.ts";
+import { useClient, useEngineHealth, useEvents } from "~/lib/store-hooks.ts";
 import { href } from "~/app/router.tsx";
-import { fmtDateTime, humanize, newestFirst, plural } from "~/lib/format.ts";
+import { eventHistoryLabel, fmtDateTime, humanize, newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { ErrorGlyph } from "@crewlethq/icons/glyphs";
 import {
@@ -73,6 +73,7 @@ const PAGE = 100;
 export function Activity() {
   const { socket } = useClient();
   const liveEvents = useEvents();
+  const { data: engine } = useEngineHealth();
   const now = useNow();
   const [category, setCategory] = useParam("category", "");
   const [actor, setActor] = useParam("actor", "");
@@ -304,7 +305,7 @@ export function Activity() {
             </Button>
             <span>
               {older.length > 0 && `${plural(older.length, "older row")} fetched · `}
-              the store keeps 30 days
+              {eventHistoryLabel(engine?.event_history_seconds)}
             </span>
           </>
         )
