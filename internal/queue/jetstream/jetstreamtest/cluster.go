@@ -282,9 +282,16 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	// can, short of never letting the port go — but it shortens the window
 	// from seconds to microseconds, and it turns the loss from a
 	// two-minute readiness timeout into an immediate retry.
-	if !PortFree(t.Context(), cfg.ClusterHost, cfg.ClusterPort) {
-		return fmt.Errorf("cluster member %d: route port %d was taken between "+
-			"this harness reserving it and the member starting", i, cfg.ClusterPort)
+	switch free, err := PortFree(t.Context(), cfg.ClusterHost, cfg.ClusterPort); {
+	case err != nil:
+		// NOT A RACE, so the retry above must not treat it as one: an
+		// address this host does not have, or a probe that never ran.
+		return fmt.Errorf("cluster member %d: route port %d on %q cannot be "+
+			"probed: %w", i, cfg.ClusterPort, cfg.ClusterHost, err)
+	case !free:
+		return fmt.Errorf("cluster member %d: %w — route port %d went between "+
+			"this harness reserving it and the member starting",
+			i, js.ErrRoutePortTaken, cfg.ClusterPort)
 	}
 	srv, err := js.StartServer(t.Context(), cfg)
 	if err != nil {
@@ -323,13 +330,21 @@ func hostPort(port int) string { return fmt.Sprintf("127.0.0.1:%d", port) }
 // THE HOST IS AN ARGUMENT, because a probe that assumes one is a probe that
 // can answer about an address the server never binds — which is exactly what a
 // hardcoded 127.0.0.1 did for a member left to listen on every interface.
-func PortFree(ctx context.Context, host string, port int) bool {
+//
+// AND A PROBE THAT COULD NOT ANSWER IS NOT AN ANSWER, which is why the error
+// comes back rather than being folded into the bool. [js.PortAvailable] draws
+// that line deliberately — an occupied port is (false, nil) and an address
+// this host does not have, a privileged port or a cancelled probe is
+// (false, err) — and collapsing it here put every one of those back under "the
+// port was taken", so a caller retried a configuration mistake three times and
+// then reported a race. That is the exact sentence [js.PortAvailable]'s own
+// doc says it exists to prevent.
+func PortFree(ctx context.Context, host string, port int) (bool, error) {
 	// THE ENGINE'S OWN PROBE, not a second one: [js.PortAvailable] is what
 	// a clustered member runs against its configured route port before it
 	// starts, and a harness asking the same question a different way is how
 	// one answer stops matching the other.
-	free, err := js.PortAvailable(ctx, host, port)
-	return free && err == nil
+	return js.PortAvailable(ctx, host, port)
 }
 
 // freePorts reserves n ports the OS is not using.

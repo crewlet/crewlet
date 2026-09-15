@@ -154,7 +154,10 @@ func TestThePortProbeSeesAHeldPort(t *testing.T) {
 	}
 	port := held.Addr().(*net.TCPAddr).Port
 
-	if PortFree(t.Context(), "127.0.0.1", port) {
+	switch free, err := PortFree(t.Context(), "127.0.0.1", port); {
+	case err != nil:
+		t.Fatalf("probing a held port reported a failure rather than an answer: %v", err)
+	case free:
 		t.Fatalf("the probe reports port %d free while this test holds it — a "+
 			"probe that cannot see a held port is a probe that never fires",
 			port)
@@ -162,10 +165,27 @@ func TestThePortProbeSeesAHeldPort(t *testing.T) {
 	if err := held.Close(); err != nil {
 		t.Fatalf("release the port: %v", err)
 	}
-	if !PortFree(t.Context(), "127.0.0.1", port) {
+	switch free, err := PortFree(t.Context(), "127.0.0.1", port); {
+	case err != nil:
+		t.Fatalf("probing a released port reported a failure: %v", err)
+	case !free:
 		t.Fatalf("the probe reports port %d taken after it was released — a "+
 			"probe that never passes would restart every cluster four times",
 			port)
+	}
+
+	// AND A PROBE THAT COULD NOT ANSWER SAYS SO, rather than reporting the
+	// port taken: a caller that cannot tell the two apart retries a
+	// configuration mistake as though it were a race, which is what
+	// [js.PortAvailable] draws the distinction to prevent.
+	// 192.0.2.0/24 is TEST-NET-1 (RFC 5737) and is never a local address.
+	free, err := PortFree(t.Context(), "192.0.2.1", port)
+	if free {
+		t.Error("an address this host does not have reported itself bindable")
+	}
+	if err == nil {
+		t.Error("an unbindable address came back as a port in use, so the " +
+			"harness would retry it as a lost race three times over")
 	}
 }
 

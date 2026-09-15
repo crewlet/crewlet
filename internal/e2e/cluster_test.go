@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/pages"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -91,19 +92,35 @@ func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n
 	t.Helper()
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
 		relays := mesh(t, n)
-		if c := startMeshOnce(t, relays, n, attempt); c != nil {
+		c, err := startMeshOnce(t, relays, n)
+		if err == nil {
 			return c
 		}
 		// THE FAILED ATTEMPT'S MESH GOES DOWN NOW, beside the members
 		// [startMeshOnce] already stopped: its relay listeners hold the
 		// ports, and the next attempt is about to ask for a fresh set.
 		relays.Stop()
+
+		// ONLY A LOST PORT IS RETRIED. Everything else a member can fail
+		// on — a company config that does not parse, an engine that will
+		// not start, a projector that will not attach — fails the same
+		// way every time, so retrying it spends three attempts to reach
+		// the same place and then reports a race that never happened,
+		// which is worse than the first failure said on its own.
+		if !errors.Is(err, jetstream.ErrRoutePortTaken) {
+			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
+				"cannot fix: %v (relays: %s)",
+				attempt, clusterStartAttempts, err, relays.Describe())
+		}
+		t.Logf("cluster attempt %d/%d lost a port race: %v (relays: %s)",
+			attempt, clusterStartAttempts, err, relays.Describe())
 	}
-	// Unreachable: the last attempt fails the test rather than returning.
+	t.Fatalf("no cluster came up in %d attempts — every one lost a port "+
+		"between reserving it and binding it", clusterStartAttempts)
 	return nil
 }
 
-func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *cluster {
+func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
 	t.Helper()
 	c := &cluster{relays: relays, nodes: make([]*node, n)}
 
@@ -140,7 +157,7 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *
 		// THE SUCCESSFUL ATTEMPT'S TEARDOWN IS THE TEST'S, so members
 		// live for the case that asked for them.
 		t.Cleanup(func() { stopAll(stops) })
-		return c
+		return c, nil
 	}
 
 	// EVERY MEMBER THIS ATTEMPT STARTED IS STOPPED BEFORE THE NEXT ONE,
@@ -159,14 +176,10 @@ func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n, attempt int) *
 	// every attempt — so registering teardown there is registering it for
 	// the wrong moment.
 	stopAll(stops)
-	if attempt < clusterStartAttempts {
-		t.Logf("cluster attempt %d/%d lost a race at member %d: %v "+
-			"(relays: %s)", attempt, clusterStartAttempts, failed, errs[failed],
-			relays.Describe())
-		return nil
-	}
-	t.Fatalf("member %d: %v (relays: %s)", failed, errs[failed], relays.Describe())
-	return nil
+	// THE ERROR GOES BACK rather than being judged here: whether it is
+	// worth another attempt is the caller's question, and it is the only
+	// frame that knows how many are left.
+	return nil, fmt.Errorf("member %d: %w", failed, errs[failed])
 }
 
 // stopAll runs every member's teardown, in reverse order within each member.
@@ -240,9 +253,17 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	//
 	// THE SAME HOST THE MEMBER BINDS, set below — a probe against a
 	// different address answers about a port the server never asks for.
-	if !jetstreamtest.PortFree(t.Context(), clusterHost, port) {
-		return fail(fmt.Errorf("route port %d was taken between this mesh "+
-			"reserving it and member %d starting", port, i))
+	switch free, err := jetstreamtest.PortFree(t.Context(), clusterHost, port); {
+	case err != nil:
+		// NOT A RACE: an address this host does not have, or a probe
+		// that never ran. Retrying it would spend every attempt on a
+		// mistake that answers the same way each time.
+		return fail(fmt.Errorf("route port %d on %q cannot be probed for "+
+			"member %d: %w", port, clusterHost, i, err))
+	case !free:
+		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
+			"reserving it and member %d starting",
+			jetstream.ErrRoutePortTaken, port, i))
 	}
 	boot := config.DefaultBootstrap()
 	boot.Node.ID = fmt.Sprintf("node-%d", i)

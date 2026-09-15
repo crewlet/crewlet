@@ -405,10 +405,10 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 				routeHostLabel(opts.Cluster.Host), probeErr)
 		case !free:
 			removeScratch(scratch)
-			return nil, fmt.Errorf("stream.cluster.port %d is already in use on %s, "+
+			return nil, fmt.Errorf("%w: stream.cluster.port %d is already in use on %s, "+
 				"so this member's route listener cannot bind and it could never form "+
 				"a route to a peer — free that port or give this node a different one",
-				opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
+				ErrRoutePortTaken, opts.Cluster.Port, routeHostLabel(opts.Cluster.Host))
 		}
 	}
 
@@ -479,10 +479,10 @@ func notReadyError(budget time.Duration, clustered bool,
 	// went to the log and the server carried on serving clients.
 	if clustered && routePort != 0 && !routed {
 		return fmt.Errorf(
-			"embedded nats server bound no route listener within %v: "+
-				"stream.cluster.port %d on %s was taken while this member "+
-				"was starting, so it can never form a route to a peer",
-			budget, routePort, routeHostLabel(routeHost))
+			"%w: embedded nats server bound no route listener within %v, "+
+				"so stream.cluster.port %d on %s was taken while this member "+
+				"was starting and it can never form a route to a peer",
+			ErrRoutePortTaken, budget, routePort, routeHostLabel(routeHost))
 	}
 	// THE BUDGET IS IN THE MESSAGE, and whether this member was waiting on
 	// peers: "did not become ready" alone sends an operator to the disk
@@ -777,6 +777,18 @@ func (q *Queue) runStreamHandler(ctx context.Context, h queue.StreamHandler, sub
 	}()
 	h(ctx, subject, ev)
 }
+
+// ErrRoutePortTaken is a clustered member whose route port was held by
+// something else — found before the bind by the probe, or after it by the
+// readiness failure that follows a listener which never came up.
+//
+// A SENTINEL because it is the one provisioning failure that is worth RETRYING
+// WITH A DIFFERENT NUMBER rather than reporting, and telling it apart from
+// everything else a boot can fail on is not something a caller should do by
+// matching text. The e2e harness retries on exactly this; a deterministic
+// failure — a bad company config, an engine that will not start — must fail
+// the first time rather than three times with a misleading diagnosis.
+var ErrRoutePortTaken = errors.New("cluster route port taken")
 
 // PortAvailable reports whether a port can still be bound on host right now.
 //

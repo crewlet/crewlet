@@ -3,6 +3,8 @@ package jetstreamtest
 import (
 	"fmt"
 	"testing"
+
+	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
 // Relays is a partitionable route MESH with no servers in it — the addressing
@@ -100,7 +102,8 @@ func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 			// goroutine instead, so the retry that exists for exactly
 			// this never runs: the cluster harness learned the same
 			// lesson when StartCluster discarded its partial cluster.
-			return nil, fmt.Errorf("start forwarder %d->%d: %w", f.from, f.to, err)
+			return nil, fmt.Errorf("start forwarder %d->%d: %w: %w",
+				f.from, f.to, js.ErrRoutePortTaken, err)
 		}
 	}
 	t.Cleanup(c.shutdown)
