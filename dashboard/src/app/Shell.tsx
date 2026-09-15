@@ -27,8 +27,6 @@ import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
 import { Badge, Button, ButtonLink, Segmented, cx } from "~/ui/primitives.tsx";
-import { isComposing } from "~/ui/keys.ts";
-import { focusables, isModalOpen, useModal } from "~/ui/useModal.ts";
 import {
   useAgents,
   useClient,
@@ -41,8 +39,12 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import {
+  focusables,
+  isComposing,
+  isModalLayerOpen,
   type ThemePreference,
   useDensityPreference,
+  useModalLayer,
   useNow,
   useThemePreference,
 } from "@crewlethq/ui";
@@ -102,7 +104,7 @@ export function Shell({ children }: { children: ReactNode }) {
   // write whose outcome the operator has not seen yet included.
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      if (e.defaultPrevented || isComposing(e) || isModalOpen()) return;
+      if (e.defaultPrevented || isComposing(e) || isModalLayerOpen()) return;
       if (isSearchShortcut(e)) {
         e.preventDefault();
         setPaletteOpen(true);
@@ -388,7 +390,7 @@ function SectionsDrawer({
   toggle: RefObject<HTMLElement | null>;
   onClose: () => void;
 }) {
-  const modal = useModal({
+  const modal = useModalLayer({
     onClose,
     // The row for the screen the reader is on, which is where the rail's
     // own highlight already points, else the first control.

@@ -22,7 +22,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { AgentRow, CompanyDocument } from "~/protocol/index.ts";
-import { focusables } from "~/ui/useModal.ts";
 import type { ChartKind } from "./BuilderContext.tsx";
 import { CanvasView } from "./CanvasView.tsx";
 import { COMPANY_KEY, seatKey, unitKey } from "./model/keys.ts";
@@ -37,6 +36,7 @@ import {
   type BuilderSpies,
   type HarnessProbe,
 } from "./viewTestkit.tsx";
+import { focusables } from "@crewlethq/ui";
 
 let restore: () => void;
 beforeEach(() => {

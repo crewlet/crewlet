@@ -39,8 +39,6 @@ import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { useListbox } from "~/ui/useListbox.ts";
-import { useModal } from "~/ui/useModal.ts";
 import {
   type GlyphProps,
   AccountTreeGlyph,
@@ -53,6 +51,7 @@ import {
   SmartToyGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
+import { useListbox, useModalLayer } from "@crewlethq/ui";
 
 interface Hit {
   id: string;
@@ -104,7 +103,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const modal = useModal({ onClose });
+  const modal = useModalLayer({ onClose });
 
   const index = useMemo(() => indexOrg(org), [org]);
 

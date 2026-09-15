@@ -29,8 +29,8 @@
 import { type ComponentType, type ReactNode, useRef } from "react";
 import { ModalPanel } from "./Dialog.tsx";
 import { Button } from "./primitives.tsx";
-import { focusables, useModal } from "./useModal.ts";
 import { type GlyphProps, CloseGlyph } from "@crewlethq/icons/glyphs";
+import { focusables, useModalLayer } from "@crewlethq/ui";
 
 export function Drawer({
   title,
@@ -52,7 +52,7 @@ export function Drawer({
   onSubmit?: () => void;
 }) {
   const body = useRef<HTMLDivElement>(null);
-  const modal = useModal({
+  const modal = useModalLayer({
     onClose,
     dismissable,
     initialFocus: () => (body.current ? (focusables(body.current)[0] ?? null) : null),

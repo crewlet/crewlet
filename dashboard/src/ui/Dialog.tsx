@@ -21,7 +21,7 @@
 
 import type { GlyphProps } from "@crewlethq/icons/glyphs";
 import type { CSSProperties, ComponentType, ReactNode } from "react";
-import { useModal } from "./useModal.ts";
+import { useModalLayer } from "@crewlethq/ui";
 
 export function Dialog({
   title,
@@ -44,7 +44,7 @@ export function Dialog({
   /** When given, the shell is a form and Enter submits it. */
   onSubmit?: () => void;
 }) {
-  const modal = useModal({ onClose, dismissable });
+  const modal = useModalLayer({ onClose, dismissable });
   return (
     <div className="veil" ref={modal.veilRef} role="presentation">
       <ModalPanel

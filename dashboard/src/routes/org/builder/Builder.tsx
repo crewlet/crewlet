@@ -56,7 +56,6 @@ import type { ConfigProblem, ConfigWarning } from "~/protocol/index.ts";
 import { Kbd } from "~/ui/Kbd.tsx";
 import { Menu, type MenuEntry } from "~/ui/Menu.tsx";
 import { Dialog } from "~/ui/Dialog.tsx";
-import { isComposing } from "~/ui/keys.ts";
 import {
   Badge,
   Banner,
@@ -70,7 +69,6 @@ import {
   type Tone,
 } from "~/ui/primitives.tsx";
 import { ToastProvider, useToast } from "~/ui/Toast.tsx";
-import { isModalOpen } from "~/ui/useModal.ts";
 import {
   BuilderContext,
   keepsTheLens,
@@ -143,6 +141,7 @@ import {
   VisibilityGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
+import { LayerHost, isComposing, isModalLayerOpen } from "@crewlethq/ui";
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -461,14 +460,19 @@ export function Builder({
   return (
     <div ref={container} className="org-builder">
       <ToastProvider>
-        <Lens
-          surfaces={surfaces}
-          transport={transport}
-          clock={clock}
-          storage={kept}
-          keys={keys}
-          container={container}
-        />
+        {/* The builder's own layer host. A fullscreen element renders only its
+            own subtree, so a dialog portalled to the application's root host
+            while the canvas is fullscreen is not painted at all. */}
+        <LayerHost>
+          <Lens
+            surfaces={surfaces}
+            transport={transport}
+            clock={clock}
+            storage={kept}
+            keys={keys}
+            container={container}
+          />
+        </LayerHost>
       </ToastProvider>
     </div>
   );
@@ -737,7 +741,7 @@ function Lens({
   // text field (where the same keys undo typing) and never under a modal.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.defaultPrevented || isComposing(e) || isModalOpen()) return;
+      if (e.defaultPrevented || isComposing(e) || isModalLayerOpen()) return;
       if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
       if (e.code !== "KeyZ" && e.key.toLowerCase() !== "z") return;
       const root = container.current;

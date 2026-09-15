@@ -48,7 +48,7 @@ import { useId, useRef, useState, type ReactNode } from "react";
 
 import { Problems } from "./Problems.tsx";
 import { complete, rank, referenceAt, type Typing } from "./secretref.ts";
-import { useListbox } from "./useListbox.ts";
+import { useListbox } from "@crewlethq/ui";
 
 export type FieldKind =
   "text" | "multiline" | "secret" | "url" | "id" | "choice" | "handle" | "email";

@@ -21,11 +21,10 @@
 import { useRef } from "react";
 import { ModalPanel } from "~/ui/Dialog.tsx";
 import { Badge, Button, KeyValue } from "~/ui/primitives.tsx";
-import { focusables, useModal } from "~/ui/useModal.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, focusables, useModalLayer, useNow } from "@crewlethq/ui";
 import {
   CloseGlyph,
   InfoGlyph,
@@ -55,7 +54,7 @@ export function EnginePanel({
   // for; without it the panel itself takes focus, so its name is announced
   // and the readout that follows is read in order.
   const body = useRef<HTMLDivElement>(null);
-  const modal = useModal({
+  const modal = useModalLayer({
     onClose,
     initialFocus: () => {
       const root = body.current;

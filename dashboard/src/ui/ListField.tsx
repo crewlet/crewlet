@@ -40,7 +40,6 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { isComposing } from "./keys.ts";
 import { Button } from "./primitives.tsx";
 import { Problems } from "./Problems.tsx";
 import {
@@ -49,6 +48,7 @@ import {
   ArrowUpwardGlyph,
   DeleteGlyph,
 } from "@crewlethq/icons/glyphs";
+import { isComposing } from "@crewlethq/ui";
 
 let minted = 0;
 const mint = () => `item-${++minted}`;

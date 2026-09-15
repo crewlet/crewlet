@@ -280,6 +280,39 @@ test("a name is chosen with the arrows and Enter", () => {
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
+// THE HIGHLIGHTED NAME IS BROUGHT INTO VIEW. A company with more secrets than
+// the list is tall left the arrows moving a highlight nobody could see: the
+// list stayed at the top and the reader arrowed into an empty box. It scrolls
+// the LIST and nothing else, by scrollTop, because scrollIntoView scrolls
+// every scrollable ancestor it finds and does not exist in jsdom at all.
+test("arrowing past the bottom of the list scrolls the highlighted name into view", () => {
+  render(<Editable secrets={["A_ONE", "A_TWO", "A_THREE", "A_FOUR"]} />);
+  const input = screen.getByLabelText("Webhook secret") as HTMLInputElement;
+  fireEvent.change(input, { target: { value: "$A" } });
+  fireEvent.keyUp(input, { key: "A" });
+
+  // jsdom lays nothing out, so the geometry is declared: a box 40px tall
+  // holding four 20px rows, scrolled to the top.
+  const list = screen.getByRole("listbox");
+  let scrolled = 0;
+  Object.defineProperty(list, "scrollTop", {
+    configurable: true,
+    get: () => scrolled,
+    set: (next: number) => {
+      scrolled = Math.max(0, next);
+    },
+  });
+  list.getBoundingClientRect = () => ({ top: 0, bottom: 40 }) as DOMRect;
+  for (const [i, row] of screen.getAllByRole("option").entries()) {
+    row.getBoundingClientRect = () => ({ top: i * 20, bottom: i * 20 + 20 }) as DOMRect;
+  }
+
+  // Down to the third row, whose bottom (60) is past the box's (40).
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  fireEvent.keyDown(input, { key: "ArrowDown" });
+  expect(scrolled).toBe(20);
+});
+
 // TAB TAKES THE HIGHLIGHTED NAME, which is what it means in every other
 // completion list, rather than leaving the field with the list open.
 test("Tab takes the highlighted name", () => {

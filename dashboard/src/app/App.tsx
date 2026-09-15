@@ -9,6 +9,7 @@
  */
 
 import { Component, type ReactNode } from "react";
+import { LayerHost } from "@crewlethq/ui";
 import { Shell } from "./Shell.tsx";
 import { ToastProvider } from "~/ui/Toast.tsx";
 import { Button, Code, Empty } from "~/ui/primitives.tsx";
@@ -148,11 +149,18 @@ export function App() {
     // outcome has to survive the navigation the write causes, and a provider
     // mounted per screen is unmounted by exactly that.
     <ToastProvider>
-      <Shell>
-        <ScreenBoundary resetKey={route.hash}>
-          <Screen />
-        </ScreenBoundary>
-      </Shell>
+      {/* Every overlay portals into the nearest LayerHost, so the one at the
+          root is what puts a dialog over the whole application rather than
+          inside the screen that opened it. The builder's fullscreen container
+          mounts a second one, because a fullscreen element renders only its
+          own subtree. */}
+      <LayerHost>
+        <Shell>
+          <ScreenBoundary resetKey={route.hash}>
+            <Screen />
+          </ScreenBoundary>
+        </Shell>
+      </LayerHost>
     </ToastProvider>
   );
 }

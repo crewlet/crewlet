@@ -70,9 +70,9 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Button, cx } from "./primitives.tsx";
-import { usePopup } from "./useModal.ts";
 import { VIEW_CHANGE_EVENT, placePopup } from "./viewport.ts";
 import { type GlyphProps, CheckGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
+import { usePopupLayer } from "@crewlethq/ui";
 
 export interface MenuItem {
   kind?: "item";
@@ -191,7 +191,7 @@ export function Menu({
     [giveFocusBack, setOpen],
   );
 
-  const popup = usePopup({
+  const popup = usePopupLayer({
     open,
     onDismiss: (reason) => close(reason === "escape"),
   });
