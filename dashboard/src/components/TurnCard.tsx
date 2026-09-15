@@ -16,10 +16,10 @@ import { useState } from "react";
 import { Badge, Button, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { PhaseCard } from "./PhaseCard.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import { useNavigator } from "~/app/router.tsx";
 import type { TurnGroup } from "~/lib/phases.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 export function TurnCard({
   group,
@@ -101,7 +101,11 @@ export function TurnCard({
           dateTime={group.live ? group.startedAt : group.at}
           title={fmtDateTime(group.live ? group.startedAt : group.at)}
         >
-          {group.live ? fmtElapsed(now - tsKey(group.startedAt)) : relTime(group.at, now)}
+          {group.live ? (
+            <RelativeTime mode="elapsed" value={group.startedAt} now={now} />
+          ) : (
+            <RelativeTime value={group.at} now={now} />
+          )}
         </time>
       </header>
 

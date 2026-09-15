@@ -18,15 +18,12 @@ import {
   fmtDuration,
   fmtPct,
   humanize,
-  inTime,
   newestFirst,
   oldestFirst,
   parseUTC,
   plural,
-  relTime,
   splitConversationKey,
   tsKey,
-  fmtElapsed,
 } from "./format.ts";
 
 describe("timestamps", () => {
@@ -75,30 +72,6 @@ describe("timestamps", () => {
       .sort(newestFirst)
       .map((r) => r.id);
     expect(once).toEqual(twice);
-  });
-});
-
-describe("relative time", () => {
-  const now = Date.parse("2026-01-01T12:00:00Z");
-
-  test("reads the instant it is GIVEN, never the clock", () => {
-    // Every relative time on a screen has to agree with every other, and a
-    // component reading its own clock re-renders on its own schedule and
-    // disagrees with the row above it. It is also what makes these strings
-    // actually advance instead of freezing until an unrelated push lands.
-    expect(relTime("2026-01-01T11:56:00Z", now)).toBe("4m ago");
-    expect(relTime("2026-01-01T12:00:00Z", now)).toBe("just now");
-    expect(relTime("2026-01-01T09:00:00Z", now)).toBe("3h ago");
-  });
-
-  test("a future stamp reads forwards rather than as a negative age", () => {
-    expect(relTime("2026-01-01T12:30:00Z", now)).toBe("in 30m");
-    expect(inTime("2026-01-01T11:00:00Z", now)).toBe("due");
-  });
-
-  test("a missing stamp is an em dash, not the epoch", () => {
-    expect(relTime(undefined, now)).toBe("—");
-    expect(inTime("", now)).toBe("—");
   });
 });
 
@@ -167,35 +140,6 @@ describe("counts and their nouns", () => {
 
   test("a large count is grouped", () => {
     expect(plural(12000, "event")).toBe(`${(12000).toLocaleString()} events`);
-  });
-});
-
-describe("a live counter reads as a clock, not as a glitch", () => {
-  test("whole seconds — never milliseconds or tenths", () => {
-    // The live row churned through "0 ms", "1.4 s", "1.9 s" once a second.
-    expect(fmtElapsed(0)).toBe("0s");
-    expect(fmtElapsed(340)).toBe("0s");
-    expect(fmtElapsed(1400)).toBe("1s");
-    expect(fmtElapsed(1900)).toBe("1s");
-    expect(fmtElapsed(59_000)).toBe("59s");
-  });
-
-  test("a clock skew never shows a negative or a future", () => {
-    // A seat's clock and the browser's disagree by a few hundred
-    // milliseconds, and "in 1s" for something already running is the one
-    // reading that is certainly wrong.
-    expect(fmtElapsed(-800)).toBe("0s");
-  });
-
-  test("minutes and hours", () => {
-    expect(fmtElapsed(72_000)).toBe("1m 12s");
-    expect(fmtElapsed(3_800_000)).toBe("1h 3m");
-  });
-
-  test("a missing span is a dash, not a zero", () => {
-    expect(fmtElapsed(null)).toBe("—");
-    expect(fmtElapsed(undefined)).toBe("—");
-    expect(fmtElapsed(NaN)).toBe("—");
   });
 });
 

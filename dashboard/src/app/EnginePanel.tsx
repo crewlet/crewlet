@@ -25,8 +25,8 @@ import { Icon } from "~/ui/Icon.tsx";
 import { focusables, useModal } from "~/ui/useModal.ts";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime } from "~/lib/format.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 export function EnginePanel({
   onClose,
@@ -151,15 +151,25 @@ export function EnginePanel({
               ["Dashboard clients", engine?.clients ?? "—"],
               [
                 "Engine up since",
-                engine?.engine_started_at
-                  ? `${fmtDateTime(engine.engine_started_at)} (${relTime(engine.engine_started_at, now)})`
-                  : "—",
+                engine?.engine_started_at ? (
+                  <>
+                    {fmtDateTime(engine.engine_started_at)} (
+                    <RelativeTime value={engine.engine_started_at} now={now} />)
+                  </>
+                ) : (
+                  "—"
+                ),
               ],
               [
                 "Process up since",
-                engine?.started_at
-                  ? `${fmtDateTime(engine.started_at)} (${relTime(engine.started_at, now)})`
-                  : "—",
+                engine?.started_at ? (
+                  <>
+                    {fmtDateTime(engine.started_at)} (
+                    <RelativeTime value={engine.started_at} now={now} />)
+                  </>
+                ) : (
+                  "—"
+                ),
               ],
             ]}
           />

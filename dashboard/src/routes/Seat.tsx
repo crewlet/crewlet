@@ -58,10 +58,8 @@ import {
   formatPhaseLLM,
   humanize,
   plural,
-  relTime,
   splitConversationKey,
 } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import {
   fromLiveCall,
   fromPhaseEvent,
@@ -71,6 +69,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 type Tab = "overview" | "model" | "memory" | "cost" | "access";
 
@@ -250,7 +249,12 @@ export function SeatScreen({ handle }: { handle: string }) {
           <span>
             <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
             {agent.last_error.phase && ` (during ${agent.last_error.phase})`}
-            {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
+            {agent.last_error.at && (
+              <>
+                {" · "}
+                <RelativeTime value={agent.last_error.at} now={now} />
+              </>
+            )}
           </span>
           {agent.last_error.event_id && (
             <a className="t-link" href={href(["events", agent.last_error.event_id])}>

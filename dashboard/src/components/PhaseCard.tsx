@@ -44,7 +44,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Badge, Button, Code, Disclosure, PhaseTag, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, relTime, tsKey } from "~/lib/format.ts";
+import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
   ledgerOf,
@@ -53,8 +53,8 @@ import {
   type Round,
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 function ToolRow({
   name,
@@ -350,7 +350,11 @@ export function PhaseCard({
           dateTime={record.live ? record.startedAt : record.at}
           title={fmtDateTime(record.live ? record.startedAt : record.at)}
         >
-          {record.live ? fmtElapsed(now - tsKey(record.startedAt)) : relTime(record.at, now)}
+          {record.live ? (
+            <RelativeTime mode="elapsed" value={record.startedAt} now={now} />
+          ) : (
+            <RelativeTime value={record.at} now={now} />
+          )}
         </time>
       </header>
 

@@ -13,9 +13,9 @@ import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.ts
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, fmtDuration, relTime, plural } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 /**
  * The lease table has no push behind it, so it polls — at 15 seconds, chosen
@@ -216,9 +216,7 @@ export function Fleet() {
                 sortValue: (n) => n.started_at ?? "",
                 cell: (n) =>
                   n.started_at ? (
-                    <span className="t-caption" title={fmtDateTime(n.started_at)}>
-                      {relTime(n.started_at, now)}
-                    </span>
+                    <RelativeTime className="t-caption" value={n.started_at} now={now} />
                   ) : (
                     <span className="faint">—</span>
                   ),

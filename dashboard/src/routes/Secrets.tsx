@@ -32,10 +32,10 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useToast } from "~/ui/Toast.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
-import { fmtDateTime, relTime, tsKey, plural } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 /**
  * How a read that did not answer is reported to the operator.
@@ -249,11 +249,7 @@ export function Secrets() {
                 header: "Updated",
                 shrink: true,
                 sortValue: (s) => tsKey(s.updated_at),
-                cell: (s) => (
-                  <span className="t-caption" title={fmtDateTime(s.updated_at)}>
-                    {relTime(s.updated_at, now)}
-                  </span>
-                ),
+                cell: (s) => <RelativeTime className="t-caption" value={s.updated_at} now={now} />,
               },
               {
                 key: "act",

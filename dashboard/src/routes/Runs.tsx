@@ -19,9 +19,9 @@ import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
-import { fmtDateTime, fmtDuration, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 const STATUS_TONE: Record<string, "positive" | "caution" | "critical" | "info" | "neutral"> = {
   running: "info",
@@ -207,9 +207,11 @@ export function Runs() {
                 shrink: true,
                 sortValue: (r) => tsKey(r.updated_at || r.started_at),
                 cell: (r) => (
-                  <span className="t-caption" title={fmtDateTime(r.updated_at || r.started_at)}>
-                    {relTime(r.updated_at || r.started_at, now)}
-                  </span>
+                  <RelativeTime
+                    className="t-caption"
+                    value={r.updated_at || r.started_at}
+                    now={now}
+                  />
                 ),
               },
             ]}

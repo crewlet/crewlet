@@ -88,47 +88,6 @@ export function fmtDate(ts: string | null | undefined): string {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
 }
 
-/**
- * "4m ago", "2h ago", "just now".
- *
- * `now` is a REQUIRED argument rather than a call to the clock inside. Every
- * relative time on a screen has to agree with every other, and a component
- * that read the clock itself would re-render on its own schedule and disagree
- * with the row above it. The shell ticks one clock (see `lib/clock.ts`) and
- * passes the instant down — which is also what makes these strings actually
- * advance, instead of freezing at whatever they were when an unrelated push
- * last happened to re-render them.
- */
-export function relTime(ts: string | null | undefined, now: number): string {
-  const at = tsKey(ts);
-  if (!at) return "—";
-  const secs = Math.round((now - at) / 1000);
-  if (secs < 0) return inTime(ts, now);
-  if (secs < 5) return "just now";
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-  return fmtDate(ts);
-}
-
-/** "in 4m" — the same rules, forward. */
-export function inTime(ts: string | null | undefined, now: number): string {
-  const at = tsKey(ts);
-  if (!at) return "—";
-  const secs = Math.round((at - now) / 1000);
-  if (secs <= 0) return "due";
-  if (secs < 60) return `in ${secs}s`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `in ${mins}m`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `in ${hours}h`;
-  return `in ${Math.floor(hours / 24)}d`;
-}
-
 /** A duration in ms as the shortest honest string. */
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return "—";
@@ -138,27 +97,6 @@ export function fmtDuration(ms: number | null | undefined): string {
   const m = Math.floor(s / 60);
   const rem = Math.round(s % 60);
   if (m < 60) return `${m}m ${rem}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
-/**
- * How long something has been running, for a clock that reruns every second.
- *
- * Distinct from [fmtDuration], which measures a FINISHED span and is free to
- * be precise: sub-second milliseconds and a tenth of a second are meaningful
- * for a call that took 340 ms. On a live counter they are noise — the number
- * churns through "0 ms", "1.4 s", "1.9 s" and reads as a glitch rather than a
- * clock. Whole seconds from the first tick, and never below zero, because a
- * seat's clock and the browser's disagree by a few hundred milliseconds and a
- * "-1 s" or an "in 1s" is the one reading that is certainly wrong.
- */
-export function fmtElapsed(ms: number | null | undefined): string {
-  if (ms == null || !Number.isFinite(ms)) return "—";
-  const s = Math.max(0, Math.floor(ms / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
   const h = Math.floor(m / 60);
   return `${h}h ${m % 60}m`;
 }

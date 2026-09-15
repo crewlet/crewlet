@@ -7,8 +7,8 @@ import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
   fired: "positive",
@@ -118,9 +118,7 @@ export function Schedules() {
                 sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
                 cell: (s) =>
                   s.next_run ? (
-                    <span className="t-caption" title={fmtDateTime(s.next_run)}>
-                      {inTime(s.next_run, now)}
-                    </span>
+                    <RelativeTime className="t-caption" value={s.next_run} now={now} />
                   ) : (
                     <span className="faint">—</span>
                   ),
@@ -133,9 +131,7 @@ export function Schedules() {
                 cell: (s) =>
                   s.last_run ? (
                     <span className="row gap-1">
-                      <span className="t-caption" title={fmtDateTime(s.last_run)}>
-                        {relTime(s.last_run, now)}
-                      </span>
+                      <RelativeTime className="t-caption" value={s.last_run} now={now} />
                       {s.last_outcome && (
                         <Badge tone={OUTCOME_TONE[s.last_outcome] ?? "neutral"}>
                           {s.last_outcome}
@@ -166,11 +162,7 @@ export function Schedules() {
                 header: "Fired",
                 shrink: true,
                 sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => (
-                  <span className="t-caption" title={fmtDateTime(r.fired_at)}>
-                    {relTime(r.fired_at, now)}
-                  </span>
-                ),
+                cell: (r) => <RelativeTime className="t-caption" value={r.fired_at} now={now} />,
               },
               { key: "name", header: "Schedule", sortValue: (r) => r.name, cell: (r) => r.name },
               {

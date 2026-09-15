@@ -25,8 +25,8 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { tsKey } from "~/lib/format.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 export function Conversations() {
   const org = useOrg();
@@ -141,14 +141,14 @@ export function Conversations() {
                   header: "Opened",
                   shrink: true,
                   sortValue: (c) => tsKey(c.opened_at),
-                  cell: (c) => <span className="t-caption">{relTime(c.opened_at, now)}</span>,
+                  cell: (c) => <RelativeTime className="t-caption" value={c.opened_at} now={now} />,
                 },
                 {
                   key: "last",
                   header: "Last message",
                   shrink: true,
                   sortValue: (c) => tsKey(c.last_at),
-                  cell: (c) => <span className="t-caption">{relTime(c.last_at, now)}</span>,
+                  cell: (c) => <RelativeTime className="t-caption" value={c.last_at} now={now} />,
                 },
               ]}
             />

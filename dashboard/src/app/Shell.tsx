@@ -41,8 +41,12 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg } from "~/lib/seats.ts";
-import { useNow } from "~/lib/clock.ts";
-import { useDensityPreference, useThemePreference, type ThemePreference } from "@crewlethq/ui";
+import {
+  type ThemePreference,
+  useDensityPreference,
+  useNow,
+  useThemePreference,
+} from "@crewlethq/ui";
 import { onTokenRequested } from "~/protocol/index.ts";
 
 export function Shell({ children }: { children: ReactNode }) {

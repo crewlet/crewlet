@@ -42,8 +42,8 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
+import { useNow } from "@crewlethq/ui";
 
 /** How far back the activity strip reaches, and how finely it is cut. */
 const STRIP_MINUTES = 60;

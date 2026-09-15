@@ -39,9 +39,9 @@ import {
 import { DataTable } from "~/ui/DataTable.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 type Lens = "active" | "audit" | "diff";
 
@@ -168,9 +168,7 @@ export function ConfigScreen() {
                       shrink: true,
                       sortValue: (r) => tsKey(r.created_at),
                       cell: (r) => (
-                        <span className="t-caption" title={fmtDateTime(r.created_at)}>
-                          {relTime(r.created_at, now)}
-                        </span>
+                        <RelativeTime className="t-caption" value={r.created_at} now={now} />
                       ),
                     },
                     {

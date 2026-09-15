@@ -29,8 +29,8 @@ import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.t
 import { Icon } from "~/ui/Icon.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtDateTime, fmtExact, fmtPct, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 const WINDOWS = ["1", "7", "30"] as const;
 
@@ -139,7 +139,13 @@ export function Spend() {
             <Stat
               icon="clock"
               label="Counted through"
-              value={tokens?.aggregated_through ? relTime(tokens.aggregated_through, now) : "—"}
+              value={
+                tokens?.aggregated_through ? (
+                  <RelativeTime value={tokens.aggregated_through} now={now} />
+                ) : (
+                  "—"
+                )
+              }
               sub={
                 tokens?.aggregated_through
                   ? fmtDateTime(tokens.aggregated_through)

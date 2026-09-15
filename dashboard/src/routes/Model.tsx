@@ -27,8 +27,7 @@ import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtCount, fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
   decisionLabel,
@@ -39,6 +38,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 const PAGE = 60;
 
@@ -235,9 +235,9 @@ export function ModelActivity() {
         // rounds deep read "0 ms".
         cell: (r) =>
           r.live ? (
-            <span className="t-num">{fmtElapsed(now - tsKey(r.startedAt))}</span>
+            <RelativeTime className="t-num" mode="elapsed" value={r.startedAt} now={now} />
           ) : (
-            <span className="t-caption">{relTime(r.at, now)}</span>
+            <RelativeTime className="t-caption" value={r.at} now={now} />
           ),
         sortValue: (r) => Date.parse(r.at) || 0,
       },

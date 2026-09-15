@@ -11,9 +11,9 @@ import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Code, CopyButton, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtDateTime, humanize, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
+import { RelativeTime, useNow } from "@crewlethq/ui";
 
 export function EventScreen({ eventId }: { eventId: string }) {
   const nav = useNavigator();
@@ -92,7 +92,13 @@ export function EventScreen({ eventId }: { eventId: string }) {
                       {data.type}
                     </code>,
                   ],
-                  ["When", `${fmtDateTime(data.timestamp)} · ${relTime(data.timestamp, now)}`],
+                  [
+                    "When",
+                    <span key="when">
+                      {fmtDateTime(data.timestamp)} ·{" "}
+                      <RelativeTime value={data.timestamp} now={now} />
+                    </span>,
+                  ],
                   ["Actor", data.actor || <span className="faint">the engine itself</span>],
                   ["Source", data.source || <span className="faint">—</span>],
                   ["Category", humanize(data.category) || "system"],

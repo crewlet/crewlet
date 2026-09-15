@@ -12,8 +12,7 @@ import type { ReactNode } from "react";
 import { Avatar, Badge, Button, cx } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { href } from "~/app/router.tsx";
-import { fmtDateTime, fmtTime, humanize, relTime } from "~/lib/format.ts";
-import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
 import {
   runState,
@@ -26,6 +25,7 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
+import { RelativeTime, formatRelative, useNow } from "@crewlethq/ui";
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
@@ -106,7 +106,7 @@ export function SeatCard({
             round {call.round_num >= 0 ? call.round_num + 1 : "—"}
           </span>
           <span className="spacer" />
-          <span className="t-caption">{relTime(call.updated_at, now)}</span>
+          <RelativeTime className="t-caption" value={call.updated_at} now={now} />
         </div>
       )}
       {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
@@ -134,11 +134,7 @@ export function AttentionRow({ item }: { item: Attention }) {
         </span>
         <span className="t-caption">{item.detail}</span>
       </span>
-      {item.at && (
-        <time className="t-caption nowrap" dateTime={item.at} title={fmtDateTime(item.at)}>
-          {relTime(item.at, now)}
-        </time>
-      )}
+      {item.at && <RelativeTime className="t-caption nowrap" value={item.at} now={now} />}
     </>
   );
   if (!item.path) {
@@ -182,7 +178,9 @@ export function EventRow({
       <time
         className="feed-time"
         dateTime={event.timestamp}
-        title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
+        title={[fmtDateTime(event.timestamp), formatRelative(event.timestamp, now)]
+          .filter(Boolean)
+          .join(" · ")}
       >
         {showDate ? fmtDateTime(event.timestamp) : fmtTime(event.timestamp)}
       </time>
