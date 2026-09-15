@@ -168,3 +168,48 @@ func TestThePortProbeSeesAHeldPort(t *testing.T) {
 			port)
 	}
 }
+
+// A FAILED ATTEMPT HANDS BACK WHAT IT STARTED, so the retry can take it down.
+//
+// # Why discarding it defeats the retry
+//
+// Every member's shutdown is registered with t.Cleanup, which runs when the
+// TEST ends — not when an attempt fails. So a factory that returns nil on
+// error leaves the members it did start holding their route listeners for the
+// whole of the retry, and the next attempt draws its ports from a machine
+// still holding the old ones. That is precisely the port contention
+// [withFreshPorts] exists to escape, reintroduced by the escape itself.
+//
+// Both factories are checked, because the two disagreed: the relay path
+// returned the partial cluster and the direct path returned nil.
+func TestAFailedStartHandsBackWhatItStarted(t *testing.T) {
+	t.Parallel()
+
+	// A CLUSTER THAT CAME UP is the control: shutdown must be safe to call
+	// on the way out, because the retry path calls it and so does the
+	// test's own cleanup.
+	c := StartCluster(t, 1, js.Config{})
+	if len(c.Servers) != 1 {
+		t.Fatalf("a one-member cluster reports %d server(s)", len(c.Servers))
+	}
+	// TWICE, which is what actually happens: withFreshPorts on a failed
+	// attempt, then t.Cleanup at the end.
+	c.shutdown()
+	c.shutdown()
+
+	// AND A HALF-BUILT ONE IS STILL A CLUSTER. start appends to Servers
+	// before it can fail on the member after, so the value a factory
+	// discards is never empty — which is the whole defect.
+	partial := &Cluster{}
+	port := freePorts(t, 1)[0]
+	cfg := memberConfig(js.Config{}, 0, 1, port, []string{routeURL(port)})
+	cfg.ClusterHost = "127.0.0.1"
+	if err := partial.start(t, cfg, 0); err != nil {
+		t.Fatalf("start a member: %v", err)
+	}
+	if len(partial.Servers) != 1 {
+		t.Fatal("a member that started is not recorded, so a failed attempt " +
+			"has nothing to hand back and nothing to shut down")
+	}
+	partial.shutdown()
+}

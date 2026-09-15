@@ -62,7 +62,16 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		c := &Cluster{}
 		for i := range n {
 			if err := c.start(t, memberConfig(base, i, n, ports[i], routes), i); err != nil {
-				return nil, err
+				// THE PARTIAL CLUSTER GOES BACK WITH THE ERROR, so
+				// [withFreshPorts] can take it down before retrying.
+				// Discarded, the members that DID start keep their
+				// route listeners — their shutdown is registered with
+				// t.Cleanup and so runs at the end of the test, not at
+				// the end of this attempt — and the next attempt then
+				// draws ports from a machine still holding the old
+				// ones. That is the contention the retry exists to
+				// escape, left in place by the retry itself.
+				return c, err
 			}
 		}
 
