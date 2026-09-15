@@ -878,7 +878,20 @@ func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bo
 	// which is the exact shape the budget below was added to remove.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancelLookup()
+	// AND ITS BREADCRUMB, because a budget without one just moves where
+	// the silence is. This is the FIRST call to reach the metadata group
+	// on this path, so a member stalled against a group that has not
+	// settled now waits here — and said nothing, while the watcher around
+	// the create below could not fire because the create had not started.
+	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
+		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
+			"consumer", name, "waited", after,
+			"detail", "still asking whether this mailbox already exists; on a "+
+				"fleet that is a metadata group that has not settled, and the "+
+				"create has not been attempted yet")
+	})
 	_, getErr := q.js.Consumer(lookupCtx, stream, name)
+	stopLookup()
 	existed := getErr == nil
 	if getErr != nil && !errors.Is(getErr, jetstream.ErrConsumerNotFound) {
 		return false, fmt.Errorf("inspect consumer %s: %w", name, getErr)
