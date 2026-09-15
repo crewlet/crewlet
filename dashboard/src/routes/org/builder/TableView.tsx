@@ -37,14 +37,15 @@
  *   rather than moving something nobody can see move.
  *
  * WHAT IT DOES NOT DO is draw its own chrome. The toolbar, the sortable
- * headers, the row shapes, the settings frame, the pager and the count are the
- * design system's `DataView`, so this screen's table is the same table as every
- * other table in the dashboard.
+ * headers, the row shapes, the settings frame and the pager are the design
+ * system's `DataView`, so this screen's table is the same table as every other
+ * table in the dashboard. How many nodes the draft holds is the lens header's
+ * to say, not a line under the rows.
  */
 
 import { useCallback, useMemo } from "react";
 import { useParam } from "~/app/router.tsx";
-import { MATCH_FOOTER_LABELS, useTableChoices } from "~/components/common.tsx";
+import { useTableChoices } from "~/components/common.tsx";
 import { plural } from "~/lib/format.ts";
 import { useBuilder, type BuilderApi } from "./BuilderContext.tsx";
 import type { NodeView, Structure } from "./chartModel.ts";
@@ -382,8 +383,6 @@ export function TableView() {
       {...choices}
       columns={columns}
       rows={shown}
-      totalCount={rows.length}
-      labels={{ footer: MATCH_FOOTER_LABELS }}
       getRowKey={(row) => row.key}
       filters={filters}
       filterValues={{ q, kind }}
