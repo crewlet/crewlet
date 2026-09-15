@@ -212,3 +212,86 @@ func TestAConsumerFoundByTheReadBackIsNotReportedAsCreated(t *testing.T) {
 		t.Errorf("the create ran %d times, want exactly one attempt", js.created)
 	}
 }
+
+// alignJS answers the alignment's Info with a consumer that needs updating, and
+// records the deadline UpdateConsumer was handed.
+type alignJS struct {
+	jetstream.JetStream
+	had   bool
+	until time.Time
+}
+
+func (f *alignJS) UpdateConsumer(ctx context.Context, _ string,
+	_ jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	f.until, f.had = ctx.Deadline()
+	return nil, ctx.Err()
+}
+
+// staleConsumer reports a configuration the alignment has to change, so the
+// update below it actually runs.
+type staleConsumer struct {
+	jetstream.Consumer
+}
+
+func (staleConsumer) CachedInfo() *jetstream.ConsumerInfo { return nil }
+
+func (staleConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
+	return &jetstream.ConsumerInfo{Config: jetstream.ConsumerConfig{
+		// Neither matches this build's, so the alignment updates.
+		MaxAckPending: 1,
+		AckWait:       time.Second,
+	}}, nil
+}
+
+// THE ALIGNMENT GETS THE PROVISIONING BUDGET, AND ONLY A LIVE CALLER CAN GIVE
+// IT ONE.
+//
+// # The two ways to get this wrong, which are each other's repair
+//
+// Handed the PER-CREATE context, the alignment inherits a deadline that may
+// have just expired — that is what puts the recovery path here at all — and
+// [context.WithTimeout] cannot revive it, because it only ever shortens. Info
+// and UpdateConsumer then fail instantly and the boot dies one line below the
+// read-back that saved it. So the call sites pass the context that bounds the
+// BOOT.
+//
+// Handed that context and nothing else, the alignment reaches nats.go with no
+// deadline at all and the client's five-second default decides it — and
+// UpdateConsumer is a write against the same metadata group as the create,
+// which is allowed twenty-four times longer. So the budget is derived here.
+//
+// Both halves are asserted below: the budget is applied, and a caller's own
+// shorter deadline still wins.
+func TestTheAlignmentGetsTheProvisioningBudget(t *testing.T) {
+	t.Parallel()
+	js := &alignJS{}
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	// A CALLER WITH NO DEADLINE OF ITS OWN, which is what an engine boot
+	// passes and what the call sites hand this.
+	if _, err := q.alignDomainConsumer(t.Context(), "CREWLET_AGENT", staleConsumer{}); err != nil {
+		t.Fatalf("the alignment failed: %v", err)
+	}
+	if !js.had {
+		t.Fatal("the update ran with no deadline of its own, so nats.go's 5s " +
+			"default decides a replicated write on a clustered boot")
+	}
+	if left := time.Until(js.until); left <= jsprovision.SlowAfter {
+		t.Errorf("the update got %v, which is shorter than the slow-create "+
+			"threshold and so cannot be the provisioning budget", left)
+	}
+
+	// AND A TIGHTER CALLER STILL WINS, which is what keeps the aggregate
+	// ceilings above this meaningful.
+	short, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	js.had = false
+	if _, err := q.alignDomainConsumer(short, "CREWLET_AGENT", staleConsumer{}); err != nil {
+		t.Fatalf("the alignment failed under a short caller: %v", err)
+	}
+	if left := time.Until(js.until); left > time.Second {
+		t.Errorf("a caller with a 50ms deadline saw the update given %v — "+
+			"WithTimeout is supposed to only ever shorten", left)
+	}
+}

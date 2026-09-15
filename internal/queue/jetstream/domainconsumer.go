@@ -185,7 +185,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 				return e
 			})
 			if err == nil {
-				cons, err = q.alignDomainConsumer(createCtx, stream, cons)
+				cons, err = q.alignDomainConsumer(ctx, stream, cons)
 			}
 		}
 	case err == nil:
@@ -197,7 +197,7 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// configuration with that one field changed — a config built
 		// from this build's defaults would reset the start policy the
 		// broker refuses to move.
-		cons, err = q.alignDomainConsumer(createCtx, stream, cons)
+		cons, err = q.alignDomainConsumer(ctx, stream, cons)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
@@ -299,6 +299,22 @@ func (c *DomainConsumer) consumerFor(ctx context.Context) (jetstream.Consumer, e
 // build's, leaving its position alone.
 func (q *Queue) alignDomainConsumer(ctx context.Context, stream string,
 	cons jetstream.Consumer) (jetstream.Consumer, error) {
+
+	// ITS OWN BUDGET, derived here rather than taken from the caller,
+	// because NEITHER context the caller holds is right for it. The
+	// per-create one may be the deadline that just expired — that is what
+	// puts the recovery path here at all, and handed it this call fails
+	// instantly on a consumer that was just found. The boot's has no
+	// deadline of its own, so it would reach nats.go under the client's
+	// five-second default, which is what every other replicated call on
+	// this path was fixed for: an UpdateConsumer is a write against the
+	// same metadata group as the create.
+	//
+	// So the caller passes the context that bounds the BOOT and this owns
+	// the term, which is [jsprovision.Settle]'s arrangement for the same
+	// reason.
+	ctx, cancel := context.WithTimeout(ctx, q.provisionBudget())
+	defer cancel()
 
 	info, err := cons.Info(ctx)
 	if err != nil {
