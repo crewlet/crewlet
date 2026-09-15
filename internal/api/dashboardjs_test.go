@@ -297,8 +297,8 @@ func sameOrigin(url string) bool {
 // rule and a component's `.crewlet-btn` rule each count as a single class, so
 // whichever is written later wins every property they share. The baseline sets
 // `border-radius`, which means a baseline written last squares off every
-// button, input and dialog the moment a reader tabs to it — visible only to
-// somebody using the keyboard, and to nothing else in this suite.
+// button, input and dialog the moment a reader tabs to it, which is visible to
+// somebody using the keyboard and to nothing else in this suite.
 //
 // It is an ORDERING of two files, so nothing but the built artifact can show
 // it: the source says `import` and the cascade says which import was evaluated
