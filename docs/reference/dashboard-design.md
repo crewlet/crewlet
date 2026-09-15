@@ -411,7 +411,8 @@ none of it:
 | `WorkspaceSidebar` | one workspace's tree, built from LIVE answers rather than a table — a hand-kept copy would be wrong the first time somebody adds a project |
 | `PageBar` + `Breadcrumb` | where you are, derived from the route by one function; the last segment is the object and is not a link |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
-| `ObjectHeader` + `TabStrip` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek; the strip takes the tabs the object HAS |
+| `ObjectHeader` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek |
+| `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has two and an agent seat has five — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `Tabs` in `ui/primitives.tsx`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
 | `DetailRail` | the peek, resizable, a drawer under 1180 px |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |

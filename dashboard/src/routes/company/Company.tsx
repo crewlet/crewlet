@@ -31,15 +31,17 @@ import type { OrgUnit } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 
-type Lens = "chart" | "charter";
+const LENSES = ["chart", "charter"] as const;
+type Lens = (typeof LENSES)[number];
 
 export function CompanyScreen() {
   const org = useOrg();
   const agents = useAgents();
   const sandboxes = useSandboxes();
-  const [lens, setLens] = useParam("lens", "chart", "section");
+  const [lens, setLens] = useTab("lens", LENSES);
   const index = useMemo(() => indexOrg(org), [org]);
 
   const seatFor = (name: string) => agents.find((a) => a.role === name);
@@ -113,7 +115,7 @@ export function CompanyScreen() {
         {
           <Segmented<Lens>
             ariaLabel="Org view"
-            value={lens as Lens}
+            value={lens}
             onChange={setLens}
             options={[
               { value: "chart", label: "Chart", icon: "sitemap" },

@@ -173,6 +173,29 @@ describe("live state reaches the screen", () => {
     );
     expect(screen.getAllByText("CEO").length).toBeGreaterThan(0);
   });
+
+  test("a seat opened on a tab it does not have still has a page under it", () => {
+    // THE BLANK PAGE, end to end. `tab=` is a string off a URL and the tab
+    // set belongs to the seat's kind, so `?tab=zzz` — a bookmark, a typed
+    // URL, a link made before the kind changed — used to select no tab and
+    // match no branch: the header and the strip, and then nothing.
+    location.hash = "#/company/people/ceo?tab=zzz";
+    const { store, view } = mount();
+    store.applyOrg({
+      name: "Acme",
+      roles: [{ name: "CEO", handle: "ceo", goal: "Set direction" }],
+    });
+    store.applyAgents([{ role: "CEO", state: "working" }]);
+    view.rerender(
+      <ClientContext.Provider value={{ store, socket: new LiveSocket(store) }}>
+        <Router>
+          <App />
+        </Router>
+      </ClientContext.Provider>,
+    );
+    // The Overview's own rail, which no other tab renders.
+    expect(screen.getByText("Reports to")).toBeDefined();
+  });
 });
 
 describe("a turn watched to its end", () => {

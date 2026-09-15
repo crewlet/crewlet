@@ -50,8 +50,17 @@ import type { ConversationEntry, CounterpartyProfile, EventRecord } from "~/prot
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import { useTab } from "~/app/frame/tabs.ts";
 
-type Tab = "overview" | "model" | "threads" | "memory" | "cost" | "access";
+// THE KIND DECIDES THE SET, and the set decides what a `tab=` may resolve to.
+// Model activity, Conversations, Memory and Cost are properties of a RUNTIME
+// and a human seat has none — it is addressable and never spawned — so the
+// two lists are declared here and handed to `useTab`, which is what makes a
+// `tab=` naming the other kind's tab land on Overview instead of on a strip
+// with nothing selected and nothing below it.
+const AGENT_TABS = ["overview", "model", "threads", "memory", "cost", "access"] as const;
+const HUMAN_TABS = ["overview", "access"] as const;
+type Tab = (typeof AGENT_TABS)[number];
 
 const seatTurnKey = (g: { turnId: string }) => g.turnId;
 
@@ -80,7 +89,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const sandboxes = useSandboxes();
   const tokens = useTokens();
   const now = useNow();
-  const [tab, setTab] = useParam("tab", "overview", "section");
+
   // WHICH THREAD IS OPEN, as a filter rather than a section: opening one
   // replaces the history entry, so Back leaves the seat rather than walking
   // every thread the reader glanced at.
@@ -94,6 +103,12 @@ export function SeatScreen({ handle }: { handle: string }) {
     index.byName.get(handle) ??
     [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
     null;
+
+  const human = seat?.kind === "human";
+  // AFTER THE SEAT RESOLVES, because the tab set is a property of the seat's
+  // kind. The list changes between renders and the hook does not, so the
+  // resolution follows the seat rather than a cast made before it was known.
+  const [tab, setTab] = useTab<Tab>("tab", human ? HUMAN_TABS : AGENT_TABS);
 
   const agent = agents.find((a) => a.handle === handle || a.id === handle || a.role === seat?.name);
   const sandbox = sandboxes.find((s) => s.role === seat?.name) ?? null;
@@ -202,12 +217,6 @@ export function SeatScreen({ handle }: { handle: string }) {
 
   const manager = index.managerOf.get(seat.name);
   const reports = index.reportsOf.get(seat.name) ?? [];
-  const human = seat.kind === "human";
-
-  // A HUMAN SEAT HAS NO RUNTIME TABS (see the strip below), so a URL naming
-  // one — a bookmark from before the seat's kind changed, or a link between
-  // two seats — must land somewhere real rather than on a blank page.
-  const shown: Tab = human && tab !== "overview" && tab !== "access" ? "overview" : (tab as Tab);
   const state = runState(agent, sandboxes);
   const seatSpend = tokens?.by_agent?.find((a) => a.role === seat.name);
 
@@ -274,7 +283,7 @@ export function SeatScreen({ handle }: { handle: string }) {
 
       <Tabs<Tab>
         ariaLabel="Seat sections"
-        value={shown}
+        value={tab}
         onChange={setTab}
         // THE KIND DECIDES THE SET. Model activity, Memory and Cost are
         // properties of a RUNTIME, and a human seat has none: it is
@@ -305,7 +314,7 @@ export function SeatScreen({ handle }: { handle: string }) {
         {/* WITHHELD, and said so. A panel that simply is not there reads as
             a person with nothing on their plate, which is the one thing it
             must not read as. */}
-        {shown === "overview" && human && !mayReadPerson && (
+        {tab === "overview" && human && !mayReadPerson && (
           <Panel title="Their day" icon="check">
             <p className="t-body">
               Their inbox, their queue and their pinned views are theirs. Reading another person's
@@ -314,7 +323,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </Panel>
         )}
 
-        {shown === "overview" && human && person.data?.held && (
+        {tab === "overview" && human && person.data?.held && (
           <Panel
             title="Their day"
             icon="check"
@@ -364,7 +373,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </Panel>
         )}
 
-        {shown === "overview" && (
+        {tab === "overview" && (
           <>
             <Panel padding="none">
               <StatRow cols={4}>
@@ -585,7 +594,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {shown === "model" && (
+        {tab === "model" && (
           <>
             {history.loading && !turns.length && <Skeleton rows={4} height={44} />}
             {/* The QUERY'S OWN STATE, BESIDE THE TURNS RATHER THAN IN PLACE OF
@@ -658,7 +667,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {shown === "threads" && (
+        {tab === "threads" && (
           <>
             <PageNote>
               Every thread this seat holds a record in, and what it said there. The ledger is what
@@ -737,7 +746,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {shown === "memory" && (
+        {tab === "memory" && (
           <>
             {memory.loading && <Skeleton rows={5} />}
             <QueryState error={memory.error} loading={memory.loading}>
@@ -913,7 +922,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {shown === "cost" && (
+        {tab === "cost" && (
           <>
             <Panel padding="none">
               <StatRow cols={3}>
@@ -1053,7 +1062,7 @@ export function SeatScreen({ handle }: { handle: string }) {
           </>
         )}
 
-        {shown === "access" && (
+        {tab === "access" && (
           <div className="col gap-4">
             <Panel title="Identity on other surfaces" icon="link">
               {Object.keys(seat.contact).length ? (

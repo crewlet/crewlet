@@ -30,12 +30,14 @@ import { useNow } from "~/lib/clock.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { useTab } from "~/app/frame/tabs.ts";
 
-type Lens = "active" | "audit" | "diff";
+const LENSES = ["active", "audit", "diff"] as const;
+type Lens = (typeof LENSES)[number];
 
 export function ConfigScreen({ revision: revisionPath }: { revision?: string }) {
   const now = useNow();
-  const [lens, setLens] = useParam("lens", "active", "section");
+  const [lens, setLens] = useTab("lens", LENSES);
   const [revision, setRevision] = useParam("revision", "");
 
   const active = useQuery("config", undefined, { enabled: lens === "active" });
@@ -57,7 +59,7 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
         {
           <Segmented<Lens>
             ariaLabel="Configuration view"
-            value={lens as Lens}
+            value={lens}
             onChange={setLens}
             options={[
               { value: "active", label: "Active", icon: "file" },

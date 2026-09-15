@@ -25,8 +25,12 @@ import { capacityText, loadRows, loadSentence, loadTone, type Load } from "~/lib
 import type { AgentRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { useTab } from "~/app/frame/tabs.ts";
 
-type Grouping = "state" | "unit" | "flat";
+const VIEWS = ["seats", "workload"] as const;
+
+const GROUPINGS = ["state", "unit", "flat"] as const;
+type Grouping = (typeof GROUPINGS)[number];
 
 /** How wide a load bar is drawn at exactly capacity, as a percentage. */
 const AT_CAPACITY_PCT = 70;
@@ -178,8 +182,8 @@ export function People() {
   const agents = useAgents();
   const sandboxes = useSandboxes();
   const org = useOrg();
-  const [view, setView] = useParam("view", "seats", "section");
-  const [group, setGroup] = useParam("group", "state", "section");
+  const [view, setView] = useTab("view", VIEWS);
+  const [group, setGroup] = useTab("group", GROUPINGS);
   const [q, setQ] = useParam("q", "");
 
   const index = useMemo(() => indexOrg(org), [org]);
@@ -255,7 +259,7 @@ export function People() {
         {view === "seats" && (
           <Segmented<Grouping>
             ariaLabel="Grouping"
-            value={group as Grouping}
+            value={group}
             onChange={setGroup}
             options={[
               { value: "state", label: "By state" },
@@ -267,7 +271,7 @@ export function People() {
         {/* THE VIEW IS A PLACE, so it pushes history: somebody who opened the
             workload and pressed back expects the roster, not the screen
             before this one. */}
-        <Segmented<string>
+        <Segmented<(typeof VIEWS)[number]>
           ariaLabel="View"
           value={view}
           onChange={setView}
