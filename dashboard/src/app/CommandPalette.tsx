@@ -19,7 +19,7 @@
  * a screen reader hears each result as it is reached. The results used to be
  * a listbox of buttons nothing pointed at: the highlight moved in silence, and
  * Tab walked through up to forty of them before it came back to the input.
- * The keys are the shared listbox's (`ui/useListbox.ts`), so the highlight
+ * The keys are the shared listbox's (`useListbox`), so the highlight
  * wraps and survives a shrinking list here exactly as it does in every field
  * that offers one; the list is the modal's whole body, so it is not a popup
  * of its own (`popup: false`).

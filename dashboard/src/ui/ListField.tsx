@@ -15,7 +15,7 @@
  *   never allowed to submit the form the list sits in: finishing a sentence is
  *   not saving the editor.
  * - SHIFT+ENTER IS A NEWLINE in a multiline list, where an item is a paragraph.
- * - A KEY AN INPUT METHOD IS COMPOSING WITH IS ITS OWN (`ui/keys.ts`): the
+ * - A KEY AN INPUT METHOD IS COMPOSING WITH IS ITS OWN (`isComposing`): the
  *   Enter that accepts a word neither adds the item nor moves on, and Alt+Arrow
  *   does not reorder under a half-built word.
  * - EVERY ITEM IS EDITED WHERE IT IS, as its own labelled control ("Goal 2 of

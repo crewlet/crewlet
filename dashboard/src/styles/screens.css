@@ -1292,8 +1292,8 @@
 }
 
 /* The third-party app's mark, in a circle the way the console draws it. Its
-   colours are the third-party app's own; see ui/VendorMark.tsx for why that
-   is the one exception to colour carrying state. */
+   colours are the third-party app's own; `VendorMark` in @crewlethq/icons
+   says why that is the one exception to colour carrying state. */
 .int-brand {
   display: inline-flex;
   align-items: center;

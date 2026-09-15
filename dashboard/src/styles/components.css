@@ -1041,46 +1041,15 @@ fieldset.field {
 }
 
 /* ---- Meter --------------------------------------------------------------
-   A budget, a share, a fill. The track is always drawn: a bar with no track is
-   a bar whose maximum the reader has to guess. */
+   What is left of the meter after the design system took it: the TRACK, which
+   the chart's own bars are drawn in. A track is always drawn, because a bar
+   with no track is a bar whose maximum the reader has to guess. */
 
-.meter {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  min-width: 0;
-}
 .meter-track {
   height: 4px;
   border-radius: var(--radius-pill);
   background: var(--color-surface-inset);
   overflow: hidden;
-}
-.meter-fill {
-  height: 100%;
-  border-radius: var(--radius-pill);
-  background: var(--color-brand-accent);
-  transition: width var(--motion-duration-slow) var(--motion-easing-emphasized);
-}
-.meter-fill[data-tone="caution"] {
-  background: var(--color-feedback-warning);
-}
-.meter-fill[data-tone="critical"] {
-  background: var(--color-feedback-danger);
-}
-.meter-fill[data-tone="positive"] {
-  background: var(--color-feedback-success);
-}
-.meter-fill[data-tone="neutral"] {
-  background: var(--color-text-muted);
-}
-.meter-legend {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
 }
 
 /* A proportional bar broken into segments: spend by phase, tools by origin.
@@ -1237,29 +1206,6 @@ fieldset.field {
   color: var(--color-text-secondary);
 }
 
-/* A skeleton is only ever shown where content of KNOWN shape is coming. A
-   spinner in place of a screen tells a reader nothing about what to expect. */
-.skeleton {
-  background: linear-gradient(
-    90deg,
-    var(--color-surface-inset) 25%,
-    var(--color-surface-hover) 37%,
-    var(--color-surface-inset) 63%
-  );
-  background-size: 400% 100%;
-  animation: shimmer 1.4s ease infinite;
-  border-radius: var(--radius-xs);
-  height: 1em;
-}
-@keyframes shimmer {
-  0% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0 50%;
-  }
-}
-
 /* ---- Key/value ---------------------------------------------------------- */
 
 .kv {
@@ -1376,123 +1322,12 @@ kbd {
   gap: var(--spacing-1);
 }
 
-/* ---- Overlay ------------------------------------------------------------ */
-
-.veil {
-  position: fixed;
-  inset: 0;
-  background: color-mix(in srgb, var(--color-surface-background) 72%, transparent);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: var(--spacing-10) var(--spacing-4) var(--spacing-4);
-  z-index: var(--z-index-modal);
-  animation: fade var(--motion-duration-base) var(--motion-easing-default);
-}
-@keyframes fade {
-  from {
-    opacity: 0;
-  }
-}
-.dialog {
-  width: min(560px, 100%);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-xl);
-  max-height: calc(100dvh - var(--spacing-10) - var(--spacing-4));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: rise var(--motion-duration-slow) var(--motion-easing-emphasized);
-}
+/* The rise a surface enters on. The shell's engine panel is what animates
+   with it; every other surface that did is the design system's now. */
 @keyframes rise {
   from {
     opacity: 0;
     transform: translateY(8px);
-  }
-}
-.dialog.wide {
-  width: min(880px, 100%);
-}
-.dialog-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-4);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.dialog-body {
-  padding: var(--spacing-4);
-  overflow: auto;
-}
-.dialog-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-  background: var(--color-surface-subtle);
-}
-
-/* A side sheet (`ui/Drawer.tsx`). The same veil as a dialog, on the same modal
-   layer, with the panel pinned to the right edge at full height. */
-.veil.sheet-veil {
-  justify-content: flex-end;
-  align-items: stretch;
-  padding: 0;
-}
-.sheet {
-  width: min(var(--crewlet-modal-sheet-width), 100%);
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--color-surface-subtle);
-  border-left: 1px solid var(--color-border-default);
-  box-shadow: var(--shadow-xl);
-  animation: slide-in var(--motion-duration-slow) var(--motion-easing-emphasized);
-}
-@keyframes slide-in {
-  from {
-    opacity: 0;
-    transform: translateX(var(--spacing-4));
-  }
-}
-.sheet-head {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.sheet-title {
-  font-size: var(--font-size-sm);
-  min-width: 0;
-}
-.sheet-body {
-  flex: 1 1 auto;
-  min-height: 0;
-  padding: var(--spacing-4);
-  overflow: auto;
-}
-.sheet-foot {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--spacing-2);
-  padding: var(--spacing-3) var(--spacing-4);
-  border-top: 1px solid var(--color-border-default);
-  background: var(--color-surface-subtle);
-}
-/* The shell's one breakpoint (shell.css): below it there is no content
-   beside a sheet to keep in view, so it takes the whole width. */
-@media (max-width: 860px) {
-  .sheet {
-    width: 100%;
-    border-left: none;
   }
 }
 
@@ -1552,13 +1387,13 @@ kbd {
     transition: none;
   }
 }
-/* Untransformed, over the viewport. Empty space passes presses through to
-   the viewport beneath; a popup inside takes its own. `.popup-layer` is the
-   same layer for any other surface whose content scrolls or clips, such as a
-   grid that scrolls sideways: a menu given it (`Menu`'s `layer`) is placed
-   from its trigger's rectangle rather than inside the box that would clip it,
-   and follows the trigger when the surface tells the layer it moved
-   (`VIEW_CHANGE_EVENT`). */
+/* Untransformed, over the viewport. Empty space passes presses through to the
+   viewport beneath; whatever is drawn inside takes its own. This layer carries
+   the canvas's own notes; an overlay that OPENS goes to the LayerHost beside
+   it instead, which is a layer of the design system's and paints above this
+   one. `.popup-layer` is the class the outline gives its host, for the same
+   reason a canvas needs one: a surface placed inside a box that scrolls
+   sideways is a surface that box clips. */
 .canvas-overlay,
 .popup-layer {
   position: absolute;
@@ -1583,127 +1418,6 @@ kbd {
   border: 1px solid var(--color-border-default);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-xs);
-}
-
-.popover {
-  position: absolute;
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-xl);
-  z-index: var(--z-index-popover);
-  min-width: 260px;
-  animation: rise var(--motion-duration-base) var(--motion-easing-emphasized);
-}
-
-/* A menu button's list (`ui/Menu.tsx`). A popover sized to its longest item
-   rather than to the popover's own minimum, under its trigger by default and
-   positioned by the component inside a canvas overlay layer. */
-.menu-anchor {
-  position: relative;
-  display: inline-flex;
-}
-.popover.menu {
-  top: calc(100% + var(--spacing-1));
-  left: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: max-content;
-  padding: var(--spacing-1);
-  border-radius: var(--radius-md);
-}
-.popover.menu.end {
-  left: auto;
-  right: 0;
-}
-/* The answers of a choice, grouped for assistive technology; laid out as the
-   menu itself lays out its items, so the group adds no box of its own. */
-.menu-group {
-  display: flex;
-  flex-direction: column;
-}
-.menu-item {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  width: 100%;
-  height: var(--size-row-sm);
-  padding: 0 var(--spacing-2);
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-compact);
-  color: var(--color-text-primary);
-  text-align: left;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.menu-item > svg {
-  color: var(--color-text-tertiary);
-}
-/* The check column of a choice: as wide as the glyph whether or not this
-   answer is the checked one, so every answer's label starts on one line. */
-.menu-item-check {
-  display: inline-flex;
-  flex: none;
-  width: var(--spacing-4);
-  color: var(--color-text-tertiary);
-}
-/* Focus is the highlight: the keyboard moves it, and the pointer's hover
-   draws the same tint so the two never show two different rows. */
-.menu-item:hover,
-.menu-item:focus {
-  background: var(--color-surface-hover);
-}
-.menu-item.danger,
-.menu-item.danger > svg {
-  color: var(--color-feedback-danger-ink);
-}
-/* Still focusable, so it is read out as unavailable rather than skipped. */
-.menu-item[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.menu-item-hint {
-  margin-left: auto;
-  padding-left: var(--spacing-4);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-}
-.menu-separator {
-  height: 1px;
-  margin: var(--spacing-1) 0;
-  background: var(--color-border-default);
-}
-
-.toast-host {
-  position: fixed;
-  bottom: var(--spacing-4);
-  right: var(--spacing-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-2);
-  z-index: var(--z-index-toast);
-  pointer-events: none;
-}
-.toast {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3);
-  background: var(--color-surface-subtle);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  font-size: var(--font-size-compact);
-  max-width: 420px;
-  pointer-events: auto;
-  animation: rise var(--motion-duration-base) var(--motion-easing-emphasized);
-}
-.toast.critical {
-  border-color: var(--color-feedback-danger);
-  color: var(--color-feedback-danger-ink);
-}
-.toast.positive svg {
-  color: var(--color-feedback-success);
 }
 
 /* ---- Chart -------------------------------------------------------------- */

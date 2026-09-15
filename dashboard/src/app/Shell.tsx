@@ -93,7 +93,7 @@ export function Shell({ children }: { children: ReactNode }) {
   useEffect(() => onTokenRequested(() => setTokenOpen(true)), []);
 
   // The shortcuts that OPEN search, and nothing else. Closing a surface
-  // belongs to the surface and the layer stack (`ui/useModal.ts`): an Escape
+  // belongs to the surface and the layer stack (`useModalLayer`): an Escape
   // handled here as well closed search and the engine panel along with
   // whatever sat above or beneath them, and a toggle here closed search from
   // beneath a dialog raised over it. A press a surface already handled (search
