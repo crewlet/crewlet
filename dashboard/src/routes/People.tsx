@@ -21,6 +21,7 @@ import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
 import { GroupGlyph, SearchGlyph } from "@crewlethq/icons/glyphs";
 import {
+  AutoGrid,
   EmptyState,
   Input,
   PageHeader,
@@ -163,18 +164,18 @@ export function People() {
         {groups.map((g) =>
           g.label ? (
             <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
-              <div className="seat-grid">
+              <AutoGrid min="lg" gap={3}>
                 {g.rows.map(({ seat, agent }) => (
                   <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
                 ))}
-              </div>
+              </AutoGrid>
             </Section>
           ) : (
-            <div className="seat-grid" key={g.key}>
+            <AutoGrid min="lg" gap={3} key={g.key}>
               {g.rows.map(({ seat, agent }) => (
                 <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
-            </div>
+            </AutoGrid>
           ),
         )}
       </TabPanel>

@@ -8,9 +8,9 @@
  * hand-built arrays, so nothing caught it.
  */
 
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { EventRow, QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -169,36 +169,21 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               const start = tsKey(event.timestamp);
               const left = to > from ? ((start - from) / (to - from)) * 100 : 0;
               return (
-                <a key={event.id} className="feed-row" href={href(["events", event.id])}>
-                  <time className="feed-time" dateTime={event.timestamp}>
-                    {fmtTime(event.timestamp)}
-                  </time>
-                  <span className="feed-actor truncate" style={{ paddingLeft: depth * 12 }}>
-                    {depth > 0 && <span className="muted">└ </span>}
-                    {event.actor || "engine"}
-                  </span>
-                  <span className="feed-what truncate">
-                    {event.summary || event.type}
+                <EventRow
+                  key={event.id}
+                  // A span row's `failed` is optional on the record and
+                  // required on a feed row: an event nobody marked did not
+                  // fail, which is the only reading that is not a guess.
+                  event={{ ...event, failed: event.failed === true }}
+                  depth={depth}
+                  mark={
                     <span
                       aria-hidden="true"
-                      style={{
-                        display: "block",
-                        height: 2,
-                        marginTop: 4,
-                        marginLeft: `${left}%`,
-                        width: "6px",
-                        minWidth: 6,
-                        background: "var(--color-brand-accent)",
-                        borderRadius: 2,
-                        opacity: 0.7,
-                      }}
+                      className="feed-span"
+                      style={{ "--feed-span-at": `${left}%` } as CSSProperties}
                     />
-                  </span>
-                  <span className="feed-tail">
-                    <span className="muted">{humanize(event.category)}</span>
-                    <ChevronRightGlyph size="xs" />
-                  </span>
-                </a>
+                  }
+                />
               );
             })}
           </Stack>

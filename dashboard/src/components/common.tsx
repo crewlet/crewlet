@@ -27,14 +27,17 @@ import {
   Avatar,
   Button,
   Callout,
+  Card,
   cx,
   EmptyState,
   formatRelative,
   InlineCode,
   RelativeTime,
+  Stack,
   tableColumns,
   Tag,
   useNow,
+  VisuallyHidden,
 } from "@crewlethq/ui";
 import type { DataViewColumn } from "@crewlethq/ui";
 import {
@@ -84,6 +87,19 @@ export function recordTable<T>(rows: readonly T[], columns: readonly DataViewCol
     showSettings: false,
   };
 }
+
+/**
+ * The rail a seat tile takes for what it is doing.
+ *
+ * Three, and `quiet` is deliberately absent rather than neutral: a seat with
+ * nothing to say draws no mark, where a neutral rail would be a line every
+ * idle seat carried and nobody could read past.
+ */
+const SEAT_RAIL: Record<string, "info" | "warning" | "danger" | undefined> = {
+  working: "info",
+  needs: "warning",
+  broken: "danger",
+};
 
 /** A seat's name and handle, linked. The one way a person appears in a list. */
 export function SeatChip({
@@ -143,37 +159,47 @@ export function SeatCard({
   const tone = seat.kind === "human" ? "quiet" : seatTone(agent, sandboxes);
   const call = agent?.live_call;
   return (
-    <a className="seat-card" data-tone={tone} href={href(seatPath(seat))}>
-      <div className="row">
-        <Avatar
-          name={seat.name}
-          size="lg"
-          variant={seat.kind === "human" ? "dashed" : "solid"}
-          decorative
-        />
-        <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-          <strong className="truncate t-body">{seat.name}</strong>
-          {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
+    <Card
+      href={href(seatPath(seat))}
+      variant="subtle"
+
+      /* The rail is what the seat is DOING, never who it is, and `quiet`
+         takes none at all: an idle seat used to draw a glowing tile that
+         read as activity. */
+      {...(SEAT_RAIL[tone] ? { rail: SEAT_RAIL[tone] } : {})}
+    >
+      <Stack gap={2}>
+        <div className="row">
+          <Avatar
+            name={seat.name}
+            size="lg"
+            variant={seat.kind === "human" ? "dashed" : "solid"}
+            decorative
+          />
+          <div className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+            <strong className="truncate t-body">{seat.name}</strong>
+            {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
+          </div>
+          {seat.kind === "human" ? (
+            <Tag appearance="outline">human</Tag>
+          ) : (
+            <StateBadge agent={agent} sandboxes={sandboxes} />
+          )}
         </div>
-        {seat.kind === "human" ? (
-          <Tag appearance="outline">human</Tag>
-        ) : (
-          <StateBadge agent={agent} sandboxes={sandboxes} />
+        <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
+        {call?.in_progress && (
+          <div className="row gap-1">
+            <Tag variant="info">{call.phase}</Tag>
+            <span className="t-caption t-num">
+              round {call.round_num >= 0 ? call.round_num + 1 : "—"}
+            </span>
+            <span className="spacer" />
+            <RelativeTime className="t-caption" value={call.updated_at} now={now} />
+          </div>
         )}
-      </div>
-      <div className="seat-line truncate">{statusLine(agent, { sandbox, seat })}</div>
-      {call?.in_progress && (
-        <div className="row gap-1">
-          <Tag variant="info">{call.phase}</Tag>
-          <span className="t-caption t-num">
-            round {call.round_num >= 0 ? call.round_num + 1 : "—"}
-          </span>
-          <span className="spacer" />
-          <RelativeTime className="t-caption" value={call.updated_at} now={now} />
-        </div>
-      )}
-      {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
-    </a>
+        {seat.unit && <div className="t-caption truncate">{seat.unit.name}</div>}
+      </Stack>
+    </Card>
   );
 }
 
@@ -226,14 +252,28 @@ export function EventRow({
   event,
   onOpen,
   showDate,
+  depth = 0,
+  mark,
 }: {
   event: FeedRow;
   onOpen?: () => void;
   showDate?: boolean;
+  /**
+   * How far in this row's actor sits, in nesting steps. A trace draws its
+   * spans as a tree, and a row that carried its own copy of this grid was a
+   * second four-column layout drifting from this one a column at a time.
+   */
+  depth?: number;
+  /** Drawn under the summary: a trace's own span bar. */
+  mark?: ReactNode;
 }) {
   const now = useNow();
-  const body = (
-    <>
+  return (
+    <a
+      className={cx("feed-row", event.failed && "failed")}
+      href={href(["events", event.id])}
+      onClick={onOpen}
+    >
       <time
         className="feed-time"
         dateTime={event.timestamp}
@@ -243,29 +283,24 @@ export function EventRow({
       >
         {showDate ? fmtDateTime(event.timestamp) : fmtTime(event.timestamp)}
       </time>
-      <span className="feed-actor truncate">{event.actor || "engine"}</span>
+      <span className="feed-actor truncate" style={depth ? { paddingLeft: depth * 12 } : undefined}>
+        {depth > 0 && <span className="muted">└ </span>}
+        {event.actor || "engine"}
+      </span>
       <span className="feed-what truncate">
         {event.failed && (
-          <ErrorGlyph
-            size="xs"
-            style={{ display: "inline", color: "var(--color-feedback-danger-ink)", marginRight: 4 }}
-          />
+          <>
+            <ErrorGlyph size="xs" className="feed-failed-mark" />
+            <VisuallyHidden>Failed</VisuallyHidden>{" "}
+          </>
         )}
         {event.summary || event.type}
+        {mark}
       </span>
       <span className="feed-tail">
         {event.source && <span className="truncate">{event.source}</span>}
         <span className="muted">{humanize(event.category) || "system"}</span>
       </span>
-    </>
-  );
-  return (
-    <a
-      className={cx("feed-row", event.failed && "failed")}
-      href={href(["events", event.id])}
-      onClick={onOpen}
-    >
-      {body}
     </a>
   );
 }

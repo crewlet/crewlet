@@ -1,0 +1,66 @@
+/**
+ * The configure screens' own layout: a seat's page, the configuration history
+ * and its diff, the secrets list and the schedules.
+ */
+
+.thread-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+  min-width: 0;
+}
+
+.thread-entry:last-child {
+  border-bottom: none;
+}
+
+/* ---- Config ------------------------------------------------------------- */
+
+.diff-line {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 200px) minmax(0, 1fr);
+  gap: var(--spacing-2);
+  padding: 2px var(--spacing-2);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  border-radius: var(--radius-xs);
+  align-items: baseline;
+}
+
+/* THE SERVER'S OWN WORDS: configapi.Change.Kind is added / removed / changed.
+   These selectors read add / remove / replace, which no answer has ever
+   carried, so every diff line rendered unstyled. */
+
+.diff-line[data-kind="added"] {
+  background: var(--color-feedback-success-soft);
+  color: var(--color-feedback-success-ink);
+}
+
+.diff-line[data-kind="removed"] {
+  background: var(--color-feedback-danger-soft);
+  color: var(--color-feedback-danger-ink);
+}
+
+.diff-line[data-kind="changed"] {
+  background: var(--color-feedback-warning-soft);
+  color: var(--color-feedback-warning-ink);
+}
+
+/* ---- A live screen that stays readable ---------------------------------- */
+
+/* Everything that changes on a timescale of milliseconds is confined here,
+   so its churn cannot reflow the settled transcript below it. The border is
+   doing real work: it is the visible promise that motion stops at this
+   edge. */
+
+.live-region {
+  border: 1px solid color-mix(in srgb, var(--color-brand-accent) 28%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-brand-accent) 3%, transparent);
+  /* Generous, and more above than below: the label sits at the top edge and
+     small tracked caps read as crowded long before body text does. */
+  padding: var(--spacing-4) var(--spacing-4) var(--spacing-3);
+  gap: var(--spacing-3);
+}

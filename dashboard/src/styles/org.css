@@ -1,0 +1,600 @@
+/**
+ * The organization screens' own layout: the chart, the directory, the charter
+ * and the builder's two views.
+ *
+ * The card width is a knob the consumer sets on the design system's own tree
+ * canvas, so the cards, their measured rows and the connectors between them
+ * all lay out against one number.
+ */
+
+/* ---- Org chart ---------------------------------------------------------- */
+
+.org-tree {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  overflow-x: auto;
+  padding-bottom: var(--spacing-2);
+}
+
+.org-unit {
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-3);
+  background: var(--color-surface-subtle);
+  min-width: 0;
+}
+
+.org-unit-head {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  margin-bottom: var(--spacing-2);
+  min-width: 0;
+}
+
+.org-children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin-top: var(--spacing-2);
+  padding-left: var(--spacing-4);
+  border-left: 1px solid var(--color-border-default);
+}
+
+.org-seats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2);
+}
+
+.org-node {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle);
+  min-width: 190px;
+  text-align: left;
+}
+
+.org-node:hover {
+  border-color: var(--color-border-hover);
+  background: var(--color-surface-hover);
+}
+
+.org-node.human {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* The unit's name is the control that selects it: a toggle in the header's
+   own type, not a button-shaped thing competing with the badges beside it. */
+
+.org-unit-name {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+  text-align: left;
+  cursor: pointer;
+}
+
+.org-unit-name:hover {
+  text-decoration: underline;
+}
+
+/* WHAT A LINK NAMED, RINGED. The accent says where the reader is, and a static
+   ring is the whole of it: nothing pulses, because the chart is a live screen
+   and nothing on it animates for data. An inset shadow rather than an outline,
+   so the ring is not clipped by the tree's own horizontal scroller and moves
+   no box. The scroll margin is what a reveal on arrival leaves above it. */
+
+.org-unit,
+.org-node {
+  scroll-margin-top: var(--spacing-4);
+}
+
+.org-unit.selected,
+.org-node.selected {
+  border-color: var(--color-brand-accent);
+  box-shadow: inset 0 0 0 1px var(--color-brand-accent);
+}
+
+/* ---- Org builder: the lens ------------------------------------------------ */
+
+/* THE CARD WIDTH IS A KNOB THE CONSUMER SETS. `--crewlet-tree-canvas-card-width`
+   is the design system's own variable for a tree card, and the design system
+   reads it with a fallback because a component has to draw without a consumer.
+   Nothing here does: the builder's chart and its outline both read it bare,
+   and an undeclared custom property takes the whole declaration with it, so
+   the cards went to `width: auto` and the outline's sideways scroller lost its
+   minimum. One declaration, on the builder's own root, is what both views
+   read, and it is what will retint the design system's TreeCanvas the day the
+   builder renders one. */
+
+.org-builder {
+  --crewlet-tree-canvas-card-width: 15rem;
+}
+
+/* THE CANVAS VIEW FILLS THE SCREEN, and `.screen` has nothing to scroll. The
+   screen's own column, the lens panel and the builder become flex columns
+   with a definite height, so the canvas takes what is left under the toolbar
+   instead of growing the page: a wheel turned over a page that scrolls would
+   otherwise land in a canvas half off screen. Matched on the builder's own
+   class rather than set by the shell, which knows nothing about lenses. */
+
+.screen-inner:has(.org-builder-body.fill) {
+  height: 100%;
+  padding-bottom: var(--spacing-5);
+}
+
+.screen-inner:has(.org-builder-body.fill) > .tab-panel,
+.org-builder:has(> .org-builder-body.fill) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.org-builder-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.org-builder-body.fill {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.org-builder-body.fill .tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Fullscreen takes the whole container, which paints its own ground: the
+   page's background is not behind a fullscreen element. */
+
+.org-builder:fullscreen {
+  display: flex;
+  flex-direction: column;
+  padding: var(--spacing-4);
+  background: var(--color-surface-background);
+  overflow: auto;
+}
+
+.org-builder-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Undo, Redo, Discard, Expand all and Collapse all move into the More menu
+   at the drawer breakpoint; the check status and Review and save stay. */
+
+.org-builder-narrow {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .org-builder-wide {
+    display: none;
+  }
+  .org-builder-narrow {
+    display: inline-flex;
+  }
+}
+
+.org-builder-problems ul,
+.org-builder-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* A sentence that follows the one before it in a banner, on its own line. */
+
+.org-builder-note {
+  display: block;
+  margin-top: var(--spacing-1);
+}
+
+.org-builder-conflict {
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+}
+
+/* ---- Org builder: canvas ------------------------------------------------
+   The builder's charts (`routes/org/builder/CanvasView.tsx`). Every card is
+   the card-width token wide and as tall as its content, measured, and placed
+   by the tidy tree layout with a transform. Nothing here is a per-entity
+   colour: a card is neutral whatever it holds, and a human seat is drawn with
+   the dashed edge every human seat on the dashboard has. */
+
+.bchart {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The canvas is the design system's, and this is the only thing the builder
+   says about it: it takes what is left of the column under the toolbar. */
+
+.bchart-canvas {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Over the canvas's top edge, in its untransformed overlay layer, so it
+   neither resizes the viewport as it comes and goes nor takes a press meant
+   for the chart beneath it. */
+
+.bchart-note {
+  position: absolute;
+  top: var(--spacing-2);
+  left: var(--spacing-2);
+  right: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  background: var(--color-surface-glass);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  pointer-events: none;
+}
+
+.bchart-tree,
+.bchart-box,
+.bchart-links,
+.bchart-gap-probe {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.bchart-box {
+  width: var(--crewlet-tree-canvas-card-width);
+}
+
+/* The gaps between cards, as tokens: measured like a card, so density scales
+   the space between cards with the space inside them. */
+
+.bchart-gap-probe {
+  width: var(--spacing-6);
+  height: var(--spacing-7);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.bchart-links {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.bchart-links path {
+  fill: none;
+  stroke: var(--color-border-hover);
+  stroke-width: 1;
+}
+
+.bchart-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+}
+
+.bchart-card.human {
+  border-style: dashed;
+  border-color: var(--color-border-default);
+}
+
+.bchart-card.group {
+  background: var(--color-surface-subtle);
+}
+
+.bchart-head,
+.bchart-row-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding: var(--spacing-2) var(--spacing-3);
+  border-radius: var(--radius-lg);
+  cursor: default;
+}
+
+/* Inset, because the ring sits on the card's own edge. */
+
+.bchart-head:focus-visible,
+.bchart-row-item:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The selection is where the reader is, so it takes the accent. */
+
+.bchart-head[aria-selected="true"],
+.bchart-row-item[aria-selected="true"] {
+  box-shadow: inset 0 0 0 1px var(--color-brand-accent);
+}
+
+.bchart-line {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+}
+
+.bchart-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.bchart-name {
+  font-size: var(--font-size-compact);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.bchart-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.bchart-marks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+}
+
+.bchart-marks:empty {
+  display: none;
+}
+
+.bchart-actions {
+  display: flex;
+  align-items: center;
+  padding: var(--spacing-1);
+}
+
+.bchart-lead {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  min-width: 0;
+  padding: 0 var(--spacing-3) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.bchart-rows {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1);
+  border-top: 1px solid var(--color-border-default);
+}
+
+.bchart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.bchart-row.human {
+  border-style: dashed;
+  border-color: var(--color-border-default);
+}
+
+/* A LIVE STATE OR A CHECK NEVER RESIZES A CARD. The live state and the
+   problem count each have a slot on the card's first line that does not
+   shrink, wrap or push the name onto a second line: the name truncates
+   instead, and the line is as tall with a badge as without one. So a push
+   that turns "idle" into "working", and a count that leaves while a check
+   is out and comes back with its answer, change a word and never a
+   measured height. */
+
+.bnode-state,
+.bnode-count {
+  display: inline-flex;
+  flex: none;
+  white-space: nowrap;
+}
+
+/* ---- Org builder: outline -----------------------------------------------
+   The builder's treegrid (`routes/org/builder/OutlineView.tsx`). Each row is
+   a grid on one column template, so the cells of every row line up without
+   a table (a table row cannot be a focusable treegrid row with a level). The
+   grid is at least three chart cards wide and scrolls sideways in its own
+   box below that, so a phone-width screen keeps every column readable and
+   the page never scrolls sideways. A box that scrolls on one axis clips on
+   both, so the rows' menus open in a `.popup-layer` over the frame rather
+   than under their triggers, where the last rows' menus would be cut off
+   and scroll the grid down. */
+
+.boutline-frame {
+  position: relative;
+}
+
+/* THE SCROLLER IS THE CONTAINING BLOCK OF WHAT IT HOLDS. A box that scrolls
+   clips only the descendants whose containing block is inside it, so an
+   absolutely positioned one (the Actions header's screen-reader text, far
+   right in a phone-width grid) was placed against the frame instead, escaped
+   the scroller, and gave `.screen` a sideways overflow of the grid's width:
+   hidden, but scrolled by a focus or a find in page, which pushed the whole
+   page sideways. Positioned, the scroller keeps all of it. */
+
+.boutline-wrap {
+  position: relative;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.boutline {
+  min-width: calc(3 * var(--crewlet-tree-canvas-card-width));
+  font-size: var(--font-size-compact);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-subtle);
+}
+
+.boutline-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 3fr) minmax(0, 1.5fr) minmax(0, 1.5fr) minmax(0, 2fr) minmax(0, 1fr)
+    var(--size-control-md);
+  align-items: center;
+  min-height: var(--size-row-md);
+  border-top: 1px solid var(--color-border-default);
+}
+
+.boutline-head .boutline-row {
+  border-top: 0;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+}
+
+.boutline-row > [role="columnheader"],
+.boutline-row > [role="gridcell"] {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: 0 var(--spacing-2);
+}
+
+/* The indent is the row's level, set on the row as `--depth`. */
+
+.boutline-name,
+.boutline-row.add > [role="gridcell"]:first-child {
+  padding-inline-start: calc(var(--spacing-5) * var(--depth, 0));
+}
+
+.boutline-row.add > [role="gridcell"]:first-child {
+  margin-inline-start: var(--size-control-sm);
+}
+
+.boutline-toggle {
+  display: inline-flex;
+  flex: none;
+  width: var(--size-control-sm);
+}
+
+.boutline-actions {
+  justify-content: flex-end;
+}
+
+.boutline-row:focus-visible,
+.boutline-row > [role="gridcell"]:focus-visible {
+  outline-offset: -2px;
+}
+
+/* The selection is where the reader is, so it takes the accent. */
+
+.boutline-row[aria-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+}
+
+/* ---- Org builder: the node editor and its dialogs ------------------------
+   `routes/org/builder/NodeEditor.tsx` and the Add, Move, Delete and Change
+   kind dialogs. A drawer's body is a column of fields; a section separates a
+   group of them (reports, a tool, what the document configures) with a rule
+   and a heading, so a long seat form reads as parts rather than one list. */
+
+.builder-section + .builder-section,
+.sheet-body > .builder-section,
+.dialog-body > .builder-section {
+  padding-top: var(--spacing-3);
+  border-top: 1px solid var(--color-border-default);
+}
+
+/* A section inside a section (one tool inside Integrations) is a sub-part,
+   not a new part: no rule of its own. */
+
+.builder-section .builder-section {
+  padding-top: 0;
+  border-top: none;
+}
+
+.builder-section-title {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.builder-section .builder-section .builder-section-title {
+  font-size: var(--font-size-compact);
+  color: var(--color-text-secondary);
+}
+
+.builder-section p,
+.builder-fact p,
+.builder-note {
+  margin: 0;
+}
+
+.builder-list {
+  margin: 0;
+  padding-left: var(--spacing-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+/* Two fields that make one answer (a contact's surface and its identity) sit
+   side by side and share the width, so neither reads as a separate question. */
+
+.builder-pair {
+  display: flex;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.builder-pair > .field {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* ---- The outline's own layer host ---------------------------------------
+   A surface anchored to a row inside a box that scrolls sideways is a surface
+   that box clips, so the outline gives its own host this class and the rows'
+   menus open into it. The canvas needs the same thing and has it built in:
+   its viewport, its panned world, its overlay and its controls are all the
+   design system's now, and so are the rules that used to live here. */
+
+.popup-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.popup-layer > * {
+  pointer-events: auto;
+}

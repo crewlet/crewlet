@@ -469,7 +469,7 @@ export function useNavigator(): Navigator {
   return nav;
 }
 
-/** An href for an anchor, so a link is a real link — middle-clickable. */
+/** An href for an anchor, so a link is a real link: middle-clickable. */
 export function href(path: string[], query?: Record<string, string>): string {
   return buildHash(path, query);
 }

@@ -506,11 +506,47 @@ function drawnClassNames(): Set<string> {
    * suite can tell it from the notification host's, and nothing draws it.
    */
   for (const { text } of files(/\.tsx$/)) {
-    for (const [, spelling] of code(text).matchAll(/className=(\{[\s\S]*?\}|"[^"]*")/g)) {
-      for (const [, literal] of spelling!.matchAll(/["'`]([^"'`]*)["'`]/g)) {
-        for (const name of literal!.split(/\s+/)) if (name) out.add(name);
+    for (const spelling of classAttributes(text)) {
+      for (const name of spelling.split(/\s+/)) if (name) out.add(name);
+    }
+  }
+  return out;
+}
+
+/**
+ * Every class name a file's `className` attributes spell.
+ *
+ * A BALANCED SCAN, not a lazy regex. `className={cond ? \`a a--${x}\` : "a"}`
+ * holds a `}` of its own, so a pattern that stopped at the first one read half
+ * the expression and found no complete literal in it: the class came back as
+ * drawn by nobody, its rules were swept as dead, and the scan that should have
+ * caught that had the same hole.
+ */
+function classAttributes(source: string): string[] {
+  const text = code(source);
+  const out: string[] = [];
+  const mark = "className=";
+  for (let at = text.indexOf(mark); at >= 0; at = text.indexOf(mark, at + 1)) {
+    let i = at + mark.length;
+    if (text[i] === '"' || text[i] === "'") {
+      const end = text.indexOf(text[i], i + 1);
+      if (end > 0) out.push(text.slice(i + 1, end));
+      continue;
+    }
+    if (text[i] !== "{") continue;
+    let depth = 0;
+    let j = i;
+    for (; j < text.length; j += 1) {
+      if (text[j] === "{") depth += 1;
+      else if (text[j] === "}") {
+        depth -= 1;
+        if (depth === 0) break;
       }
     }
+    // The interpolations go first: what is left of a template literal between
+    // them is the fixed part, which is the part that names classes.
+    const expression = text.slice(i + 1, j).replace(/\$\{[^}]*\}/g, " ");
+    for (const [, literal] of expression.matchAll(/["'`]([^"'`]*)["'`]/g)) out.push(literal!);
   }
   return out;
 }
@@ -530,6 +566,12 @@ test("the vacuous-assertion scan reads selectors, and finds the stylesheets", ()
   expect(drawnClassNames().size).toBeGreaterThan(50);
   // A class with no rule behind it is still drawn, so it still counts.
   expect(drawnClassNames().has("org-builder-live")).toBe(true);
+  // And one spelled inside a template literal with an interpolation in it.
+  expect(classAttributes('className={on ? `tier tier--${x}` : "tier"}')).toEqual([
+    "tier tier-- ",
+    "tier",
+  ]);
+  expect(classAttributes('<div className="row gap-2">')).toEqual(["row gap-2"]);
   expect(queriedClasses('el.closest(".diff-line")')).toEqual(["diff-line"]);
   // The singular form too: written `querySelectorAll?` it matched only the
   // plural, and every `querySelector(".gone")` in the tree went unread.
@@ -565,11 +607,18 @@ test("no query names a class no stylesheet draws", () => {
  *
  * `components.css` is not on the list, deliberately: it held the button, the
  * badge, the table, the field, the banner, the chip, the meter, the list and
- * the empty state, and every one of those is the package's now.
+ * the empty state, and every one of those is the package's now. Neither is
+ * `screens.css`, which held every screen's layout at once: one file per family
+ * is what stops a rule for one screen reaching another that never asked for
+ * it, and the names are who owns them.
  */
 const SHEET_BUDGET: Record<string, number> = {
   "styles/base.css": 210,
-  "styles/screens.css": 1900,
+  "styles/live.css": 160,
+  "styles/records.css": 570,
+  "styles/org.css": 610,
+  "styles/configure.css": 75,
+  "styles/integrations.css": 760,
 };
 
 test("no stylesheet is longer than its budget, and none has appeared", () => {

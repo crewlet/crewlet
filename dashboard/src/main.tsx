@@ -36,10 +36,22 @@ import { applyStoredPreferences } from "@crewlethq/ui";
 
 // The engine's own sheets last, so a screen's own layout outranks anything it
 // inherits. There is no component sheet: every primitive this dashboard draws
-// is the design system's, and the two files here are the utilities each screen
-// leans on and the layout each screen family needs on top of them.
+// is the design system's, and what is left is the utilities every screen leans
+// on plus the layout each FAMILY of screens needs on top of them.
+//
+// ONE FILE PER FAMILY, and the file name is who owns it: a rule a screen needs
+// goes in its family's sheet and nowhere else, which is what stops the single
+// sheet these replace from growing a rule for every screen again. They are
+// imported HERE rather than from the screens themselves for the reason the
+// block above gives: an import inside the module graph lands above this file's
+// own imports, so a screen's layout would be emitted before the baseline it
+// sits on and lose every cascade tie to it.
 import "./styles/base.css";
-import "./styles/screens.css";
+import "./styles/live.css";
+import "./styles/records.css";
+import "./styles/org.css";
+import "./styles/configure.css";
+import "./styles/integrations.css";
 
 // Before the first paint, so a reader whose machine is set to light never sees
 // a dark flash on the way to their own preference. A Content-Security-Policy

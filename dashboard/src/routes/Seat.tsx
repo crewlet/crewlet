@@ -53,6 +53,7 @@ import {
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
 import {
+  AutoGrid,
   Avatar,
   BarList,
   Button,
@@ -64,6 +65,7 @@ import {
   EmptyValue,
   InlineCode,
   Meter,
+  NewItemsNotice,
   PageHeader,
   RelativeTime,
   Skeleton,
@@ -523,32 +525,39 @@ export function SeatScreen({ handle }: { handle: string }) {
 
             {reports.length > 0 && (
               <Section title="Direct reports" hint={`${reports.length}`}>
-                <div className="seat-grid">
+                <AutoGrid min="lg" gap={3}>
                   {reports.map((r) => (
-                    <a key={r.key} className="seat-card" href={href(seatPath(r))}>
-                      <div className="row">
-                        <Avatar
-                          name={r.name}
-                          variant={r.kind === "human" ? "dashed" : "solid"}
-                          size="sm"
-                          decorative
-                        />
-                        <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                          <span className="truncate t-cell">{r.name}</span>
-                          <span className="truncate t-caption">{r.goal || r.unit?.name}</span>
-                        </span>
-                        {r.kind === "human" ? (
-                          <Tag appearance="outline">human</Tag>
-                        ) : (
-                          <StateBadge
-                            agent={agents.find((a) => a.role === r.name)}
-                            sandboxes={sandboxes}
+                    <Card
+                      key={r.key}
+                      variant="subtle"
+
+                      href={href(seatPath(r))}
+                    >
+                      <Stack gap={2}>
+                        <div className="row">
+                          <Avatar
+                            name={r.name}
+                            variant={r.kind === "human" ? "dashed" : "solid"}
+                            size="sm"
+                            decorative
                           />
-                        )}
-                      </div>
-                    </a>
+                          <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                            <span className="truncate t-cell">{r.name}</span>
+                            <span className="truncate t-caption">{r.goal || r.unit?.name}</span>
+                          </span>
+                          {r.kind === "human" ? (
+                            <Tag appearance="outline">human</Tag>
+                          ) : (
+                            <StateBadge
+                              agent={agents.find((a) => a.role === r.name)}
+                              sandboxes={sandboxes}
+                            />
+                          )}
+                        </div>
+                      </Stack>
+                    </Card>
                   ))}
-                </div>
+                </AutoGrid>
               </Section>
             )}
 
@@ -630,11 +639,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                 </div>
               </section>
             )}
-            {settled.pending > 0 && (
-              <button className="new-rows" onClick={settled.flush}>
-                {plural(settled.pending, "new turn")} finished while you were reading — show
-              </button>
-            )}
+            <NewItemsNotice count={settled.pending} noun="new turn" onShow={settled.flush} />
             <div className="col gap-2">
               {settled.items.map((g, i) => (
                 <TurnCard

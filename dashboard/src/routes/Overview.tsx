@@ -42,6 +42,7 @@ import { phaseColor } from "~/lib/phases.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
 import {
   ActivityStrip,
+  AutoGrid,
   BarList,
   Button,
   Card,
@@ -309,11 +310,11 @@ export function Overview() {
             <Card.Title>Live seats</Card.Title>
           </Card.Header>
           {live.length ? (
-            <div className="seat-grid">
+            <AutoGrid min="lg" gap={3}>
               {live.map(({ seat, agent }) => (
                 <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />
               ))}
-            </div>
+            </AutoGrid>
           ) : (
             <EmptyState
               size="compact"
@@ -438,17 +439,17 @@ export function Overview() {
               path: ["knowledge"],
             },
           ].map((card) => (
-            <a key={card.title} className="seat-card" href={href(card.path)}>
-              <div className="row">
-                <span className="attention-icon" data-severity="info">
+            <Card key={card.title} variant="subtle" href={href(card.path)}>
+              <Stack gap={2}>
+                <div className="row">
                   <card.icon size="sm" />
-                </span>
-                <strong className="t-body">{card.title}</strong>
-                <span className="spacer" />
-                <ArrowForwardGlyph size="sm" />
-              </div>
-              <span className="t-caption">{card.body}</span>
-            </a>
+                  <strong className="t-body">{card.title}</strong>
+                  <span className="spacer" />
+                  <ArrowForwardGlyph size="sm" />
+                </div>
+                <span className="t-caption">{card.body}</span>
+              </Stack>
+            </Card>
           ))}
         </div>
       </Section>

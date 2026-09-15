@@ -340,7 +340,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
       href={href(["events", event.id])}
       title={fmtDateTime(event.timestamp)}
     >
-      <time className="feed-time" dateTime={event.timestamp}>
+      <time className="turn-time" dateTime={event.timestamp}>
         {fmtTime(event.timestamp)}
       </time>
       <span className="what truncate">
@@ -352,7 +352,7 @@ function TurnEventRow({ event, actor }: { event: EventRecord; actor: string }) {
         )}
         {withoutActor(event.summary, actor) || event.type}
       </span>
-      <span className="feed-tail">
+      <span className="turn-tail">
         <span className="muted mono truncate">{event.type}</span>
       </span>
     </a>

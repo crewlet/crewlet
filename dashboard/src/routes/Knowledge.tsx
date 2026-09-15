@@ -210,25 +210,23 @@ export function Knowledge() {
             .filter((s) => s.kind === "agent")
             .slice(0, 12)
             .map((seat) => (
-              <a
-                key={seat.key}
-                className="seat-card"
-                href={href(seatPath(seat), { tab: "memory" })}
-              >
-                <div className="row">
-                  <span className="attention-icon" data-severity="info">
+              <Card key={seat.key} variant="subtle" href={href(seatPath(seat), { tab: "memory" })}>
+                <Stack gap={2}>
+                  <div className="row">
                     <DatabaseGlyph size="sm" />
+                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                      <strong className="truncate t-cell">{seat.name}</strong>
+                      {seat.handle && (
+                        <span className="truncate t-caption mono">@{seat.handle}</span>
+                      )}
+                    </span>
+                    <ArrowForwardGlyph size="sm" />
+                  </div>
+                  <span className="t-caption truncate">
+                    {seat.goal || "memory, episodes and skills"}
                   </span>
-                  <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                    <strong className="truncate t-cell">{seat.name}</strong>
-                    {seat.handle && <span className="truncate t-caption mono">@{seat.handle}</span>}
-                  </span>
-                  <ArrowForwardGlyph size="sm" />
-                </div>
-                <span className="t-caption truncate">
-                  {seat.goal || "memory, episodes and skills"}
-                </span>
-              </a>
+                </Stack>
+              </Card>
             ))}
         </div>
       </Section>

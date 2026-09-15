@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 const css = readFileSync(
-  fileURLToPath(new URL("../../../styles/screens.css", import.meta.url)),
+  fileURLToPath(new URL("../../../styles/org.css", import.meta.url)),
   "utf8",
 );
 
