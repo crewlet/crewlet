@@ -204,7 +204,7 @@ export function Knowledge() {
 
       <Section
         title="What each seat has learned for itself"
-        description="private to the seat — its diary, its past turns, the skills it drafted"
+        description="private to the seat: its diary, its past turns, the skills it drafted"
       >
         <div className="grid grid-auto">
           {index.seats
