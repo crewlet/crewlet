@@ -19,7 +19,8 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { createRef } from "react";
 import { afterEach, expect, test, vi } from "vitest";
 import { AddGlyph, ArrowUpwardGlyph, MoreVertGlyph } from "@crewlethq/icons/glyphs";
-import { Button, ButtonLink, CodeBlock, CopyButton, IconButton } from "@crewlethq/ui";
+import { Button, ButtonLink, CodeBlock, CopyButton, IconButton, Tag } from "@crewlethq/ui";
+import { drawnClasses } from "./testing.tsx";
 
 afterEach(() => {
   cleanup();
@@ -256,4 +257,42 @@ test("a record block that did not ask for select-all is not a tab stop and takes
   });
   block.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(false);
+});
+
+// EB02. The badge this replaces drew a pressed filter as `background:
+// currentColor` with its label still in that same ink, which is 1:1: the
+// Model screen's "4 failed" filter became an unreadable block the moment
+// somebody used it. A press is a state, and a state does not get to repaint
+// the ground a label was measured against.
+test("a filter tag that is on keeps the ground its label was measured on", () => {
+  const off = drawnClasses(Tag, {
+    variant: "danger",
+    onClick: () => {},
+    children: "4 failed",
+  });
+  const on = drawnClasses(Tag, {
+    variant: "danger",
+    onClick: () => {},
+    pressed: true,
+    children: "4 failed",
+  });
+  expect(on).toEqual(off);
+});
+
+test("a filter tag says whether it is on, and still reads as its own label", () => {
+  const { rerender } = render(
+    <Tag variant="danger" pressed onClick={() => {}}>
+      4 failed
+    </Tag>,
+  );
+  const filter = screen.getByRole("button", { name: "4 failed" });
+  expect(filter.getAttribute("aria-pressed")).toBe("true");
+  rerender(
+    <Tag variant="danger" onClick={() => {}}>
+      4 failed
+    </Tag>,
+  );
+  expect(screen.getByRole("button", { name: "4 failed" }).getAttribute("aria-pressed")).toBe(
+    "false",
+  );
 });

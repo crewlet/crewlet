@@ -42,68 +42,6 @@ export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "a
 // Controls
 // ---------------------------------------------------------------------------
 
-export function Badge({
-  children,
-  tone = "neutral",
-  icon: Glyph,
-  dot,
-  outline,
-  mono,
-  title,
-  onClick,
-  pressed,
-}: {
-  children: ReactNode;
-  tone?: Tone;
-  icon?: ComponentType<GlyphProps>;
-  dot?: boolean;
-  outline?: boolean;
-  mono?: boolean;
-  title?: string;
-  /** Makes the badge a real button — see the note below. */
-  onClick?: () => void;
-  /** For a badge that toggles a filter, whether that filter is on. */
-  pressed?: boolean;
-}) {
-  const className = cx(
-    "badge",
-    tone !== "neutral" && tone,
-    outline && "outline",
-    mono && "mono",
-    onClick && "actionable",
-    pressed && "pressed",
-  );
-  const inner = (
-    <>
-      {dot && <i className={cx("dot", tone !== "neutral" && tone)} />}
-      {Glyph && <Glyph size="xs" />}
-      {children}
-    </>
-  );
-  // A BUTTON when it acts, a span when it does not. A count that filters the
-  // list has to be reachable by keyboard and announce its pressed state; a
-  // span with a click handler is neither, and looks identical to the inert
-  // badges beside it.
-  if (onClick) {
-    return (
-      <button
-        type="button"
-        className={className}
-        title={title}
-        onClick={onClick}
-        aria-pressed={!!pressed}
-      >
-        {inner}
-      </button>
-    );
-  }
-  return (
-    <span className={className} title={title}>
-      {inner}
-    </span>
-  );
-}
-
 /**
  * A phase mark.
  *

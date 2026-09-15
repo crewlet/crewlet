@@ -454,4 +454,3 @@ export function ScreenHead({
     </header>
   );
 }
-

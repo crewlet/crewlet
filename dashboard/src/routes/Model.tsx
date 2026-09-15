@@ -22,7 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Chip, PhaseTag, Select } from "~/ui/primitives.tsx";
+import { Chip, PhaseTag, Select } from "~/ui/primitives.tsx";
 import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -267,14 +267,14 @@ export function ModelActivity() {
                 the filtering — so a reader who saw the number had to go find
                 the unrelated pill that acted on it. */}
             {failedCount > 0 && (
-              <Badge
-                tone="critical"
+              <Tag
+                variant="danger"
                 onClick={() => setOnlyFailed(onlyFailed ? "" : "1")}
                 pressed={!!onlyFailed}
                 title={onlyFailed ? "show every phase" : "show only failed phases"}
               >
                 {failedCount} failed
-              </Badge>
+              </Tag>
             )}
             <Tag appearance="outline">{plural(filtered.length, "phase")} loaded</Tag>
           </>

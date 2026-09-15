@@ -20,73 +20,7 @@
   text-align: center;
 }
 
-/* ---- Badge --------------------------------------------------------------
-   A soft tint plus its ink step, NEVER a solid block with a label on it. That
-   is what lets the status hues be light enough to read as marks on a dark
-   ground without dragging their own label under 4.5:1 with them. */
-
-/* A badge that ACTS. Same shape as the inert ones so the row still reads as
-   one set, plus a hover and a pressed state so it is discoverable as a
-   control rather than looking like a label that happens to respond. */
-.badge.actionable {
-  cursor: pointer;
-  transition:
-    background var(--motion-duration-fast) var(--motion-easing-default),
-    border-color var(--motion-duration-fast) var(--motion-easing-default);
-}
-.badge.actionable:hover {
-  border-color: currentColor;
-}
-.badge.actionable.pressed {
-  background: currentColor;
-}
-.badge.actionable.pressed > * {
-  mix-blend-mode: luminosity;
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--spacing-1);
-  padding: 1px var(--spacing-2);
-  border-radius: var(--radius-xs);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  background: var(--color-surface-inset);
-  color: var(--color-text-secondary);
-  border: 1px solid transparent;
-}
-.badge.positive {
-  background: var(--color-feedback-success-soft);
-  color: var(--color-feedback-success-ink);
-}
-.badge.caution {
-  background: var(--color-feedback-warning-soft);
-  color: var(--color-feedback-warning-ink);
-}
-.badge.critical {
-  background: var(--color-feedback-danger-soft);
-  color: var(--color-feedback-danger-ink);
-}
-.badge.info {
-  background: var(--color-feedback-info-soft);
-  color: var(--color-feedback-info-ink);
-}
-.badge.accent {
-  background: var(--color-brand-accent-soft);
-  color: var(--color-brand-accent-ink);
-}
-.badge.outline {
-  background: transparent;
-  border-color: var(--color-border-default);
-  color: var(--color-text-tertiary);
-}
-.badge.mono {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-2xs);
-}
+/* ---- Status marks ------------------------------------------------------- */
 
 /* The dot is the shape half of a status. Colour is never the only carrier:
    every dot sits beside its own word. */
