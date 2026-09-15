@@ -23,7 +23,7 @@ import { Badge, Button, KeyValue } from "~/ui/primitives.tsx";
 import { useConnection } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime } from "~/lib/format.ts";
-import { Modal, RelativeTime, useNow } from "@crewlethq/ui";
+import { EmptyValue, Modal, RelativeTime, useNow } from "@crewlethq/ui";
 import {
   CloseGlyph,
   InfoGlyph,
@@ -108,10 +108,10 @@ export function EnginePanel({
           [
             "Node",
             <code key="n" className="inline">
-              {engine?.node || "—"}
+              {engine?.node || <EmptyValue label="Not reported" />}
             </code>,
           ],
-          ["Version", engine?.version || "—"],
+          ["Version", engine?.version || <EmptyValue label="Not reported" />],
           [
             "Company config",
             engine?.configured === false ? (
@@ -125,19 +125,19 @@ export function EnginePanel({
           [
             "Applied epoch",
             <code key="e" className="inline">
-              {engine?.applied_epoch || "—"}
+              {engine?.applied_epoch || <EmptyValue label="Not reported" />}
             </code>,
           ],
-          ["Control-plane posture", engine?.posture || "—"],
+          ["Control-plane posture", engine?.posture || <EmptyValue label="Not reported" />],
           [
             "Turns in flight",
             <span key="f" className="t-num">
               {health.in_flight ?? engine?.in_flight ?? 0}
             </span>,
           ],
-          ["Seats held here", engine?.seats?.length ?? "—"],
-          ["Stream", engine?.queue || "—"],
-          ["Dashboard clients", engine?.clients ?? "—"],
+          ["Seats held here", engine?.seats?.length ?? <EmptyValue label="Not reported" />],
+          ["Stream", engine?.queue || <EmptyValue label="Not reported" />],
+          ["Dashboard clients", engine?.clients ?? <EmptyValue label="Not reported" />],
           [
             "Engine up since",
             engine?.engine_started_at ? (
@@ -146,7 +146,7 @@ export function EnginePanel({
                 <RelativeTime value={engine.engine_started_at} now={now} />)
               </>
             ) : (
-              "—"
+              <EmptyValue label="Not reported" />
             ),
           ],
           [
@@ -157,7 +157,7 @@ export function EnginePanel({
                 <RelativeTime value={engine.started_at} now={now} />)
               </>
             ) : (
-              "—"
+              <EmptyValue label="Not reported" />
             ),
           ],
         ]}

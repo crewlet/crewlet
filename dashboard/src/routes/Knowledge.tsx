@@ -88,7 +88,7 @@ export function Knowledge() {
         <EmptyState
           icon={<Book2Glyph />}
           title="Search the company's shared knowledge"
-          description="The engine runs this against the configured knowledge backend at query time — the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
+          description="The engine runs this against the configured knowledge backend at query time, the same live search an agent gets at turn start and can re-run itself with search_knowledge. Nothing is cached here, so there is no staleness window."
         />
       )}
 

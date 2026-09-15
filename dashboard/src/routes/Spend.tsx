@@ -20,7 +20,7 @@ import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.t
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
-import { Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
+import { EmptyValue, Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   AutorenewGlyph,
@@ -144,7 +144,7 @@ export function Spend() {
                 tokens?.aggregated_through ? (
                   <RelativeTime value={tokens.aggregated_through} now={now} />
                 ) : (
-                  "—"
+                  <EmptyValue label="Not reported yet" />
                 )
               }
               sub={
