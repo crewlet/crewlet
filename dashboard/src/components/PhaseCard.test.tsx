@@ -183,5 +183,5 @@ test("a header fact the engine did not report says so, rather than drawing a das
     expect(screen.getByText(said)).toBeDefined();
   }
   // And the punctuation is the design system's, not this file's idea of one.
-  expect(document.body.textContent).not.toContain("—");
+  expect(document.body.textContent).not.toContain("\u2014");
 });
