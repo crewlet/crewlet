@@ -1077,13 +1077,23 @@
 }
 
 /* The identity column takes the slack, so every badge in the list lands on
-   the same right edge however long a name or a path is. */
+   the same right edge however long a name or a path is.
+
+   THE BASIS IS WHAT MAKES THE ROW WRAP. At `flex: 1` — a basis of 0 — the
+   badges never wrapped: flex placement asks whether an item's HYPOTHETICAL
+   size fits, a zero basis always does, and `min-width: 0` then let this
+   column shrink to about ten pixels rather than push them onto a second line.
+   In the peek rail, where a surface's three badges take most of 420px, the
+   sentence beside them came out one word per line. With a real basis the
+   badges wrap instead and the identity gets the width back on its own line;
+   `min-width: 0` stays, for the long paths it has to truncate rather than
+   overflow. */
 .int-row-identity {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 15rem;
 }
 .int-row-name {
   font-size: var(--fs-xs);

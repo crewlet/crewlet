@@ -127,7 +127,19 @@ function AdminRoutes({ rest }: { rest: string[] }) {
     case "integrations":
       return <Integrations key={tail[0] ?? ""} kind={tail[0]} />;
     case "tools":
-      return <Tools key={tail.join("/")} server={tail[0] === "servers" ? tail[1] : undefined} />;
+      // TWO SHAPES UNDER ONE SEGMENT, and they do not overlap: `servers/{name}`
+      // is a FILTER on the catalogue's origin, and a bare `{name}` is one TOOL
+      // — which is what `objects.ts` calls a tool's page and where a tool
+      // peek's `Open ↗` goes. The bare form used to fall through with the
+      // segment dropped, so that link landed on the unfiltered catalogue and a
+      // reader lost the tool they had open.
+      return (
+        <Tools
+          key={tail.join("/")}
+          server={tail[0] === "servers" ? tail[1] : undefined}
+          tool={tail[0] && tail[0] !== "servers" ? tail.join("/") : undefined}
+        />
+      );
     case "config":
       return (
         <ConfigScreen

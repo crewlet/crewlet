@@ -43,6 +43,10 @@ import { ChannelPeek } from "~/routes/activity/Conversations.tsx";
 import { EventPeek } from "~/routes/activity/Event.tsx";
 import { SchedulePeek } from "~/routes/activity/Schedules.tsx";
 import { NodePeek } from "~/routes/admin/Fleet.tsx";
+import { ToolPeek } from "~/routes/admin/Tools.tsx";
+import { IntegrationPeek } from "~/routes/admin/Integrations.tsx";
+import { CredentialPeek } from "~/routes/admin/Secrets.tsx";
+import { RevisionPeek } from "~/routes/admin/Config.tsx";
 
 /**
  * What every peek is handed.
@@ -73,6 +77,10 @@ export const PEEKS: Partial<Record<ObjectKind, (props: PeekProps) => React.React
   event: ({ id }) => <EventPeek eventId={id} />,
   schedule: ({ id }) => <SchedulePeek scope={id} />,
   node: ({ id }) => <NodePeek id={id} />,
+  tool: ({ id }) => <ToolPeek name={id} />,
+  integration: ({ id }) => <IntegrationPeek kind={id} />,
+  credential: ({ id }) => <CredentialPeek name={id} />,
+  revision: ({ id }) => <RevisionPeek id={id} />,
 };
 
 /** Whether this kind can be peeked at all. */

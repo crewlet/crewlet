@@ -748,6 +748,16 @@ export interface FleetNode {
   config_epoch?: number;
   config_status?: string;
   config_error?: string;
+  /**
+   * WHICH revision this node is on, which the epoch does not say.
+   *
+   * Carried on the apply record for exactly this reason: a fleet view is read
+   * while nodes are mid-transition, and a node still on the previous revision
+   * is what an operator is looking for. `internal/api/queries/fleet.go` has
+   * written it on every row since it was added; this type simply never
+   * declared it, so the one screen that compares them read it through a cast.
+   */
+  config_revision_id?: string;
   config_reported_at?: string;
   in_flight?: number;
   draining?: boolean;

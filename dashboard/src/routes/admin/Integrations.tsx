@@ -22,13 +22,24 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { QueryState, SeatChip } from "~/components/common.tsx";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QueryState } from "~/components/common.tsx";
 import { Avatar, Badge, Button, Empty, Panel, Skeleton } from "~/ui/primitives.tsx";
-import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import { DataGrid, type GridColumn } from "~/app/frame/DataGrid.tsx";
+import {
+  Dash,
+  DateCell,
+  DurationCell,
+  KeyCell,
+  NumberCell,
+  SeatCell,
+  StatusCell,
+  TextCell,
+} from "~/app/frame/cells.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
+import { fmtDate, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { Icon } from "~/ui/Icon.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "~/ui/VendorMark.tsx";
@@ -41,6 +52,7 @@ import type {
   IntegrationRow,
   ReconcileFinding,
   ReconcileStatus,
+  SetupRun,
 } from "~/protocol/types.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
@@ -417,6 +429,149 @@ export function rollUp(
   };
 }
 
+// ---------------------------------------------------------------------------
+// What an integration IS, in facts
+// ---------------------------------------------------------------------------
+
+/**
+ * A counter summed over the surfaces one tool is made of, still three-valued.
+ *
+ * A SURFACE THAT CANNOT SAY CONTRIBUTES NOTHING RATHER THAN ZERO, so the total
+ * is a FLOOR: `null` is this process reporting that it could not read its own
+ * event log, and folding that in as 0 would turn "nobody looked" into "nothing
+ * arrived there". Where no surface can say at all the answer stays null, which
+ * is the em dash [NumberCell] draws and the one this screen means by it.
+ */
+function total(
+  present: Present[],
+  pick: (row: IntegrationRow) => number | null | undefined,
+): number | null {
+  let sum: number | null = null;
+  for (const p of present) {
+    const one = pick(p.row);
+    if (one == null) continue;
+    sum = (sum ?? 0) + one;
+  }
+  return sum;
+}
+
+/** The most recent of an instant across a tool's surfaces, or null. */
+function latestOf(
+  present: Present[],
+  pick: (row: IntegrationRow) => string | null | undefined,
+): string | null {
+  let best = "";
+  for (const p of present) {
+    const at = pick(p.row) ?? "";
+    if (at !== "" && tsKey(at) > tsKey(best)) best = at;
+  }
+  return best === "" ? null : best;
+}
+
+/**
+ * The SOONEST of an instant across a tool's surfaces, or null.
+ *
+ * The other direction from [latestOf], and not a flag on it: "when did
+ * anything last look" and "when does anything look next" are two questions,
+ * and taking the latest of the second would report the slowest surface's tick
+ * as the whole tool's — on a card whose every other roll-up reports the LEAST
+ * ready surface, that is the wrong end of the list every time.
+ */
+function soonestOf(
+  present: Present[],
+  pick: (row: IntegrationRow) => string | null | undefined,
+): string | null {
+  let best = "";
+  for (const p of present) {
+    const at = pick(p.row) ?? "";
+    if (at !== "" && (best === "" || tsKey(at) < tsKey(best))) best = at;
+  }
+  return best === "" ? null : best;
+}
+
+/**
+ * The facts one integration answers, in one order.
+ *
+ * ONE FUNCTION, because the page and the peek must show the SAME facts in the
+ * SAME order — see `app/frame/ObjectHeader.tsx`. Two lists drift the moment
+ * either one gains a value, and a reader who has to re-learn an object every
+ * time it changes frame is what that component exists to prevent.
+ *
+ * THE COUNTS ARE GATED ON `traffic_known`, which is not a detail. `inbound`
+ * arrives as a plain number, and a node that could not read its event log
+ * sends ZERO for every surface — the engine says so at the field
+ * (internal/api/queries/company.go) and carries `traffic_known` beside the
+ * rows for exactly this reason. Rendered straight, the one screen that answers
+ * "is anything arriving at all" would report the alarming answer on precisely
+ * the node that had not looked. So a measurement nobody made is null here,
+ * which draws the dash, and the note says which of the two a reader has.
+ *
+ * `skipped` and `coalesced` are already three-valued on the wire; they are
+ * gated too, because a rule applied to one count and not its neighbours is one
+ * somebody has to re-derive per column.
+ */
+export function integrationFacts(
+  entry: Entry,
+  rows: Map<string, IntegrationRow>,
+  now: number,
+  traffic: { known: boolean; since?: string | null },
+): Fact[] {
+  const present = presentSurfaces(entry, rows);
+  const covered = !traffic.known
+    ? "this node could not read its event log"
+    : traffic.since
+      ? `since ${fmtDate(traffic.since)}`
+      : undefined;
+  const counted = (pick: (row: IntegrationRow) => number | null | undefined): number | null =>
+    traffic.known ? total(present, pick) : null;
+  return [
+    {
+      label: "Delivered",
+      value: (
+        <NumberCell
+          value={counted((r) => r.inbound)}
+          title="deliveries this engine verified and stored"
+        />
+      ),
+      note: covered,
+    },
+    {
+      // NO NOTE ON THE OTHER TWO, although the same window covers them: a
+      // fact line whose every value carries the same footnote is one nobody
+      // reads, which is what `Fact.note` says about itself. The three counts
+      // are read together and the first one states what they all cover.
+      label: "Dropped",
+      value: (
+        <NumberCell
+          value={counted((r) => r.skipped)}
+          title="verified, and turned into work for nobody"
+        />
+      ),
+    },
+    {
+      label: "Coalesced",
+      value: (
+        <NumberCell
+          value={counted((r) => r.coalesced)}
+          title="folded into a wake the seat already had"
+        />
+      ),
+    },
+    {
+      // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
+      // reports what the last pass CONCLUDED and never when that was, so a
+      // surface checked a moment ago and one nothing has looked at in an hour
+      // read identically.
+      label: "Last pass",
+      value: <DateCell at={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />,
+    },
+    {
+      label: "Next pass",
+      value: <DateCell at={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />,
+    },
+  ];
+}
+
 /**
  * What the reconcile loop last found for one surface.
  *
@@ -725,6 +880,55 @@ export function disconnectOrder(
 }
 
 /**
+ * What is wrong with one surface, as badges.
+ *
+ * TWO READERS, ONE COPY. The card's surface row draws these under a tool the
+ * operator has opened, and the peek draws them beside EVERY surface whether or
+ * not it is faulted — the peek answers "is this the one I meant", and a
+ * surface that renders nothing when it is healthy cannot answer it. Written
+ * twice, the two would disagree about what an unresolved secret means the
+ * first time either one gained a badge.
+ *
+ * EVERY ONE OF THEM IS A FALSE, never a missing value: each of these fields is
+ * three-valued and `null` is "nothing here can say", which is not a fault to
+ * badge a surface with.
+ */
+function SurfaceBadges({ row }: { row: IntegrationRow }) {
+  return (
+    <>
+      {row.secret_usable === false && (
+        <Badge
+          tone="caution"
+          outline
+          title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
+        >
+          secret unresolved
+        </Badge>
+      )}
+      {row.routes === false && (
+        <Badge
+          tone="caution"
+          outline
+          title="deliveries are verified and stored, and no parser turns them into work for a seat"
+        >
+          routes nowhere
+        </Badge>
+      )}
+      {row.endpoint_current === false && (
+        <Badge
+          tone="caution"
+          outline
+          title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
+        >
+          address moved
+        </Badge>
+      )}
+      {row.enabled === false && <Badge outline>paused</Badge>}
+    </>
+  );
+}
+
+/**
  * What one surface has to report, or nothing.
  *
  * A CARD'S BODY IS ITS AGENTS. It used to open with a row per surface —
@@ -770,34 +974,7 @@ function SurfaceRow({
       </div>
 
       <div className="int-row-badges">
-        {row.secret_usable === false && (
-          <Badge
-            tone="caution"
-            outline
-            title="the config names a secret whose ${VAR} resolved to nothing, so every delivery is refused"
-          >
-            secret unresolved
-          </Badge>
-        )}
-        {row.routes === false && (
-          <Badge
-            tone="caution"
-            outline
-            title="deliveries are verified and stored, and no parser turns them into work for a seat"
-          >
-            routes nowhere
-          </Badge>
-        )}
-        {row.endpoint_current === false && (
-          <Badge
-            tone="caution"
-            outline
-            title="this surface is registered at an address that is no longer this deployment's, so its deliveries go nowhere"
-          >
-            address moved
-          </Badge>
-        )}
-        {row.enabled === false && <Badge outline>paused</Badge>}
+        <SurfaceBadges row={row} />
       </div>
       {/* BOTH ADDRESSES, because the fix is to replace one with the other
           at the third-party app and a reader cannot do that from a badge.
@@ -1138,6 +1315,7 @@ export function EntryRow({
   rows,
   sections,
   publicBase,
+  titled,
   onConnect,
   onDisconnect,
 }: {
@@ -1150,6 +1328,17 @@ export function EntryRow({
   publicBase?: string;
   /** The engine's setup state per surface this tool is made of. */
   sections?: { name: string; tool: SetupToolState }[];
+  /**
+   * Whether something above this card already names the tool and states it.
+   *
+   * THE FOCUSED PAGE HAS AN OBJECT HEADER, and its status badge is this card's
+   * own roll-up — the same value out of the same function — so drawing it here
+   * too is one state in two places thirty pixels apart, ready to disagree the
+   * moment either read moves. The card keeps every control; the WORD goes to
+   * the header, which is where a page says what it is about. On the catalogue,
+   * where nothing names the tool but the card, it stays.
+   */
+  titled?: boolean;
   /** Open the settings form: the connect form, and the same one afterwards. */
   onConnect?: () => void;
   /** Take the tool away. Absent for a tool nothing has configured. */
@@ -1211,7 +1400,7 @@ export function EntryRow({
   // rather than behind a header button competing with Disconnect.
   const actions = (
     <>
-      {state.tag !== "" && (
+      {!titled && state.tag !== "" && (
         <Badge tone={state.tone} outline={state.outline}>
           {state.tag}
         </Badge>
@@ -1669,7 +1858,25 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
             rows={rows}
             rowKey={(e) => e.id}
             defaultSort="-at"
-            onRowActivate={(e) => nav.to(["activity", "events", e.id])}
+            // THE ROW IS A REAL LINK to the delivery's own event, so the
+            // middle button, ⌘-click and the status bar all behave — which
+            // they did not, because the row carried a click handler and no
+            // address at all.
+            //
+            // AND A PLAIN CLICK STILL NAVIGATES, which is the opposite of the
+            // rule every list of a PEEKABLE kind follows. An event has no peek
+            // in this build (`app/frame/peeks.tsx` registers six kinds and
+            // `event` is not one), and `PeekHost` closes the rail for a kind
+            // with no body — so opening one here would be a click that does
+            // nothing at all. The raw delivery is also the whole reason to
+            // open a webhook row, and that is a page rather than a panel.
+            rowHref={(e) => href(["activity", "events", e.id])}
+            onRowActivate={(e, event) => {
+              // THE ANCHOR DOES THE MOUSE. What it never sees is the grid's
+              // own `enter` chord, which carries no button because it is not
+              // a mouse event at all.
+              if (!("button" in event)) nav.to(["activity", "events", e.id]);
+            }}
             empty={{ title: "No delivery matches" }}
             columns={[
               {
@@ -1677,11 +1884,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 header: "Arrived",
                 shrink: true,
                 sortValue: (e) => tsKey(e.timestamp),
-                cell: (e) => (
-                  <span className="t-caption" title={fmtDateTime(e.timestamp)}>
-                    {relTime(e.timestamp, now)}
-                  </span>
-                ),
+                cell: (e) => <DateCell at={e.timestamp} now={now} />,
               },
               {
                 key: "event",
@@ -1698,7 +1901,7 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
               {
                 key: "summary",
                 header: "What it said",
-                cell: (e) => <span className="t-caption">{e.summary}</span>,
+                cell: (e) => <TextCell>{e.summary}</TextCell>,
               },
               {
                 key: "for",
@@ -1707,12 +1910,16 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 sortValue: (e) => e.tags?.recipient ?? "",
                 cell: (e) =>
                   e.tags?.recipient ? (
-                    <SeatChip name={e.tags.recipient} handle={e.tags.recipient} />
+                    // THE SEAT AS IT LOOKS EVERYWHERE ELSE — the mark and the
+                    // name, linking to the seat. A delivery is addressed to a
+                    // colleague, and a colleague should not be a chip on this
+                    // grid and an avatar on the next.
+                    <SeatCell handle={e.tags.recipient} name={e.tags.recipient} />
                   ) : (
-                    // NOT "nobody": a company-wide delivery is routed by
-                    // the notification spine rather than addressed in the
-                    // URL, and calling that unaddressed would read as a
-                    // delivery that reached no one.
+                    // NOT THE CELL'S OWN "nobody" DASH: a company-wide
+                    // delivery is routed by the notification spine rather than
+                    // addressed in the URL, and calling that unaddressed would
+                    // read as a delivery that reached no one.
                     <span className="faint t-caption">the company</span>
                   ),
               },
@@ -1723,9 +1930,12 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
                 sortValue: (e) => e.tags?.delivery_key ?? "",
                 cell: (e) =>
                   e.tags?.delivery_key ? (
-                    <code className="inline nowrap">{e.tags.delivery_key}</code>
+                    <KeyCell value={e.tags.delivery_key} />
                   ) : (
-                    <span className="faint t-caption">none sent</span>
+                    // A DASH THAT SAYS WHICH ABSENCE THIS IS. Not every
+                    // provider sends an id of its own, and a blank cell and an
+                    // id nobody sent are different facts.
+                    <Dash title="this provider sent no delivery id" />
                   ),
               },
             ]}
@@ -1752,6 +1962,873 @@ function SurfaceDeliveries({ surface, name }: { surface: string; name: string })
  * and the event log is where a reader goes to page through history.
  */
 const DELIVERY_PAGE = 50;
+
+// ---------------------------------------------------------------------------
+// The provisioning passes
+// ---------------------------------------------------------------------------
+
+/**
+ * What `GET /setup/integrations/{kind}/runs` answers.
+ *
+ * Declared here rather than in the protocol types, for the reason the setup
+ * dialog gives for its own answer shape: it is the ENVELOPE of one read made
+ * on one screen. The record inside it is `SetupRun`, which is shared — the
+ * same run comes back from a pass this dashboard starts, and from
+ * `runs/{id}`.
+ */
+interface RunListing {
+  runs: SetupRun[];
+  /**
+   * Whose history this is, in the engine's own words ("this node").
+   *
+   * A pass is executed by whichever node held the surface's lease and is
+   * remembered in THAT node's process, so an empty list on a fleet is an
+   * honest answer to a question the reader did not mean to ask. The engine
+   * sends the scope for that reason and the panel prints it.
+   */
+  scope?: string;
+}
+
+/**
+ * How often a pass that is still running is asked about.
+ *
+ * FOUR SECONDS — the cadence this screen already uses while something is
+ * settling, and it is bounded by the pass itself rather than picked: a run is
+ * stopped at `setup.PassDeadline`, four minutes, so a pass still `running`
+ * past that is a node that stopped existing mid-pass rather than work in
+ * progress. A slower poll would leave an operator watching "running" for most
+ * of a minute after the third-party app had already answered, which is the
+ * delay they read as the failure.
+ */
+const PASS_POLL_MS = 4_000;
+
+/**
+ * How often the history is re-read when nothing is running.
+ *
+ * A MINUTE, the cadence this screen already reads its traffic counters at, and
+ * it is not idleness that earns it: a pass is started by things this panel
+ * cannot see — the loop's own tick, a connect in the dialog above it, another
+ * operator pressing recheck on another node — so a panel that only polled
+ * while it already knew a pass was running would report "no pass has run"
+ * across the whole of the first one.
+ */
+const PASS_IDLE_POLL_MS = 60_000;
+
+/**
+ * The passes this node has run for a tool, newest first.
+ *
+ * ONE READ PER KIND, because the route is keyed on one and a card is several:
+ * Atlassian's organization, Jira and Confluence each converge separately and
+ * each has a history of its own. They are merged on the clock rather than
+ * drawn as three tables, because what an operator is reading is a history of
+ * one TOOL and which surface it was is a column of it.
+ *
+ * ONLY WHAT IS A KIND. `forge` is a surface of the Atlassian card and is not
+ * in `integration.Kinds`, so the route answers 404 for it — the caller passes
+ * the keys the setup listing carries, which is that same set.
+ *
+ * REST, LIKE [useSetup], AND FOR THE SAME REASONS: no query in the socket's
+ * registry answers anything about a pass, and `/setup` is guarded in full —
+ * so a reader with no operator token is REFUSED here rather than shown an
+ * empty history, and `guarded` is what tells those two apart.
+ */
+function useSetupRuns(kinds: string[]): {
+  runs: SetupRun[];
+  scope: string;
+  guarded: boolean;
+  loading: boolean;
+} {
+  // THE KEY IS THE DEPENDENCY, not the array. A caller derives its kinds from
+  // the catalogue on every render, so an effect depending on the array itself
+  // would re-read this several times a second.
+  const key = kinds.join(",");
+  const [runs, setRuns] = useState<SetupRun[]>([]);
+  const [scope, setScope] = useState("");
+  const [guarded, setGuarded] = useState(false);
+  const [loading, setLoading] = useState(key !== "");
+  // THE READ THAT ANSWERS LAST IS NOT THE READ THAT WAS ASKED LAST — the same
+  // generation counter [useSetup] keeps, and for the same reason: a poll tick
+  // and the re-read that follows a pass are in flight together every time one
+  // ends.
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current++;
+    },
+    [],
+  );
+
+  const reload = useCallback(
+    (quiet = false) => {
+      generation.current++;
+      const mine = generation.current;
+      const wanted = key === "" ? [] : key.split(",");
+      if (wanted.length === 0) {
+        // NOTHING TO ASK IS NOT A LOADING STATE. With no kind there is no
+        // route, and a panel that spun for ever would be reporting a wait on
+        // a request nobody made.
+        setRuns([]);
+        setScope("");
+        setLoading(false);
+        return;
+      }
+      if (!quiet) setLoading(true);
+      void (async () => {
+        try {
+          const answers = (await Promise.all(
+            wanted.map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`)),
+          )) as RunListing[];
+          if (generation.current !== mine) return;
+          setRuns(
+            answers
+              .flatMap((answer) => answer.runs ?? [])
+              .sort((a, b) => tsKey(b.started_at) - tsKey(a.started_at)),
+          );
+          setScope(answers.find((answer) => answer.scope)?.scope ?? "");
+          setGuarded(false);
+        } catch (err) {
+          if (generation.current !== mine) return;
+          setRuns([]);
+          setGuarded(err instanceof RestError && err.unauthorized);
+        } finally {
+          // ANSWERED, not answered WELL — [useSetup] says the rest.
+          if (generation.current === mine) setLoading(false);
+        }
+      })();
+    },
+    [key],
+  );
+
+  useEffect(() => reload(), [reload]);
+  // TWO CADENCES, ONE LOOP. A pass in flight ends on its own inside
+  // `setup.PassDeadline` and this list is the only place that says how it
+  // ended, so it is watched at [PASS_POLL_MS]; the rest of the time the
+  // history still moves without this panel touching anything, which is what
+  // [PASS_IDLE_POLL_MS] is for.
+  //
+  // QUIET, both of them: a re-read that blanked the table into its skeleton
+  // once a minute would take the row an operator was reading out from under
+  // them to say nothing new.
+  const running = runs.some((run) => run.state === "running");
+  useEffect(() => {
+    const timer = setInterval(() => reload(true), running ? PASS_POLL_MS : PASS_IDLE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [running, reload]);
+  // AND WHENEVER THIS TAB COMES BACK. Connecting an integration means leaving
+  // for the third-party app and returning, and the pass that ran while the
+  // reader was away is the one they came back to read — the same argument
+  // [useSetup] makes for re-reading its listing, on the same event.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") reload(true);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [reload]);
+
+  return { runs, scope, guarded, loading };
+}
+
+/**
+ * ONE pass, read fresh.
+ *
+ * WHY NOT THE ROW THAT WAS CLICKED: the listing is a snapshot of the moment it
+ * answered, and it is capped at ten (`setupapi.MaxRunsListed`) against the
+ * runner's own memory of thirty-two. This route answers a single pass —
+ * including one the listing has already dropped, and including one that is
+ * still going, which is what makes a running pass readable WHILE it runs
+ * rather than by fetching every other pass's findings again beside it.
+ *
+ * `missing` is the engine's own 404 and is NOT an error to draw in red: a run
+ * is remembered by the node that executed it and only for its last few passes,
+ * so ageing out is the ordinary end of one's life. What it concluded is folded
+ * into the surface's state either way.
+ */
+function useSetupRun(
+  kind: string,
+  id: string,
+): { run: SetupRun | null; missing: boolean; guarded: boolean; loading: boolean } {
+  const [run, setRun] = useState<SetupRun | null>(null);
+  const [missing, setMissing] = useState(false);
+  const [guarded, setGuarded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const generation = useRef(0);
+  useEffect(
+    () => () => {
+      generation.current++;
+    },
+    [],
+  );
+
+  const read = useCallback(
+    (quiet = false) => {
+      generation.current++;
+      const mine = generation.current;
+      if (kind === "" || id === "") {
+        setRun(null);
+        setMissing(false);
+        setLoading(false);
+        return;
+      }
+      if (!quiet) setLoading(true);
+      void (async () => {
+        try {
+          const answer = (await rest.get(
+            `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
+          )) as SetupRun;
+          if (generation.current !== mine) return;
+          setRun(answer);
+          setMissing(false);
+          setGuarded(false);
+        } catch (err) {
+          if (generation.current !== mine) return;
+          setRun(null);
+          setMissing(err instanceof RestError && err.status === 404);
+          setGuarded(err instanceof RestError && err.unauthorized);
+        } finally {
+          if (generation.current === mine) setLoading(false);
+        }
+      })();
+    },
+    [kind, id],
+  );
+
+  useEffect(() => read(), [read]);
+  // FOLLOWED TO ITS END, and only while it is going: the row that opened this
+  // may have been a pass that was running when the list answered.
+  const running = run?.state === "running";
+  useEffect(() => {
+    if (!running) return;
+    const timer = setInterval(() => read(true), PASS_POLL_MS);
+    return () => clearInterval(timer);
+  }, [running, read]);
+
+  return { run, missing, guarded, loading };
+}
+
+/**
+ * How a pass ended, in the vocabulary the rest of this screen already uses.
+ *
+ * THE RUN'S REPORT IS WHERE THE TONE COMES FROM, not its findings. A run
+ * carries its findings RAW — `setup.Run` marshals `integration.Finding` itself
+ * — so unlike the socket's reconcile rows they arrive with no verdict on them
+ * (the query surface is what adds `phase`, from `FindingKind.Verdict`), and
+ * colouring one here would be this build inventing a severity. What the run
+ * does carry is `report`, which IS the engine's classification of exactly
+ * those findings, so the pass wears the phase its own findings classify to.
+ *
+ * A STATE THIS BUILD DOES NOT KNOW IS DRAWN AS ITSELF, in neutral — the same
+ * rule [phaseTone] follows, and for the same reason.
+ */
+function passState(run: SetupRun): { glyph: string; label: string; tone: Tone; title: string } {
+  switch (run.state) {
+    case "running":
+      return {
+        glyph: "◐",
+        label: "running",
+        tone: "info",
+        title: "this pass is still going; the engine holds the surface's lease until it ends",
+      };
+    case "failed":
+      return {
+        glyph: "✕",
+        label: "failed",
+        tone: "critical",
+        title:
+          run.error ||
+          "the third-party app refused this pass; nothing it had already done is undone",
+      };
+    case "done": {
+      const phase = run.report?.phase ?? "";
+      return {
+        glyph: "●",
+        // THE ENGINE'S OWN WORD, with its underscores opened — which is all
+        // this build can honestly do with it. A run's report carries the
+        // phase and NOT the `phase_label` the socket's rows do: that label is
+        // derived in Go on the query surface, and a marshalled
+        // `integration.Report` never passes through it.
+        label: phase === "" ? "done" : phase.replace(/_/g, " "),
+        tone: phaseTone(phase),
+        title: run.report?.detail || "the pass ran and the third-party app answered",
+      };
+    }
+    default:
+      return {
+        glyph: "○",
+        label: run.state || "unknown",
+        tone: "neutral",
+        title: "a state this build does not know; a newer node wrote it",
+      };
+  }
+}
+
+/**
+ * How long a pass took, or null while it is still going.
+ *
+ * NULL RATHER THAN "now minus started", which is the obvious alternative and
+ * is a different measurement: a run whose node died mid-pass would report a
+ * duration that grows for ever. [DurationCell] draws "not measured" for this,
+ * which is exactly what it is until the run ends.
+ */
+function passMs(run: SetupRun): number | null {
+  if (!run.ended_at) return null;
+  const ms = tsKey(run.ended_at) - tsKey(run.started_at);
+  return ms >= 0 ? ms : null;
+}
+
+/** The one line a pass's outcome reduces to, for the column that has one. */
+function concludedLine(run: SetupRun): string {
+  // THE FAULT FIRST. A pass that could not run has no report to classify, and
+  // the engine's sentence is the whole of what happened.
+  if (run.error) return run.error;
+  if (run.report?.detail) return run.report.detail;
+  if (run.state === "running") return "still running";
+  const found = run.findings?.length ?? 0;
+  return found === 0 ? "nothing outstanding" : plural(found, "finding");
+}
+
+/**
+ * What the reconcile passes actually did.
+ *
+ * THE GAP THIS CLOSES. Every finding on this screen comes from a pass, and
+ * nothing anywhere said that one had ever run: the card reports what the LAST
+ * pass concluded and the loop's cadence, which answers "what is wrong" and
+ * never "what has been happening". An operator who fixed something at the
+ * third-party app could not tell a surface that had just been checked from one
+ * nothing had looked at in an hour — and a pass running right now, which is
+ * the state most worth seeing, was invisible until it ended.
+ *
+ * THE FINDINGS ARE THE POINT OF A ROW, so opening one reads the pass itself
+ * rather than expanding the row's own copy — see [useSetupRun].
+ */
+function SetupPasses({ entry, kinds }: { entry: Entry; kinds: string[] }) {
+  const now = useNow();
+  const { runs, scope, guarded, loading } = useSetupRuns(kinds);
+  // WHICH PASS IS OPEN, as the surface AND the id rather than the id alone:
+  // the detail route is keyed on both, and a tool has several kinds — an id on
+  // its own could not say which surface's pass it was once the listing that
+  // carried it had moved on.
+  const [open, setOpen] = useState<{ kind: string; id: string } | null>(null);
+  const named = useMemo(
+    () => new Map(entry.surfaces.map((surface) => [surface.key, surface.name])),
+    [entry],
+  );
+
+  if (guarded) {
+    // NOT AN EMPTY HISTORY. `/setup` is guarded in full, reads included, so
+    // this reader is being refused rather than told nothing has run — and the
+    // banner at the top of the screen is where the token is supplied.
+    return (
+      <Panel title="Provisioning passes" icon="refresh">
+        <span className="t-caption">
+          Reading what a pass found needs an operator token, so this is what the engine will not say
+          without one.
+        </span>
+      </Panel>
+    );
+  }
+
+  const columns: GridColumn<SetupRun>[] = [
+    {
+      key: "ran",
+      header: "Ran",
+      shrink: true,
+      sortValue: (run) => tsKey(run.started_at),
+      cell: (run) => <DateCell at={run.started_at} now={now} />,
+    },
+    // THE SURFACE ONLY WHERE THERE IS MORE THAN ONE. A column whose every
+    // value is the tool's own name is a column that says nothing.
+    ...(kinds.length > 1
+      ? [
+          {
+            key: "surface",
+            header: "Surface",
+            shrink: true,
+            sortValue: (run: SetupRun) => named.get(run.key) ?? run.key,
+            cell: (run: SetupRun) => <TextCell>{named.get(run.key) ?? run.key}</TextCell>,
+          },
+        ]
+      : []),
+    {
+      key: "state",
+      header: "How it ended",
+      shrink: true,
+      sortValue: (run) => run.state,
+      cell: (run) => {
+        const state = passState(run);
+        return (
+          <StatusCell
+            glyph={state.glyph}
+            label={state.label}
+            tone={state.tone}
+            title={state.title}
+          />
+        );
+      },
+    },
+    {
+      key: "took",
+      header: "Took",
+      shrink: true,
+      align: "right",
+      // A RUNNING PASS SORTS LAST rather than as zero: it has no duration
+      // yet, and a column sorted by "shortest" that put every live pass at
+      // the top would be ordering on a measurement nobody made.
+      sortValue: (run) => passMs(run) ?? -1,
+      cell: (run) => <DurationCell ms={passMs(run)} />,
+    },
+    {
+      key: "findings",
+      header: "Findings",
+      shrink: true,
+      align: "right",
+      sortValue: (run) => run.findings?.length ?? 0,
+      // ZERO IS THE GOOD ANSWER HERE, and it has to look like one: a
+      // converged third-party app reports an EMPTY slice rather than saying it
+      // is fine (`integration.Classify`), so "found nothing" and "nothing
+      // recorded" must not draw the same mark. That is the whole of
+      // [NumberCell].
+      cell: (run) => (
+        <NumberCell
+          value={run.findings?.length ?? 0}
+          title="what this pass observed that was not fine"
+        />
+      ),
+    },
+    {
+      key: "detail",
+      header: "What it concluded",
+      cell: (run) => <TextCell>{concludedLine(run)}</TextCell>,
+    },
+  ];
+
+  return (
+    <Panel
+      title="Provisioning passes"
+      icon="refresh"
+      count={runs.length}
+      subtitle={`what ${scope || "this node"} has run — a pass another node ran is remembered there`}
+      padding="none"
+    >
+      <DataGrid<SetupRun>
+        rows={runs}
+        rowKey={(run) => run.run_id}
+        defaultSort="-ran"
+        isSelected={(run) => run.run_id === open?.id}
+        // A ROW OPENS THE PASS, in place. There is no page for a run and no
+        // peek either — a pass is not one of the kinds `app/frame/objects.ts`
+        // addresses, because it is one node's memory of a few minutes' work
+        // rather than an object with a life of its own — so what a row
+        // discloses is its findings, under the list it came from.
+        onRowActivate={(run) =>
+          setOpen((was) => (was?.id === run.run_id ? null : { kind: run.key, id: run.run_id }))
+        }
+        // WHICH ABSENCE THIS IS. A read still in flight and a node that has
+        // run nothing are the same empty array, and only one of them is a
+        // fact about the integration — a table that announced "no pass has
+        // run" for the half second before its answer landed would be the
+        // alarming one, said first.
+        empty={
+          loading
+            ? { title: "Reading this node's passes", icon: "refresh" }
+            : {
+                title: "No pass has run on this node",
+                icon: "refresh",
+                hint: "The loop runs one per surface on its own cadence, and connecting an integration runs one at once. A pass another node ran is remembered on that node.",
+              }
+        }
+        columns={columns}
+      />
+      {open && (
+        // AT THE FOOT OF THE LIST IT CAME FROM, ruled off and inset the way
+        // every other trailing note on a panel is — the grid itself is flush
+        // to the panel's edges, as every grid in this product is.
+        <footer className="panel-foot">
+          <PassDetail
+            kind={open.kind}
+            id={open.id}
+            name={named.get(open.kind) ?? open.kind}
+            now={now}
+          />
+        </footer>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * One pass, opened: what it found, and what it could not do about it.
+ *
+ * THE FINDINGS ARE LAID OUT THE WAY THE CARD'S ARE — what is wrong, which
+ * things, what to do — because they are the same findings, arriving by another
+ * route. What is deliberately NOT here is a tone per finding: see [passState],
+ * a run's findings carry no verdict, and the pass's own phase is the honest
+ * place to put one.
+ */
+function PassDetail({
+  kind,
+  id,
+  name,
+  now,
+}: {
+  kind: string;
+  id: string;
+  /** The surface in the reader's words, from the catalogue. */
+  name: string;
+  now: number;
+}) {
+  const { run, missing, guarded, loading } = useSetupRun(kind, id);
+
+  if (loading && !run) return <Skeleton rows={4} />;
+  if (missing) {
+    return (
+      <div className="int-row-note">
+        <span className="int-row-note-text">
+          <span className="int-note-problem">This pass is no longer remembered.</span>
+          <span className="int-row-note-when">
+            A run is kept by the node that executed it, and only for its last few passes. What it
+            concluded is folded into the surface&rsquo;s own state either way, which is what the
+            card above reports.
+          </span>
+        </span>
+      </div>
+    );
+  }
+  if (guarded) {
+    return (
+      <div className="int-row-note">
+        <span className="int-row-note-text">
+          <span className="int-row-note-when">Reading one pass needs an operator token.</span>
+        </span>
+      </div>
+    );
+  }
+  if (!run) return null;
+
+  const state = passState(run);
+  const findings = run.findings ?? [];
+  return (
+    <div className="int-row-note">
+      <div className="int-row-note-text">
+        <p className="int-note-problem">
+          {name} · {state.label}
+        </p>
+        <span className="int-row-note-when">
+          started {fmtDateTime(run.started_at)} ({relTime(run.started_at, now)})
+          {run.ended_at ? `, ended ${fmtDateTime(run.ended_at)}` : ""}
+        </span>
+        {/* THE FAULT, WHERE THERE IS ONE. A pass that could not run has no
+            findings to show and the engine's sentence is the whole answer. */}
+        {run.error && <p className="int-note-problem">{run.error}</p>}
+        {findings.length > 0 ? (
+          <ul className="col int-findings">
+            {findings.map((finding, at) => (
+              <li key={`${finding.kind}:${finding.subject ?? ""}:${at}`} className="col gap-1">
+                <span className="int-note-problem">
+                  {finding.detail ||
+                    `${finding.kind.replace(/_/g, " ")}${finding.subject ? `: ${finding.subject}` : ""}`}
+                </span>
+                <FindingSubjects of={finding} />
+                {finding.remedy && <span className="int-note-remedy">{finding.remedy}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className="int-row-note-when">
+            {run.state === "running"
+              ? "Nothing outstanding so far — a pass records what it observes as it goes."
+              : "This pass found nothing outstanding."}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The peek
+// ---------------------------------------------------------------------------
+
+/**
+ * Every finding the loop holds about a tool, worst first.
+ *
+ * ACROSS SURFACES, because a tool is one thing to a reader and three answers
+ * to the engine. The order is the finding's OWN verdict: the advisory ones —
+ * `phase: "ready"`, something the engine did not do on an integration that
+ * works — sink below everything outstanding rather than being dropped, because
+ * an operator reading what is wrong is entitled to the notes as well.
+ *
+ * The surface travels with each one, since the peek rolls three answers into
+ * one list and "which of them said this" is the first thing a reader asks of
+ * it.
+ */
+function openFindings(present: Present[]): { surface: string; finding: ReconcileFinding }[] {
+  return present
+    .flatMap((p) =>
+      (p.row.reconcile?.findings ?? []).map((finding) => ({ surface: p.surface.name, finding })),
+    )
+    .sort((a, b) => Number(advisory(a.finding)) - Number(advisory(b.finding)));
+}
+
+/**
+ * The newest delivery on one surface, or the honest absence of one.
+ *
+ * ONE ROW, ONE READ, and the read is keyed on the SURFACE because that is what
+ * an event row carries as its source. A single read over the whole `webhook`
+ * category could not answer this: a busier integration's page would push this
+ * tool's last delivery off the end, and a short page would read as silence —
+ * which on the panel that exists to say whether anything is arriving is the
+ * one wrong answer.
+ */
+function LastDelivery({ surface, name, now }: { surface: string; name: string; now: number }) {
+  // A minute, the cadence "is anything arriving at all" is asked at — the same
+  // one the deliveries panel and the traffic counters use. A delivery arrives
+  // on the provider's schedule rather than this panel's.
+  const deliveries = useQuery(
+    "events",
+    { category: "webhook", source: surface, limit: 1 },
+    { pollMs: 60_000, refetchOnFocus: true },
+  );
+  const row = deliveries.data?.events?.[0];
+  return (
+    <li className="int-row">
+      <div className="int-row-identity">
+        <span className="int-row-name">{name}</span>
+        <span className="int-row-detail">
+          {/* A FAILED READ IS NOT SILENCE. This is the only thing on the peek
+              that can see the event log, so nothing else contradicts it, and
+              "nothing has arrived" over a read that never answered is the
+              alarming answer given on no evidence. */}
+          {deliveries.error
+            ? "this node could not read its event log"
+            : deliveries.loading && !deliveries.data
+              ? "reading"
+              : row
+                ? row.summary
+                : "nothing has arrived on this surface"}
+        </span>
+      </div>
+      {row ? (
+        <DateCell at={row.timestamp} now={now} />
+      ) : (
+        <Dash title="no delivery is recorded for this surface" />
+      )}
+    </li>
+  );
+}
+
+/**
+ * One integration, beside whatever brought the reader to it.
+ *
+ * THE TOOL, NOT THE SURFACE, and by the SAME lookup the screen behind it uses:
+ * a finding and a webhook route both name the surface (`jira`) while the card
+ * is the tool (`atlassian`), so both addresses resolve here to the object the
+ * page would have shown. A peek that resolved them differently would be a
+ * second answer to "what is this", which is the one thing the frame's header
+ * exists to stop.
+ *
+ * IT ASKS FOR ITS OWN ROWS. The catalogue is static and needs no read, but
+ * what an integration is DOING is the socket's answer, and this is opened from
+ * a pasted URL as often as from a row — see `app/frame/peeks.tsx`.
+ *
+ * THE CHROME IS THE FRAME'S. No rail, no way out, no close: those are the same
+ * on every kind, and this renders the integration's own content and nothing
+ * else.
+ */
+export function IntegrationPeek({ kind }: { kind: string }) {
+  const now = useNow();
+  const { data, loading, error } = useQuery("integrations", undefined, {
+    enabled: kind !== "",
+    // The same slow cadence the screen uses at rest: traffic counters move
+    // slowly, and a peek is read for seconds rather than watched.
+    pollMs: 60_000,
+    refetchOnFocus: true,
+  });
+  // THE SECOND HALF, for the same reason the screen reads it: whether anything
+  // CONVERGES a surface decides whether a missing reconcile row is a window or
+  // a resting state, and without it Slack — whose apps are made by hand and
+  // whose loop writes no status row, ever — reports "Connecting" for as long
+  // as it is configured. See [rollUp].
+  const setup = useSetup();
+  const rows = useMemo(
+    () => new Map((data?.integrations ?? []).map((row) => [row.key, row])),
+    [data],
+  );
+  const entry = CATALOG.find((e) => e.key === kind || e.surfaces.some((s) => s.key === kind));
+
+  if (!entry) {
+    return (
+      <Empty
+        inline
+        icon="plug"
+        title={`This build serves no integration called “${kind}”`}
+        hint="The link that opened this names a surface this engine does not have. Every integration it does serve is on the Integrations screen."
+      />
+    );
+  }
+
+  const present = presentSurfaces(entry, rows);
+  // BY KEY, because a per-seat app contributes one section per agent and they
+  // all carry the same tool — see [EntryRow], which counts them the same way.
+  const tools = [
+    ...new Map(sectionsFor(entry, setup.byKey).map((s) => [s.tool.key, s.tool])).values(),
+  ];
+  const state = rollUp(entry, rows, tools);
+  const findings = openFindings(present);
+
+  return (
+    <>
+      <ObjectHeader
+        size="peek"
+        kind="Integration"
+        icon="plug"
+        identifier={entry.key}
+        title={entry.name}
+        status={
+          state.tag === "" ? undefined : (
+            <Badge tone={state.tone} outline={state.outline}>
+              {state.tag}
+            </Badge>
+          )
+        }
+        // NO FACT LINE OVER A TOOL NOBODY HAS CONNECTED: every one of these is
+        // a measurement of traffic that cannot exist yet, and five em dashes
+        // under a name is a card reporting an absence rather than the absence
+        // itself. The panel below says the one true thing instead.
+        facts={
+          present.length > 0
+            ? integrationFacts(entry, rows, now, {
+                known: data?.traffic_known ?? false,
+                since: data?.traffic_since,
+              })
+            : undefined
+        }
+      />
+      <div className="col gap-3">
+        {loading && !data && <Skeleton rows={6} />}
+        <QueryState error={error} loading={loading}>
+          {data && present.length === 0 && (
+            <Empty
+              inline
+              icon="plug"
+              title={`${entry.name} is not connected`}
+              hint={`${entry.description}. Nothing in this company is configured for it, so no delivery reaches a seat and no pass runs against it.`}
+            />
+          )}
+          {present.length > 0 && (
+            <>
+              {/* WHAT THIS TOOL IS MADE OF, all of it. The card below shows a
+                  surface only when something is wrong with it, which is right
+                  for a reader scanning six integrations and wrong for one
+                  asking whether this is the integration they meant: a tool
+                  whose Jira is fine and whose Confluence is not is a different
+                  object from one with no Confluence at all. */}
+              <Panel title="Surfaces" icon="layers" count={entry.surfaces.length}>
+                <ul className="int-rows">
+                  {entry.surfaces.map((surface) => {
+                    const row = rows.get(surface.key);
+                    return (
+                      <li key={surface.key} className="int-row">
+                        <div className="int-row-identity">
+                          <span className="int-row-name">{surface.name}</span>
+                          <span className="int-row-detail">
+                            {/* A ROW WITH NO RECONCILE IS NOT A HEALTHY ROW.
+                                Null is a process with no loop to ask or a
+                                surface it has not reached, and "nothing
+                                outstanding" there would be this screen
+                                inventing the health it has always refused to
+                                show. */}
+                            {row
+                              ? row.reconcile?.detail ||
+                                row.detail ||
+                                (row.reconcile
+                                  ? "nothing outstanding"
+                                  : "no pass has reported on this surface")
+                              : "not configured"}
+                          </span>
+                        </div>
+                        <div className="int-row-badges">
+                          {row?.reconcile?.phase && (
+                            <Badge tone={phaseTone(row.reconcile.phase)} outline>
+                              {row.reconcile.phase_label || row.reconcile.phase.replace(/_/g, " ")}
+                            </Badge>
+                          )}
+                          {row && <SurfaceBadges row={row} />}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </Panel>
+
+              <Panel title="Findings" icon="alert" count={findings.length}>
+                {findings.length > 0 ? (
+                  <ul className="col int-findings">
+                    {findings.map(({ surface, finding }, at) => (
+                      <li
+                        key={`${finding.kind}:${finding.subject ?? ""}:${at}`}
+                        className="col gap-1"
+                      >
+                        <span className="row wrap gap-2">
+                          {/* THE VERDICT THE ENGINE PUT ON THE KIND, never one
+                              derived here: `phase` travels with every finding
+                              for exactly this, and an ABSENT phase is "cannot
+                              say" rather than fine — which is what
+                              [phaseTone]'s neutral default draws. */}
+                          <Badge tone={phaseTone(finding.phase ?? "")} outline>
+                            {finding.kind.replace(/_/g, " ")}
+                          </Badge>
+                          {present.length > 1 && <span className="t-caption faint">{surface}</span>}
+                        </span>
+                        <span className="int-note-problem">
+                          {finding.detail ||
+                            `${finding.kind.replace(/_/g, " ")}${finding.subject ? `: ${finding.subject}` : ""}`}
+                        </span>
+                        <FindingSubjects of={finding} />
+                        {finding.remedy && (
+                          <span className="int-note-remedy">{finding.remedy}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="t-caption">
+                    {/* WHICH SILENCE THIS IS. A pass that found nothing and a
+                        surface no pass has reached are both an empty list, and
+                        only one of them is good news. */}
+                    {present.some((p) => p.row.reconcile)
+                      ? "The last pass found nothing outstanding."
+                      : "Nothing has reported on this integration yet, which is not the same as nothing being wrong."}
+                  </span>
+                )}
+              </Panel>
+
+              {/* IS ANYTHING ARRIVING, per surface — the question the facts
+                  above count and this one dates. `forge` is left out for the
+                  reason the screen leaves it out of its delivery panels: it is
+                  a relay, and its events are filed under the product they
+                  belong to, so a row for it could only ever be empty. */}
+              <Panel title="Last delivery" icon="inbox">
+                <ul className="int-rows">
+                  {entry.surfaces
+                    .filter((surface) => surface.key !== "forge")
+                    .map((surface) => (
+                      <LastDelivery
+                        key={surface.key}
+                        surface={surface.key}
+                        name={surface.name}
+                        now={now}
+                      />
+                    ))}
+                </ul>
+              </Panel>
+            </>
+          )}
+        </QueryState>
+      </div>
+    </>
+  );
+}
 
 export function Integrations({ kind }: { kind?: string }) {
   // Traffic counters are not pushed, and they move slowly; a minute is the
@@ -1794,6 +2871,10 @@ export function Integrations({ kind }: { kind?: string }) {
     refetchOnFocus: true,
   });
   const setup = useSetup();
+  // ONE CLOCK for every relative time on the screen, the header's facts
+  // included — two components reading their own is how "4m ago" comes to sit
+  // beside "3m ago" for one instant.
+  const now = useNow();
   // READ AGAIN AFTER A WRITE, because the first read can land before the
   // engine has applied the revision it just stored. See [useRecheck].
   const { watching, watch } = useRecheck(
@@ -1828,6 +2909,27 @@ export function Integrations({ kind }: { kind?: string }) {
   const focus = kind
     ? CATALOG.find((e) => e.key === kind || e.surfaces.some((s) => s.key === kind))
     : undefined;
+  // THE HEADER'S OWN ROLL-UP, derived exactly as a card derives its own — the
+  // state of a tool is the least ready of its surfaces, and a page and a card
+  // disagreeing about that would be two answers to one question on one screen.
+  const focusTools = focus
+    ? [...new Map(sectionsFor(focus, setup.byKey).map((s) => [s.tool.key, s.tool])).values()]
+    : [];
+  const focusState = focus ? rollUp(focus, rows, focusTools) : undefined;
+  // WHICH SURFACES OF THIS TOOL A PASS CAN EVEN RUN AGAINST, which is what the
+  // runs route is keyed on: `integration.Kinds`, the same set the setup
+  // listing carries and the same set `DELETE /setup/integrations/{kind}`
+  // accepts. `forge` is a surface of the Atlassian card and is not a kind, so
+  // asking for its runs is a 404 — the same trap `disconnectOrder` fell into.
+  //
+  // EMPTY MEANS THE LISTING IS NOT HERE, not that nothing converges: every
+  // kind is in it whether or not this company configured it, so the only way
+  // to hold none of them is a refused or unfinished read — and a passes panel
+  // drawn from that would report "no pass has run" about a question it never
+  // asked.
+  const focusKinds = focus
+    ? focus.surfaces.filter((s) => setup.byKey.has(s.key)).map((s) => s.key)
+    : [];
   // A TERMINAL PHASE IS ONE NOBODY IS WAITING ON. Everything else is the
   // engine mid-flight, and the screen's job while that is true is to keep
   // looking. Derived from what arrived rather than from what was clicked, so
@@ -1919,6 +3021,39 @@ export function Integrations({ kind }: { kind?: string }) {
         </div>
       )}
 
+      {/* ONE OBJECT, ONE HEADER. `#/admin/integrations/{kind}` is a page about
+          a single tool, and it opened with the catalogue's chrome and a card:
+          the tool's name lived inside the card's disclosure BUTTON, which is a
+          control rather than a title, so nothing on the screen named what it
+          was about until the reader's eye reached the row.
+          The card stays — it carries the actions, the surfaces and the roster
+          — and this is the title and the facts re-homed above it. They are the
+          peek's facts, from one function, so the two frames cannot drift; see
+          [integrationFacts]. */}
+      {focus && focusState && (
+        <ObjectHeader
+          kind="Integration"
+          icon="plug"
+          identifier={focus.key}
+          title={focus.name}
+          status={
+            focusState.tag === "" ? undefined : (
+              <Badge tone={focusState.tone} outline={focusState.outline}>
+                {focusState.tag}
+              </Badge>
+            )
+          }
+          facts={
+            presentSurfaces(focus, rows).length > 0
+              ? integrationFacts(focus, rows, now, {
+                  known: data?.traffic_known ?? false,
+                  since: data?.traffic_since,
+                })
+              : undefined
+          }
+        />
+      )}
+
       {dropping && (
         <DisconnectDialog
           name={dropping.name}
@@ -1997,6 +3132,7 @@ export function Integrations({ kind }: { kind?: string }) {
                 rows={rows}
                 sections={sectionsFor(entry, setup.byKey)}
                 publicBase={setup.base?.value}
+                titled={Boolean(focus)}
                 onConnect={() =>
                   setDialog({
                     title: entry.name,
@@ -2051,6 +3187,20 @@ export function Integrations({ kind }: { kind?: string }) {
             ))}
           </div>
         )}
+        {/* WHAT HAS BEEN HAPPENING TO IT, above what has been arriving: every
+            finding on this screen comes from a pass, and until this panel
+            existed nothing said that one had ever run — `SetupRun` was
+            declared on the wire and read by nobody. Only on the focused
+            screen, because a history per tool over six cards is six tables
+            nobody came for. */}
+        {focus && focusKinds.length > 0 && (
+          // KEYED ON THE TOOL, so walking from one integration's page to
+          // another's does not carry the open pass across: the detail route is
+          // keyed on (kind, id), and a pass opened on GitHub would be asked
+          // for under Slack and answer 404.
+          <SetupPasses key={focus.key} entry={focus} kinds={focusKinds} />
+        )}
+
         {/* WHAT ACTUALLY ARRIVED, one panel per surface the tool covers.
             Per surface rather than per tool because the event rows carry the
             SURFACE as their source — Atlassian is an organization and two

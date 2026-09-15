@@ -46,10 +46,10 @@ function grid(onRowActivate?: (row: Row) => void) {
         rowHref={(r) => `#/activity/turns/${r.id}`}
         onRowActivate={onRowActivate}
         columns={[
-          { key: "id", label: "Id", cell: (r) => r.id },
+          { key: "id", header: "Id", cell: (r) => r.id },
           {
             key: "who",
-            label: "Who",
+            header: "Who",
             // The shape every linking cell has.
             cell: (r) => <a href={`#/company/people/${r.who}`}>{r.who}</a>,
           },
@@ -100,7 +100,7 @@ test("a grid with no row link renders no overlay at all", () => {
       <DataGrid<Row>
         rows={ROWS}
         rowKey={(r) => r.id}
-        columns={[{ key: "id", label: "Id", cell: (r) => r.id }]}
+        columns={[{ key: "id", header: "Id", cell: (r) => r.id }]}
       />
     </Router>,
   );
