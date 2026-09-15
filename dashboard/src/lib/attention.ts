@@ -84,7 +84,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       title: "No company configuration is active",
       detail:
         "The engine is running with nothing to run: no seats are spawned and every inbound webhook is dropped. Import a company revision.",
-      path: ["config"],
+      path: ["admin", "config"],
     });
   }
   if (engine?.posture && ["shed", "stuck", "isolated"].includes(engine.posture)) {
@@ -97,7 +97,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         engine.posture === "shed"
           ? "It has released its seats because it could not reach the configuration it is supposed to run."
           : "It cannot converge on the fleet's active configuration.",
-      path: ["fleet"],
+      path: ["admin", "fleet"],
     });
   }
   if (engine?.shutting_down) {
@@ -107,21 +107,35 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "power",
       title: "This node is draining",
       detail: `${engine.in_flight ?? 0} turn(s) still in flight. Seats are released as each finishes.`,
-      path: ["fleet"],
+      path: ["admin", "fleet"],
     });
   }
 
   // --- budgets -------------------------------------------------------------
+  //
+  // THE METER, NOT A REFUSAL INSTANT. Both entries used to key on a
+  // `refused_at` the engine never wrote: the reporter that builds the budget
+  // payload set neither the org's nor any seat's, so the critical entry was
+  // unreachable and the badge beside it could never render. It could not have
+  // been written from there either — the report is built per NODE and a
+  // refusal happens inside one node's tool loop, so a node that refused
+  // nothing would report no refusal while the company next door was turning
+  // charges away.
+  //
+  // What the meter DOES say is honest and fleet-wide, because the counter is
+  // shared: at or past the cap, no further charge can be accepted. It is
+  // sufficient rather than necessary — a refused charge increments nothing, so
+  // a company that is refusing can sit just short of its cap — which is what
+  // the 90% entry below is for.
   const org = budget?.org;
-  if (org?.refused_at) {
+  if (org && org.max > 0 && org.used >= org.max) {
     out.push({
       id: "org-budget",
       severity: "critical",
       icon: "coin",
-      title: "The company token budget is refusing charges",
-      detail: `Turns are being declined at the budget gate. Last refusal ${org.refused_at}.`,
-      path: ["spend"],
-      at: org.refused_at,
+      title: "The company token budget is spent",
+      detail: `${org.used.toLocaleString()} of ${org.max.toLocaleString()} tokens. No further charge can be accepted, so turns are being declined at the gate.`,
+      path: ["cost"],
     });
   } else if (org && org.max > 0 && org.used / org.max >= 0.9) {
     out.push({
@@ -130,7 +144,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "coin",
       title: "The company token budget is nearly spent",
       detail: `${Math.round((org.used / org.max) * 100)}% of the process-lifetime meter is used.`,
-      path: ["spend"],
+      path: ["cost"],
     });
   }
 
@@ -147,7 +161,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "help",
       title: `${box.role || box.agent_handle} is waiting on an answer`,
       detail: box.question || "A coding run paused on a clarification and cannot continue.",
-      path: ["runs"],
+      path: ["activity", "runs"],
       query: { run: box.turn_id },
       at: box.started_at,
       who: box.agent_handle,
@@ -164,7 +178,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         icon: "alert",
         title: `${agent.role} stopped: ${agent.last_error.kind || "error"}`,
         detail: agent.last_error.message || "The seat stopped and has not done work since.",
-        path: ["seats", String(agent.handle ?? agent.id)],
+        path: ["company", "people", String(agent.handle ?? agent.id)],
         at: agent.last_error.at,
         who: String(agent.handle ?? agent.role),
       });
@@ -179,7 +193,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
         detail: agent.afk_reason
           ? `The engine paused it: ${agent.afk_reason}.`
           : "The engine paused this seat.",
-        path: ["seats", String(agent.handle ?? agent.id)],
+        path: ["company", "people", String(agent.handle ?? agent.id)],
         who: String(agent.handle ?? agent.role),
       });
       continue;
@@ -198,7 +212,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
               ? `${agent.role} has been on one round for over 10 minutes`
               : `${agent.role} has been on one round for over 2 minutes`,
           detail: `${call.phase} · round ${call.round_num >= 0 ? call.round_num : "?"} — no update since ${call.updated_at}.`,
-          path: ["seats", String(agent.handle ?? agent.id)],
+          path: ["company", "people", String(agent.handle ?? agent.id)],
           query: { tab: "model" },
           at: call.updated_at,
           who: String(agent.handle ?? agent.role),
@@ -206,16 +220,15 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       }
     }
     const meter = agent.budget;
-    if (meter?.refused_at) {
+    if (meter && meter.max > 0 && meter.used >= meter.max) {
       out.push({
         id: `seat-budget-${agent.role}`,
         severity: "caution",
         icon: "coin",
-        title: `${agent.role}'s token budget is refusing charges`,
-        detail: "This seat's turns are being declined at the budget gate.",
-        path: ["seats", String(agent.handle ?? agent.id)],
+        title: `${agent.role}'s token budget is spent`,
+        detail: `${meter.used.toLocaleString()} of ${meter.max.toLocaleString()} tokens. This seat's turns are being declined at the gate.`,
+        path: ["company", "people", String(agent.handle ?? agent.id)],
         query: { tab: "cost" },
-        at: meter.refused_at,
       });
     }
   }

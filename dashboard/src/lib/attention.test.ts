@@ -70,7 +70,7 @@ describe("what it surfaces", () => {
   test("a run paused on a question carries the question", () => {
     const items = attentionQueue(input({ sandboxes: [parked("awaiting_clarification")] }));
     expect(items[0]?.detail).toBe("Which branch should I target?");
-    expect(items[0]?.path).toEqual(["runs"]);
+    expect(items[0]?.path).toEqual(["activity", "runs"]);
   });
 
   // A BOX REAPED PAST ITS PAUSE TTL is the same fact one step worse: the work
@@ -124,14 +124,23 @@ describe("what it surfaces", () => {
     expect(stalled[0]?.severity).toBe("critical");
   });
 
-  test("a budget refusing charges outranks one merely near its cap", () => {
-    const refusing = attentionQueue(
-      input({ budget: { org: { used: 10, max: 100, refused_at: "2026-01-01T11:00:00Z" } } }),
-    );
-    expect(refusing[0]?.severity).toBe("critical");
+  // A SPENT BUDGET OUTRANKS ONE MERELY NEAR ITS CAP, and both are read off
+  // the shared counter.
+  //
+  // They used to key on a `refused_at` the engine never wrote, so the critical
+  // branch was unreachable on every company — the exact case an operator needs
+  // it for. At or past the cap is what a fleet-wide counter can honestly say:
+  // sufficient, and not necessary, which is what the 90% rung below it is for.
+  test("a spent budget outranks one merely near its cap", () => {
+    const spent = attentionQueue(input({ budget: { org: { used: 100, max: 100 } } }));
+    expect(spent[0]?.severity).toBe("critical");
 
-    const near = attentionQueue(input({ budget: { org: { used: 95, max: 100, refused_at: "" } } }));
+    const near = attentionQueue(input({ budget: { org: { used: 95, max: 100 } } }));
     expect(near[0]?.severity).toBe("caution");
+
+    // AND A HEALTHY METER RAISES NOTHING, which is what stops the first
+    // two being a check that anything at all is pushed.
+    expect(attentionQueue(input({ budget: { org: { used: 10, max: 100 } } }))).toEqual([]);
   });
 });
 
@@ -140,7 +149,7 @@ describe("ordering", () => {
     const items = attentionQueue(
       input({
         connected: false,
-        budget: { org: { used: 95, max: 100, refused_at: "" } },
+        budget: { org: { used: 95, max: 100 } },
         agents: [
           {
             id: "a",
