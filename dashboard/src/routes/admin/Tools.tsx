@@ -11,7 +11,7 @@ import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
 import { Badge, Chip, Empty, Panel, SearchInput, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { Capability } from "~/lib/tools.ts";
 import {
@@ -137,10 +137,10 @@ export function Tools({ server }: { server?: string }) {
         />
       ) : (
         <Panel padding="none">
-          <DataTable<ToolRow>
+          <DataGrid<ToolRow>
             rows={rows}
             rowKey={(t) => `${t.source}:${t.name}`}
-            defaultSort={{ key: "name", dir: "asc" }}
+            defaultSort="name"
             empty={{ title: `No tool matches “${q}”` }}
             columns={[
               {

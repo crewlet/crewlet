@@ -8,12 +8,26 @@
  * puts everybody permanently over.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { Burndown, SprintPanel, Velocity } from "./Sprints.tsx";
 import { describeChange } from "~/lib/work.ts";
 import { ProjectHead } from "./Work.tsx";
 import type { WorkBurndown, WorkProjectDetail, WorkSprintRow } from "~/protocol/index.ts";
+import type { ReactElement } from "react";
+import { Router } from "~/app/router.tsx";
+
+/**
+ * A screen renders inside the Router.
+ *
+ * The grid every list is drawn with keeps its sort and its visible columns in
+ * the URL — see `app/frame/DataGrid.tsx` — so it reads the route, and a bare
+ * `render()` throws "useRoute outside a Router". Wrapping here rather than in
+ * every case keeps each assertion about the screen.
+ */
+function render(ui: ReactElement) {
+  return rtlRender(<Router>{ui}</Router>);
+}
 
 afterEach(cleanup);
 
@@ -79,10 +93,10 @@ test("a declared capacity somebody is over is marked as such", () => {
   // way is a column nobody reads. It is the SERVER's verdict rather than a
   // comparison of our own, for the reason the overdue flag is: two places
   // deriving one predicate is how one screen says over and another does not.
-  // INSIDE THE TABLE, because the panel now carries a delivery bar of its
+  // INSIDE THE GRID, because the panel now carries a delivery bar of its
   // own: a selector that took the first meter on the screen would be
   // asserting the sprint's own progress and calling it a capacity.
-  const fill = container.querySelector(".table .meter-fill");
+  const fill = container.querySelector(".grid-body .meter-fill");
   expect(fill).toBeTruthy();
   expect(fill?.getAttribute("data-tone")).toBe("critical");
   expect(screen.getByText("8 / 21")).toBeTruthy();

@@ -23,7 +23,7 @@
 import { useMemo } from "react";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { describe as describeCron, nextFires } from "~/lib/cron.ts";
 import { fmtDateTime, inTime, relTime, tsKey, plural } from "~/lib/format.ts";
@@ -158,7 +158,7 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         }
       >
         <Panel title="Defined" icon="calendar" count={schedules.length} padding="none">
-          <DataTable
+          <DataGrid
             rows={schedules}
             rowKey={rowID}
             // A SCHEDULE HAS AN ADDRESS, and it is its whole identity: two
@@ -166,8 +166,10 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
             // both, so the trail is all three segments. The route existed and
             // rendered this same list, because the screen destructured its
             // segments and never read them.
-            onRowClick={(s) => nav.to(["activity", "schedules", s.scope_type, s.scope_id, s.name])}
-            defaultSort={{ key: "next", dir: "asc" }}
+            onRowActivate={(s) =>
+              nav.to(["activity", "schedules", s.scope_type, s.scope_id, s.name])
+            }
+            defaultSort="next"
             columns={[
               {
                 key: "name",
@@ -291,10 +293,11 @@ export function Schedules({ scope = [] }: { scope?: string[] }) {
         </Panel>
 
         <Panel title="Recent runs" icon="clock" count={runs.length} padding="none">
-          <DataTable
+          <DataGrid
+            name="runs"
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${runID(r)}:${r.fire_label}`}
-            defaultSort={{ key: "fired", dir: "desc" }}
+            defaultSort="-fired"
             empty={{
               title: "No runs recorded",
               hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
@@ -542,10 +545,11 @@ function OneSchedule({
             truncated ? `the newest ${runs.length} — older fires are past this page` : undefined
           }
         >
-          <DataTable
+          <DataGrid
+            name="fires"
             rows={runs}
             rowKey={(r) => `${r.fired_at}:${r.fire_label}:${r.target_handle}`}
-            defaultSort={{ key: "fired", dir: "desc" }}
+            defaultSort="-fired"
             columns={[
               {
                 key: "fired",

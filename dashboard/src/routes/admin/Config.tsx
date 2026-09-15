@@ -22,7 +22,7 @@ import {
   Segmented,
   Skeleton,
 } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, relTime, tsKey } from "~/lib/format.ts";
@@ -119,11 +119,11 @@ export function ConfigScreen({ revision: revisionPath }: { revision?: string }) 
             }
           >
             <Panel title="Revisions" icon="clock" count={(audit.data ?? []).length} padding="none">
-              <DataTable<RevisionMeta>
+              <DataGrid<RevisionMeta>
                 rows={audit.data ?? []}
                 rowKey={(r) => r.revision_id}
-                defaultSort={{ key: "at", dir: "desc" }}
-                onRowClick={(r) => {
+                defaultSort="-at"
+                onRowActivate={(r) => {
                   setRevision(r.revision_id);
                   setLens("diff");
                 }}

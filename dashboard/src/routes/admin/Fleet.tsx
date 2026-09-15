@@ -9,7 +9,7 @@
 
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { Icon } from "~/ui/Icon.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, relTime, plural } from "~/lib/format.ts";
@@ -119,10 +119,10 @@ export function Fleet({ node }: { node?: string }) {
         }
       >
         <Panel title="Nodes" icon="server" count={nodes.length} padding="none">
-          <DataTable<FleetNode>
+          <DataGrid<FleetNode>
             rows={nodes}
             rowKey={(n) => n.id}
-            defaultSort={{ key: "id", dir: "asc" }}
+            defaultSort="id"
             isFailed={(n) => n.config_status === "error"}
             columns={[
               {
@@ -256,10 +256,11 @@ export function Fleet({ node }: { node?: string }) {
             count={data?.seats?.length ?? 0}
             padding="none"
           >
-            <DataTable
+            <DataGrid
+              name="seats"
               rows={data?.seats ?? []}
               rowKey={(s) => s.handle}
-              defaultSort={{ key: "handle", dir: "asc" }}
+              defaultSort="handle"
               empty={{ title: "No seats are leased" }}
               columns={[
                 {
@@ -301,10 +302,11 @@ export function Fleet({ node }: { node?: string }) {
             count={data?.duties?.length ?? 0}
             padding="none"
           >
-            <DataTable
+            <DataGrid
+              name="duties"
               rows={data?.duties ?? []}
               rowKey={(d) => d.duty}
-              defaultSort={{ key: "duty", dir: "asc" }}
+              defaultSort="duty"
               empty={{
                 title: "No singleton duties are leased",
                 hint: "The retention sweep and the scheduler are fleet singletons — exactly one node runs each.",

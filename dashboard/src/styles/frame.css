@@ -714,6 +714,15 @@
   gap: var(--space-2);
 }
 
+/* A column that shrinks to its content and never wraps — a key, a timestamp,
+   a status. It was declared on the table this grid replaced, and the grid has
+   named it since it was written: the track is already `max-content` (see the
+   template), so what this adds is that the CELL does not wrap inside it. */
+.grid-th.shrink,
+.grid-cell.shrink {
+  white-space: nowrap;
+}
+
 .grid-cell.right {
   justify-content: flex-end;
 }

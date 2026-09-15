@@ -14,7 +14,7 @@ import { useMemo } from "react";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import { Badge, Meter, Panel, Segmented, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   BarList,
   Legend,
@@ -370,11 +370,11 @@ export function Spend() {
       )}
 
       <Panel title="By seat" icon="users" count={tokens?.by_agent?.length ?? 0} padding="none">
-        <DataTable
+        <DataGrid
           rows={tokens?.by_agent ?? []}
           rowKey={(a) => a.agent_id || a.role}
-          defaultSort={{ key: "total", dir: "desc" }}
-          onRowClick={(a) => nav.to(["seats", a.handle || a.role], { tab: "cost" })}
+          defaultSort="-total"
+          onRowActivate={(a) => nav.to(["seats", a.handle || a.role], { tab: "cost" })}
           empty={{ title: "No seat has spent tokens in this window" }}
           columns={[
             {
@@ -428,11 +428,12 @@ export function Spend() {
       </Panel>
 
       <Panel title="Recent turns" icon="layers" count={tokens?.by_turn?.length ?? 0} padding="none">
-        <DataTable
+        <DataGrid
+          name="turns"
           rows={tokens?.by_turn ?? []}
           rowKey={(t) => t.turn_id}
-          defaultSort={{ key: "started", dir: "desc" }}
-          onRowClick={(t) => nav.to(["turns", t.turn_id])}
+          defaultSort="-started"
+          onRowActivate={(t) => nav.to(["turns", t.turn_id])}
           empty={{ title: "No turns in this window" }}
           columns={[
             {

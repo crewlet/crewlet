@@ -22,7 +22,8 @@ import { useCallback, useMemo, useState } from "react";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
 import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
-import { DataTable, type Column } from "~/ui/DataTable.tsx";
+import { DataGrid } from "~/app/frame/DataGrid.tsx";
+import type { GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -165,7 +166,7 @@ export function ModelActivity() {
   // Defined here rather than at module scope because two cells need `now` to
   // render an elapsed time, and memoised so the table's own sort does not see
   // a new column set on every push.
-  const columns = useMemo<Column<PhaseRecord>[]>(
+  const columns = useMemo<GridColumn<PhaseRecord>[]>(
     () => [
       {
         key: "seat",
@@ -345,13 +346,13 @@ export function ModelActivity() {
             Running now
             <span className="faint"> · {plural(running.length, "phase")} mid-flight</span>
           </div>
-          <DataTable
+          <DataGrid
             rows={running}
             columns={columns}
             rowKey={phaseRecordKey}
-            onRowClick={openSeat}
+            onRowActivate={openSeat}
             isFailed={(r) => r.failed}
-            defaultSort={{ key: "seat", dir: "asc" }}
+            defaultSort="seat"
           />
         </section>
       )}
@@ -370,11 +371,12 @@ export function ModelActivity() {
             Recent phases
             <span className="faint"> · newest first · open a row for its transcript</span>
           </div>
-          <DataTable
+          <DataGrid
+            name="settled"
             rows={settled.items}
             columns={columns}
             rowKey={phaseRecordKey}
-            onRowClick={openSeat}
+            onRowActivate={openSeat}
             isFailed={(r) => r.failed}
           />
         </section>
