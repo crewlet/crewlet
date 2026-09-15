@@ -15,9 +15,24 @@
  * as "nothing points at it".
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { Router } from "~/app/router.tsx";
 import { Secrets } from "./Secrets.tsx";
+
+/*
+ * The screen keeps every filter in the URL, so it needs the router around it
+ * exactly as the application gives it one. Rendered bare it throws before it
+ * draws a row.
+ */
+function screenAt(hash = "#/secrets") {
+  location.hash = hash;
+  return render(
+    <Router>
+      <Secrets />
+    </Router>,
+  );
+}
 
 // The shape internal/api/secretsapi writes: names, provenance, key id. There
 // is deliberately no `value` field on this route at all.
@@ -75,8 +90,20 @@ function stubLoaded(extra: (path: string, init?: RequestInit) => Response | null
 }
 
 /** Opens the removal confirmation for one row of the table. */
+/**
+ * A row's own actions, which live behind the table's kebab rather than as two
+ * controls in a cell. The row is found by the credential's name, and the menu
+ * on that row is the one the action is picked from: a query over the whole
+ * page would open whichever kebab happened to be first.
+ */
+async function rowAction(name: string, action: string) {
+  const row = (await screen.findByText(name)).closest("tr")!;
+  fireEvent.click(within(row).getByRole("button", { name: "Row actions" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: action }));
+}
+
 async function openRemove(name: string) {
-  fireEvent.click(await screen.findByRole("button", { name: `Remove ${name}` }));
+  await rowAction(name, `Remove ${name}`);
   return screen.findByRole("dialog", { name: `Remove ${name}` });
 }
 
@@ -99,7 +126,7 @@ afterEach(() => {
 
 test("the list comes from GET /secrets, carrying the operator token", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
-  render(<Secrets />);
+  screenAt();
 
   expect(await screen.findByText("DATADOG_WEBHOOK_TOKEN")).toBeDefined();
   expect(screen.getByText("GITHUB_TOKEN")).toBeDefined();
@@ -114,7 +141,7 @@ test("the list comes from GET /secrets, carrying the operator token", async () =
 // where that trade gets made. This asserts the screen never asks.
 test("the screen never asks for a value", async () => {
   const spy = stubFetch((path) => (path === "/secrets" ? ok(body) : ok({})));
-  render(<Secrets />);
+  screenAt();
   await screen.findByText("DATADOG_WEBHOOK_TOKEN");
 
   const paths = spy.mock.calls.map(([input]) => String(input));
@@ -131,7 +158,7 @@ test("the screen never asks for a value", async () => {
 // must not do is render an empty table as if that were an answer.
 test("a refused read says so instead of showing an empty company", async () => {
   stubFetch(() => new Response(JSON.stringify({ error: "invalid_token" }), { status: 401 }));
-  render(<Secrets />);
+  screenAt();
 
   expect(await screen.findByText(/needs an operator token/)).toBeDefined();
 });
@@ -144,7 +171,7 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
   const spy = stubLoaded((path, init) =>
     path === "/secrets/NEW_TOKEN" && init?.method === "PUT" ? ok({ name: "NEW_TOKEN" }) : null,
   );
-  render(<Secrets />);
+  screenAt();
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "NEW_TOKEN" } });
@@ -164,7 +191,7 @@ test("a stored value goes as the request body rather than wrapped in JSON", asyn
 // form that is a security property rather than a nicety.
 test("the value is a password field and the form offers no autofill", async () => {
   stubLoaded();
-  render(<Secrets />);
+  screenAt();
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
   const value = screen.getByLabelText("Value");
@@ -188,7 +215,7 @@ test("a name the engine refuses is reported in the engine's own words", async ()
         )
       : null,
   );
-  render(<Secrets />);
+  screenAt();
 
   fireEvent.click(await screen.findByRole("button", { name: "Store a secret" }));
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "gitlab-token" } });
@@ -204,7 +231,7 @@ test("a name the engine refuses is reported in the engine's own words", async ()
 // before the operator can go through with it.
 test("a removal names every config field that points at the secret", async () => {
   stubLoaded();
-  render(<Secrets />);
+  screenAt();
   await openRemove("GITHUB_TOKEN");
 
   expect(screen.getByText("integrations.github.token")).toBeDefined();
@@ -222,7 +249,7 @@ test("a secret nothing reads is removed without a second gesture", async () => {
   const spy = stubLoaded((path, init) =>
     init?.method === "DELETE" ? ok({ name: "DATADOG_WEBHOOK_TOKEN", removed: true }) : null,
   );
-  render(<Secrets />);
+  screenAt();
   await openRemove("DATADOG_WEBHOOK_TOKEN");
 
   expect(screen.queryByRole("checkbox")).toBeNull();
@@ -247,7 +274,7 @@ test("a reference check that failed is never shown as nothing pointing at it", a
     }
     return ok({});
   });
-  render(<Secrets />);
+  screenAt();
   await openRemove("GITHUB_TOKEN");
 
   expect(screen.getByText(/could not be read/)).toBeDefined();
@@ -269,7 +296,7 @@ test("no active configuration reads as nothing pointing at it, not as a failure"
     }
     return ok({});
   });
-  render(<Secrets />);
+  screenAt();
   await openRemove("GITHUB_TOKEN");
 
   expect(screen.getByText(/No field in the active configuration names this/)).toBeDefined();
@@ -284,9 +311,9 @@ test("editing a secret asks for a new value and never receives the old one", asy
   const spy = stubLoaded((path, init) =>
     init?.method === "PUT" ? ok({ name: "GITHUB_TOKEN" }) : null,
   );
-  render(<Secrets />);
+  screenAt();
 
-  fireEvent.click(await screen.findByRole("button", { name: "Edit GITHUB_TOKEN" }));
+  await rowAction("GITHUB_TOKEN", "Edit GITHUB_TOKEN");
   expect((screen.getByLabelText("New value") as HTMLInputElement).value).toBe("");
   fireEvent.change(screen.getByLabelText("New value"), { target: { value: "ghp-rotated" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));

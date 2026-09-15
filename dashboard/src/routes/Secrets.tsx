@@ -26,17 +26,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
+import { useParam } from "~/app/router.tsx";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import { onTokenChanged, rest, RestError } from "~/protocol/index.ts";
 import type { ConfigReference, SecretRow } from "~/protocol/index.ts";
 import {
   Button,
-  Card,
+  DataView,
+  EmptyState,
   EmptyValue,
-  IconButton,
   RelativeTime,
   Skeleton,
   StatCard,
@@ -44,6 +44,9 @@ import {
   Tag,
   useNow,
   useToast,
+  type DataViewColumn,
+  type FilterDef,
+  type FilterValues,
 } from "@crewlethq/ui";
 import {
   AddGlyph,
@@ -159,6 +162,90 @@ export function Secrets() {
 
   const pathsFor = (name: string): string[] | null => readers?.get(name) ?? (readers ? [] : null);
 
+  /*
+   * THE SCREEN OWNS THE NARROWING, so both axes are URL parameters. Source is
+   * the axis worth having: whether a name is sealed in the coordination store
+   * or resolves from this process's own environment is the difference between
+   * a credential the fleet holds and one only this node can see.
+   */
+  const [q, setQ] = useParam("q", "");
+  const [source, setSource] = useParam("source", "");
+
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return list
+      .filter((s) => !source || s.source === source)
+      .filter((s) => !needle || s.name.toLowerCase().includes(needle));
+  }, [list, q, source]);
+
+  const filters = useMemo<FilterDef<SecretRow>[]>(
+    () => [
+      { name: "q", label: "Search credentials", role: "search", placeholder: "Search by name" },
+      {
+        name: "source",
+        label: "Source",
+        kind: "select",
+        options: [
+          { value: "", label: "Any source" },
+          ...[...new Set(list.map((s) => s.source))].sort().map((s) => ({ value: s, label: s })),
+        ],
+      },
+    ],
+    [list],
+  );
+
+  const values: FilterValues = { q, source };
+
+  const onValuesChange = useCallback(
+    (next: FilterValues) => {
+      setQ(String(next.q ?? ""));
+      setSource(String(next.source ?? ""));
+    },
+    [setQ, setSource],
+  );
+
+  const columns = useMemo<DataViewColumn<SecretRow>[]>(
+    () => [
+      { key: "name", header: "Name", sortable: true, mono: true, copyable: true },
+      {
+        key: "read",
+        header: "Read by",
+        shrink: true,
+        // AN UNANSWERED CHECK SORTS AS ITS OWN THING, below every count, in
+        // both directions: "not known" is not a zero, and the table's own
+        // comparator puts an absent value last whichever way a reader sorts.
+        sortable: true,
+        sortValue: (s) => pathsFor(s.name)?.length ?? null,
+        render: (s) => <Readers paths={pathsFor(s.name)} />,
+      },
+      {
+        key: "source",
+        header: "Source",
+        shrink: true,
+        sortable: true,
+        render: (s) => <Tag appearance="outline">{s.source}</Tag>,
+      },
+      { key: "key_id", header: "Key id", shrink: true, sortable: true, mono: true },
+      {
+        key: "updated_by",
+        header: "Set by",
+        sortable: true,
+        render: (s) => s.updated_by || <EmptyValue label="Not recorded" />,
+      },
+      {
+        key: "updated_at",
+        header: "Updated",
+        shrink: true,
+        sortable: true,
+        firstDirection: "desc",
+        sortValue: (s) => tsKey(s.updated_at),
+        render: (s) => <RelativeTime className="t-caption" value={s.updated_at} now={now} />,
+      },
+    ],
+    // `pathsFor` reads the references answer, which is what `readers` holds.
+    [readers, now],
+  );
+
   return (
     <>
       <ScreenHead
@@ -214,92 +301,44 @@ export function Secrets() {
       </StatGroup>
 
       {loading && rows === null && <Skeleton label="Loading the secrets" variant="text" rows={4} />}
-      <QueryState
-        error={error}
-        loading={loading}
-        empty={
-          list.length
-            ? undefined
-            : {
-                title: "No secrets are stored",
-                hint: "Store one here, set one with crewlet secrets set, or let a provisioning command hand one straight to the engine.",
-              }
-        }
-      >
-        <Card padding="none">
-          <DataTable<SecretRow>
-            rows={list}
-            rowKey={(s) => s.name}
-            defaultSort={{ key: "name", dir: "asc" }}
-            columns={[
-              {
-                key: "name",
-                header: "Name",
-                sortValue: (s) => s.name,
-                cell: (s) => <code className="inline">{s.name}</code>,
-              },
-              {
-                key: "read",
-                header: "Read by",
-                shrink: true,
-                // AN UNANSWERED CHECK SORTS AS ITS OWN THING, below every
-                // count: -1 rather than 0, so "not known" never sits among
-                // the rows nothing reads.
-                sortValue: (s) => pathsFor(s.name)?.length ?? -1,
-                cell: (s) => <Readers paths={pathsFor(s.name)} />,
-              },
-              {
-                key: "source",
-                header: "Source",
-                shrink: true,
-                sortValue: (s) => s.source,
-                cell: (s) => <Tag appearance="outline">{s.source}</Tag>,
-              },
-              {
-                key: "key",
-                header: "Key id",
-                shrink: true,
-                sortValue: (s) => s.key_id,
-                cell: (s) => <code className="inline">{s.key_id}</code>,
-              },
-              {
-                key: "by",
-                header: "Set by",
-                sortValue: (s) => s.updated_by,
-                cell: (s) => s.updated_by || <EmptyValue label="Not recorded" />,
-              },
-              {
-                key: "at",
-                header: "Updated",
-                shrink: true,
-                sortValue: (s) => tsKey(s.updated_at),
-                cell: (s) => <RelativeTime className="t-caption" value={s.updated_at} now={now} />,
-              },
-              {
-                key: "act",
-                header: "",
-                shrink: true,
-                cell: (s) => (
-                  <span className="row gap-1">
-                    <IconButton
-                      label={`Edit ${s.name}`}
-                      icon={<EditGlyph />}
-                      size="sm"
-                      onClick={() => setWriting({ editing: s.name })}
-                    />
-                    <IconButton
-                      label={`Remove ${s.name}`}
-                      icon={<CloseGlyph />}
-                      size="sm"
-                      onClick={() => setRemoving(s.name)}
-                    />
-                  </span>
-                ),
-              },
-            ]}
+      {error && <QueryState error={error} loading={loading} />}
+
+      <DataView<SecretRow>
+        framed
+        columns={columns}
+        rows={shown}
+        totalCount={list.length}
+        getRowKey={(s) => s.name}
+        defaultSort={{ key: "name", direction: "asc" }}
+        filters={filters}
+        filterValues={values}
+        onFilterValuesChange={onValuesChange}
+        rowActions={(s) => [
+          {
+            label: `Edit ${s.name}`,
+            icon: <EditGlyph />,
+            onClick: () => setWriting({ editing: s.name }),
+          },
+          {
+            label: `Remove ${s.name}`,
+            icon: <CloseGlyph />,
+            danger: true,
+            onClick: () => setRemoving(s.name),
+          },
+        ]}
+        emptyMessage={
+          <EmptyState
+            size="compact"
+            icon={<KeyGlyph />}
+            title={list.length ? "No credential matches these filters" : "No secrets are stored"}
+            description={
+              list.length
+                ? "Clear them to see every name the fleet holds."
+                : "Store one here, set one with crewlet secrets set, or let a provisioning command hand one straight to the engine."
+            }
           />
-        </Card>
-      </QueryState>
+        }
+      />
 
       {writing && (
         <SecretDialog

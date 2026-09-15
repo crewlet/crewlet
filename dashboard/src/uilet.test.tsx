@@ -612,3 +612,17 @@ test("a column says which way its first press sorts, and an absent value sorts l
   fireEvent.click(screen.getByRole("button", { name: /Spent/ }));
   expect(seatOrder()).toEqual(["reviewer", "planner", "unmetered"]);
 });
+
+test("a column is sorted from a button inside its header, and the cell says which way", () => {
+  // A sortable column used to be a click handler on the header cell, which a
+  // keyboard could not reach and a screen reader did not announce as a
+  // control. An unsortable column stays a plain header with nothing to press.
+  render(<DataTable {...recordTable(ROWS, ROW_COLUMNS)} getRowKey={(row) => row.seat} />);
+  const header = screen.getByRole("columnheader", { name: /Seat/ });
+  const button = within(header).getByRole("button", { name: /Seat/ });
+  expect(header.getAttribute("aria-sort")).toBeNull();
+  fireEvent.click(button);
+  expect(header.getAttribute("aria-sort")).toBe("ascending");
+  fireEvent.click(button);
+  expect(header.getAttribute("aria-sort")).toBe("descending");
+});

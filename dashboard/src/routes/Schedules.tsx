@@ -3,12 +3,13 @@
  */
 
 import { ScreenHead } from "~/app/Shell.tsx";
-import { QueryState, SeatChip } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
+import { QueryState, recordTable, SeatChip } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
 import {
   Card,
+  DataTable,
+  EmptyState,
   EmptyValue,
   RelativeTime,
   Skeleton,
@@ -93,17 +94,23 @@ export function Schedules() {
             <Card.Title>Defined</Card.Title>
           </Card.Header>
           <DataTable
-            rows={schedules}
-            rowKey={(s) => `${s.scope}:${s.scope_name}:${s.name}`}
-            defaultSort={{ key: "next", dir: "asc" }}
-            columns={[
-              { key: "name", header: "Name", sortValue: (s) => s.name, cell: (s) => s.name },
+            getRowKey={(s) => `${s.scope}:${s.scope_name}:${s.name}`}
+            defaultSort={{ key: "next", direction: "asc" }}
+            {...recordTable(schedules, [
+              {
+                key: "name",
+                header: "Name",
+                sortable: true,
+                sortValue: (s) => s.name,
+                render: (s) => s.name,
+              },
               {
                 key: "scope",
                 header: "Scope",
                 shrink: true,
+                sortable: true,
                 sortValue: (s) => `${s.scope}:${s.scope_name}`,
-                cell: (s) =>
+                render: (s) =>
                   s.scope === "role" ? (
                     <SeatChip name={s.scope_name} handle={s.scope_name} />
                   ) : (
@@ -114,8 +121,9 @@ export function Schedules() {
                 key: "cron",
                 header: "Cron",
                 shrink: true,
+                sortable: true,
                 sortValue: (s) => s.cron,
-                cell: (s) => (
+                render: (s) => (
                   <code
                     className="inline"
                     title={s.timezone ? `timezone: ${s.timezone}` : undefined}
@@ -127,14 +135,15 @@ export function Schedules() {
               {
                 key: "task",
                 header: "Task",
-                cell: (s) => <span className="truncate">{s.task}</span>,
+                render: (s) => <span className="truncate">{s.task}</span>,
               },
               {
                 key: "next",
                 header: "Next",
                 shrink: true,
+                sortable: true,
                 sortValue: (s) => tsKey(s.next_run) || Number.MAX_SAFE_INTEGER,
-                cell: (s) =>
+                render: (s) =>
                   s.next_run ? (
                     <RelativeTime className="t-caption" value={s.next_run} now={now} />
                   ) : (
@@ -145,8 +154,9 @@ export function Schedules() {
                 key: "last",
                 header: "Last",
                 shrink: true,
+                sortable: true,
                 sortValue: (s) => tsKey(s.last_run),
-                cell: (s) =>
+                render: (s) =>
                   s.last_run ? (
                     <span className="row gap-1">
                       <RelativeTime className="t-caption" value={s.last_run} now={now} />
@@ -160,7 +170,7 @@ export function Schedules() {
                     <span className="muted">never</span>
                   ),
               },
-            ]}
+            ])}
           />
         </Card>
 
@@ -174,42 +184,55 @@ export function Schedules() {
             <Card.Title>Recent runs</Card.Title>
           </Card.Header>
           <DataTable
-            rows={runs}
-            rowKey={(r) => `${r.fired_at}:${r.name}:${r.scope_name}`}
-            defaultSort={{ key: "fired", dir: "desc" }}
-            empty={{
-              title: "No runs recorded",
-              hint: "A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record.",
-            }}
-            isFailed={(r) => OUTCOME_TONE[r.outcome] === "danger"}
-            columns={[
+            getRowKey={(r) => `${r.fired_at}:${r.name}:${r.scope_name}`}
+            defaultSort={{ key: "fired", direction: "desc" }}
+            emptyMessage={
+              <EmptyState
+                size="compact"
+                title="No runs recorded"
+                description="A run is recorded when a schedule fires. Nothing has fired since this node started keeping the record."
+              />
+            }
+            rowTone={(r) => (OUTCOME_TONE[r.outcome] === "danger" ? "danger" : null)}
+            {...recordTable(runs, [
               {
                 key: "fired",
                 header: "Fired",
                 shrink: true,
+                sortable: true,
+                firstDirection: "desc",
                 sortValue: (r) => tsKey(r.fired_at),
-                cell: (r) => <RelativeTime className="t-caption" value={r.fired_at} now={now} />,
+                render: (r) => <RelativeTime className="t-caption" value={r.fired_at} now={now} />,
               },
-              { key: "name", header: "Schedule", sortValue: (r) => r.name, cell: (r) => r.name },
+              {
+                key: "name",
+                header: "Schedule",
+                sortable: true,
+                sortValue: (r) => r.name,
+                render: (r) => r.name,
+              },
               {
                 key: "scope",
                 header: "Scope",
                 shrink: true,
-                cell: (r) => <Tag appearance="outline">{r.scope_name}</Tag>,
+                render: (r) => <Tag appearance="outline">{r.scope_name}</Tag>,
               },
               {
                 key: "outcome",
                 header: "Outcome",
                 shrink: true,
+                sortable: true,
                 sortValue: (r) => r.outcome,
-                cell: (r) => <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>,
+                render: (r) => (
+                  <Tag variant={OUTCOME_TONE[r.outcome] ?? "neutral"}>{r.outcome}</Tag>
+                ),
               },
               {
                 key: "detail",
                 header: "Detail",
-                cell: (r) => <span className="truncate t-caption">{r.detail}</span>,
+                render: (r) => <span className="truncate t-caption">{r.detail}</span>,
               },
-            ]}
+            ])}
           />
         </Card>
       </QueryState>

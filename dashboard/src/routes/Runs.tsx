@@ -10,11 +10,10 @@
  * the first, so a run parked on a question with its box gone appeared NOWHERE.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
@@ -22,7 +21,10 @@ import type { SandboxRun } from "~/protocol/index.ts";
 import {
   Button,
   Card,
+  DataView,
   DescriptionList,
+  EmptyState,
+  EmptyValue,
   IconButton,
   RelativeTime,
   Skeleton,
@@ -30,6 +32,9 @@ import {
   StatGroup,
   Tag,
   useNow,
+  type DataViewColumn,
+  type FilterDef,
+  type FilterValues,
 } from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 import {
@@ -97,6 +102,149 @@ export function Runs() {
   const waiting = rows.filter((r) => r.status === "awaiting_input").length;
   const running = rows.filter((r) => r.status === "running").length;
 
+  /*
+   * THE SCREEN OWNS THE NARROWING, so both axes are URL parameters and a
+   * narrowed record is a link somebody can send. Status is the one a reader
+   * reaches for first, because "what is waiting on a person" is the question
+   * this screen exists to answer.
+   */
+  const [status, setStatus] = useParam("status", "");
+  const [seat, setSeat] = useParam("seat", "");
+
+  const shown = useMemo(() => {
+    const needle = seat.trim().toLowerCase();
+    return rows
+      .filter((r) => !status || r.status === status)
+      .filter(
+        (r) =>
+          !needle ||
+          (r.role || "").toLowerCase().includes(needle) ||
+          (r.agent_handle || "").toLowerCase().includes(needle),
+      );
+  }, [rows, status, seat]);
+
+  const filters = useMemo<FilterDef<SandboxRun>[]>(
+    () => [
+      { name: "seat", label: "Seat", role: "search", placeholder: "Search by seat or handle" },
+      {
+        name: "status",
+        label: "Status",
+        kind: "select",
+        options: [
+          { value: "", label: "Any status" },
+          ...[...new Set(rows.map((r) => r.status))].sort().map((s) => ({
+            value: s,
+            label: s.replace(/_/g, " "),
+          })),
+        ],
+      },
+    ],
+    [rows],
+  );
+
+  const values: FilterValues = { seat, status };
+
+  const onValuesChange = useCallback(
+    (next: FilterValues) => {
+      setSeat(String(next.seat ?? ""));
+      setStatus(String(next.status ?? ""));
+    },
+    [setSeat, setStatus],
+  );
+
+  const columns = useMemo<DataViewColumn<SandboxRun>[]>(
+    () => [
+      {
+        key: "status",
+        header: "Status",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => r.status,
+        render: (r) => (
+          <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
+            {r.status.replace(/_/g, " ")}
+          </Tag>
+        ),
+      },
+      {
+        key: "seat",
+        header: "Seat",
+        sortable: true,
+        sortValue: (r) => r.role || r.agent_handle,
+        render: (r) => <SeatChip name={r.role || r.agent_handle} handle={r.agent_handle} />,
+      },
+      {
+        key: "task",
+        header: "Task",
+        render: (r) => (
+          <span className="truncate">
+            {r.task_description || <EmptyValue label="No task recorded" />}
+          </span>
+        ),
+      },
+      {
+        key: "agent",
+        header: "Coding agent",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => r.coding_agent,
+        render: (r) =>
+          r.coding_agent ? (
+            <Tag appearance="outline" monospace>
+              {r.coding_agent}
+            </Tag>
+          ) : (
+            <EmptyValue label="Not recorded" />
+          ),
+      },
+      {
+        key: "where",
+        header: "Runs in",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => r.placement,
+        render: (r) =>
+          r.placement ? (
+            <Tag appearance="outline" monospace>
+              {r.placement}
+            </Tag>
+          ) : (
+            <EmptyValue label="Not recorded" />
+          ),
+      },
+      {
+        key: "box",
+        header: "Box",
+        shrink: true,
+        sortable: true,
+        sortValue: (r) => (r.box_exists ? 1 : 0),
+        render: (r) =>
+          r.box_exists ? (
+            <span className="t-caption">up</span>
+          ) : (
+            <span
+              className="t-caption"
+              title="the sandbox has been reclaimed; the run's record remains"
+            >
+              reclaimed
+            </span>
+          ),
+      },
+      {
+        key: "updated",
+        header: "Updated",
+        shrink: true,
+        sortable: true,
+        firstDirection: "desc",
+        sortValue: (r) => tsKey(r.updated_at || r.started_at),
+        render: (r) => (
+          <RelativeTime className="t-caption" value={r.updated_at || r.started_at} now={now} />
+        ),
+      },
+    ],
+    [now],
+  );
+
   return (
     <>
       <ScreenHead
@@ -146,105 +294,35 @@ export function Runs() {
       {loading && !rows.length && (
         <Skeleton label="Loading the coding runs" variant="text" rows={4} />
       )}
-      <QueryState
-        error={error}
-        loading={loading}
-        empty={
-          rows.length
-            ? undefined
-            : {
-                title: "No coding runs",
-                hint: "A run starts when a seat calls the sandbox tool. Configure providers.sandbox to give one a place to run.",
-              }
-        }
-      >
-        <Card padding="none">
-          <DataTable<SandboxRun>
-            rows={rows}
-            rowKey={(r) => r.turn_id}
-            onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
-            isSelected={(r) => r.turn_id === selected}
-            isFailed={(r) => r.status === "failed"}
-            defaultSort={{ key: "updated", dir: "desc" }}
-            columns={[
-              {
-                key: "status",
-                header: "Status",
-                shrink: true,
-                sortValue: (r) => r.status,
-                cell: (r) => (
-                  <Tag variant={STATUS_TONE[r.status] ?? "neutral"} dot>
-                    {r.status.replace(/_/g, " ")}
-                  </Tag>
-                ),
-              },
-              {
-                key: "seat",
-                header: "Seat",
-                sortValue: (r) => r.role || r.agent_handle,
-                cell: (r) => <SeatChip name={r.role || r.agent_handle} handle={r.agent_handle} />,
-              },
-              {
-                key: "task",
-                header: "Task",
-                cell: (r) => <span className="truncate">{r.task_description || "—"}</span>,
-              },
-              {
-                key: "agent",
-                header: "Coding agent",
-                shrink: true,
-                sortValue: (r) => r.coding_agent,
-                cell: (r) => (
-                  <Tag appearance="outline" monospace>
-                    {r.coding_agent || "—"}
-                  </Tag>
-                ),
-              },
-              {
-                key: "where",
-                header: "Runs in",
-                shrink: true,
-                sortValue: (r) => r.placement,
-                cell: (r) => (
-                  <Tag appearance="outline" monospace>
-                    {r.placement || "—"}
-                  </Tag>
-                ),
-              },
-              {
-                key: "box",
-                header: "Box",
-                shrink: true,
-                sortValue: (r) => (r.box_exists ? 1 : 0),
-                cell: (r) =>
-                  r.box_exists ? (
-                    <span className="t-caption">up</span>
-                  ) : (
-                    <span
-                      className="t-caption"
-                      title="the sandbox has been reclaimed; the run's record remains"
-                    >
-                      reclaimed
-                    </span>
-                  ),
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                shrink: true,
-                sortValue: (r) => tsKey(r.updated_at || r.started_at),
-                cell: (r) => (
-                  <RelativeTime
-                    className="t-caption"
-                    value={r.updated_at || r.started_at}
-                    now={now}
-                  />
-                ),
-              },
-            ]}
+      {error && <QueryState error={error} loading={loading} />}
+
+      <DataView<SandboxRun>
+        framed
+        columns={columns}
+        rows={shown}
+        totalCount={rows.length}
+        getRowKey={(r) => r.turn_id}
+        onRowClick={(r) => setSelected(r.turn_id === selected ? "" : r.turn_id)}
+        isSelected={(r) => r.turn_id === selected}
+        rowTone={(r) => (r.status === "failed" ? "danger" : null)}
+        defaultSort={{ key: "updated", direction: "desc" }}
+        filters={filters}
+        filterValues={values}
+        onFilterValuesChange={onValuesChange}
+        loading={loading && !rows.length}
+        emptyMessage={
+          <EmptyState
+            size="compact"
+            icon={<TerminalGlyph />}
+            title={rows.length ? "No run matches these filters" : "No coding runs"}
+            description={
+              rows.length
+                ? "Clear them to see every run the record holds."
+                : "A run starts when a seat calls the sandbox tool. Configure providers.sandbox to give one a place to run."
+            }
           />
-        </Card>
-      </QueryState>
+        }
+      />
 
       {detail && (
         <Card as="section">

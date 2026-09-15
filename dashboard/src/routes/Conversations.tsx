@@ -19,12 +19,25 @@
 import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { tsKey } from "~/lib/format.ts";
-import { Card, RelativeTime, Skeleton, StatCard, StatGroup, Tag, useNow } from "@crewlethq/ui";
+import type { A2AChannel } from "~/protocol/index.ts";
+import {
+  DataView,
+  EmptyState,
+  RelativeTime,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+  type DataViewColumn,
+  type FilterDef,
+  type FilterValues,
+} from "@crewlethq/ui";
 import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 
 export function Conversations() {
@@ -42,6 +55,121 @@ export function Conversations() {
     [index],
   );
 
+  const all = useMemo(() => channels.data?.channels ?? [], [channels.data]);
+
+  /*
+   * THE SCREEN OWNS THE NARROWING, so both axes are URL parameters. State is
+   * the axis worth having: an open channel is one a seat is still waiting on,
+   * and a record with a thousand closed rows in it buries them.
+   */
+  const [state, setState] = useParam("state", "");
+  const [party, setParty] = useParam("party", "");
+
+  const shown = useMemo(() => {
+    const needle = party.trim().toLowerCase();
+    return all
+      .filter((c) => !state || (c.closed_at ? "closed" : "open") === state)
+      .filter(
+        (c) =>
+          !needle ||
+          seatName(c.requester).toLowerCase().includes(needle) ||
+          seatName(c.target).toLowerCase().includes(needle) ||
+          c.requester.toLowerCase().includes(needle) ||
+          c.target.toLowerCase().includes(needle),
+      );
+  }, [all, state, party, seatName]);
+
+  const filters = useMemo<FilterDef<A2AChannel>[]>(
+    () => [
+      {
+        name: "party",
+        label: "Party",
+        role: "search",
+        placeholder: "Either seat, by name or handle",
+      },
+      {
+        name: "state",
+        label: "State",
+        kind: "select",
+        options: [
+          { value: "", label: "Any state" },
+          { value: "open", label: "Open" },
+          { value: "closed", label: "Closed" },
+        ],
+      },
+    ],
+    [],
+  );
+
+  const values: FilterValues = { party, state };
+
+  const onValuesChange = useCallback(
+    (next: FilterValues) => {
+      setParty(String(next.party ?? ""));
+      setState(String(next.state ?? ""));
+    },
+    [setParty, setState],
+  );
+
+  const columns = useMemo<DataViewColumn<A2AChannel>[]>(
+    () => [
+      {
+        key: "state",
+        header: "State",
+        shrink: true,
+        sortable: true,
+        sortValue: (c) => (c.closed_at ? "closed" : "open"),
+        render: (c) => (
+          <Tag variant={c.closed_at ? "neutral" : "info"} dot>
+            {c.closed_at ? "closed" : "open"}
+          </Tag>
+        ),
+      },
+      {
+        key: "from",
+        header: "Asked by",
+        sortable: true,
+        sortValue: (c) => seatName(c.requester),
+        render: (c) => <SeatChip name={seatName(c.requester)} handle={c.requester} />,
+      },
+      {
+        key: "to",
+        header: "Asked",
+        sortable: true,
+        sortValue: (c) => seatName(c.target),
+        render: (c) => <SeatChip name={seatName(c.target)} handle={c.target} />,
+      },
+      {
+        key: "messages",
+        header: "Messages",
+        align: "right",
+        shrink: true,
+        sortable: true,
+        firstDirection: "desc",
+        sortValue: (c) => c.messages,
+      },
+      {
+        key: "opened",
+        header: "Opened",
+        shrink: true,
+        sortable: true,
+        firstDirection: "desc",
+        sortValue: (c) => tsKey(c.opened_at),
+        render: (c) => <RelativeTime className="t-caption" value={c.opened_at} now={now} />,
+      },
+      {
+        key: "last",
+        header: "Last message",
+        shrink: true,
+        sortable: true,
+        firstDirection: "desc",
+        sortValue: (c) => tsKey(c.last_at),
+        render: (c) => <RelativeTime className="t-caption" value={c.last_at} now={now} />,
+      },
+    ],
+    [seatName, now],
+  );
+
   return (
     <>
       <ScreenHead
@@ -53,21 +181,19 @@ export function Conversations() {
         <StatCard
           icon={<LinkGlyph />}
           label="Open channels"
-          value={(channels.data?.channels ?? []).filter((c) => !c.closed_at).length}
+          value={all.filter((c) => !c.closed_at).length}
           sub="one ask, one answer, then closed"
         />
         <StatCard
           icon={<ChatGlyph />}
           label="Messages"
-          value={(channels.data?.channels ?? []).reduce((n, c) => n + c.messages, 0)}
+          value={all.reduce((n, c) => n + c.messages, 0)}
           sub="across every channel in the record"
         />
         <StatCard
           icon={<GroupGlyph />}
           label="Pairs"
-          value={
-            new Set((channels.data?.channels ?? []).map((c) => `${c.requester}->${c.target}`)).size
-          }
+          value={new Set(all.map((c) => `${c.requester}->${c.target}`)).size}
           sub="distinct requester/target pairs"
         />
       </StatGroup>
@@ -83,72 +209,32 @@ export function Conversations() {
           </span>
         </div>
       ) : (
-        <QueryState
-          error={channels.error}
-          loading={channels.loading}
-          empty={
-            channels.data?.channels?.length
-              ? undefined
-              : {
-                  title: "No channels have been opened",
-                  hint: "A seat opens one with a2a_ask — narrowly scoped to tight-loop sync between agents. Ordinary collaboration goes through chat and the tracker, where a human can see it.",
+        <QueryState error={channels.error} loading={channels.loading}>
+          <DataView<A2AChannel>
+            framed
+            columns={columns}
+            rows={shown}
+            totalCount={all.length}
+            getRowKey={(c) => c.id}
+            defaultSort={{ key: "last", direction: "desc" }}
+            filters={filters}
+            filterValues={values}
+            onFilterValuesChange={onValuesChange}
+            emptyMessage={
+              <EmptyState
+                size="compact"
+                icon={<LinkGlyph />}
+                title={
+                  all.length ? "No channel matches these filters" : "No channels have been opened"
                 }
-          }
-        >
-          <Card padding="none">
-            <DataTable
-              rows={channels.data?.channels ?? []}
-              rowKey={(c) => c.id}
-              defaultSort={{ key: "last", dir: "desc" }}
-              columns={[
-                {
-                  key: "state",
-                  header: "State",
-                  shrink: true,
-                  sortValue: (c) => (c.closed_at ? "closed" : "open"),
-                  cell: (c) => (
-                    <Tag variant={c.closed_at ? "neutral" : "info"} dot>
-                      {c.closed_at ? "closed" : "open"}
-                    </Tag>
-                  ),
-                },
-                {
-                  key: "from",
-                  header: "Asked by",
-                  sortValue: (c) => seatName(c.requester),
-                  cell: (c) => <SeatChip name={seatName(c.requester)} handle={c.requester} />,
-                },
-                {
-                  key: "to",
-                  header: "Asked",
-                  sortValue: (c) => seatName(c.target),
-                  cell: (c) => <SeatChip name={seatName(c.target)} handle={c.target} />,
-                },
-                {
-                  key: "messages",
-                  header: "Messages",
-                  align: "right",
-                  shrink: true,
-                  sortValue: (c) => c.messages,
-                  cell: (c) => c.messages,
-                },
-                {
-                  key: "opened",
-                  header: "Opened",
-                  shrink: true,
-                  sortValue: (c) => tsKey(c.opened_at),
-                  cell: (c) => <RelativeTime className="t-caption" value={c.opened_at} now={now} />,
-                },
-                {
-                  key: "last",
-                  header: "Last message",
-                  shrink: true,
-                  sortValue: (c) => tsKey(c.last_at),
-                  cell: (c) => <RelativeTime className="t-caption" value={c.last_at} now={now} />,
-                },
-              ]}
-            />
-          </Card>
+                description={
+                  all.length
+                    ? "Clear them to see every channel in the record."
+                    : "A seat opens one with a2a_ask, narrowly scoped to tight-loop sync between agents. Ordinary collaboration goes through chat and the tracker, where a human can see it."
+                }
+              />
+            }
+          />
         </QueryState>
       )}
 

@@ -79,3 +79,17 @@ export function isDrawnAs<T extends ElementType>(
 ): boolean {
   return distinguishing(component, props, base).every((name) => element.classList.contains(name));
 }
+
+/**
+ * Narrow a list screen the way a reader does: open the Filter menu, pick the
+ * axis, then pick the answer from the editor the chip opens with.
+ *
+ * The editor opens by itself the moment an axis is added, which is the whole
+ * reason the chip appears before it has a value; a helper that pressed the
+ * chip again would close it.
+ */
+export function narrow(axis: string, answer: string | RegExp): void {
+  fireEvent.click(screen.getByRole("button", { name: "Filter" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: axis }));
+  fireEvent.mouseDown(screen.getByRole("option", { name: answer }));
+}

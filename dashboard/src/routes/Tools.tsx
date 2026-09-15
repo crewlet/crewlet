@@ -6,24 +6,23 @@
  * that can say.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
-import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
-import { BuildGlyph, CableGlyph, Package2Glyph, SearchGlyph } from "@crewlethq/icons/glyphs";
+import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
 import {
-  Card,
+  DataView,
   EmptyState,
-  FilterChip,
-  FilterChipGroup,
-  Input,
   StatCard,
   StatGroup,
   Tag,
+  type DataViewColumn,
+  type FilterDef,
+  type FilterValues,
 } from "@crewlethq/ui";
 
 function originOf(source: string): { kind: string; detail: string } {
@@ -58,6 +57,80 @@ export function Tools() {
   const builtins = tools.filter((t) => t.source === "builtin").length;
   const mcp = tools.filter((t) => t.source.startsWith("mcp")).length;
 
+  /*
+   * THE SCREEN OWNS THE NARROWING: both axes are URL parameters, so a narrowed
+   * catalogue is a link. The origin list is built from what is registered,
+   * which is honest here in a way it is not on the event log: an origin with
+   * no tools in it does not exist.
+   */
+  const filters = useMemo<FilterDef<ToolRow>[]>(
+    () => [
+      {
+        name: "q",
+        label: "Search tools",
+        role: "search",
+        placeholder: "Search by name or description",
+      },
+      {
+        name: "origin",
+        label: "Origin",
+        kind: "select",
+        options: [
+          { value: "", label: "Any origin" },
+          ...origins.map(([source, count]) => ({ value: source, label: `${source} (${count})` })),
+        ],
+      },
+    ],
+    [origins],
+  );
+
+  const values: FilterValues = { q, origin };
+
+  const onValuesChange = useCallback(
+    (next: FilterValues) => {
+      setQ(String(next.q ?? ""));
+      setOrigin(String(next.origin ?? ""));
+    },
+    [setQ, setOrigin],
+  );
+
+  const columns = useMemo<DataViewColumn<ToolRow>[]>(
+    () => [
+      {
+        key: "name",
+        header: "Tool",
+        sortable: true,
+        mono: true,
+        copyable: true,
+        sortValue: (t) => t.name,
+      },
+      {
+        key: "origin",
+        header: "Origin",
+        shrink: true,
+        sortable: true,
+        sortValue: (t) => t.source,
+        render: (t) => {
+          const { kind, detail } = originOf(t.source);
+          return (
+            <span className="row gap-1">
+              <Tag appearance="outline">{kind}</Tag>
+              {detail && <span className="t-caption mono">{detail}</span>}
+            </span>
+          );
+        },
+      },
+      {
+        key: "description",
+        header: "What it does",
+        sortable: true,
+        sortValue: (t) => t.description ?? "",
+        render: (t) => t.description || <span className="muted">no description</span>,
+      },
+    ],
+    [],
+  );
+
   return (
     <>
       <ScreenHead
@@ -87,82 +160,29 @@ export function Tools() {
         />
       </StatGroup>
 
-      <div className="toolbar">
-        <Input
-          type="search"
-          width="md"
-          value={q}
-          onChange={(event) => setQ(event.target.value)}
-          onClear={() => setQ("")}
-          aria-label="Search tools"
-          placeholder="Search by name or description"
-          leading={<SearchGlyph size="sm" />}
-        />
-        <span className="spacer" />
-        <FilterChipGroup
-          label="Tool origin"
-          hideLabel
-          semantics="radio"
-          value={origin}
-          onValueChange={(next) => setOrigin(next ?? "")}
-        >
-          <FilterChip value="">All</FilterChip>
-          {origins.map(([source, count]) => (
-            <FilterChip key={source} value={source} count={count}>
-              {source}
-            </FilterChip>
-          ))}
-        </FilterChipGroup>
-      </div>
-
-      {!tools.length ? (
-        <EmptyState
-          icon={<BuildGlyph />}
-          title="No tools are registered"
-          description="Builtins register at boot; MCP tools are discovered from the servers in mcp_servers. An engine with no active configuration has neither."
-        />
-      ) : (
-        <Card padding="none">
-          <DataTable<ToolRow>
-            rows={rows}
-            rowKey={(t) => `${t.source}:${t.name}`}
-            defaultSort={{ key: "name", dir: "asc" }}
-            empty={{ title: `No tool matches “${q}”` }}
-            columns={[
-              {
-                key: "name",
-                header: "Tool",
-                sortValue: (t) => t.name,
-                cell: (t) => <code className="inline">{t.name}</code>,
-              },
-              {
-                key: "origin",
-                header: "Origin",
-                shrink: true,
-                sortValue: (t) => t.source,
-                cell: (t) => {
-                  const { kind, detail } = originOf(t.source);
-                  return (
-                    <span className="row gap-1">
-                      <Tag appearance="outline">{kind}</Tag>
-                      {detail && <span className="t-caption mono">{detail}</span>}
-                    </span>
-                  );
-                },
-              },
-              {
-                key: "desc",
-                header: "What it does",
-                cell: (t) => (
-                  <span className="t-caption">
-                    {t.description || <span className="muted">no description</span>}
-                  </span>
-                ),
-              },
-            ]}
+      <DataView<ToolRow>
+        framed
+        columns={columns}
+        rows={rows}
+        totalCount={tools.length}
+        getRowKey={(t) => `${t.source}:${t.name}`}
+        defaultSort={{ key: "name", direction: "asc" }}
+        filters={filters}
+        filterValues={values}
+        onFilterValuesChange={onValuesChange}
+        emptyMessage={
+          <EmptyState
+            size="compact"
+            icon={<BuildGlyph />}
+            title={tools.length ? "No tool matches these filters" : "No tools are registered"}
+            description={
+              tools.length
+                ? "Clear them to see every tool a seat can reach."
+                : "Builtins register at boot and MCP tools are discovered from the servers in mcp_servers, so an engine with no active configuration has neither."
+            }
           />
-        </Card>
-      )}
+        }
+      />
 
       <Section title="How a model reaches these">
         <div className="banner neutral">
