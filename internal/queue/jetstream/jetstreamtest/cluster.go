@@ -13,6 +13,7 @@ package jetstreamtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"testing"
@@ -102,7 +103,34 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 // again with different numbers.
 const clusterStartAttempts = 4
 
-// withFreshPorts runs start until it stops losing a port race.
+// errNotRetryable marks a start failure that a fresh set of ports cannot
+// change: the same input answering the same way every time.
+//
+// DELIBERATELY SHORT, and everything not on it is retried — see
+// [withFreshPorts] for why the burden sits on proving a failure repeats.
+var errNotRetryable = errors.New("not fixable by another attempt")
+
+// withFreshPorts runs start until it comes up, with fresh ports each time.
+//
+// # What it retries, and what it must not
+//
+// RETRY IS THE DEFAULT and the log says what actually failed. Standing up n
+// brokers fails for TIMING far more often than for ports — a member whose
+// readiness wait ran out, a metadata group still electing — and absorbing
+// exactly that is what the attempts are for. Measured by getting it backwards
+// in this same pull request: gating [internal/e2e]'s equivalent retry on a
+// lost port alone ended three cluster cases on their first attempt, each on a
+// `context deadline exceeded` that a second attempt had always taken in its
+// stride.
+//
+// So only a failure KNOWN to repeat ends the run early, and the burden is on
+// proving that rather than on proving it might not: guessing "deterministic"
+// wrongly ends a case that would have passed, while guessing "transient"
+// wrongly costs some seconds and a line.
+//
+// What the log must not do is call every one of them a port race. That was the
+// other half of the same defect — the one diagnostic a reader gets, naming a
+// cause the run had no evidence for.
 func withFreshPorts(t *testing.T, start func() (*Cluster, error)) *Cluster {
 	t.Helper()
 	var last error
@@ -118,11 +146,14 @@ func withFreshPorts(t *testing.T, start func() (*Cluster, error)) *Cluster {
 		if c != nil {
 			c.shutdown()
 		}
-		t.Logf("cluster attempt %d/%d lost a port race: %v",
+		if errors.Is(err, errNotRetryable) {
+			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
+				"cannot fix: %v", attempt, clusterStartAttempts, err)
+		}
+		t.Logf("cluster attempt %d/%d failed, retrying with fresh ports: %v",
 			attempt, clusterStartAttempts, err)
 	}
-	t.Fatalf("no cluster came up in %d attempts: %v — every one lost a port to "+
-		"another process between reserving it and binding it, which is what a "+
+	t.Fatalf("no cluster came up in %d attempts: %v — which is what a "+
 		"machine running many brokers at once produces",
 		clusterStartAttempts, last)
 	return nil
@@ -286,8 +317,10 @@ func (c *Cluster) start(t *testing.T, cfg js.Config, i int) error {
 	case err != nil:
 		// NOT A RACE, so the retry above must not treat it as one: an
 		// address this host does not have, or a probe that never ran.
-		return fmt.Errorf("cluster member %d: route port %d on %q cannot be "+
-			"probed: %w", i, cfg.ClusterPort, cfg.ClusterHost, err)
+		// Both answer identically however many ports it is offered.
+		return fmt.Errorf("cluster member %d: %w: route port %d on %q cannot "+
+			"be probed: %w", i, errNotRetryable, cfg.ClusterPort,
+			cfg.ClusterHost, err)
 	case !free:
 		return fmt.Errorf("cluster member %d: %w — route port %d went between "+
 			"this harness reserving it and the member starting",

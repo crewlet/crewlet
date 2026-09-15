@@ -1,7 +1,9 @@
 package jetstreamtest
 
 import (
+	"errors"
 	"fmt"
+	"syscall"
 	"testing"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -102,12 +104,34 @@ func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 			// goroutine instead, so the retry that exists for exactly
 			// this never runs: the cluster harness learned the same
 			// lesson when StartCluster discarded its partial cluster.
-			return nil, fmt.Errorf("start forwarder %d->%d: %w: %w",
-				f.from, f.to, js.ErrRoutePortTaken, err)
+			//
+			// THE SENTINEL ONLY FOR A PORT ACTUALLY IN USE. f.start
+			// hands back whatever [net.ListenConfig.Listen] said, which
+			// is EADDRINUSE for a race and a permission failure, an
+			// unbindable address or a cancelled context for things a
+			// different port would not fix. Naming all of them
+			// ErrRoutePortTaken contradicts what that sentinel is for
+			// — see its doc in [internal/queue/jetstream] — and would
+			// tell a reader the harness lost a race it never had.
+			return nil, fmt.Errorf("start forwarder %d->%d: %w",
+				f.from, f.to, portErr(err))
 		}
 	}
 	t.Cleanup(c.shutdown)
 	return &Relays{c: c, ports: routePorts, dead: dead}, nil
+}
+
+// portErr names a listen failure that is a port already in use, and passes
+// everything else through unchanged.
+//
+// It exists because the distinction is the sentinel's whole content: a port
+// somebody else holds is fixed by asking for a different one, and a permission
+// failure, an address this host does not have or a cancelled context are not.
+func portErr(err error) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("%w: %w", js.ErrRoutePortTaken, err)
+	}
+	return err
 }
 
 // StartDirectMesh reserves an n-member mesh with NO relays: members are given
