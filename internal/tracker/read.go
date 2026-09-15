@@ -1285,13 +1285,47 @@ type sortTerm struct {
 	JoinArgs []any
 }
 
+// sortColumn is a column a caller may order by, and whether it can be absent.
+type sortColumn struct {
+	Column string
+	// Nullable says the schema permits NULL here, which decides whether the
+	// order carries an explicit NULL clause. See [renderOrder].
+	Nullable bool
+}
+
 // sortColumns is what a caller may order by.
-var sortColumns = map[string]string{
-	"rank": "t.rank", "updated": "t.updated_at", "due": "t.due_at",
-	"start":    "t.start_at",
-	"priority": "t.prio_rank", "created": "t.created_at",
-	"title": "t.title", "estimate": "t.estimate_min", "points": "t.points",
-	"spend": "t.spend_tokens", "status_entered": "t.status_entered_at",
+//
+// THE NULLABILITY IS HERE, beside the column, and it is not a style note: an
+// ascending order over a NOT NULL column must NOT carry `NULLS LAST`, because
+// that is not the order an index stores and the planner then sorts the whole
+// scope in a temp b-tree instead. Written on every column, it cost
+// `tracker_tasks_board_idx` its only reader — the board, which is every
+// listing inside a project — and `tracker_tasks_updated_idx` the workspace's.
+//
+// BOTH DIRECTIONS ARE GATED, which is what makes a table of nullability safe
+// to keep here rather than a hazard: marking a nullable column NOT NULL is
+// caught by [TestSortingByADateLeavesTheUndatedLast], and failing to mark a
+// NOT NULL one is caught by TestEveryIndexServesARegisteredQuery, which
+// reports the index that lost its reader. A migration that relaxes a
+// constraint has to touch this map, and the suite says so either way.
+var sortColumns = map[string]sortColumn{
+	// NOT NULL in `0002_the_tracker_lands.sql`, every one of them with a
+	// default where the writer may omit a value.
+	"rank":           {Column: "t.rank"},
+	"updated":        {Column: "t.updated_at"},
+	"priority":       {Column: "t.prio_rank"},
+	"created":        {Column: "t.created_at"},
+	"title":          {Column: "t.title"},
+	"estimate":       {Column: "t.estimate_min"},
+	"points":         {Column: "t.points"},
+	"spend":          {Column: "t.spend_tokens"},
+	"status_entered": {Column: "t.status_entered_at"},
+
+	// NULLABLE, and the two that made this rule necessary: a task with no
+	// due date is not the soonest-due task, and `sort=due` answered with
+	// every undated one ahead of the one due tomorrow.
+	"due":   {Column: "t.due_at", Nullable: true},
+	"start": {Column: "t.start_at", Nullable: true},
 }
 
 // EVERY KEY HERE IS ONE [sortKeys] ADMITS, and the two are checked against
@@ -1342,7 +1376,10 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 		if !known {
 			continue
 		}
-		terms = append(terms, sortTerm{Column: column, Descending: sort.Descending})
+		terms = append(terms, sortTerm{
+			Column: column.Column, Descending: sort.Descending,
+			NeverNull: !column.Nullable,
+		})
 	}
 	if len(terms) == 0 {
 		switch {
@@ -1353,6 +1390,8 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 			// is ordering by a stale number — and the only index over
 			// removed rows is the partial one on this column, so the
 			// board default also made the listing a heap scan.
+			// NULLABLE — it is what "removed" MEANS — and descending, so
+			// the clause is SQLite's own default either way.
 			terms = append(terms, sortTerm{
 				Column: "t.removed_at", Descending: true,
 			})
@@ -1361,9 +1400,11 @@ func sortTerms(q Query, fields map[string]resolvedField) []sortTerm {
 			// the most recently touched everywhere else, because a
 			// rank is only an order within the container that owns
 			// it.
-			terms = append(terms, sortTerm{Column: "t.rank"})
+			terms = append(terms, sortTerm{Column: "t.rank", NeverNull: true})
 		default:
-			terms = append(terms, sortTerm{Column: "t.updated_at", Descending: true})
+			terms = append(terms, sortTerm{
+				Column: "t.updated_at", Descending: true, NeverNull: true,
+			})
 		}
 	}
 	// The primary key, which the schema declares NOT NULL — so it takes no
