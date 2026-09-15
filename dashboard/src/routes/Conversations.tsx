@@ -175,7 +175,7 @@ export function Conversations() {
     <>
       <PageHeader
         title="Agent-to-agent"
-        description="The private channels seats opened with each other. One ask, one answer, then closed — the channel is the authorization record, not the transport."
+        description="The private channels seats opened with each other. One ask, one answer, then closed. The channel is the authorization record, not the transport."
       />
 
       <StatGroup columns={3}>

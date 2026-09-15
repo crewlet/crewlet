@@ -323,7 +323,12 @@ export function Spend() {
                 firstDirection: "desc",
                 sortable: true,
                 sortValue: (a) => (a.calls ? a.total_tokens / a.calls : 0),
-                render: (a) => (a.calls ? fmtCount(Math.round(a.total_tokens / a.calls)) : "—"),
+                render: (a) =>
+                  a.calls ? (
+                    fmtCount(Math.round(a.total_tokens / a.calls))
+                  ) : (
+                    <EmptyValue label="No calls in this window" />
+                  ),
               },
             ])}
           />

@@ -197,7 +197,7 @@ export function Tools() {
               The model calls <InlineCode tone="inherit">list_mcp_server_tools(server)</InlineCode>{" "}
               to see what a server offers, then{" "}
               <InlineCode tone="inherit">activate_tool(name)</InlineCode> to promote one into the
-              schemas it can actually invoke. It activates what it needs the moment it needs it —
+              schemas it can actually invoke. It activates what it needs the moment it needs it:
               there is no separate planning pass to name a tool in advance.
             </span>
           </span>

@@ -65,7 +65,7 @@ export function Fleet() {
     <>
       <PageHeader
         title="Fleet"
-        description="Seat ownership is a lease with a fencing epoch — no two nodes ever run one seat. A node that cannot reach the configuration it should be running releases its seats rather than serving stale work."
+        description="Seat ownership is a lease with a fencing epoch, so no two nodes ever run one seat. A node that cannot reach the configuration it should be running releases its seats rather than serving stale work."
         badges={
           <>
             <Tag appearance="outline">{plural(nodes.length, "node")}</Tag>
@@ -271,7 +271,7 @@ export function Fleet() {
                 .map((n) => (
                   <Callout variant="danger" key={n.id} icon={<ErrorGlyph size="sm" />}>
                     <span>
-                      <InlineCode>{n.id}</InlineCode> — {n.config_error}
+                      <InlineCode>{n.id}</InlineCode>: {n.config_error}
                     </span>
                   </Callout>
                 ))}

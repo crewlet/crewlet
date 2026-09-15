@@ -337,7 +337,7 @@ export function ModelActivity() {
     <>
       <PageHeader
         title="Model activity"
-        description="Every phase the models ran, one row each. Open a row for the transcript on that seat — reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
+        description="Every phase the models ran, one row each. Open a row for the transcript on that seat: reading what a model said is a one-agent job, and this page has to stay readable with fifty of them running."
         badges={
           <>
             {liveCount > 0 && (

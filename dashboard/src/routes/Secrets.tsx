@@ -252,7 +252,7 @@ export function Secrets() {
     <>
       <PageHeader
         title="Secrets"
-        description="The company's sealed credentials. Names, key ids and provenance — this screen never asks for a value."
+        description="The company's sealed credentials. Names, key ids and provenance: this screen never asks for a value."
         badges={<Tag appearance="outline">{plural(list.length, "credential")} held</Tag>}
         actions={
           <Button

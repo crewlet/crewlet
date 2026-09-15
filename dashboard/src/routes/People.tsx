@@ -111,7 +111,7 @@ export function People() {
     <>
       <PageHeader
         title="People"
-        description="Every seat in the company — the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
+        description="Every seat in the company, the ones this node runs and the ones its peers do. A seat that is not held anywhere reads as “not running here”."
         badges={
           <>
             <Tag appearance="outline">{plural(agentSeats, "agent seat")}</Tag>

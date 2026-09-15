@@ -59,7 +59,7 @@ export function Knowledge() {
     <>
       <PageHeader
         title="Knowledge"
-        description="The company knowledge base, searched live the way an agent searches it — there is no local copy, so what you see here is what the backend holds right now."
+        description="The company knowledge base, searched live the way an agent searches it. There is no local copy, so what you see here is what the backend holds right now."
         badges={data?.backend ? <Tag appearance="outline">{data.backend}</Tag> : undefined}
       />
 

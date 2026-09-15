@@ -251,7 +251,7 @@ export function Runs() {
     <>
       <PageHeader
         title="Coding runs"
-        description="Each one is an Execute phase that suspended. It resumes when the sandbox reports back — after a restart, or on another node."
+        description="Each one is an Execute phase that suspended. It resumes when the sandbox reports back, after a restart or on another node."
         badges={
           <>
             {running > 0 && (
@@ -391,7 +391,14 @@ export function Runs() {
               ],
               ["Coding agent", detail.coding_agent || "—"],
               ["Runs in", detail.placement || "—"],
-              ["Branch", detail.branch ? <InlineCode key={"b"}>{detail.branch}</InlineCode> : "—"],
+              [
+                "Branch",
+                detail.branch ? (
+                  <InlineCode key="b">{detail.branch}</InlineCode>
+                ) : (
+                  <EmptyValue key="b" label="No branch recorded" />
+                ),
+              ],
               ["Owner node", detail.owner || "—"],
               ["Started", fmtDateTime(detail.started_at)],
               ["Updated", fmtDateTime(detail.updated_at)],
