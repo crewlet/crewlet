@@ -1,12 +1,8 @@
 package jetstreamtest
 
 import (
-	"errors"
 	"fmt"
-	"syscall"
 	"testing"
-
-	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
 // Relays is a partitionable route MESH with no servers in it — the addressing
@@ -51,33 +47,39 @@ func StartRelays(t *testing.T, n int) *Relays {
 		t.Fatalf("StartRelays(%d): a partition needs at least two members, or "+
 			"there is no pair to cut", n)
 	}
-	// RETRIED WITH FRESH PORTS, which is [withFreshPorts]'s argument
-	// applied to the other half of the harness: a lost port is not fixed
-	// by asking for the same number again, and this reserves three sets at
-	// once so it is the likelier half to lose one.
-	var last error
-	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
+	// THROUGH [withFreshPorts], the harness's ONE retry loop, rather than a
+	// second one beside it. This reserves three port sets at once, so it is
+	// the likelier half to lose one — but a second loop was a second set of
+	// answers to "which failures are worth another attempt", and it got
+	// them wrong in the direction the shared one is written against: it
+	// retried everything and logged every failure as a lost port race, so
+	// an unbindable address or a cancelled context cost four attempts and
+	// was reported as a race the run had no evidence for.
+	//
+	// The classification it needs lives at the bind itself now, in
+	// [listenErr], which is the only place that can tell those apart.
+	var mesh *Relays
+	withFreshPorts(t, "relay mesh", func() (*Cluster, error) {
 		r, err := startRelaysOnce(t, n)
-		if err == nil {
-			return r
-		}
-		last = err
-		t.Logf("relay mesh attempt %d/%d lost a port race: %v",
-			attempt, clusterStartAttempts, err)
-	}
-	t.Fatalf("no relay mesh came up in %d attempts: %v — every one lost a "+
-		"listener to another process between reserving its port and binding "+
-		"it", clusterStartAttempts, last)
-	return nil
+		mesh = r
+		return r.c, err
+	})
+	return mesh
 }
 
 // startRelaysOnce is one attempt, which is the unit the retry above works in.
+//
+// The PARTIAL MESH goes back with the error, never nil, for the reason
+// [StartCluster]'s factory gives: the relays that DID bind hold their
+// listeners until the test ends, and [withFreshPorts] is what takes them down
+// between attempts. Only the embedded cluster is meaningful on an error.
 func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 	t.Helper()
 	ports := freePorts(t, n+n*(n-1)+n)
 	routePorts, relayPorts, dead := ports[:n], ports[n:n+n*(n-1)], ports[n+n*(n-1):]
 
 	c := &Cluster{}
+	mesh := &Relays{c: c, ports: routePorts, dead: dead}
 	for i := range n {
 		for j := range n {
 			if i == j {
@@ -96,42 +98,25 @@ func startRelaysOnce(t *testing.T, n int) (*Relays, error) {
 	// already handles.
 	for _, f := range c.forwarders {
 		if err := f.start(t.Context()); err != nil {
-			c.shutdown()
 			// RETURNED, NOT FATAL. A relay listener loses its port to
 			// the same race a member's does — this reserves n(n-1)+2n
-			// of them, so it loses MORE often — and the caller above
-			// retries with a fresh set. t.Fatalf ends the test binary's
-			// goroutine instead, so the retry that exists for exactly
-			// this never runs: the cluster harness learned the same
-			// lesson when StartCluster discarded its partial cluster.
+			// of them, so it loses MORE often — and the retry above
+			// tries again with a fresh set. t.Fatalf ends the test
+			// binary's goroutine instead, so the retry that exists for
+			// exactly this never runs.
 			//
-			// THE SENTINEL ONLY FOR A PORT ACTUALLY IN USE. f.start
-			// hands back whatever [net.ListenConfig.Listen] said, which
-			// is EADDRINUSE for a race and a permission failure, an
-			// unbindable address or a cancelled context for things a
-			// different port would not fix. Naming all of them
-			// ErrRoutePortTaken contradicts what that sentinel is for
-			// — see its doc in [internal/queue/jetstream] — and would
-			// tell a reader the harness lost a race it never had.
-			return nil, fmt.Errorf("start forwarder %d->%d: %w",
-				f.from, f.to, portErr(err))
+			// AND CLASSIFIED, through [listenErr]: a port somebody else
+			// holds is worth another set of numbers, and a permission
+			// failure, an address this host does not have or a
+			// cancelled context answer identically however many it is
+			// offered. This one call is what keeps the sentinel meaning
+			// what its doc in [internal/queue/jetstream] says.
+			return mesh, fmt.Errorf("start forwarder %d->%d: %w",
+				f.from, f.to, listenErr(err))
 		}
 	}
 	t.Cleanup(c.shutdown)
-	return &Relays{c: c, ports: routePorts, dead: dead}, nil
-}
-
-// portErr names a listen failure that is a port already in use, and passes
-// everything else through unchanged.
-//
-// It exists because the distinction is the sentinel's whole content: a port
-// somebody else holds is fixed by asking for a different one, and a permission
-// failure, an address this host does not have or a cancelled context are not.
-func portErr(err error) error {
-	if errors.Is(err, syscall.EADDRINUSE) {
-		return fmt.Errorf("%w: %w", js.ErrRoutePortTaken, err)
-	}
-	return err
+	return mesh, nil
 }
 
 // StartDirectMesh reserves an n-member mesh with NO relays: members are given

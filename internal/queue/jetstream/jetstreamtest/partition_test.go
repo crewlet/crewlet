@@ -1,7 +1,11 @@
 package jetstreamtest
 
 import (
+	"context"
+	"errors"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -189,20 +193,125 @@ func TestThePortProbeSeesAHeldPort(t *testing.T) {
 	}
 }
 
-// A FAILED ATTEMPT HANDS BACK WHAT IT STARTED, so the retry can take it down.
+// A BIND FAILURE IS CLASSIFIED BY WHETHER ANOTHER PORT WOULD ANSWER
+// DIFFERENTLY, which is the one question [withFreshPorts] needs answered and
+// the one a raw listen error cannot answer.
 //
-// # Why discarding it defeats the retry
+// Both relay paths returned that raw error, so the retry read a permission
+// failure and a cancelled context as transient and spent four attempts on
+// them — then reported them as a lost port race, a cause the run had no
+// evidence for. Asserted on the SHAPE net produces, not a bare errno: the
+// real error is an *net.OpError around an *os.SyscallError around the errno,
+// and a classifier that stopped walking that chain would call every bind
+// failure deterministic and end every genuine race on its first attempt.
+func TestABindFailureIsClassifiedByWhetherAnotherPortWouldHelp(t *testing.T) {
+	t.Parallel()
+	listenErrOf := func(e error) error {
+		return &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", e)}
+	}
+	for name, tc := range map[string]struct {
+		in        error
+		retryable bool
+	}{
+		"a port somebody else holds":   {listenErrOf(syscall.EADDRINUSE), true},
+		"the bare errno":               {syscall.EADDRINUSE, true},
+		"a port this user may not use": {listenErrOf(syscall.EACCES), false},
+		"an address this host has not": {listenErrOf(syscall.EADDRNOTAVAIL), false},
+		"a cancelled probe":            {context.Canceled, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			out := listenErr(tc.in)
+
+			if !errors.Is(out, tc.in) {
+				t.Errorf("the underlying error was dropped: %v no longer reports %v",
+					out, tc.in)
+			}
+			gotPort := errors.Is(out, js.ErrRoutePortTaken)
+			gotStop := errors.Is(out, errNotRetryable)
+			if gotPort == gotStop {
+				t.Fatalf("%v classified as neither or both: port-taken=%v, "+
+					"not-retryable=%v — the retry needs exactly one answer",
+					tc.in, gotPort, gotStop)
+			}
+			if gotPort != tc.retryable {
+				t.Errorf("%v: retryable=%v, want %v", tc.in, gotPort, tc.retryable)
+			}
+		})
+	}
+}
+
+// A FAILED ATTEMPT'S LISTENERS ARE GONE BEFORE THE NEXT ONE ASKS FOR PORTS.
+//
+// # What this measures, and why the preconditions below are not enough
 //
 // Every member's shutdown is registered with t.Cleanup, which runs when the
 // TEST ends — not when an attempt fails. So a factory that returns nil on
 // error leaves the members it did start holding their route listeners for the
 // whole of the retry, and the next attempt draws its ports from a machine
-// still holding the old ones. That is precisely the port contention
-// [withFreshPorts] exists to escape, reintroduced by the escape itself.
+// still holding the old ones: precisely the port contention [withFreshPorts]
+// exists to escape, reintroduced by the escape itself.
+//
+// So this drives [withFreshPorts] itself. The first attempt starts a real
+// member and then fails — the shape every factory in this package has — and
+// the second attempt asks whether that member's route port is bindable again.
+// It is only free if the retry took the partial cluster down, which it can
+// only do if the factory handed it back. TestAFailedStartCanHandBackWhatIt
+// Started below pins the two properties that make it possible; neither of
+// them notices a factory that regresses to `return nil, err`, which is the
+// regression that actually costs the ports.
+func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
+	t.Parallel()
+
+	var startedPort, attempts int
+	freeOnRetry := false
+
+	c := withFreshPorts(t, "partial-teardown probe", func() (*Cluster, error) {
+		attempts++
+		if attempts > 1 {
+			free, err := PortFree(t.Context(), "127.0.0.1", startedPort)
+			if err != nil {
+				t.Fatalf("probe the first attempt's route port: %v", err)
+			}
+			freeOnRetry = free
+			return &Cluster{}, nil
+		}
+		// ONE MEMBER, THEN A FAILURE AFTER IT — a factory fails on the
+		// member it is up to, never on the first, so the value it hands
+		// back is never empty. That is the whole defect.
+		partial := &Cluster{}
+		startedPort = freePorts(t, 1)[0]
+		cfg := memberConfig(js.Config{}, 0, 1, startedPort, []string{routeURL(startedPort)})
+		cfg.ClusterHost = "127.0.0.1"
+		if err := partial.start(t, cfg, 0); err != nil {
+			t.Fatalf("start the member this case needs: %v", err)
+		}
+		// Retryable on purpose: errNotRetryable would end the run here
+		// and there would be no second attempt to measure.
+		return partial, errors.New("the member after this one lost its port")
+	})
+
+	if attempts != 2 {
+		t.Fatalf("the factory ran %d time(s), want 2: the first attempt's "+
+			"failure did not produce a retry, so nothing was measured", attempts)
+	}
+	if c == nil {
+		t.Fatal("withFreshPorts returned no cluster after a successful attempt")
+	}
+	if !freeOnRetry {
+		t.Errorf("route port %d was still held when the retry ran: the failed "+
+			"attempt's member was not shut down, so the next attempt draws "+
+			"its ports from a machine still holding the old ones — which is "+
+			"the contention the retry exists to escape", startedPort)
+	}
+}
+
+// AND THE TWO PROPERTIES THAT MAKE THAT POSSIBLE: shutdown is safe to call
+// twice, and a member that started is recorded before a later one can fail.
 //
 // Both factories are checked, because the two disagreed: the relay path
 // returned the partial cluster and the direct path returned nil.
-func TestAFailedStartHandsBackWhatItStarted(t *testing.T) {
+func TestAFailedStartCanHandBackWhatItStarted(t *testing.T) {
 	t.Parallel()
 
 	// A CLUSTER THAT CAME UP is the control: shutdown must be safe to call

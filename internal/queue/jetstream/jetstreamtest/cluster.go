@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"testing"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -49,7 +50,7 @@ func StartCluster(t *testing.T, n int, base js.Config) *Cluster {
 		t.Fatalf("StartCluster(%d): a cluster needs at least one member", n)
 	}
 
-	return withFreshPorts(t, func() (*Cluster, error) {
+	return withFreshPorts(t, "cluster", func() (*Cluster, error) {
 		// Ports are reserved up front because every member's routes
 		// must name every other member, including ones not started
 		// yet, and the alternative — starting members one at a time
@@ -110,6 +111,28 @@ const clusterStartAttempts = 4
 // [withFreshPorts] for why the burden sits on proving a failure repeats.
 var errNotRetryable = errors.New("not fixable by another attempt")
 
+// listenErr classifies a route listener's bind failure for [withFreshPorts].
+//
+// THE ONE CLASSIFIER BOTH RELAY PATHS USE, so the retry gets the same answer
+// wherever a forwarder failed to bind. [net.ListenConfig.Listen] hands back
+// EADDRINUSE for the race this harness genuinely loses — it reserves
+// n(n-1)+2n ports and then binds them one at a time — and a permission
+// failure, an address this host does not have, or a cancelled context for the
+// things a different number answers identically.
+//
+// It exists because the classification was written at neither relay path:
+// both returned the raw error, so [withFreshPorts]'s "retry unless it is
+// proven to repeat" read every one of them as transient and spent four
+// attempts on an unbindable address before reporting it as a lost race. The
+// mechanism was already here — [Cluster.start] classifies its own probe
+// failure exactly this way — and the relay half simply did not feed it.
+func listenErr(err error) error {
+	if errors.Is(err, syscall.EADDRINUSE) {
+		return fmt.Errorf("%w: %w", js.ErrRoutePortTaken, err)
+	}
+	return fmt.Errorf("%w: %w", errNotRetryable, err)
+}
+
 // withFreshPorts runs start until it comes up, with fresh ports each time.
 //
 // # What it retries, and what it must not
@@ -131,7 +154,7 @@ var errNotRetryable = errors.New("not fixable by another attempt")
 // What the log must not do is call every one of them a port race. That was the
 // other half of the same defect — the one diagnostic a reader gets, naming a
 // cause the run had no evidence for.
-func withFreshPorts(t *testing.T, start func() (*Cluster, error)) *Cluster {
+func withFreshPorts(t *testing.T, what string, start func() (*Cluster, error)) *Cluster {
 	t.Helper()
 	var last error
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
@@ -147,15 +170,15 @@ func withFreshPorts(t *testing.T, start func() (*Cluster, error)) *Cluster {
 			c.shutdown()
 		}
 		if errors.Is(err, errNotRetryable) {
-			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
-				"cannot fix: %v", attempt, clusterStartAttempts, err)
+			t.Fatalf("%s attempt %d/%d failed for a reason retrying "+
+				"cannot fix: %v", what, attempt, clusterStartAttempts, err)
 		}
-		t.Logf("cluster attempt %d/%d failed, retrying with fresh ports: %v",
-			attempt, clusterStartAttempts, err)
+		t.Logf("%s attempt %d/%d failed, retrying with fresh ports: %v",
+			what, attempt, clusterStartAttempts, err)
 	}
-	t.Fatalf("no cluster came up in %d attempts: %v — which is what a "+
+	t.Fatalf("no %s came up in %d attempts: %v — which is what a "+
 		"machine running many brokers at once produces",
-		clusterStartAttempts, last)
+		what, clusterStartAttempts, last)
 	return nil
 }
 
@@ -204,7 +227,7 @@ func StartPartitionableCluster(t *testing.T, n int, base js.Config) *Cluster {
 			"two members, or there is no pair to cut", n)
 	}
 
-	return withFreshPorts(t, func() (*Cluster, error) {
+	return withFreshPorts(t, "partitionable cluster", func() (*Cluster, error) {
 		return startPartitionable(t, n, base)
 	})
 }
@@ -236,7 +259,11 @@ func startPartitionable(t *testing.T, n int, base js.Config) (*Cluster, error) {
 	// already handles.
 	for _, f := range c.forwarders {
 		if err := f.start(t.Context()); err != nil {
-			return c, fmt.Errorf("start forwarder %d->%d: %w", f.from, f.to, err)
+			// THROUGH [listenErr], because the retry above cannot tell a
+			// lost port from an unbindable address on its own — and the
+			// raw error told it everything was transient.
+			return c, fmt.Errorf("start forwarder %d->%d: %w",
+				f.from, f.to, listenErr(err))
 		}
 	}
 	t.Cleanup(c.shutdown)
