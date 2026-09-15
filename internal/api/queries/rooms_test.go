@@ -34,6 +34,52 @@ func (memorySandbox) ListWithStatus(context.Context, []string) ([]sandbox.Pendin
 	return nil, nil
 }
 
+// declaration finds the ONE file under the dashboard tree whose source matches
+// `pattern`, and hands back its first capture.
+//
+// A GATE OVER A CONSTANT IS A GATE OVER THE CONSTANT. Reading it from a fixed
+// path makes every such gate a second thing that breaks when a screen moves —
+// and breaks LOUDLY but WRONGLY, reporting a drift between two lists neither of
+// which changed. Keyed on the declaration, a move and a rename are both
+// invisible, and the two failures that matter are the ones it names: nothing
+// declares it, which is a gate certifying nothing; and TWO files declare it,
+// which is two copies that can drift from each other as well as from the
+// engine.
+func declaration(t *testing.T, pattern string) string {
+	t.Helper()
+	re := regexp.MustCompile(pattern)
+	var found []string
+	err := filepath.WalkDir(dashboardTree, func(path string, d os.DirEntry, err error) error {
+		switch {
+		case err != nil:
+			return err
+		case d.IsDir(), !strings.HasSuffix(path, ".ts") && !strings.HasSuffix(path, ".tsx"):
+			return nil
+		case strings.Contains(d.Name(), ".test."):
+			return nil
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if m := re.FindStringSubmatch(string(source)); m != nil {
+			found = append(found, m[1])
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("the dashboard tree at %s could not be walked, so this gate "+
+			"certifies nothing: %v", dashboardTree, err)
+	}
+	if len(found) != 1 {
+		t.Fatalf("%d files under %s match %s, want exactly one — none is a "+
+			"gate certifying nothing, and two are two copies that can drift "+
+			"from each other as well as from the engine",
+			len(found), dashboardTree, pattern)
+	}
+	return found[0]
+}
+
 // dashboardTree is the room source this sweep reads. Relative, because the
 // package it certifies is the one that serves those rooms.
 //
@@ -366,15 +412,14 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 // behind and a live one missing.
 func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	t.Parallel()
-	source, err := os.ReadFile(filepath.Join(dashboardTree, "lib", "reasons.ts"))
-	if err != nil {
-		t.Fatalf("the client's reason table could not be read, so this gate "+
-			"certifies nothing: %v", err)
-	}
+	// FOUND RATHER THAN ADDRESSED — see [declaration]. This table has not
+	// moved, but a gate that names a path is one more thing a reorganisation
+	// breaks, and it breaks by reporting a drift that did not happen.
+	table := declaration(t, `(?s)const PHRASES: Record<[^>]*> = \{(.*?)\n\};`)
 	// The table is `key: { short: …, why: … }`, one per line.
 	entry := regexp.MustCompile(`(?m)^\s{2}([a-z_]+):\s*\{`)
 	phrased := map[string]bool{}
-	for _, m := range entry.FindAllStringSubmatch(string(source), -1) {
+	for _, m := range entry.FindAllStringSubmatch(table, -1) {
 		phrased[m[1]] = true
 	}
 	if len(phrased) == 0 {
@@ -408,23 +453,19 @@ func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 // checked too — that is how a renamed group leaves a dead control behind.
 func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 	t.Parallel()
-	source, err := os.ReadFile(filepath.Join(dashboardTree, "routes", "Spend.tsx"))
-	if err != nil {
-		t.Fatalf("the cost screen could not be read, so this gate certifies "+
-			"nothing: %v", err)
-	}
 	// THE `GROUPS` TABLE ITSELF, not every `{value, label}` pair on the
 	// screen: the compare control is the same shape one line away, and a
 	// sweep over the whole file read its "previous" as a seventh dimension.
-	block := regexp.MustCompile(`(?s)const GROUPS = \[(.*?)\] as const;`).
-		FindStringSubmatch(string(source))
-	if block == nil {
-		t.Fatal("the screen's GROUPS table was not found, so this gate " +
-			"certifies nothing")
-	}
+	//
+	// FOUND RATHER THAN ADDRESSED. This read the screen at
+	// `routes/Spend.tsx` and went red the day the screens were grouped by
+	// workspace, reporting a drift between two lists that had not changed.
+	// A gate over a constant is a gate over the constant, and the file it
+	// happens to sit in is not the subject.
+	block := declaration(t, `(?s)const GROUPS = \[(.*?)\] as const;`)
 	entry := regexp.MustCompile(`value: "([a-z_]+)"`)
 	offered := map[string]bool{}
-	for _, m := range entry.FindAllStringSubmatch(block[1], -1) {
+	for _, m := range entry.FindAllStringSubmatch(block, -1) {
 		offered[m[1]] = true
 	}
 	if len(offered) == 0 {
