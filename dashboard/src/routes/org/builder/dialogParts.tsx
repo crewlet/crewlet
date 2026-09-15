@@ -48,7 +48,10 @@ export function EditorSection({
   const depth = useContext(SectionDepth);
   const Heading = `h${Math.min(depth + 2, 6)}` as SectionHeading;
   return (
-    <section className="builder-section col gap-3" aria-labelledby={id}>
+    /* THE DEPTH IS ON THE ELEMENT, because the stylesheet needs it too: a
+       top-level section is separated from what is above it by a rule, and a
+       section inside one is a sub-part that takes none. */
+    <section className="builder-section col gap-3" data-depth={depth} aria-labelledby={id}>
       <div className="col gap-1">
         <Heading className="builder-section-title" id={id}>
           {title}

@@ -522,19 +522,18 @@
    group of them (reports, a tool, what the document configures) with a rule
    and a heading, so a long seat form reads as parts rather than one list. */
 
-.builder-section + .builder-section,
-.sheet-body > .builder-section,
-.dialog-body > .builder-section {
+/* KEYED ON THE SECTION'S OWN DEPTH, which it already knows: it reads the
+   depth to pick its heading level, so it says it. The three selectors this
+   replaces began at the section before it and at the dialog and drawer bodies,
+   and the design system draws those bodies, so two of the three stopped
+   matching and the first section of every dialog lost the rule above it. A
+   section inside a section (one tool inside Integrations) is a sub-part, not a
+   new part, and takes no rule, which the depth says directly rather than by
+   being cancelled again below. */
+
+.builder-section[data-depth="0"] {
   padding-top: var(--spacing-3);
   border-top: 1px solid var(--color-border-default);
-}
-
-/* A section inside a section (one tool inside Integrations) is a sub-part,
-   not a new part: no rule of its own. */
-
-.builder-section .builder-section {
-  padding-top: 0;
-  border-top: none;
 }
 
 .builder-section-title {
@@ -565,14 +564,17 @@
 /* Two fields that make one answer (a contact's surface and its identity) sit
    side by side and share the width, so neither reads as a separate question. */
 
-.builder-pair {
-  display: flex;
-  gap: var(--spacing-3);
-  min-width: 0;
-}
+/* A GRID, so the split is the row's own rule rather than one each child has
+   to carry. It used to be a flex row that sized its children through
+   `> .field`, the class the engine's own field component drew; the design
+   system draws the field now, and that selector went with it, leaving the two
+   questions to size themselves and the pair to read as one wide and one
+   narrow. */
 
-.builder-pair > .field {
-  flex: 1 1 0;
+.builder-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-3);
   min-width: 0;
 }
 

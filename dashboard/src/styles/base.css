@@ -15,36 +15,11 @@
 
 /* ---- Type utilities -----------------------------------------------------
    Named for what they MEAN, not for their size, so a change of scale is one
-   edit here rather than a search for `font-size: 11px`. */
+   edit here rather than a search for `font-size: 11px`. The heading steps that
+   used to open this section are the package's `Text` and `PageHeader` now, and
+   the rules went with the last screen that spelled one: a utility nothing
+   writes is a rule that cannot be seen to be wrong. */
 
-.t-display {
-  font-size: var(--font-size-3xl);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.03em;
-  line-height: 1.05;
-  font-variant-numeric: tabular-nums;
-}
-.t-stat {
-  font-size: var(--font-size-2xl);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--font-letter-spacing-tight);
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
-}
-.t-title {
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--font-letter-spacing-tight);
-}
-.t-heading {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: var(--font-letter-spacing-tight);
-}
-.t-lead {
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
-}
 .t-body {
   font-size: var(--font-size-sm);
 }
@@ -112,13 +87,6 @@
   white-space: nowrap;
   min-width: 0;
 }
-.clamp-2 {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
 .measure {
   max-width: var(--size-measure);
 }
@@ -148,12 +116,6 @@
   gap: var(--spacing-2);
   min-width: 0;
 }
-.row-top {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-2);
-  min-width: 0;
-}
 .col {
   display: flex;
   flex-direction: column;
@@ -176,9 +138,6 @@
 .gap-4 {
   gap: var(--spacing-4);
 }
-.gap-6 {
-  gap: var(--spacing-6);
-}
 
 /* A grid that lays cards out at a minimum readable width and stops. `auto-fit`
    with `minmax` is what makes every screen in the product respond without a
@@ -189,9 +148,6 @@
 }
 .grid-auto {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-}
-.grid-auto-sm {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 .grid-auto-lg {
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
