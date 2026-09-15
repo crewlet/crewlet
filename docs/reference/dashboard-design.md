@@ -1009,7 +1009,7 @@ rendered idle from the first phase to the last.
   press's click rather than on its first contact, so the tap that dismisses a
   dialog never also lands on the control the veil was covering.
   The page's own shortcuts (Ctrl or Command with K, and a bare `/`, for
-  search) wait for the page: while a modal is open (`isModalOpen`) they do
+  search) wait for the page: while a modal is open (`isModalLayerOpen`) they do
   nothing, because the page behind `aria-modal` is inert and search opened
   over a dialog could navigate away from under it, unmounting an unsaved
   editor or a write whose outcome the operator has not seen. Search closes on
@@ -1044,8 +1044,11 @@ rendered idle from the first phase to the last.
   listbox keys, the multi-select and the list field all leave such a press
   alone: search does not close or navigate in the middle of a word, and a list
   field does not add half of one.
-- **A canvas never takes the page's scroll.** `ui/Canvas.tsx` fills the box
-  its screen gives it and clips; `.screen` stays the only scroller. A plain
+- **A canvas never takes the page's scroll.** The design system's `Canvas`
+  fills the box its screen gives it and clips, and the shell's one scroller
+  stops scrolling while it is on screen: the screen ASKS for the window's
+  height (`useFillScreen`) and `AppShell` answers, rather than a rule in the
+  screen's own stylesheet reaching up at a wrapper the shell draws. A plain
   wheel pans the canvas only while focus is inside it, and Ctrl or Command
   with the wheel zooms toward the cursor. On touch, one finger scrolls the page
   until the canvas is tapped, after which it pans and a visible Done control
@@ -1085,9 +1088,9 @@ rendered idle from the first phase to the last.
   counts them among themselves, and the form that edits the same value still
   uses the list.
 - **The layout is measured, never assumed.** A chart card's width is the
-  `--crewlet-tree-canvas-card-width` knob, declared on the builder's own root; its height is measured in the browser
-  (`ui/useMeasuredSizes.ts`) and fed to the pure tidy tree layout
-  (`ui/tidytree.ts`), because density and the reader's font size change every
+  `--crewlet-tree-canvas-card-width` knob, declared on the builder's own root;
+  its height is measured in the browser and fed to the design system's own pure
+  tidy tree layout, because density and the reader's font size change every
   card's height. Nothing is shown before the first measurement, and a relayout
   keeps the node the operator acted on where it was on screen.
 
@@ -1117,10 +1120,12 @@ while the screen binds the real canvas, outline, editor and dialogs, and
 - **The canvas is handed the chart it draws.** `chart=structure|reporting` is
   the Builder's own section param, chosen in its toolbar, so the canvas is
   given the answer as a prop rather than reading the URL a second time.
-- **The canvas view fills the screen.** With `view=canvas` the lens is a flex
-  column of definite height (`.screen-inner:has(.org-builder-body.fill)`), so
-  the canvas takes what is left under the toolbar and `.screen` has nothing to
-  scroll.
+- **The canvas view fills the screen.** With `view=canvas` the lens asks the
+  shell for the window's height (`useFillScreen`), and it and the tab panel it
+  sits in become flex columns of definite height, so the canvas takes what is
+  left under the toolbar and the shell's scroller has nothing to scroll. The
+  outline view withdraws the request, and so does the posture screen the lens
+  draws before the engine has answered.
 - **Fullscreen takes the builder container**, never the canvas: the toolbar,
   the view, the dialog host, a toast outlet of its own and the live region all
   render inside it, because a fullscreen element renders only its subtree.
