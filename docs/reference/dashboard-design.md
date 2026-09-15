@@ -397,6 +397,27 @@ open — and moving it **replaces**, because four objects walked through one ope
 rail are one place the reader has been, exactly as four ticked chips are one
 screen.
 
+**The shell mounts the rail; no screen renders one.** A peek's BODY belongs to
+the kind, in `app/frame/peeks.tsx`, and the shell dispatches on the `peek=`
+token — so a list opens a peek by naming what it points at and needs to know
+nothing about it. The rail took its body as `children` once, which meant the
+screen that opened a peek had to know how to render one, and so exactly one
+screen ever did: nineteen kinds were addressable and only a work item could
+appear in the rail. A kind with no entry in that table is not an error — a
+notice is read in its own inbox and a model has no page at all — and the rail
+closes rather than opening empty.
+
+**Each peek asks its own question.** It takes an id and fetches, rather than
+being handed the row that opened it: the row carries what its list needed, a
+peek answers "what is this thing", and the two differ on every kind. It is
+also what lets a pasted `peek=` open on arrival, where no row exists.
+
+**`[` and `]` walk the list, so the list publishes its order** with
+`usePeekNeighbours`. Only the list knows what the reader is looking at —
+sorted, filtered and paged as they left it — and a rail that stepped through
+anything else would be walking a different set from the one on screen. A
+screen that publishes nothing gets a rail with no stepper, which is honest.
+
 The id is split on its FIRST colon only, so `sprint:ENG/3` and
 `page:ENG/Deploy runbook` survive being carried in a query value.
 
@@ -413,7 +434,8 @@ none of it:
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied |
 | `ObjectHeader` | an object's eyebrow, title, status and up to six facts, in the same order on the page and in the peek |
 | `useTab` | which tab is real. `tab=` is a string off a URL and the tab set belongs to the object — a human seat has two and an agent seat has five — so the hook resolves the parameter against the tabs this object HAS and the caller renders what it returns. It binds `1`–`9` for a `section`, which is where the tabs of an object live; the strip itself is `Tabs` in `ui/primitives.tsx`, the one tab widget, which mints the `aria-controls` pair so it controls a panel rather than claiming to |
-| `DetailRail` | the peek, resizable, a drawer under 1180 px |
+| `DetailRail` | the peek's chrome — resizable, a drawer under 1180 px |
+| `PeekHost` + `peeks.tsx` | the one peek in the product, mounted by the shell: the body belongs to the KIND, so a list opens a peek by naming what it points at. `usePeekNeighbours` is how a list publishes the order `[` and `]` walk |
 | `DataGrid` + `cells` | sorting in the URL, bands from a grouped answer, typed cells |
 | `PropertiesRail` | an object's own facts, in sections, with who set each |
 | `Histogram` + `FacetRail` | a log's time axis, and one dimension of it as chips |

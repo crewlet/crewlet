@@ -59,6 +59,36 @@
   grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr);
 }
 
+/* THE PEEK IS A COLUMN OF THIS GRID, not a child of whichever screen opened
+   it. It used to be a flex child inside the tracker's own three-column
+   layout, which is exactly why no other screen could have one: a second
+   screen would have had to rebuild that layout to hold it.
+
+   The shell mounts it, so the track has to exist here — and it exists ONLY
+   while the rail is open, because an empty fourth column would take its
+   width from every screen that never opens one. `--peek-w` is the reader's
+   own dragged width, set on the rail itself and read here, so the column and
+   the panel cannot disagree about how wide it is. */
+.app[data-peek="true"] {
+  grid-template-columns:
+    var(--rail-w) var(--sidebar-w) minmax(0, 1fr)
+    var(--peek-w, 420px);
+}
+
+.app[data-peek="true"][data-rail-collapsed="true"] {
+  grid-template-columns:
+    var(--rail-w-collapsed) var(--sidebar-w) minmax(0, 1fr)
+    var(--peek-w, 420px);
+}
+
+.app[data-peek="true"][data-no-sidebar="true"] {
+  grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--peek-w, 420px);
+}
+
+.app[data-peek="true"][data-no-sidebar="true"][data-rail-collapsed="true"] {
+  grid-template-columns: var(--rail-w-collapsed) minmax(0, 1fr) var(--peek-w, 420px);
+}
+
 /* ---- The global rail ---------------------------------------------------- */
 
 .rail {
@@ -498,8 +528,9 @@
 
 .peek-rail {
   position: relative;
-  width: var(--peek-w, 420px);
-  flex: 0 0 auto;
+  /* THE TRACK SETS THE WIDTH. A width here as well would win over the grid
+     and leave the column it sits in either short or overflowing whenever the
+     two were nudged apart. */
   display: flex;
   flex-direction: column;
   min-height: 0;

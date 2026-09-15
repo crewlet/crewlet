@@ -37,7 +37,8 @@
 
 import { useEffect, useMemo } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { DetailRail, usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeek, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
 import {
   BoardCard,
@@ -49,7 +50,6 @@ import {
   type RowChrome,
 } from "~/components/work.tsx";
 import { TimelineView } from "~/components/timeline.tsx";
-import { ItemPeek } from "./WorkItem.tsx";
 import {
   Badge,
   Banner,
@@ -155,11 +155,12 @@ export function Work({ project = "" }: { project?: string }) {
 
   const container = project ? `project:${project}` : "workspace";
 
-  // THE PEEK IS THE FRAME'S. It was `item=` on this screen alone, which is why
-  // a board could peek a task and nothing else in the product could peek
-  // anything — see `app/frame/DetailRail.tsx`.
+  // THE PEEK IS THE FRAME'S, and so is the rail: the shell mounts one for
+  // every screen (`app/frame/PeekHost.tsx`), so this screen opens peeks and
+  // renders none. It was `item=` on this screen alone, which is why a board
+  // could peek a task and nothing else in the product could peek anything.
   const peek = usePeek();
-  const { open: openPeek, move: movePeek } = usePeekControls();
+  const { open: openPeek } = usePeekControls();
 
   // THE PROJECT LIST IS THE COMPANY'S, never the page's — a rail built from
   // the rows could only ever offer the projects already on screen, so a board
@@ -262,6 +263,10 @@ export function Work({ project = "" }: { project?: string }) {
 
   const groups = useMemo(() => data?.groups ?? [], [data]);
   const rows = useMemo(() => data?.items ?? [], [data]);
+  // WHAT `[` AND `]` WALK: the rows this board actually loaded, sorted and
+  // filtered as the reader left them. Published rather than handed to the
+  // rail, because only the list knows that order — see `PeekHost`.
+  usePeekNeighbours(useMemo(() => rows.map((r) => ({ kind: "item", id: r.key })), [rows]));
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
 
   const chrome: RowChrome = {
@@ -578,24 +583,6 @@ export function Work({ project = "" }: { project?: string }) {
             <ActivityFeed records={feed.data?.records ?? []} now={now} />
           </div>
         </div>
-
-        {/* THE PEEK, in the frame's own rail. `[` and `]` step through the
-              rows this list actually loaded, which is what makes a board
-              readable without leaving it — and the same rail, the same
-              keystrokes and the same way out on every kind of object. */}
-        {peek?.kind === "item" && (
-          <DetailRail
-            ref={peek}
-            onStep={(delta) => {
-              const keys = rows.map((r) => r.key);
-              const at = keys.indexOf(peek.id);
-              const next = keys[Math.max(0, Math.min(keys.length - 1, at + delta))];
-              if (next && next !== peek.id) movePeek({ kind: "item", id: next });
-            }}
-          >
-            <ItemPeek itemKey={peek.id} chrome={chrome} />
-          </DetailRail>
-        )}
 
         {!loading && !error && (projects.data?.projects ?? []).length === 0 && (
           <Empty

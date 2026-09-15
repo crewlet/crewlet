@@ -19,32 +19,147 @@
  * its own tabs, and was one filter away from being lost.
  */
 
-import { useMemo } from "react";
+import { useMemo, type CSSProperties } from "react";
 import { plural } from "~/lib/format.ts";
 import { href, useParam } from "~/app/router.tsx";
 import { StateBadge, Section } from "~/components/common.tsx";
-import { Avatar, Badge, Empty, Panel, Segmented } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Empty, Panel, Segmented, Skeleton } from "~/ui/primitives.tsx";
 import { Icon } from "~/ui/Icon.tsx";
-import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
-import { indexOrg } from "~/lib/seats.ts";
+import { useAgents, useConnection, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
+import { indexOrg, type OrgIndex, type Seat } from "~/lib/seats.ts";
 import type { OrgUnit } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { ObjectHeader } from "~/app/frame/ObjectHeader.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 
 const LENSES = ["chart", "charter"] as const;
 type Lens = (typeof LENSES)[number];
 
-export function CompanyScreen() {
-  const org = useOrg();
+/**
+ * A unit's seats, as rows.
+ *
+ * ONE COPY. This block is drawn in four places between this screen, the unit
+ * page and the unit peek — the chart's units, the seats above every unit, the
+ * page's roster and the rail's — and it renders a seat's STATE: whether a node
+ * is running it, whether it is waiting on a person, whether it broke. Four
+ * hand-written copies of that is four chances for one of them to keep drawing
+ * a healthy badge over a seat nothing is running.
+ *
+ * It reads the agent and sandbox slices itself rather than taking them as
+ * props: every caller was subscribing to both for this and for nothing else,
+ * and a subscription per row-block is what the store's slice keys are for.
+ */
+function SeatLinks({ seats, style }: { seats: Seat[]; style?: CSSProperties }) {
   const agents = useAgents();
   const sandboxes = useSandboxes();
+  return (
+    <div className="org-seats" style={style}>
+      {seats.map((seat) => (
+        <a
+          key={seat.handle}
+          className={`org-node${seat.kind === "human" ? " human" : ""}`}
+          href={href(["company", "people", seat.handle])}
+        >
+          <Avatar name={seat.name} human={seat.kind === "human"} />
+          <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
+            <span className="truncate t-cell">{seat.name}</span>
+            <span className="truncate t-caption mono">@{seat.handle}</span>
+          </span>
+          {seat.kind === "human" ? (
+            <Badge outline>human</Badge>
+          ) : (
+            <StateBadge agent={agents.find((a) => a.role === seat.name)} sandboxes={sandboxes} />
+          )}
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The units under one unit, as rows.
+ *
+ * A LINK OUT, on the page and in the rail alike. The rail holds one object at
+ * a time and `[` and `]` step the list it was opened FROM, so a sub-unit
+ * swapped into it in place of its parent would leave the stepper walking a
+ * list this object is not in — the row goes to the unit's own page instead,
+ * where its seats and its own children are the point rather than a preview.
+ */
+function SubUnitLinks({ units }: { units: OrgUnit[] }) {
+  return (
+    <div className="list">
+      {units.map((child) => (
+        <a
+          key={child.name}
+          className="thread-entry"
+          href={href(["company", "units", child.id || child.name])}
+        >
+          <Icon name="folder" size="sm" />
+          <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+            <strong className="t-cell truncate">{child.name}</strong>
+            {child.purpose && <span className="t-caption truncate">{child.purpose}</span>}
+          </span>
+          <Badge outline>{child.type || "unit"}</Badge>
+          <Icon name="arrowRight" size="sm" />
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * What a unit IS — the five facts, and the roster two of them are counted from.
+ *
+ * THE PAGE AND THE PEEK READ THE SAME FUNCTION, which is the only thing that
+ * keeps them from drifting: "Seats" and "Directly in it" are two different
+ * questions about the same tree — everything under the unit, against what sits
+ * immediately in it — and two hand-written fact lists would eventually answer
+ * them the other way round in one of the two frames.
+ */
+function unitView(index: OrgIndex, unit: OrgUnit): { seats: Seat[]; facts: Fact[] } {
+  const seats = index.seats.filter((s) => s.unitChain.some((u) => u.name === unit.name));
+  const direct = index.seats.filter((s) => s.unit?.name === unit.name);
+  // THE EFFECTIVE LEAD, which is the nearest ancestor's where this unit
+  // declares none. It behaves identically everywhere in the engine, and hiding
+  // the difference is how somebody concludes a team is unmanaged.
+  const lead = direct[0]?.unitLead ?? unit.lead ?? "";
+  return {
+    seats,
+    facts: [
+      { label: "Type", value: unit.type || "unit" },
+      {
+        label: "Lead",
+        value: lead ? (
+          <>
+            {index.byName.get(lead)?.name ?? lead}
+            {!unit.lead && <span className="faint"> (inherited)</span>}
+          </>
+        ) : (
+          ""
+        ),
+        path: lead ? ["company", "people", index.byName.get(lead)?.handle ?? lead] : undefined,
+      },
+      { label: "Seats", value: seats.length },
+      { label: "Directly in it", value: direct.length },
+      { label: "Sub-units", value: (unit.children ?? []).length },
+    ],
+  };
+}
+
+/** The hint under every "no such unit", on the page and in the rail alike. */
+const NO_UNIT_HINT =
+  "A unit is addressed by its id where it declares one and by its name where it does not — the same key the engine files work, routing and pages under.";
+
+/** And what an empty one costs, which is the part a reader acts on. */
+const NO_SEATS_HINT =
+  "A unit with no seats routes nothing: work filed to it reaches its lead, or nobody.";
+
+export function CompanyScreen() {
+  const org = useOrg();
   const [lens, setLens] = useTab("lens", LENSES);
   const index = useMemo(() => indexOrg(org), [org]);
-
-  const seatFor = (name: string) => agents.find((a) => a.role === name);
 
   function UnitBlock({ unit, depth }: { unit: OrgUnit; depth: number }) {
     const seats = index.seats.filter((s) => s.unit === unit);
@@ -74,28 +189,7 @@ export function CompanyScreen() {
           <span className="t-caption">{plural(seats.length, "seat")}</span>
         </div>
         {unit.purpose && <div className="t-caption measure">{unit.purpose}</div>}
-        {seats.length > 0 && (
-          <div className="org-seats" style={{ marginTop: "var(--space-2)" }}>
-            {seats.map((seat) => (
-              <a
-                key={seat.handle}
-                className={`org-node${seat.kind === "human" ? " human" : ""}`}
-                href={href(["company", "people", seat.handle])}
-              >
-                <Avatar name={seat.name} human={seat.kind === "human"} />
-                <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
-                  <span className="truncate t-cell">{seat.name}</span>
-                  <span className="truncate t-caption mono">@{seat.handle}</span>
-                </span>
-                {seat.kind === "human" ? (
-                  <Badge outline>human</Badge>
-                ) : (
-                  <StateBadge agent={seatFor(seat.name)} sandboxes={sandboxes} />
-                )}
-              </a>
-            ))}
-          </div>
-        )}
+        {seats.length > 0 && <SeatLinks seats={seats} style={{ marginTop: "var(--space-2)" }} />}
         {(unit.children?.length ?? 0) > 0 && (
           <div className="org-children">
             {unit.children!.map((child) => (
@@ -132,26 +226,7 @@ export function CompanyScreen() {
         <>
           {rootSeats.length > 0 && (
             <Panel title="Org-wide" icon="crown" subtitle="seats above every unit">
-              <div className="org-seats">
-                {rootSeats.map((seat) => (
-                  <a
-                    key={seat.handle}
-                    className={`org-node${seat.kind === "human" ? " human" : ""}`}
-                    href={href(["company", "people", seat.handle])}
-                  >
-                    <Avatar name={seat.name} human={seat.kind === "human"} />
-                    <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
-                      <span className="truncate t-cell">{seat.name}</span>
-                      <span className="truncate t-caption mono">@{seat.handle}</span>
-                    </span>
-                    {seat.kind === "human" ? (
-                      <Badge outline>human</Badge>
-                    ) : (
-                      <StateBadge agent={seatFor(seat.name)} sandboxes={sandboxes} />
-                    )}
-                  </a>
-                ))}
-              </div>
+              <SeatLinks seats={rootSeats} />
             </Panel>
           )}
           <div className="org-tree">
@@ -244,30 +319,16 @@ export function CompanyScreen() {
  */
 export function UnitScreen({ id }: { id: string }) {
   const org = useOrg();
-  const agents = useAgents();
-  const sandboxes = useSandboxes();
   const index = useMemo(() => indexOrg(org), [org]);
-  const seatFor = (name: string) => agents.find((a) => a.role === name);
 
   const unit = index.units.find((u) => (u.id || u.name) === id || u.name === id);
   usePageLabels(unit ? { [id]: unit.name } : {});
 
   if (!unit) {
-    return (
-      <Empty
-        icon="sitemap"
-        title={`No unit called “${id}”`}
-        hint="A unit is addressed by its id where it declares one and by its name where it does not — the same key the engine files work, routing and pages under."
-      />
-    );
+    return <Empty icon="sitemap" title={`No unit called “${id}”`} hint={NO_UNIT_HINT} />;
   }
 
-  const seats = index.seats.filter((s) => s.unitChain.some((u) => u.name === unit.name));
-  const direct = index.seats.filter((s) => s.unit?.name === unit.name);
-  // THE EFFECTIVE LEAD, which is the nearest ancestor's where this unit
-  // declares none. It behaves identically everywhere in the engine, and hiding
-  // the difference is how somebody concludes a team is unmanaged.
-  const lead = direct[0]?.unitLead ?? unit.lead ?? "";
+  const { seats, facts } = unitView(index, unit);
 
   return (
     <>
@@ -284,24 +345,7 @@ export function UnitScreen({ id }: { id: string }) {
         icon="sitemap"
         identifier={unit.id || undefined}
         title={unit.name}
-        facts={[
-          { label: "Type", value: unit.type || "unit" },
-          {
-            label: "Lead",
-            value: lead ? (
-              <>
-                {index.byName.get(lead)?.name ?? lead}
-                {!unit.lead && <span className="faint"> (inherited)</span>}
-              </>
-            ) : (
-              ""
-            ),
-            path: lead ? ["company", "people", index.byName.get(lead)?.handle ?? lead] : undefined,
-          },
-          { label: "Seats", value: seats.length },
-          { label: "Directly in it", value: direct.length },
-          { label: "Sub-units", value: (unit.children ?? []).length },
-        ]}
+        facts={facts}
       />
 
       {unit.purpose && (
@@ -329,57 +373,100 @@ export function UnitScreen({ id }: { id: string }) {
         subtitle="everyone in this unit and everything under it"
         padding="none"
       >
-        <div className="org-seats" style={{ padding: "var(--space-3)" }}>
-          {seats.map((seat) => (
-            <a
-              key={seat.handle}
-              className={`org-node${seat.kind === "human" ? " human" : ""}`}
-              href={href(["company", "people", seat.handle])}
-            >
-              <Avatar name={seat.name} human={seat.kind === "human"} />
-              <span className="col" style={{ gap: 0, minWidth: 0, flex: 1 }}>
-                <span className="truncate t-cell">{seat.name}</span>
-                <span className="truncate t-caption mono">@{seat.handle}</span>
-              </span>
-              {seat.kind === "human" ? (
-                <Badge outline>human</Badge>
-              ) : (
-                <StateBadge agent={seatFor(seat.name)} sandboxes={sandboxes} />
-              )}
-            </a>
-          ))}
-          {seats.length === 0 && (
-            <Empty
-              inline
-              icon="users"
-              title="No seats in this unit"
-              hint="A unit with no seats routes nothing: work filed to it reaches its lead, or nobody."
-            />
-          )}
-        </div>
+        {seats.length > 0 ? (
+          <SeatLinks seats={seats} style={{ padding: "var(--space-3)" }} />
+        ) : (
+          <Empty inline icon="users" title="No seats in this unit" hint={NO_SEATS_HINT} />
+        )}
       </Panel>
 
       {(unit.children ?? []).length > 0 && (
         <Panel title="Sub-units" icon="sitemap" count={(unit.children ?? []).length} padding="none">
-          <div className="list">
-            {(unit.children ?? []).map((child) => (
-              <a
-                key={child.name}
-                className="thread-entry"
-                href={href(["company", "units", child.id || child.name])}
-              >
-                <Icon name="folder" size="sm" />
-                <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
-                  <strong className="t-cell truncate">{child.name}</strong>
-                  {child.purpose && <span className="t-caption truncate">{child.purpose}</span>}
-                </span>
-                <Badge outline>{child.type || "unit"}</Badge>
-                <Icon name="arrowRight" size="sm" />
-              </a>
-            ))}
-          </div>
+          <SubUnitLinks units={unit.children ?? []} />
         </Panel>
       )}
+    </>
+  );
+}
+
+/**
+ * One unit, in the rail.
+ *
+ * # Why this reads the pushed tree and not a query of its own
+ *
+ * Every other peek asks the engine for its object, because a row's copy is
+ * whatever its own list needed. A unit has no such answer to ask for: the org
+ * tree arrives whole in the connect handshake and is REPLACED whole whenever
+ * the company configuration activates, so it is already present before any
+ * list is — which is the property the "fetch your own object" rule is actually
+ * buying, and a peek opened from a pasted URL therefore renders with nothing
+ * else on screen. The `config` query is the same document pulled instead of
+ * pushed, and reading it here would give the page and the rail two sources for
+ * one set of facts, which is exactly the drift [unitView] exists to prevent.
+ *
+ * # Two absences, and only one of them is honest as "no such unit"
+ *
+ * The store starts with an EMPTY tree rather than a null one, so "the
+ * handshake has not landed" and "this company has no units" are the same
+ * value. The connection is what tells them apart: until it is up, an unknown
+ * id is a tree that has not arrived and the rail says so with a skeleton
+ * rather than claiming a unit does not exist.
+ */
+export function UnitPeek({ id }: { id: string }) {
+  const org = useOrg();
+  const { connected } = useConnection();
+  const index = useMemo(() => indexOrg(org), [org]);
+  const unit = index.units.find((u) => (u.id || u.name) === id || u.name === id);
+
+  if (!unit) {
+    if (!connected) return <Skeleton rows={6} />;
+    return <Empty inline icon="sitemap" title={`No unit called “${id}”`} hint={NO_UNIT_HINT} />;
+  }
+
+  const { seats, facts } = unitView(index, unit);
+  const children = unit.children ?? [];
+
+  return (
+    <>
+      <ObjectHeader
+        size="peek"
+        kind="Unit"
+        icon="sitemap"
+        identifier={unit.id || undefined}
+        title={unit.name}
+        facts={facts}
+      />
+      <div className="col gap-3">
+        {/* WHAT IT IS FOR, always drawn — including when nobody wrote one.
+            "Is this the one I meant" is the question the rail answers, and a
+            purpose that is simply missing from the panel reads as a unit
+            whose purpose the reader failed to scroll to. */}
+        <Panel title="Purpose" icon="target">
+          {unit.purpose ? (
+            <p className="t-body measure">{unit.purpose}</p>
+          ) : (
+            <span className="muted">No purpose is written for this unit.</span>
+          )}
+        </Panel>
+
+        {/* THE SEATS THEMSELVES, not just the count in the facts above: a
+            reader recognises a team by who is in it long before they
+            recognise it by its name, and the badge on each row is the other
+            half of "what is it doing". */}
+        <Panel title="Seats" icon="users" count={seats.length} padding="none">
+          {seats.length > 0 ? (
+            <SeatLinks seats={seats} style={{ padding: "var(--space-3)" }} />
+          ) : (
+            <Empty inline icon="users" title="No seats in this unit" hint={NO_SEATS_HINT} />
+          )}
+        </Panel>
+
+        {children.length > 0 && (
+          <Panel title="Sub-units" icon="sitemap" count={children.length} padding="none">
+            <SubUnitLinks units={children} />
+          </Panel>
+        )}
+      </div>
     </>
   );
 }

@@ -15,7 +15,11 @@
  * inside a fixed row cannot change the layout around it. That property is why
  * the table survives fifty seats when a list of cards did not survive seven.
  *
- * The transcript is one click away, on the seat.
+ * A row is a phase, and a phase is one leg of a TURN — so a plain click opens
+ * that turn in the rail beside the table, where the comparison the reader came
+ * for survives reading one of them. The turn's own page is what `Open ↗` and a
+ * ⌘-click reach, and the full transcript is still a seat's page, which is
+ * where a row the engine recorded no turn id for goes directly.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -27,7 +31,7 @@ import type { GridColumn } from "~/app/frame/DataGrid.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { fmtElapsed, plural, relTime, tsKey } from "~/lib/format.ts";
+import { fmtElapsed, plural, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import { href, useNavigator } from "~/app/router.tsx";
 import {
@@ -41,7 +45,8 @@ import {
 import type { EventRecord } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
-import { NumberCell, TokenCell } from "~/app/frame/cells.tsx";
+import { Dash, DateCell, NumberCell, TokenCell } from "~/app/frame/cells.tsx";
+import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
 
 const PAGE = 60;
 
@@ -157,11 +162,55 @@ export function ModelActivity() {
   const nav = useNavigator();
   const now = useNow();
 
+  const { open: openPeek } = usePeekControls();
+
   // A row goes to the seat, because that is where a transcript is readable:
-  // one turn in focus instead of seven competing for the page.
+  // one turn in focus instead of seven competing for the page. That is still
+  // where a row with no turn on it goes — see [openRow].
   const openSeat = useCallback(
     (r: PhaseRecord) => nav.to(["company", "people", r.role], { tab: "model" }),
     [nav],
+  );
+
+  /**
+   * Where a row points, which is the TURN the phase ran in.
+   *
+   * A phase is not an object a reader can address — it is one leg of a turn,
+   * and "which turn was this" is the question a row on this table raises. So a
+   * plain click opens the turn beside the table rather than replacing it: this
+   * screen is a monitor, and a reader comparing seven running phases loses the
+   * comparison the moment the page navigates.
+   *
+   * A row with no turn id keeps the old destination. That is a live call the
+   * engine published before the turn was recorded, and there is no turn to
+   * peek — the seat's model tab is the honest second-best, not an empty rail.
+   */
+  const openRow = useCallback(
+    (r: PhaseRecord, e: React.MouseEvent | React.KeyboardEvent) => {
+      const go = () => (r.turnId ? openPeek({ kind: "turn", id: r.turnId }) : openSeat(r));
+      // THE GRID HANDS THIS BOTH EVENTS. `rowPeekHandler` is the frame's one
+      // copy of "which clicks mean elsewhere" and reads a mouse event — ⌘,
+      // ctrl, shift, alt and the middle button belong to the browser, which
+      // is what keeps the row a real link to what `rowLink` names. The
+      // `enter` chord carries no button at all and is never "open elsewhere".
+      if (!("button" in e)) {
+        go();
+        return;
+      }
+      rowPeekHandler(go)?.(e);
+    },
+    [openPeek, openSeat],
+  );
+
+  /** And the page that same row is a link TO, for every click that is not a
+   *  plain one. The two must name the same object or ⌘-click lands somewhere
+   *  the click would not have. */
+  const rowLink = useCallback(
+    (r: PhaseRecord) =>
+      r.turnId
+        ? href(["activity", "turns", r.turnId])
+        : href(["company", "people", r.role], { tab: "model" }),
+    [],
   );
 
   // Defined here rather than at module scope because two cells need `now` to
@@ -172,10 +221,14 @@ export function ModelActivity() {
       {
         key: "seat",
         header: "Seat",
+        // NOT `SeatCell`: it is a link, and every row here is already one —
+        // an anchor inside an anchor is markup no browser agrees about. The
+        // live dot is the other half, and it is state the cell has no idea
+        // about.
         cell: (r) => (
           <span className="row gap-2">
             {r.live && <span className="dot info" />}
-            <span className="truncate">{r.role || "—"}</span>
+            <span className="truncate">{r.role || <Dash title="no seat" />}</span>
           </span>
         ),
         sortValue: (r) => r.role,
@@ -236,11 +289,18 @@ export function ModelActivity() {
         // advances on every published round, several times a second while a
         // round streams — the answer was always about zero, so a phase nine
         // rounds deep read "0 ms".
+        //
+        // The settled half is `DateCell`, which is the same relative time
+        // this column already wrote plus the exact instant in its title — the
+        // fact a reader wants once they have found the row. The running half
+        // stays a stopwatch: `DurationCell` spells a MEASURED duration, and
+        // running these two through one cell would make a phase still in
+        // flight look like one that took that long.
         cell: (r) =>
           r.live ? (
             <span className="t-num">{fmtElapsed(now - tsKey(r.startedAt))}</span>
           ) : (
-            <span className="t-caption">{relTime(r.at, now)}</span>
+            <DateCell at={r.at} now={now} />
           ),
         sortValue: (r) => Date.parse(r.at) || 0,
       },
@@ -281,9 +341,9 @@ export function ModelActivity() {
         }
       </PageActions>
       <PageNote>
-        Every phase the models ran, one row each. Open a row for the transcript on that seat —
-        reading what a model said is a one-agent job, and this page has to stay readable with fifty
-        of them running.
+        Every phase the models ran, one row each. Open a row for the turn it ran in, beside the
+        table — reading what a model said is a one-agent job, and this page has to stay readable
+        with fifty of them running.
       </PageNote>
 
       {/* ONE row of controls. This screen had eighteen: a segmented control, a
@@ -351,7 +411,8 @@ export function ModelActivity() {
             rows={running}
             columns={columns}
             rowKey={phaseRecordKey}
-            onRowActivate={openSeat}
+            onRowActivate={openRow}
+            rowHref={rowLink}
             isFailed={(r) => r.failed}
             defaultSort="seat"
           />
@@ -370,14 +431,15 @@ export function ModelActivity() {
         <section className="col gap-1">
           <div className="t-label">
             Recent phases
-            <span className="faint"> · newest first · open a row for its transcript</span>
+            <span className="faint"> · newest first · open a row for its turn</span>
           </div>
           <DataGrid
             name="settled"
             rows={settled.items}
             columns={columns}
             rowKey={phaseRecordKey}
-            onRowActivate={openSeat}
+            onRowActivate={openRow}
+            rowHref={rowLink}
             isFailed={(r) => r.failed}
           />
         </section>

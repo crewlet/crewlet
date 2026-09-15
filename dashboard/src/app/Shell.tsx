@@ -30,6 +30,9 @@ import { TokenDialog } from "./TokenDialog.tsx";
 import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
 import { WorkspaceSidebar, type SidebarSection } from "./frame/WorkspaceSidebar.tsx";
 import { PageBar, CopyLink, StarPage } from "./frame/PageBar.tsx";
+import { PeekHost, PeekNeighbours } from "./frame/PeekHost.tsx";
+import { usePeek } from "./frame/DetailRail.tsx";
+import { peekable } from "./frame/peeks.tsx";
 import { StateBar, degradationOf } from "./frame/StateBar.tsx";
 import { crumbsFor, titleOf, type Labels } from "./workspaces/crumbs.ts";
 import {
@@ -150,6 +153,7 @@ function useSidebar(workspace: Workspace | ""): SidebarSection[] | null {
 
 export function Shell({ children }: { children: ReactNode }) {
   const route = useRoute();
+  const peek = usePeek();
   const nav = useNavigator();
   const { socket } = useClient();
   const { connected, authRejected, health } = useConnection();
@@ -263,74 +267,87 @@ export function Shell({ children }: { children: ReactNode }) {
   });
 
   return (
-    <div
-      className="app"
-      data-rail-collapsed={collapsed || undefined}
-      data-no-sidebar={sections === null || undefined}
-    >
-      <AppRail
-        active={workspace}
-        badges={badges}
-        collapsed={collapsed}
-        onToggle={toggleRail}
-        locked={!viewer.operator}
-        footer={
-          <EngineFooter
-            connected={connected}
-            authRejected={authRejected}
-            configured={engine?.configured}
-            inFlight={health.in_flight ?? 0}
-            theme={theme}
-            setTheme={setTheme}
-            density={density}
-            setDensity={setDensity}
-            collapsed={collapsed}
-          />
-        }
-      />
-
-      {sections && (
-        <WorkspaceSidebar
-          title={RAIL.find((r) => r.key === workspace)?.label ?? ""}
-          sections={sections}
-          open={drawer}
-          onClose={() => setDrawer(false)}
-        />
-      )}
-
-      <main className="page">
-        <PageBar
-          crumbs={crumbs}
-          actions={
-            <>
-              {actions}
-              <StarPage path={path} label={where} workspace={workspaceOf(path) || ""} />
-              <CopyLink />
-            </>
+    // THE STEPPER'S ORDER, published by whichever list the reader is on, so
+    // `[` and `]` walk the rows they are actually looking at. See `PeekHost`.
+    <PeekNeighbours>
+      <div
+        className="app"
+        data-rail-collapsed={collapsed || undefined}
+        data-no-sidebar={sections === null || undefined}
+        // THE GRID GAINS ITS FOURTH TRACK ONLY WHILE THE RAIL IS OPEN — an
+        // empty column would take its width from every screen that never opens
+        // one. See `.app[data-peek]` in frame.css.
+        data-peek={peekable(peek) || undefined}
+      >
+        <AppRail
+          active={workspace}
+          badges={badges}
+          collapsed={collapsed}
+          onToggle={toggleRail}
+          locked={!viewer.operator}
+          footer={
+            <EngineFooter
+              connected={connected}
+              authRejected={authRejected}
+              configured={engine?.configured}
+              inFlight={health.in_flight ?? 0}
+              theme={theme}
+              setTheme={setTheme}
+              density={density}
+              setDensity={setDensity}
+              collapsed={collapsed}
+            />
           }
-          viewer={<ViewerChip />}
-          onSearch={() => setPaletteOpen(true)}
-          onToggleSidebar={sections ? () => setDrawer((v) => !v) : undefined}
         />
-        <StateBar degraded={degraded} coverage={coverage} />
-        <div className="screen" id="screen-scroll">
-          <div className="screen-inner">
-            <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
-          </div>
-        </div>
-      </main>
 
-      {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
-      {tokenOpen && (
-        <TokenDialog
-          onClose={() => setTokenOpen(false)}
-          onSaved={(token) => {
-            socket.setToken(token);
-            socket.reconnect();
-          }}
-        />
-      )}
-    </div>
+        {sections && (
+          <WorkspaceSidebar
+            title={RAIL.find((r) => r.key === workspace)?.label ?? ""}
+            sections={sections}
+            open={drawer}
+            onClose={() => setDrawer(false)}
+          />
+        )}
+
+        <main className="page">
+          <PageBar
+            crumbs={crumbs}
+            actions={
+              <>
+                {actions}
+                <StarPage path={path} label={where} workspace={workspaceOf(path) || ""} />
+                <CopyLink />
+              </>
+            }
+            viewer={<ViewerChip />}
+            onSearch={() => setPaletteOpen(true)}
+            onToggleSidebar={sections ? () => setDrawer((v) => !v) : undefined}
+          />
+          <StateBar degraded={degraded} coverage={coverage} />
+          <div className="screen" id="screen-scroll">
+            <div className="screen-inner">
+              <PageContextValue.Provider value={page}>{children}</PageContextValue.Provider>
+            </div>
+          </div>
+        </main>
+
+        {/* THE ONE PEEK IN THE PRODUCT. Mounted here rather than by a screen,
+          which is what makes it available to every list instead of to the one
+          that remembered to render a rail — see `frame/PeekHost.tsx`. */}
+        <PeekHost />
+
+        {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+        {tokenOpen && (
+          <TokenDialog
+            onClose={() => setTokenOpen(false)}
+            onSaved={(token) => {
+              socket.setToken(token);
+              socket.reconnect();
+            }}
+          />
+        )}
+      </div>
+    </PeekNeighbours>
   );
 }
 

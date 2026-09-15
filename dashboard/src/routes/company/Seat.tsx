@@ -17,6 +17,7 @@ import {
   Empty,
   Meter,
   Panel,
+  PhaseTag,
   Skeleton,
   Stat,
   StatRow,
@@ -28,15 +29,16 @@ import { Icon } from "~/ui/Icon.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { awaitingPerson, indexOrg, statusLine, afkReason, runState } from "~/lib/seats.ts";
 import {
-  fmtCount,
-  fmtDateTime,
-  fmtDuration,
-  plural,
-  relTime,
-  splitConversationKey,
-} from "~/lib/format.ts";
+  awaitingPerson,
+  indexOrg,
+  statusLine,
+  afkReason,
+  runState,
+  type OrgIndex,
+  type Seat,
+} from "~/lib/seats.ts";
+import { fmtCount, fmtDateTime, plural, relTime, tsKey } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import {
   fromLiveCall,
@@ -46,10 +48,25 @@ import {
   streamedPhases,
   type PhaseRecord,
 } from "~/lib/phases.ts";
-import type { ConversationEntry, CounterpartyProfile, EventRecord } from "~/protocol/index.ts";
+import type {
+  AgentRow,
+  ConversationEntry,
+  CounterpartyProfile,
+  EventRecord,
+} from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
+import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import {
+  Dash,
+  DateCell,
+  DurationCell,
+  KeyCell,
+  NumberCell,
+  TextCell,
+  TokenCell,
+} from "~/app/frame/cells.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 
 // THE KIND DECIDES THE SET, and the set decides what a `tab=` may resolve to.
@@ -82,6 +99,93 @@ function ModelChain({ keys }: { keys: string[] }) {
   );
 }
 
+/**
+ * The seat a handle names, resolved the ONE way.
+ *
+ * Three lookups rather than one, because a handle reaches this screen spelled
+ * three ways: a link built from the roster carries the handle, a link built
+ * from a config field carries the ROLE NAME, and a pasted URL carries whatever
+ * somebody typed. Written here rather than at each caller so the page and the
+ * peek can never disagree about which seat a `peek=` token names — the rail
+ * and the page its `Open ↗` leads to must be the same seat.
+ */
+function findSeat(index: OrgIndex, handle: string): Seat | null {
+  return (
+    index.byHandle.get(handle) ??
+    index.byName.get(handle) ??
+    [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
+    null
+  );
+}
+
+/** The live row for a seat, matched every way the roster and the overlay agree. */
+function liveRow(agents: AgentRow[], handle: string, seat: Seat | null): AgentRow | undefined {
+  return agents.find((a) => a.handle === handle || a.id === handle || a.role === seat?.name);
+}
+
+/**
+ * The facts a seat wears, in the one order.
+ *
+ * ONE BUILDER FOR THE PAGE AND THE PEEK. The header exists so a reader scans
+ * the same facts in the same order wherever the object appears, and two lists
+ * written separately drift on the first field somebody adds to one of them.
+ *
+ * RUNTIME IS NOT A NODE ID, and the label says the smaller true thing rather
+ * than the larger convenient one. `runtime_id` is the agent INSTANCE the live
+ * projection minted, and that projection belongs to the node this dashboard is
+ * attached to — so an empty one means "no instance here", never "this seat is
+ * placed nowhere". Which node HOLDS the seat's lease is a fleet fact and lives
+ * on `#/admin/fleet`; asking the fleet in order to label one seat would make
+ * opening a peek a company-wide read.
+ *
+ * A HUMAN SEAT'S RUNTIME AND MODEL ARE EMPTY ON PURPOSE. `FactLine` drops a
+ * fact whose value is empty, so the two rows that describe a runtime are
+ * absent for a seat that has none — rather than present and dashed, which
+ * would claim the engine failed to record something it will never record.
+ */
+function seatFacts({
+  seat,
+  agent,
+  manager,
+  human,
+}: {
+  seat: Seat;
+  agent: AgentRow | undefined;
+  manager: Seat | undefined;
+  human: boolean;
+}): Fact[] {
+  const unit = seat.unit;
+  return [
+    { label: "Kind", value: human ? "human teammate" : "agent seat" },
+    {
+      label: "Unit",
+      value: seat.unitChain.length > 0 ? seat.unitChain.map((u) => u.name).join(" › ") : "org-wide",
+      path: unit ? ["company", "units", unit.id || unit.name] : undefined,
+    },
+    {
+      label: "Reports to",
+      value: manager ? manager.name : "nobody",
+      path: manager ? ["company", "people", manager.handle] : undefined,
+    },
+    {
+      label: "Runtime",
+      value: human ? (
+        ""
+      ) : agent?.runtime_id ? (
+        <code className="inline">{agent.runtime_id}</code>
+      ) : (
+        "not running on this node"
+      ),
+    },
+    {
+      // THE FLATTENED CHAIN, in the order the fallback walks it. An empty
+      // array is truthy, which is why this is a length test rather than `||`.
+      label: "Model",
+      value: human ? "" : seat.llm.length > 0 ? seat.llm.join(" → ") : "default provider",
+    },
+  ];
+}
+
 export function SeatScreen({ handle }: { handle: string }) {
   const nav = useNavigator();
   const org = useOrg();
@@ -98,11 +202,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   const phaseEvents = usePhaseEvents();
 
   const index = useMemo(() => indexOrg(org), [org]);
-  const seat =
-    index.byHandle.get(handle) ??
-    index.byName.get(handle) ??
-    [...index.byHandle.values()].find((s) => s.handle.toLowerCase() === handle.toLowerCase()) ??
-    null;
+  const seat = findSeat(index, handle);
 
   const human = seat?.kind === "human";
   // AFTER THE SEAT RESOLVES, because the tab set is a property of the seat's
@@ -110,7 +210,7 @@ export function SeatScreen({ handle }: { handle: string }) {
   // resolution follows the seat rather than a cast made before it was known.
   const [tab, setTab] = useTab<Tab>("tab", human ? HUMAN_TABS : AGENT_TABS);
 
-  const agent = agents.find((a) => a.handle === handle || a.id === handle || a.role === seat?.name);
+  const agent = liveRow(agents, handle, seat);
   const sandbox = sandboxes.find((s) => s.role === seat?.name) ?? null;
   // The ROLE NAME, which is what a phase record carries — the URL and every
   // link into this screen carry the handle. Empty for a handle that resolves to
@@ -224,19 +324,6 @@ export function SeatScreen({ handle }: { handle: string }) {
     <>
       <PageActions>
         {
-          <>
-            <Badge mono outline>
-              @{seat.handle}
-            </Badge>
-            {human ? (
-              <Badge outline>human seat</Badge>
-            ) : (
-              <StateBadge agent={agent} sandboxes={sandboxes} />
-            )}
-            {seat.unit && <Badge outline>{seat.unit.name}</Badge>}
-          </>
-        }
-        {
           <Button
             icon="activity"
             size="sm"
@@ -246,6 +333,27 @@ export function SeatScreen({ handle }: { handle: string }) {
           </Button>
         }
       </PageActions>
+
+      {/* THE HANDLE, THE STATE AND THE UNIT ARE THE HEADER'S NOW. They were
+          three badges in the page bar, which is where a screen's CONTROLS
+          live — so the seat's identity was rendered in the one strip that is
+          not about the object, and the peek would have had to spell it a
+          second way. Nothing is lost: the handle is the identifier, the state
+          is the status, and the unit is the fact it always was. */}
+      <ObjectHeader
+        kind="Seat"
+        icon={human ? "user" : "cpu"}
+        identifier={`@${seat.handle}`}
+        title={seat.name}
+        status={
+          human ? (
+            <Badge outline>human seat</Badge>
+          ) : (
+            <StateBadge agent={agent} sandboxes={sandboxes} />
+          )
+        }
+        facts={seatFacts({ seat, agent, manager, human })}
+      />
       <PageNote>{seat.goal || statusLine(agent, { sandbox, seat })}</PageNote>
 
       {agent?.last_error && (
@@ -575,8 +683,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                   rows={seat.schedules}
                   rowKey={(s) => s.name}
                   columns={[
-                    { key: "name", header: "Name", cell: (s) => s.name, sortValue: (s) => s.name },
                     {
+                      key: "name",
+                      header: "Name",
+                      cell: (s) => <TextCell icon="calendar">{s.name}</TextCell>,
+                      sortValue: (s) => s.name,
+                    },
+                    {
+                      // NOT A KEY CELL. A cron expression is a five-field
+                      // schedule rather than an identifier — nothing is
+                      // addressed by it — so it keeps the code face it reads
+                      // in everywhere else in the product.
                       key: "cron",
                       header: "Cron",
                       shrink: true,
@@ -585,7 +702,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                     {
                       key: "task",
                       header: "Task",
-                      cell: (s) => <span className="truncate">{s.task}</span>,
+                      cell: (s) => <TextCell>{s.task}</TextCell>,
                     },
                   ]}
                 />
@@ -802,21 +919,36 @@ export function SeatScreen({ handle }: { handle: string }) {
                         key: "at",
                         header: "When",
                         shrink: true,
-                        sortValue: (e) => e.created_at,
-                        cell: (e) => <span className="t-caption">{fmtDateTime(e.created_at)}</span>,
+                        // THROUGH `tsKey`, never `<` on the string. The engine
+                        // sends both encodings of an instant and trims
+                        // trailing zeros, so a raw compare puts `:07Z` before
+                        // `:07.42Z` — the later episode first, in a list read
+                        // newest-first.
+                        sortValue: (e) => tsKey(e.created_at),
+                        cell: (e) => <DateCell at={e.created_at} now={now} />,
                       },
                       {
                         key: "task",
                         header: "What it did",
-                        cell: (e) => (
-                          <span className="truncate">{e.task_summary || e.content || "—"}</span>
-                        ),
+                        // `||` rather than `??`: an episode that recorded an
+                        // EMPTY summary has none, and a dash that says so
+                        // beats a blank cell nobody can tell from a fault.
+                        cell: (e) =>
+                          e.task_summary || e.content ? (
+                            <TextCell>{e.task_summary || e.content}</TextCell>
+                          ) : (
+                            <Dash title="the episode recorded no summary" />
+                          ),
                       },
                       {
                         key: "outcome",
                         header: "Outcome",
                         shrink: true,
-                        sortValue: (e) => e.review_outcome ?? e.outcome ?? "",
+                        // NULL, not "": an outcome nothing recorded sorts
+                        // last in both directions rather than ahead of every
+                        // recorded one, which is what the grid does with an
+                        // absent value and what the dash below claims.
+                        sortValue: (e) => e.review_outcome ?? e.outcome ?? null,
                         cell: (e) =>
                           e.review_outcome || e.outcome ? (
                             <Badge
@@ -827,7 +959,7 @@ export function SeatScreen({ handle }: { handle: string }) {
                               {e.review_outcome ?? e.outcome}
                             </Badge>
                           ) : (
-                            <span className="faint">—</span>
+                            <Dash title="the turn ended without a review outcome" />
                           ),
                       },
                       {
@@ -835,17 +967,17 @@ export function SeatScreen({ handle }: { handle: string }) {
                         header: "Took",
                         align: "right",
                         shrink: true,
-                        sortValue: (e) => e.duration_ms ?? 0,
-                        cell: (e) => fmtDuration(e.duration_ms ?? null),
+                        sortValue: (e) => e.duration_ms ?? null,
+                        cell: (e) => <DurationCell ms={e.duration_ms} />,
                       },
                       {
                         key: "conv",
                         header: "Conversation",
                         cell: (e) =>
                           e.conversation_key ? (
-                            <span className="mono t-caption">{e.conversation_key}</span>
+                            <KeyCell value={e.conversation_key} />
                           ) : (
-                            <span className="faint">—</span>
+                            <Dash title="not part of a conversation" />
                           ),
                       },
                     ]}
@@ -1033,27 +1165,30 @@ export function SeatScreen({ handle }: { handle: string }) {
                       key: "started",
                       header: "Started",
                       shrink: true,
-                      sortValue: (t) => t.started_at,
-                      cell: (t) => <span className="t-caption">{fmtDateTime(t.started_at)}</span>,
+                      // `tsKey`, for the reason the episodes grid above gives.
+                      sortValue: (t) => tsKey(t.started_at),
+                      cell: (t) => <DateCell at={t.started_at} now={now} />,
                     },
                     {
+                      // NO PATH ON THE CELL: the whole row already activates
+                      // to the turn, and a link inside it would fire both.
                       key: "id",
                       header: "Turn",
-                      cell: (t) => <code className="inline">{t.turn_id.slice(0, 8)}</code>,
+                      cell: (t) => <KeyCell value={t.turn_id.slice(0, 8)} />,
                     },
                     {
                       key: "tokens",
                       header: "Tokens",
                       align: "right",
                       sortValue: (t) => t.total_tokens,
-                      cell: (t) => fmtCount(t.total_tokens),
+                      cell: (t) => <TokenCell value={t.total_tokens} />,
                     },
                     {
                       key: "calls",
                       header: "Calls",
                       align: "right",
                       sortValue: (t) => t.calls,
-                      cell: (t) => t.calls,
+                      cell: (t) => <NumberCell value={t.calls} />,
                     },
                   ]}
                 />
@@ -1132,6 +1267,215 @@ export function SeatScreen({ handle }: { handle: string }) {
           </div>
         )}
       </Tabs>
+    </>
+  );
+}
+
+/**
+ * One seat, beside the list it was found in.
+ *
+ * # It asks nothing
+ *
+ * Every fact a peek needs about a seat is already pushed: the ROSTER carries
+ * who it is and the AGENTS slice carries what it is doing, both over the socket
+ * the shell already holds. So opening this costs no request, and a seat that is
+ * working updates in the rail while the reader watches it — where a query would
+ * answer once and then be stale for exactly as long as the peek is interesting.
+ * The seat PAGE asks two further questions (`agent`, `agent_memory`); neither of
+ * them answers "is this the one I meant".
+ *
+ * # The last turn is the STREAM's, and it says so
+ *
+ * `usePhaseEvents` holds the phases that completed while this tab has been
+ * open. That is a smaller claim than the page's Model activity tab, which
+ * queries the event store, and the empty state below says which of the two it
+ * is — "nothing streamed here yet" rather than "this seat has never run",
+ * because the second would be a lie the page immediately disproves.
+ *
+ * # A human seat has no runtime
+ *
+ * So it gets no runtime panels at all, in the peek exactly as in the tab strip
+ * on the page: a panel that cannot have content is not an empty state, it is a
+ * claim that the reader is missing something.
+ */
+export function SeatPeek({ handle }: { handle: string }) {
+  const org = useOrg();
+  const agents = useAgents();
+  const sandboxes = useSandboxes();
+  const phaseEvents = usePhaseEvents();
+  const now = useNow();
+
+  const index = useMemo(() => indexOrg(org), [org]);
+  const seat = findSeat(index, handle);
+  const agent = liveRow(agents, handle, seat);
+  // The ROLE NAME, which is what a phase record carries. `role !== ""` below is
+  // load-bearing rather than defensive: an unresolved handle must match NO
+  // phase, where an empty role compared against a record's own empty one would
+  // match every phase the engine recorded without one.
+  const role = agent?.role ?? seat?.name ?? "";
+
+  const lastTurn = useMemo(() => {
+    const streamed = streamedPhases(phaseEvents, (r) => role !== "" && r.role === role);
+    const live = agent?.live_call ? [fromLiveCall(agent.live_call, agent.role)] : [];
+    // Newest turn first, so the head of the list is the one being asked about.
+    return groupTurns(mergePhases(streamed, live))[0] ?? null;
+  }, [phaseEvents, agent, role]);
+
+  // NOT AN EMPTY RAIL. A `peek=seat:` reaches this from a pasted or hand-edited
+  // URL as often as from a row, so the honest answer names the handle that
+  // resolved to nothing rather than drawing a header over no seat.
+  if (!seat) {
+    return (
+      <Empty
+        inline
+        icon="user"
+        title={`No seat called “${handle}”`}
+        hint="Seats are addressed by handle. A company revision may have renamed or removed this one."
+      />
+    );
+  }
+
+  const human = seat.kind === "human";
+  const manager = index.managerOf.get(seat.name);
+  const reports = index.reportsOf.get(seat.name) ?? [];
+  const sandbox = sandboxes.find((s) => s.role === seat.name) ?? null;
+
+  return (
+    <>
+      <ObjectHeader
+        size="peek"
+        kind="Seat"
+        icon={human ? "user" : "cpu"}
+        identifier={`@${seat.handle}`}
+        title={seat.name}
+        status={
+          human ? (
+            <Badge outline>human seat</Badge>
+          ) : (
+            <StateBadge agent={agent} sandboxes={sandboxes} />
+          )
+        }
+        facts={seatFacts({ seat, agent, manager, human })}
+      />
+
+      <div className="col gap-3">
+        <section className="col gap-2">
+          <div className="t-label">Doing now</div>
+          {/* THE SAME SENTENCE THE PAGE PRINTS, out of the same function. A
+              rail and the page behind it describing one seat in two different
+              words is how a reader comes to believe they are two seats. */}
+          <p className="t-body">{statusLine(agent, { sandbox, seat })}</p>
+          {seat.goal && <p className="t-caption">Standing goal: {seat.goal}</p>}
+          {human && (
+            // WHY THERE IS NOTHING BELOW, rather than a second sentence about
+            // what this seat is. The status line above already says that; what
+            // a reader cannot see is the reason the runtime panels are missing.
+            <p className="t-caption faint">
+              No runtime here: the engine never spawns a human seat, so there are no turns, no model
+              and no spend for it to report.
+            </p>
+          )}
+          {agent?.last_error && (
+            <div className="banner critical">
+              <Icon name="alert" size="sm" />
+              <span>
+                <strong>{agent.last_error.kind || "error"}</strong> — {agent.last_error.message}
+                {agent.last_error.at && ` · ${relTime(agent.last_error.at, now)}`}
+              </span>
+            </div>
+          )}
+          {sandbox && awaitingPerson(sandbox.status) && (
+            // THE ONE THING A READER CAN ACT ON from a list. A run parked on a
+            // question stops this seat until somebody answers it, and a peek
+            // that showed "writing code in a sandbox" and nothing else would
+            // hide the half that needs them.
+            <div className="banner caution">
+              <Icon name="help" size="sm" />
+              <span>
+                A coding run is paused on a question: {sandbox.question || "(no question recorded)"}
+              </span>
+            </div>
+          )}
+        </section>
+
+        {!human && (
+          <section className="col gap-2">
+            <div className="t-label">Last turn</div>
+            {lastTurn ? (
+              <div className="thread-entry">
+                <div className="row gap-1">
+                  {lastTurn.live ? (
+                    <Badge tone="info" dot>
+                      running
+                    </Badge>
+                  ) : lastTurn.failed ? (
+                    <Badge tone="critical">failed</Badge>
+                  ) : (
+                    <Badge outline>finished</Badge>
+                  )}
+                  <span className="truncate t-cell">
+                    {lastTurn.trigger?.summary || lastTurn.trigger?.type || "turn"}
+                  </span>
+                  <span className="spacer" />
+                  <span className="t-caption">{relTime(lastTurn.at, now)}</span>
+                </div>
+                <div className="row gap-1 wrap">
+                  {lastTurn.phases.map((p) => (
+                    <PhaseTag key={p.key} phase={p.phase} />
+                  ))}
+                  <span className="spacer" />
+                  <span className="t-caption">{fmtCount(lastTurn.totalTokens)} tokens</span>
+                  <a className="t-link" href={href(["activity", "turns", lastTurn.turnId])}>
+                    turn ↗
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <p className="t-caption faint">
+                Nothing has streamed to this tab yet. What the engine has RECORDED for this seat is
+                on its own Model activity tab — this panel only ever shows what completed while the
+                tab was open.
+              </p>
+            )}
+          </section>
+        )}
+
+        <section className="col gap-2">
+          <div className="t-label">Direct reports</div>
+          {reports.length > 0 ? (
+            <div className="list">
+              {reports.map((r) => (
+                <a
+                  key={r.handle}
+                  className="thread-entry"
+                  href={href(["company", "people", r.handle])}
+                >
+                  <div className="row gap-2">
+                    <Avatar name={r.name} size="sm" human={r.kind === "human"} />
+                    <span className="col" style={{ gap: 0, flex: 1, minWidth: 0 }}>
+                      <span className="truncate t-cell">{r.name}</span>
+                      <span className="truncate t-caption">{r.goal || r.unit?.name || ""}</span>
+                    </span>
+                    {r.kind === "human" ? (
+                      <Badge outline>human</Badge>
+                    ) : (
+                      <StateBadge
+                        agent={agents.find((a) => a.role === r.name)}
+                        sandboxes={sandboxes}
+                      />
+                    )}
+                  </div>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <p className="t-caption faint">
+              Nobody reports to this seat. Delegation follows the chart, so work it cannot do itself
+              goes sideways or nowhere.
+            </p>
+          )}
+        </section>
+      </div>
     </>
   );
 }

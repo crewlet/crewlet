@@ -224,8 +224,15 @@ describe("live state reaches the screen", () => {
         </Router>
       </ClientContext.Provider>,
     );
-    // The Overview's own rail, which no other tab renders.
-    expect(screen.getByText("Reports to")).toBeDefined();
+    // THE STRIP'S OWN ANSWER, which is the thing being asserted: a `tab=`
+    // naming no tab must resolve to one that exists, and the reader must be
+    // able to see WHICH. Reading the page's content instead was ambiguous
+    // the moment the seat grew an ObjectHeader whose facts repeat a
+    // property's label.
+    const selected = screen
+      .getAllByRole("tab")
+      .find((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected?.textContent).toContain("Overview");
   });
 });
 

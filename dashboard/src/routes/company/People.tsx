@@ -14,7 +14,7 @@
 
 import { useMemo } from "react";
 import { plural } from "~/lib/format.ts";
-import { useParam } from "~/app/router.tsx";
+import { href, useParam } from "~/app/router.tsx";
 import { SeatCard, Section } from "~/components/common.tsx";
 import { Badge, Empty, Panel, Segmented, SearchInput, cx } from "~/ui/primitives.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
@@ -25,6 +25,8 @@ import { capacityText, loadRows, loadSentence, loadTone, type Load } from "~/lib
 import type { AgentRow } from "~/protocol/index.ts";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PageNote } from "~/app/frame/PageNote.tsx";
+import { rowPeekHandler, usePeekControls } from "~/app/frame/DetailRail.tsx";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
 import { useTab } from "~/app/frame/tabs.ts";
 
 const VIEWS = ["seats", "workload"] as const;
@@ -90,6 +92,7 @@ function Workload({ seats }: { seats: Seat[] }) {
 
 /** One person's row. */
 function LoadRow({ load }: { load: Load }) {
+  const { open: openPeek } = usePeekControls();
   const tone = loadTone(load);
   // THE BAR IS RELATIVE TO CAPACITY, drawn so exactly-at-capacity is a fixed
   // fraction of the track. Over-capacity therefore has somewhere to go and is
@@ -99,7 +102,19 @@ function LoadRow({ load }: { load: Load }) {
     load.fraction === null ? 0 : Math.min(100, Math.round(load.fraction * AT_CAPACITY_PCT));
   return (
     <div className="wl-row" title={loadSentence(load)}>
-      <a className="wl-who" href={`#/company/seats/${encodeURIComponent(load.handle)}`}>
+      {/* A DEAD LINK UNTIL NOW: this hand-built `#/company/seats/…` named a
+          segment Company routes nothing under, so every name in this table
+          landed on "there is no such screen". A seat's page is
+          `#/company/people/{handle}`, and `href` is what spells it — the one
+          place the route and its encoding are written down. A plain click
+          peeks instead, which on this table is the whole point: the question
+          is who is over capacity, and answering it should not cost the row
+          the reader was comparing against. */}
+      <a
+        className="wl-who"
+        href={href(["company", "people", load.handle])}
+        onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: load.handle }))}
+      >
         <span className="truncate">{load.seat?.name ?? load.handle}</span>
         <span className="wl-handle mono">{load.handle}</span>
       </a>
@@ -227,6 +242,45 @@ export function People() {
 
   const agentSeats = index.seats.filter((s) => s.kind === "agent").length;
 
+  // WHAT `[` AND `]` WALK: the cards in the order they are on screen, which is
+  // the GROUPS' order rather than `rows`' — a reader stepping from a stopped
+  // seat expects the next stopped seat, not whoever follows it alphabetically
+  // across every bucket. Empty on the workload view, whose table is a
+  // different list in a different order; a rail opened from there gets no
+  // stepper, which is what `PeekHost` does with a list that publishes nothing.
+  const { open: openPeek } = usePeekControls();
+  usePeekNeighbours(
+    useMemo(
+      () =>
+        view === "seats"
+          ? groups.flatMap((g) =>
+              g.rows.map(({ seat }) => ({ kind: "seat" as const, id: seat.handle })),
+            )
+          : [],
+      [groups, view],
+    ),
+  );
+
+  /**
+   * One card, peekable.
+   *
+   * THE WRAPPER IS `display: contents`, so the CARD stays the grid item: a box
+   * of its own would become the cell and leave every card at its natural
+   * height, ragged against the taller ones beside it in the row. What it adds
+   * is the click, caught on its way out of the anchor — so the card is still a
+   * real link and ⌘-click, middle-click and the status bar all still name the
+   * seat's own page, exactly as `rowPeekHandler` has it everywhere else.
+   */
+  const card = ({ seat, agent }: (typeof rows)[number]) => (
+    <div
+      key={seat.handle}
+      style={{ display: "contents" }}
+      onClick={rowPeekHandler(() => openPeek({ kind: "seat", id: seat.handle }))}
+    >
+      <SeatCard seat={seat} agent={agent} sandboxes={sandboxes} />
+    </div>
+  );
+
   return (
     <>
       <PageActions>
@@ -300,17 +354,11 @@ export function People() {
         groups.map((g) =>
           g.label ? (
             <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
-              <div className="seat-grid">
-                {g.rows.map(({ seat, agent }) => (
-                  <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
-                ))}
-              </div>
+              <div className="seat-grid">{g.rows.map(card)}</div>
             </Section>
           ) : (
             <div className="seat-grid" key={g.key}>
-              {g.rows.map(({ seat, agent }) => (
-                <SeatCard key={seat.handle} seat={seat} agent={agent} sandboxes={sandboxes} />
-              ))}
+              {g.rows.map(card)}
             </div>
           ),
         )}
