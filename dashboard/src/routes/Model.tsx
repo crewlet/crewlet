@@ -255,8 +255,12 @@ export function ModelActivity() {
       },
       {
         key: "when",
+        // NOT RIGHT-ALIGNED, though the two columns before it are. Numbers
+        // are set right so a reader can compare them digit by digit down the
+        // column; "2 m ago" and "14:07" are words and a clock, and nothing is
+        // compared by their last character. Set right they also drifted away
+        // from the header above them, which is set left like every other.
         header: "When",
-        align: "right",
         shrink: true,
         firstDirection: "desc",
         // Elapsed while it runs, and when it landed once it has. Two
