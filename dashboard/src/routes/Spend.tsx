@@ -226,8 +226,8 @@ export function Spend() {
             <div className="col gap-3">
               <BarList data={models} limit={8} emptyLabel="No model calls in this window." />
               <p className="t-caption">
-                Built from what each completion reported, never from a provider's configured name —
-                a fallback chain serves several models under one key.
+                Built from what each completion reported, never from a provider's configured name. A
+                fallback chain serves several models under one key.
               </p>
             </div>
           </Card>
