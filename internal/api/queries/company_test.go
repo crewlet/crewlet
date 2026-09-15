@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1985,5 +1986,154 @@ func jsonInt(t *testing.T, v any) int {
 	default:
 		t.Fatalf("%v is not a number (%T)", v, v)
 		return 0
+	}
+}
+
+// AN EPOCH IS A NUMBER AND NOT A REVISION, and the fleet view carried only
+// the number.
+//
+// `coord.NodeApply.RevisionID` is written by every node and stored by the
+// plane precisely so a mid-transition read can name it — its own doc says "a
+// node still on the previous revision is exactly what an operator is looking
+// for" — and the answer dropped it. So a screen could say "node-b is two
+// epochs behind" and not which revision it was behind, when that revision was
+// activated, or what whoever activated it wrote about it.
+func TestTheFleetNamesTheRevisionAndNotJustTheEpoch(t *testing.T) {
+	t.Parallel()
+	pinned := time.Date(2026, 5, 4, 9, 30, 0, 0, time.UTC)
+	backend := coordmemory.New()
+	for _, node := range []string{"node-a", "node-b"} {
+		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plane := coordmemory.NewFleet()
+	published, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "rev-2", Payload: []byte("{}"), At: pinned,
+		Summary: "raise the CTO's budget",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ONE NODE ON THE TARGET, one still on its predecessor — which is the
+	// state the revision id exists to make visible.
+	if err := plane.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-a", Epoch: published.Epoch, RevisionID: "rev-2",
+		Status: string(configplane.StatusOK), UpdatedAt: pinned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plane.RecordApply(t.Context(), coord.NodeApply{
+		NodeID: "node-b", Epoch: published.Epoch - 1, RevisionID: "rev-1",
+		Status: string(configplane.StatusOK), UpdatedAt: pinned,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, Plane: plane, NodeID: "node-a",
+	}, "fleet", nil))
+
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	if got := byID["node-a"]["config_revision_id"]; got != "rev-2" {
+		t.Errorf("node-a is on %v, want rev-2", got)
+	}
+	if got := byID["node-b"]["config_revision_id"]; got != "rev-1" {
+		t.Errorf("node-b is on %v, want the predecessor it is still running", got)
+	}
+
+	// AND WHAT THE TARGET EPOCH STANDS FOR, beside the number every row is
+	// compared against.
+	activation, ok := body["activation"].(map[string]any)
+	if !ok {
+		t.Fatalf("activation = %#v, want the pointer's own record", body["activation"])
+	}
+	switch {
+	case activation["revision_id"] != "rev-2":
+		t.Errorf("activation names %v, want rev-2", activation["revision_id"])
+	case activation["summary"] != "raise the CTO's budget":
+		t.Errorf("activation summary = %v", activation["summary"])
+	case activation["at"] == "" || activation["at"] == nil:
+		t.Error("the activation carries no instant, so a screen cannot say when")
+	}
+	// ONE READ, so the two cannot disagree: an activation landing between
+	// two reads would put "target 42" beside "revision r-41" and describe a
+	// fleet that never existed.
+	if body["target_epoch"] != activation["epoch"] {
+		t.Errorf("target_epoch = %v and activation.epoch = %v — read twice, "+
+			"they can describe different fleets", body["target_epoch"],
+			activation["epoch"])
+	}
+}
+
+// A FLEET WITH NO ACTIVATION CARRIES NO ACTIVATION RECORD, rather than an
+// object of empty strings: a screen given one would render a revision named ""
+// activated at the zero time, which is a worse answer than none.
+func TestAFleetWithNoActivationCarriesNoRecord(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	if _, err := backend.TryAcquire(t.Context(), coord.NodeResource("node-a"),
+		coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, Plane: coordmemory.NewFleet(), NodeID: "node-a",
+	}, "fleet", nil))
+	if body["activation"] != nil {
+		t.Errorf("activation = %#v on a fleet nobody has activated", body["activation"])
+	}
+	if body["target_epoch"] != float64(0) {
+		t.Errorf("target_epoch = %v, want 0 so the client makes no comparison",
+			body["target_epoch"])
+	}
+}
+
+// HOW FAR A NODE'S OWN COPY HAS COME UP is a different question from its
+// config epoch: a node can hold the current revision and still be hydrating
+// the state it derives from the log, and only one of those makes its seats
+// servable. The presence heartbeat has carried both counts since it existed
+// and the fleet answer dropped them.
+//
+// ABSENT RATHER THAN ZERO for a node that published none, which is the rule
+// `in_flight` already follows: a confident 0 of 0 reads as "ready" for a
+// process that is simply not saying.
+func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	claim := func(node string, meta map[string]any) {
+		t.Helper()
+		if _, err := backend.TryAcquire(t.Context(), coord.NodeResource(node),
+			coord.AcquireOptions{Owner: node + ":1", TTL: time.Minute, Meta: meta},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// UNDER THE STATUS KEY, which is where the presence heartbeat puts it
+	// and where [coord.StatusFromMeta] looks.
+	claim("node-a", map[string]any{coord.StatusKey: coord.NodeStatus{
+		ProjectionsReady: 2, ProjectionsTotal: 3,
+	}.Meta()})
+	claim("node-b", map[string]any{coord.StatusKey: coord.NodeStatus{}.Meta()})
+
+	body := asMap(t, answer(t, queries.Sources{
+		Coord: backend, NodeID: "node-a",
+	}, "fleet", nil))
+	byID := map[string]map[string]any{}
+	for _, row := range rows(t, body["nodes"]) {
+		byID[fmt.Sprint(row["id"])] = row
+	}
+	if got := byID["node-a"]["projections_ready"]; got != float64(2) {
+		t.Errorf("node-a reports %v of its projections ready, want 2", got)
+	}
+	if got := byID["node-a"]["projections_total"]; got != float64(3) {
+		t.Errorf("node-a reports a total of %v, want 3", got)
+	}
+	if _, present := byID["node-b"]["projections_total"]; present {
+		t.Error("a node that published no projection counts carries a total " +
+			"anyway, so a screen draws 0 of 0 — which reads as ready")
 	}
 }
