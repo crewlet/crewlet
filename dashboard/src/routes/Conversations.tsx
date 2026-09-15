@@ -19,13 +19,12 @@
 import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { tsKey } from "~/lib/format.ts";
-import { Card, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import { Card, RelativeTime, Skeleton, StatCard, StatGroup, Tag, useNow } from "@crewlethq/ui";
 import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 
 export function Conversations() {
@@ -50,31 +49,28 @@ export function Conversations() {
         sub="The private channels seats opened with each other. One ask, one answer, then closed — the channel is the authorization record, not the transport."
       />
 
-      <Card padding="none">
-        <StatRow cols={3}>
-          <Stat
-            icon={LinkGlyph}
-            label="Open channels"
-            value={(channels.data?.channels ?? []).filter((c) => !c.closed_at).length}
-            sub="one ask, one answer, then closed"
-          />
-          <Stat
-            icon={ChatGlyph}
-            label="Messages"
-            value={(channels.data?.channels ?? []).reduce((n, c) => n + c.messages, 0)}
-            sub="across every channel in the record"
-          />
-          <Stat
-            icon={GroupGlyph}
-            label="Pairs"
-            value={
-              new Set((channels.data?.channels ?? []).map((c) => `${c.requester}->${c.target}`))
-                .size
-            }
-            sub="distinct requester/target pairs"
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={3}>
+        <StatCard
+          icon={<LinkGlyph />}
+          label="Open channels"
+          value={(channels.data?.channels ?? []).filter((c) => !c.closed_at).length}
+          sub="one ask, one answer, then closed"
+        />
+        <StatCard
+          icon={<ChatGlyph />}
+          label="Messages"
+          value={(channels.data?.channels ?? []).reduce((n, c) => n + c.messages, 0)}
+          sub="across every channel in the record"
+        />
+        <StatCard
+          icon={<GroupGlyph />}
+          label="Pairs"
+          value={
+            new Set((channels.data?.channels ?? []).map((c) => `${c.requester}->${c.target}`)).size
+          }
+          sub="distinct requester/target pairs"
+        />
+      </StatGroup>
 
       {channels.loading && <Skeleton label="Loading the conversations" variant="text" rows={4} />}
       {channels.data?.available === false ? (

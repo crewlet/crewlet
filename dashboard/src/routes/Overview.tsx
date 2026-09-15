@@ -26,7 +26,6 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
@@ -42,7 +41,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { Button, Card, EmptyState, Meter, Tag, useNow } from "@crewlethq/ui";
+import { Button, Card, EmptyState, Meter, StatCard, StatGroup, Tag, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -236,50 +235,50 @@ export function Overview() {
       </Card>
 
       {/* 2. What the company is doing. */}
-      <Card padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon={BoltGlyph}
-            label="Working now"
-            value={live.length}
-            sub={
-              live.length
-                ? live.map(({ seat }) => seat.name).join(", ")
-                : `${plural(idle, "seat")} idle and waiting for work`
-            }
-          />
-          <Stat
-            icon={TerminalGlyph}
-            label="Coding runs"
-            value={sandboxes.length}
-            sub={
-              sandboxes.filter((s) => s.status === "awaiting_input").length
-                ? `${plural(sandboxes.filter((s) => s.status === "awaiting_input").length, "run")} paused on a question`
-                : "detached sandbox runs in flight"
-            }
-          />
-          <Stat
-            icon={TimelineGlyph}
-            label={`Events · last ${STRIP_MINUTES}m`}
-            value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
-            sub={
-              stripTruncated
-                ? "the tab holds the last 400 events, so this hour is partial"
-                : "everything the engine published"
-            }
-          />
-          <Stat
-            icon={TokenGlyph}
-            label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
-            value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
-            sub={
-              tokens
-                ? `${tokens.totals.calls.toLocaleString()} model calls`
-                : "no spend has been recorded yet"
-            }
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<BoltGlyph />}
+          label="Working now"
+          value={live.length}
+          sub={
+            live.length
+              ? live.map(({ seat }) => seat.name).join(", ")
+              : `${plural(idle, "seat")} idle and waiting for work`
+          }
+        />
+        <StatCard
+          icon={<TerminalGlyph />}
+          label="Coding runs"
+          value={sandboxes.length}
+          sub={
+            sandboxes.filter((s) => s.status === "awaiting_input").length
+              ? `${plural(sandboxes.filter((s) => s.status === "awaiting_input").length, "run")} paused on a question`
+              : "detached sandbox runs in flight"
+          }
+        />
+        <StatCard
+          icon={<TimelineGlyph />}
+          label={`Events · last ${STRIP_MINUTES}m`}
+          value={fmtCount(strip.reduce((n, b) => n + b.v, 0))}
+          sub={
+            stripTruncated
+              ? "the tab holds the last 400 events, so this hour is partial"
+              : "everything the engine published"
+          }
+        />
+        <StatCard
+          icon={<TokenGlyph />}
+          label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
+          loading={!tokens}
+          loadingLabel="Loading the token total"
+          value={tokens ? fmtCount(tokens.totals.total_tokens) : null}
+          sub={
+            tokens
+              ? `${tokens.totals.calls.toLocaleString()} model calls`
+              : "no spend has been recorded yet"
+          }
+        />
+      </StatGroup>
 
       <div className="grid grid-auto-lg">
         <Card as="section">

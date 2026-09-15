@@ -11,12 +11,20 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
 import { Section } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph, SearchGlyph } from "@crewlethq/icons/glyphs";
-import { Card, EmptyState, FilterChip, FilterChipGroup, Input, Tag } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyState,
+  FilterChip,
+  FilterChipGroup,
+  Input,
+  StatCard,
+  StatGroup,
+  Tag,
+} from "@crewlethq/ui";
 
 function originOf(source: string): { kind: string; detail: string } {
   const idx = source.indexOf(":");
@@ -58,23 +66,26 @@ export function Tools() {
         badges={<Tag appearance="outline">{plural(tools.length, "tool")} registered</Tag>}
       />
 
-      <Card padding="none">
-        <StatRow cols={3}>
-          <Stat icon={BuildGlyph} label="Total" value={tools.length} sub="across every origin" />
-          <Stat
-            icon={Package2Glyph}
-            label="Built in"
-            value={builtins}
-            sub="shipped by the engine itself"
-          />
-          <Stat
-            icon={CableGlyph}
-            label="From MCP servers"
-            value={mcp}
-            sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={3}>
+        <StatCard
+          icon={<BuildGlyph />}
+          label="Total"
+          value={tools.length}
+          sub="across every origin"
+        />
+        <StatCard
+          icon={<Package2Glyph />}
+          label="Built in"
+          value={builtins}
+          sub="shipped by the engine itself"
+        />
+        <StatCard
+          icon={<CableGlyph />}
+          label="From MCP servers"
+          value={mcp}
+          sub={`${origins.filter(([s]) => s.startsWith("mcp")).length} server(s)`}
+        />
+      </StatGroup>
 
       <div className="toolbar">
         <Input

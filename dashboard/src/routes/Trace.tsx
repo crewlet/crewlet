@@ -12,7 +12,6 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -24,7 +23,7 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, Skeleton, Tag } from "@crewlethq/ui";
+import { Button, Card, EmptyValue, Skeleton, StatCard, StatGroup, Tag } from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -120,32 +119,30 @@ export function TraceScreen({ traceId }: { traceId: string }) {
               }
         }
       >
-        <Card padding="none">
-          <StatRow cols={3}>
-            <Stat
-              icon={LayersGlyph}
-              label="Spans"
-              value={events.length}
-              sub="events sharing this trace"
-            />
-            <Stat
-              icon={ScheduleGlyph}
-              label="Elapsed"
-              value={to > from ? fmtDuration(to - from) : "—"}
-              sub={
-                from
-                  ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
-                  : ""
-              }
-            />
-            <Stat
-              icon={ErrorGlyph}
-              label="Failures"
-              value={failed}
-              sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
-            />
-          </StatRow>
-        </Card>
+        <StatGroup columns={3}>
+          <StatCard
+            icon={<LayersGlyph />}
+            label="Spans"
+            value={events.length}
+            sub="events sharing this trace"
+          />
+          <StatCard
+            icon={<ScheduleGlyph />}
+            label="Elapsed"
+            value={to > from ? fmtDuration(to - from) : <EmptyValue label="Not measured" />}
+            sub={
+              from
+                ? `${fmtTime(new Date(from).toISOString())} → ${fmtTime(new Date(to).toISOString())}`
+                : ""
+            }
+          />
+          <StatCard
+            icon={<ErrorGlyph />}
+            label="Failures"
+            value={failed}
+            sub={failed ? "at least one span recorded a failure" : "nothing failed in this trace"}
+          />
+        </StatGroup>
 
         <Card as="section" padding="none">
           <Card.Header

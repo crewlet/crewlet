@@ -14,7 +14,6 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
@@ -27,6 +26,8 @@ import {
   RelativeTime,
   SegmentedControl,
   Skeleton,
+  StatCard,
+  StatGroup,
   TabPanel,
   Tag,
   useNow,
@@ -119,52 +120,56 @@ export function Spend() {
       />
 
       <TabPanel id={panel} value={days}>
-        <Card padding="none">
-          <StatRow cols={4}>
-            <Stat
-              icon={TokenGlyph}
-              label={`Tokens · ${tokens?.since_days ?? "—"}d`}
-              value={tokens ? fmtCount(tokens.totals.total_tokens) : "—"}
-              sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
-            />
-            <Stat
-              icon={MemoryGlyph}
-              label="Model calls"
-              value={tokens ? fmtCount(tokens.totals.calls) : "—"}
-              sub={
-                tokens && tokens.totals.calls
-                  ? `${fmtCount(Math.round(tokens.totals.total_tokens / tokens.totals.calls))} tokens per call`
-                  : ""
-              }
-            />
-            <Stat
-              icon={ArrowForwardGlyph}
-              label="Input / output"
-              value={
-                tokens
-                  ? `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
-                  : "—"
-              }
-              sub="input includes any cached prefix, as the provider reports it"
-            />
-            <Stat
-              icon={ScheduleGlyph}
-              label="Counted through"
-              value={
-                tokens?.aggregated_through ? (
-                  <RelativeTime value={tokens.aggregated_through} now={now} />
-                ) : (
-                  <EmptyValue label="Not reported yet" />
-                )
-              }
-              sub={
-                tokens?.aggregated_through
-                  ? fmtDateTime(tokens.aggregated_through)
-                  : "no high-water mark yet"
-              }
-            />
-          </StatRow>
-        </Card>
+        <StatGroup columns={4}>
+          <StatCard
+            icon={<TokenGlyph />}
+            label={tokens ? `Tokens · ${tokens.since_days}d` : "Tokens"}
+            loading={!tokens}
+            loadingLabel="Loading the token total"
+            value={tokens ? fmtCount(tokens.totals.total_tokens) : null}
+            sub={tokens ? `${fmtExact(tokens.totals.total_tokens)} exactly` : "nothing recorded"}
+          />
+          <StatCard
+            icon={<MemoryGlyph />}
+            label="Model calls"
+            loading={!tokens}
+            loadingLabel="Loading the call count"
+            value={tokens ? fmtCount(tokens.totals.calls) : null}
+            sub={
+              tokens && tokens.totals.calls
+                ? `${fmtCount(Math.round(tokens.totals.total_tokens / tokens.totals.calls))} tokens per call`
+                : ""
+            }
+          />
+          <StatCard
+            icon={<ArrowForwardGlyph />}
+            label="Input / output"
+            loading={!tokens}
+            loadingLabel="Loading the input and output split"
+            value={
+              tokens
+                ? `${fmtCount(tokens.totals.input_tokens)} / ${fmtCount(tokens.totals.output_tokens)}`
+                : null
+            }
+            sub="input includes any cached prefix, as the provider reports it"
+          />
+          <StatCard
+            icon={<ScheduleGlyph />}
+            label="Counted through"
+            value={
+              tokens?.aggregated_through ? (
+                <RelativeTime value={tokens.aggregated_through} now={now} />
+              ) : (
+                <EmptyValue label="Not reported yet" />
+              )
+            }
+            sub={
+              tokens?.aggregated_through
+                ? fmtDateTime(tokens.aggregated_through)
+                : "no high-water mark yet"
+            }
+          />
+        </StatGroup>
 
         {org && org.max > 0 && (
           <Card as="section">

@@ -51,7 +51,7 @@ import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { EventRow, QueryState, RECORD_MAX_HEIGHT, SeatChip } from "~/components/common.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
-import { Disclosure, KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Disclosure, KeyValue } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
   fmtBytes,
@@ -90,7 +90,19 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Button, Card, CodeBlock, CopyButton, EmptyValue, Skeleton, Tag, cx } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  CodeBlock,
+  CopyButton,
+  EmptyValue,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  cx,
+} from "@crewlethq/ui";
+import type { StatCardTone } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -120,31 +132,32 @@ function str(event: EventRecord | undefined, key: string): string {
  * turn that delivered look identical whenever the reviewer accepted both.
  */
 function outcomeOf(rec: TurnRecord): {
-  word: string;
-  tone: "positive" | "caution" | "critical" | undefined;
+  word: ReactNode;
+  tone: StatCardTone | undefined;
   sub: string;
 } {
   const failed = field(rec.summary, "failed") === true;
   const review = str(rec.learning, "review_outcome") || str(rec.summary, "decision");
   const executor = str(rec.learning, "outcome");
-  if (!review && !executor) return { word: "—", tone: undefined, sub: "" };
+  if (!review && !executor)
+    return { word: <EmptyValue label="No outcome recorded" />, tone: undefined, sub: "" };
   const kind = str(rec.summary, "error_kind");
   if (failed || review === "failed") {
     return {
       word: "failed",
-      tone: "critical",
+      tone: "danger",
       sub: kind ? `the engine stopped it: ${kind}` : "the turn will not retry",
     };
   }
   const label: Record<string, string> = {
     delivered: "delivered the work",
-    no_action: "nothing to do — ended silently",
+    no_action: "nothing to do, so it ended silently",
     blocked: "blocked, and said why",
     incomplete: "never said what it did",
   };
   return {
     word: review === "done" ? "done" : review || executor,
-    tone: review === "done" ? "positive" : "caution",
+    tone: review === "done" ? "success" : "warning",
     sub:
       label[executor] ?? (executor ? `the executor said ${executor}` : "the reviewer's decision"),
   };
@@ -602,71 +615,71 @@ export function TurnScreen({ turnId }: { turnId: string }) {
               }
         }
       >
-        <Card padding="none">
-          <StatRow cols={4}>
-            <Stat
-              icon={PersonGlyph}
-              label="Seat"
-              value={
-                role ? (
-                  <SeatChip name={role} handle={role} size="sm" />
-                ) : (
-                  <EmptyValue label="No seat recorded" />
-                )
-              }
-              // The conversation key used to sit here, raw and truncated —
-              // "mattermost:9zd7xj4mqj8hf8fy4gt7aitiny:cnjzasu…" under a seat's
-              // name, with nothing saying what it was. It is a property of the
-              // TURN, not of the seat, and it is explained below rather than
-              // dumped here.
-              sub={running ? "running now" : "ran this turn"}
-            />
-            <Stat
-              icon={ScheduleGlyph}
-              label="Took"
-              value={
-                durationMs != null
-                  ? fmtDuration(durationMs)
-                  : to > from
-                    ? fmtDuration(to - from)
-                    : "—"
-              }
-              sub={
-                durationMs != null
-                  ? "the engine's own measurement"
-                  : running
-                    ? "still running"
-                    : "spanning the turn's first and last event"
-              }
-            />
-            <Stat
-              icon={TokenGlyph}
-              label="Tokens"
-              // THE TURN'S OWN PHASES. A worker's tokens are already charged
-              // through the shared meter, which is why the engine keeps them
-              // out of `total_tokens` and reports them as `subagent_tokens` —
-              // so summing every record made this tile disagree with the very
-              // record shown further down the same page. The split is also
-              // the only thing that answers "how much of this turn was
-              // fan-out" when a seat's spend jumps and its own rounds did not.
-              value={fmtCount(own.reduce((n, p) => n + p.totalTokens, 0))}
-              sub={
-                workerTokens > 0
-                  ? `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls · +${fmtCount(
-                      workerTokens,
-                    )} in ${workerCount} worker${workerCount === 1 ? "" : "s"}`
-                  : `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls`
-              }
-            />
-            <Stat
-              icon={CheckGlyph}
-              label="Outcome"
-              value={outcome.word}
-              tone={outcome.tone}
-              sub={outcome.sub || (running ? "still running" : "no turn record")}
-            />
-          </StatRow>
-        </Card>
+        <StatGroup columns={4}>
+          <StatCard
+            icon={<PersonGlyph />}
+            label="Seat"
+            value={
+              role ? (
+                <SeatChip name={role} handle={role} size="sm" />
+              ) : (
+                <EmptyValue label="No seat recorded" />
+              )
+            }
+            // The conversation key used to sit here, raw and truncated, as
+            // "mattermost:9zd7xj4mqj8hf8fy4gt7aitiny:cnjzasu…" under a seat's
+            // name, with nothing saying what it was. It is a property of the
+            // TURN, not of the seat, and it is explained below rather than
+            // dumped here.
+            sub={running ? "running now" : "ran this turn"}
+          />
+          <StatCard
+            icon={<ScheduleGlyph />}
+            label="Took"
+            value={
+              durationMs != null ? (
+                fmtDuration(durationMs)
+              ) : to > from ? (
+                fmtDuration(to - from)
+              ) : (
+                <EmptyValue label="Not measured" />
+              )
+            }
+            sub={
+              durationMs != null
+                ? "the engine's own measurement"
+                : running
+                  ? "still running"
+                  : "spanning the turn's first and last event"
+            }
+          />
+          <StatCard
+            icon={<TokenGlyph />}
+            label="Tokens"
+            // THE TURN'S OWN PHASES. A worker's tokens are already charged
+            // through the shared meter, which is why the engine keeps them
+            // out of `total_tokens` and reports them as `subagent_tokens`, so
+            // summing every record made this tile disagree with the very
+            // record shown further down the same page. The split is also
+            // the only thing that answers "how much of this turn was
+            // fan-out" when a seat's spend jumps and its own rounds did not.
+            value={fmtCount(own.reduce((n, p) => n + p.totalTokens, 0))}
+            sub={
+              workerTokens > 0
+                ? `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls · +${fmtCount(
+                    workerTokens,
+                  )} in ${workerCount} worker${workerCount === 1 ? "" : "s"}`
+                : `${own.reduce((n, p) => n + p.tools.length, 0)} tool calls`
+            }
+          />
+          <StatCard
+            icon={<CheckGlyph />}
+            label="Outcome"
+            value={outcome.word}
+            tone={outcome.tone}
+            sub={outcome.sub || (running ? "still running" : "no turn record")}
+          />
+        </StatGroup>
 
         <TurnBrief rec={rec} trigger={trigger} />
 

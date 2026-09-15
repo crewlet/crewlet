@@ -14,13 +14,23 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { KeyValue } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
-import { Button, Card, IconButton, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import {
+  Button,
+  Card,
+  IconButton,
+  RelativeTime,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 import {
   CloseGlyph,
@@ -106,34 +116,32 @@ export function Runs() {
         }
       />
 
-      <Card padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon={TerminalGlyph}
-            label="Running"
-            value={running}
-            sub="a box is up and working"
-          />
-          <Stat
-            icon={HelpGlyph}
-            label="Waiting on an answer"
-            value={waiting}
-            sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
-          />
-          <Stat
-            icon={Package2Glyph}
-            label="In the record"
-            value={rows.length}
-            sub="live and finished"
-          />
-          <Stat
-            icon={ErrorGlyph}
-            label="Failed"
-            value={rows.filter((r) => r.status === "failed").length}
-            sub="in the retained record"
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<TerminalGlyph />}
+          label="Running"
+          value={running}
+          sub="a box is up and working"
+        />
+        <StatCard
+          icon={<HelpGlyph />}
+          label="Waiting on an answer"
+          value={waiting}
+          sub={waiting ? "the run cannot continue until someone replies" : "nothing is blocked"}
+        />
+        <StatCard
+          icon={<Package2Glyph />}
+          label="In the record"
+          value={rows.length}
+          sub="live and finished"
+        />
+        <StatCard
+          icon={<ErrorGlyph />}
+          label="Failed"
+          value={rows.filter((r) => r.status === "failed").length}
+          sub="in the retained record"
+        />
+      </StatGroup>
 
       {loading && !rows.length && (
         <Skeleton label="Loading the coding runs" variant="text" rows={4} />

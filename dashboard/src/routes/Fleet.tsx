@@ -9,12 +9,21 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
-import { Card, EmptyState, EmptyValue, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyState,
+  EmptyValue,
+  RelativeTime,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 import {
   DnsGlyph,
@@ -73,42 +82,40 @@ export function Fleet() {
         </div>
       )}
 
-      <Card padding="none">
-        <StatRow cols={4}>
-          <Stat
-            icon={DnsGlyph}
-            label="Live nodes"
-            value={nodes.length}
-            sub="holding an unexpired lease"
-          />
-          <Stat
-            icon={GroupGlyph}
-            label="Seats placed"
-            value={data?.seats?.length ?? 0}
-            sub={
-              data?.unmanned_roles?.length
-                ? `${data.unmanned_roles.length} role(s) with no seat running`
-                : "every role has a home"
-            }
-          />
-          <Stat
-            icon={WarningGlyph}
-            label="Unplaceable"
-            value={data?.unplaceable?.length ?? 0}
-            sub={
-              data?.unplaceable?.length
-                ? "a placement constraint cannot be satisfied"
-                : "nothing is stranded"
-            }
-          />
-          <Stat
-            icon={ManufacturingGlyph}
-            label="Behind on config"
-            value={behind.length}
-            sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={4}>
+        <StatCard
+          icon={<DnsGlyph />}
+          label="Live nodes"
+          value={nodes.length}
+          sub="holding an unexpired lease"
+        />
+        <StatCard
+          icon={<GroupGlyph />}
+          label="Seats placed"
+          value={data?.seats?.length ?? 0}
+          sub={
+            data?.unmanned_roles?.length
+              ? `${data.unmanned_roles.length} role(s) with no seat running`
+              : "every role has a home"
+          }
+        />
+        <StatCard
+          icon={<WarningGlyph />}
+          label="Unplaceable"
+          value={data?.unplaceable?.length ?? 0}
+          sub={
+            data?.unplaceable?.length
+              ? "a placement constraint cannot be satisfied"
+              : "nothing is stranded"
+          }
+        />
+        <StatCard
+          icon={<ManufacturingGlyph />}
+          label="Behind on config"
+          value={behind.length}
+          sub={data?.target_epoch ? `target epoch ${data.target_epoch}` : "no target epoch"}
+        />
+      </StatGroup>
 
       {loading && !data && <Skeleton label="Loading the fleet" variant="text" rows={4} />}
       <QueryState

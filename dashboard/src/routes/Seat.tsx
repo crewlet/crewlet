@@ -21,7 +21,7 @@ import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip, Section, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
-import { KeyValue, Stat, StatRow } from "~/ui/primitives.tsx";
+import { KeyValue } from "~/ui/primitives.tsx";
 import { BarList, phaseColor } from "~/ui/charts.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -64,6 +64,8 @@ import {
   Meter,
   RelativeTime,
   Skeleton,
+  StatCard,
+  StatGroup,
   TabPanel,
   Tabs,
   Tag,
@@ -325,46 +327,44 @@ export function SeatScreen({ handle }: { handle: string }) {
       <TabPanel id={panel} value={tab}>
         {tab === "overview" && (
           <>
-            <Card padding="none">
-              <StatRow cols={4}>
-                <Stat
-                  icon={BoltGlyph}
-                  label="State"
-                  value={human ? "human" : state}
-                  sub={statusLine(agent, { sandbox, seat })}
-                />
-                <Stat
-                  icon={TokenGlyph}
-                  label="Tokens · 7d"
-                  value={seatSpend ? fmtCount(seatSpend.total_tokens) : "—"}
-                  sub={
-                    seatSpend
-                      ? `${seatSpend.calls.toLocaleString()} model calls`
-                      : "nothing recorded"
-                  }
-                />
-                <Stat
-                  icon={LayersGlyph}
-                  label="Turns in the record"
-                  // Zero is a MEASUREMENT — this seat has taken no turns — and
-                  // an em dash would claim nobody looked.
-                  value={turns.length}
-                  sub="the phase history loaded below"
-                />
-                <Stat
-                  icon={GroupGlyph}
-                  label="Direct reports"
-                  value={hierarchy ? reports.length : "Not reported"}
-                  sub={
-                    !hierarchy
-                      ? "this engine did not report the hierarchy"
-                      : manager
-                        ? `reports to ${manager.name}`
-                        : "no manager in the chart"
-                  }
-                />
-              </StatRow>
-            </Card>
+            <StatGroup columns={4}>
+              <StatCard
+                icon={<BoltGlyph />}
+                label="State"
+                value={human ? "human" : state}
+                sub={statusLine(agent, { sandbox, seat })}
+              />
+              <StatCard
+                icon={<TokenGlyph />}
+                label="Tokens · 7d"
+                loading={!seatSpend}
+                loadingLabel="Loading this seat's tokens"
+                value={seatSpend ? fmtCount(seatSpend.total_tokens) : null}
+                sub={
+                  seatSpend ? `${seatSpend.calls.toLocaleString()} model calls` : "nothing recorded"
+                }
+              />
+              <StatCard
+                icon={<LayersGlyph />}
+                label="Turns in the record"
+                // Zero is a MEASUREMENT: this seat has taken no turns, and a
+                // marked absence would claim nobody looked.
+                value={turns.length}
+                sub="the phase history loaded below"
+              />
+              <StatCard
+                icon={<GroupGlyph />}
+                label="Direct reports"
+                value={hierarchy ? reports.length : "Not reported"}
+                sub={
+                  !hierarchy
+                    ? "this engine did not report the hierarchy"
+                    : manager
+                      ? `reports to ${manager.name}`
+                      : "no manager in the chart"
+                }
+              />
+            </StatGroup>
 
             <div className="grid grid-auto-lg">
               <Card as="section">
@@ -849,46 +849,48 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "cost" && (
           <>
-            <Card padding="none">
-              <StatRow cols={3}>
-                <Stat
-                  icon={TokenGlyph}
-                  label="Tokens · 7d"
-                  value={spend.data ? fmtCount(spend.data.totals.total_tokens) : "—"}
-                  sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
-                />
-                <Stat
-                  icon={ArrowForwardGlyph}
-                  label="Input / output"
-                  value={
-                    spend.data
-                      ? `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
-                      : "—"
-                  }
-                  sub="input includes any cached prefix, as the provider reports it"
-                />
-                <Stat
-                  icon={TargetGlyph}
-                  label="Configured budget"
-                  value={
-                    configRole
-                      ? configRole.token_budget
-                        ? fmtCount(configRole.token_budget)
-                        : "unlimited"
-                      : "Unknown"
-                  }
-                  sub={
-                    configRole
-                      ? configRole.token_budget
-                        ? "token_budget on this role in the company config"
-                        : "token_budget is 0 or unset on this role"
-                      : config.error === "unauthorized"
-                        ? "reading the company config needs an operator token"
-                        : "the company config does not say for this seat"
-                  }
-                />
-              </StatRow>
-            </Card>
+            <StatGroup columns={3}>
+              <StatCard
+                icon={<TokenGlyph />}
+                label="Tokens · 7d"
+                loading={!spend.data}
+                loadingLabel="Loading this seat's tokens"
+                value={spend.data ? fmtCount(spend.data.totals.total_tokens) : null}
+                sub={spend.data ? `${spend.data.totals.calls.toLocaleString()} model calls` : ""}
+              />
+              <StatCard
+                icon={<ArrowForwardGlyph />}
+                label="Input / output"
+                loading={!spend.data}
+                loadingLabel="Loading the input and output split"
+                value={
+                  spend.data
+                    ? `${fmtCount(spend.data.totals.input_tokens)} / ${fmtCount(spend.data.totals.output_tokens)}`
+                    : null
+                }
+                sub="input includes any cached prefix, as the provider reports it"
+              />
+              <StatCard
+                icon={<TargetGlyph />}
+                label="Configured budget"
+                value={
+                  configRole
+                    ? configRole.token_budget
+                      ? fmtCount(configRole.token_budget)
+                      : "unlimited"
+                    : "Unknown"
+                }
+                sub={
+                  configRole
+                    ? configRole.token_budget
+                      ? "token_budget on this role in the company config"
+                      : "token_budget is 0 or unset on this role"
+                    : config.error === "unauthorized"
+                      ? "reading the company config needs an operator token"
+                      : "the company config does not say for this seat"
+                }
+              />
+            </StatGroup>
 
             {/* The live meter and the configured budget are DIFFERENT facts and
               the screen says so. The previous seat page printed "no budget is

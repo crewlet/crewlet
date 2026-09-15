@@ -26,7 +26,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { SecretDialog } from "./SecretDialog.tsx";
 import { RemoveSecretDialog } from "./RemoveSecretDialog.tsx";
@@ -40,6 +39,8 @@ import {
   IconButton,
   RelativeTime,
   Skeleton,
+  StatCard,
+  StatGroup,
   Tag,
   useNow,
   useToast,
@@ -191,28 +192,26 @@ export function Secrets() {
         </span>
       </div>
 
-      <Card padding="none">
-        <StatRow cols={3}>
-          <Stat
-            icon={KeyGlyph}
-            label="Credentials"
-            value={list.length}
-            sub="names the fleet holds"
-          />
-          <Stat
-            icon={DatabaseGlyph}
-            label="In the secret store"
-            value={fromStore}
-            sub="the rest resolve from this process's environment"
-          />
-          <Stat
-            icon={ShieldGlyph}
-            label="Distinct key ids"
-            value={new Set(list.map((r) => r.key_id)).size}
-            sub="a rekey moves every value onto a new one"
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={3}>
+        <StatCard
+          icon={<KeyGlyph />}
+          label="Credentials"
+          value={list.length}
+          sub="names the fleet holds"
+        />
+        <StatCard
+          icon={<DatabaseGlyph />}
+          label="In the secret store"
+          value={fromStore}
+          sub="the rest resolve from this process's environment"
+        />
+        <StatCard
+          icon={<ShieldGlyph />}
+          label="Distinct key ids"
+          value={new Set(list.map((r) => r.key_id)).size}
+          sub="a rekey moves every value onto a new one"
+        />
+      </StatGroup>
 
       {loading && rows === null && <Skeleton label="Loading the secrets" variant="text" rows={4} />}
       <QueryState

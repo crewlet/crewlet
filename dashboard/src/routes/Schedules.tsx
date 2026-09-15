@@ -4,11 +4,19 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
-import { Card, EmptyValue, RelativeTime, Skeleton, Tag, useNow } from "@crewlethq/ui";
+import {
+  Card,
+  EmptyValue,
+  RelativeTime,
+  Skeleton,
+  StatCard,
+  StatGroup,
+  Tag,
+  useNow,
+} from "@crewlethq/ui";
 import type { Tone } from "@crewlethq/ui";
 import { CalendarClockGlyph, ErrorGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
@@ -39,28 +47,26 @@ export function Schedules() {
         badges={<Tag appearance="outline">{plural(schedules.length, "schedule")} defined</Tag>}
       />
 
-      <Card padding="none">
-        <StatRow cols={3}>
-          <Stat
-            icon={CalendarClockGlyph}
-            label="Schedules"
-            value={schedules.length}
-            sub="across every seat and unit"
-          />
-          <Stat
-            icon={ScheduleGlyph}
-            label="Firing within the hour"
-            value={due.length}
-            sub={due.length ? due.map((s) => s.name).join(", ") : "nothing due soon"}
-          />
-          <Stat
-            icon={ErrorGlyph}
-            label="Recent failures"
-            value={runs.filter((r) => OUTCOME_TONE[r.outcome] === "danger").length}
-            sub={`in the last ${runs.length} recorded runs`}
-          />
-        </StatRow>
-      </Card>
+      <StatGroup columns={3}>
+        <StatCard
+          icon={<CalendarClockGlyph />}
+          label="Schedules"
+          value={schedules.length}
+          sub="across every seat and unit"
+        />
+        <StatCard
+          icon={<ScheduleGlyph />}
+          label="Firing within the hour"
+          value={due.length}
+          sub={due.length ? due.map((s) => s.name).join(", ") : "nothing due soon"}
+        />
+        <StatCard
+          icon={<ErrorGlyph />}
+          label="Recent failures"
+          value={runs.filter((r) => OUTCOME_TONE[r.outcome] === "danger").length}
+          sub={`in the last ${runs.length} recorded runs`}
+        />
+      </StatGroup>
 
       {loading && !schedules.length && (
         <Skeleton label="Loading the schedules" variant="text" rows={4} />

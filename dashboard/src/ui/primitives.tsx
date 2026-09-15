@@ -39,63 +39,6 @@ import {
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
 
 // ---------------------------------------------------------------------------
-// Controls
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Measure
-// ---------------------------------------------------------------------------
-
-export function StatRow({ cols, children }: { cols?: number; children: ReactNode }) {
-  return (
-    <div className="stat-row" style={{ "--stat-cols": cols ?? 4 } as CSSProperties}>
-      {children}
-    </div>
-  );
-}
-
-export function Stat({
-  label,
-  value,
-  unit,
-  sub,
-  icon: Glyph,
-  tone,
-}: {
-  label: ReactNode;
-  value: ReactNode;
-  unit?: ReactNode;
-  sub?: ReactNode;
-  icon?: ComponentType<GlyphProps>;
-  /**
-   * The STATE this number is in, when it has one — the ink of the value moves
-   * to that tone's step.
-   *
-   * Deliberately absent from most stats. Colour carries state and never
-   * identity, and a token count or an elapsed time is not in a state: tinting
-   * every tile would spend the four status hues on decoration and leave the
-   * one tile that means something indistinguishable from its neighbours. Use
-   * it where the value IS an outcome — a turn's decision, a probe's verdict —
-   * and nowhere else.
-   */
-  tone?: Exclude<Tone, "neutral" | "accent">;
-}) {
-  return (
-    <div className="stat">
-      <div className="stat-label">
-        {Glyph && <Glyph size="xs" />}
-        {label}
-      </div>
-      <div className={cx("stat-value truncate", tone && `tone-${tone}`)}>
-        {value}
-        {unit && <span className="unit">{unit}</span>}
-      </div>
-      <div className="stat-sub truncate">{sub}</div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // States
 // ---------------------------------------------------------------------------
 
