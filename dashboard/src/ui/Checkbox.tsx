@@ -22,7 +22,7 @@
  */
 
 import { useId, type ReactNode } from "react";
-import { cx } from "./primitives.tsx";
+import { cx } from "@crewlethq/ui";
 
 export function Checkbox({
   label,

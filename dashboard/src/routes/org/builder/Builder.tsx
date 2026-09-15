@@ -61,9 +61,7 @@ import {
   ButtonLink,
   Empty,
   Segmented,
-  Skeleton,
   TabPanel,
-  cx,
   type Tone,
 } from "~/ui/primitives.tsx";
 import {
@@ -142,7 +140,9 @@ import {
   LayerHost,
   Menu,
   Modal,
+  Skeleton,
   ToastProvider,
+  cx,
   isComposing,
   isModalLayerOpen,
   type MenuEntry,
@@ -1819,7 +1819,7 @@ function PostureScreen({
     case "loading":
     case "edit":
     case "create":
-      return <Skeleton rows={4} />;
+      return <Skeleton label="Loading the company" variant="text" rows={4} />;
     case "behind":
       return (
         <Empty

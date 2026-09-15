@@ -12,7 +12,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, fmtTime, humanize, oldestFirst, tsKey } from "~/lib/format.ts";
 import type { EventRecord } from "~/protocol/index.ts";
@@ -24,6 +24,7 @@ import {
   ScheduleGlyph,
   TimelineGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Skeleton } from "@crewlethq/ui";
 
 interface Node {
   event: EventRecord;
@@ -105,7 +106,7 @@ export function TraceScreen({ traceId }: { traceId: string }) {
         }
       />
 
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton label="Loading the trace" variant="text" rows={6} />}
       <QueryState
         error={error}
         loading={loading}

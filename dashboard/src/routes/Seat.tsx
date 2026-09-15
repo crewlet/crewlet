@@ -27,9 +27,7 @@ import {
   Button,
   Empty,
   KeyValue,
-  Meter,
   Panel,
-  Skeleton,
   Stat,
   StatRow,
   TabPanel,
@@ -68,7 +66,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { CompanyDocument, ConfigRole, EventRecord } from "~/protocol/index.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   AccountTreeGlyph,
   ArrowForwardGlyph,
@@ -568,7 +566,9 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "model" && (
           <>
-            {history.loading && !turns.length && <Skeleton rows={4} height={44} />}
+            {history.loading && !turns.length && (
+              <Skeleton label="Loading this seat's turns" variant="text" rows={4} rowHeight={44} />
+            )}
             {/* The QUERY'S OWN STATE, BESIDE THE TURNS RATHER THAN IN PLACE OF
               THEM. It used to wrap them, and `QueryState` renders NOTHING while
               a query is in flight and a banner INSTEAD of its children when one
@@ -636,7 +636,9 @@ export function SeatScreen({ handle }: { handle: string }) {
 
         {tab === "memory" && (
           <>
-            {memory.loading && <Skeleton rows={5} />}
+            {memory.loading && (
+              <Skeleton label="Loading this seat's memory" variant="text" rows={5} />
+            )}
             <QueryState error={memory.error} loading={memory.loading}>
               <div className="col gap-4">
                 <Panel
@@ -859,11 +861,11 @@ export function SeatScreen({ handle }: { handle: string }) {
                 subtitle="process-lifetime, not the 7-day window"
               >
                 <Meter
-                  used={agent.budget.used}
+                  value={agent.budget.used}
                   max={agent.budget.max}
                   label={agent.budget.refused_at ? "Refusing charges" : "Used"}
-                  right={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
-                  tone={agent.budget.refused_at ? "critical" : undefined}
+                  valueText={`${fmtCount(agent.budget.used)} / ${fmtCount(agent.budget.max)}`}
+                  tone={agent.budget.refused_at ? "danger" : undefined}
                 />
                 {agent.budget.refused_at && (
                   <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
@@ -885,7 +887,9 @@ export function SeatScreen({ handle }: { handle: string }) {
               </div>
             )}
 
-            {spend.loading && <Skeleton rows={4} />}
+            {spend.loading && (
+              <Skeleton label="Loading this seat's spend" variant="text" rows={4} />
+            )}
             <QueryState error={spend.error} loading={spend.loading}>
               <div className="grid grid-auto-lg">
                 <Panel title="By phase" icon={LayersGlyph}>
@@ -1027,7 +1031,8 @@ function SettingsState({
   seat: Seat;
   children: ReactNode;
 }) {
-  if (loading && !doc && !error) return <Skeleton rows={3} />;
+  if (loading && !doc && !error)
+    return <Skeleton label="Loading the document" variant="text" rows={3} />;
   if (error) return <QueryState error={error} loading={loading} />;
   if (!doc) {
     return (

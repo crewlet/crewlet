@@ -59,10 +59,8 @@ import {
   Disclosure,
   KeyValue,
   Panel,
-  Skeleton,
   Stat,
   StatRow,
-  cx,
 } from "~/ui/primitives.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import {
@@ -102,6 +100,7 @@ import {
   TimelineGlyph,
   TokenGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Skeleton, cx } from "@crewlethq/ui";
 
 /** The two records the engine closes every turn with, read as one answer. */
 interface TurnRecord {
@@ -578,7 +577,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
         }
       />
 
-      {loading && <Skeleton rows={6} />}
+      {loading && <Skeleton label="Loading the turn" variant="text" rows={6} />}
       <QueryState
         error={error}
         loading={loading}

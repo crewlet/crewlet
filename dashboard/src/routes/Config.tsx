@@ -33,14 +33,13 @@ import {
   Empty,
   Panel,
   Segmented,
-  Skeleton,
   TabPanel,
 } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey } from "~/lib/format.ts";
 import type { RevisionMeta } from "~/protocol/index.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DescriptionGlyph,
   DifferenceGlyph,
@@ -100,7 +99,9 @@ export function ConfigScreen() {
       <TabPanel id={panel} value={lens}>
         {lens === "active" && (
           <>
-            {active.loading && <Skeleton rows={6} />}
+            {active.loading && (
+              <Skeleton label="Loading the configuration" variant="text" rows={6} />
+            )}
             <QueryState error={active.error} loading={active.loading}>
               {active.data ? (
                 <Panel
@@ -137,7 +138,9 @@ export function ConfigScreen() {
 
         {lens !== "active" && (
           <>
-            {audit.loading && <Skeleton rows={5} />}
+            {audit.loading && (
+              <Skeleton label="Loading the revision history" variant="text" rows={5} />
+            )}
             <QueryState
               error={audit.error}
               loading={audit.loading}
@@ -227,7 +230,7 @@ export function ConfigScreen() {
                     hint="Its differences against the currently active document are shown here."
                   />
                 ) : diff.loading ? (
-                  <Skeleton rows={4} />
+                  <Skeleton label="Loading the differences" variant="text" rows={4} />
                 ) : (
                   <QueryState
                     error={diff.error}

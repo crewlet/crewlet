@@ -27,7 +27,7 @@ import { href } from "~/app/router.tsx";
 import { plural } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { rest, RestError, type EngineHealth, type FleetAnswer } from "~/protocol/index.ts";
-import { Banner, Button, ButtonLink, Code, CopyButton, Skeleton } from "~/ui/primitives.tsx";
+import { Banner, Button, ButtonLink, Code, CopyButton } from "~/ui/primitives.tsx";
 import { useRecheck } from "~/routes/recheck.ts";
 import { revisionOfEtag } from "./model/transport.ts";
 import { useSavedRevision, type SavedRevision } from "./savedRevision.ts";
@@ -38,7 +38,7 @@ import {
   ErrorGlyph,
   RefreshGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Modal } from "@crewlethq/ui";
+import { Modal, Skeleton } from "@crewlethq/ui";
 
 /**
  * How often the two answers are read while the apply is still moving. The
@@ -324,7 +324,9 @@ function YamlDialog({ savedRevision, onClose }: { savedRevision: string; onClose
         </>
       }
     >
-      {state.kind === "loading" && <Skeleton rows={4} />}
+      {state.kind === "loading" && (
+        <Skeleton label="Loading the saved revision" variant="text" rows={4} />
+      )}
       {state.kind === "failed" && <Banner tone="critical">{state.detail}</Banner>}
       {state.kind === "text" && (
         <>

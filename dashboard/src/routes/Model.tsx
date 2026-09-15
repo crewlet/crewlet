@@ -22,7 +22,7 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Empty, PhaseTag, Select, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Chip, Empty, PhaseTag, Select } from "~/ui/primitives.tsx";
 import { DataTable, type Column } from "~/ui/DataTable.tsx";
 import { useAgents, useClient, usePhaseEvents } from "~/lib/store-hooks.ts";
 import { useSettled } from "~/lib/settled.ts";
@@ -38,7 +38,7 @@ import {
   type PhaseRecord,
 } from "~/lib/phases.ts";
 import type { EventRecord } from "~/protocol/index.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { CloseGlyph, NeurologyGlyph } from "@crewlethq/icons/glyphs";
 
 const PAGE = 60;
@@ -316,7 +316,9 @@ export function ModelActivity() {
         )}
       </div>
 
-      {loading && !merged.length && <Skeleton rows={5} height={44} />}
+      {loading && !merged.length && (
+        <Skeleton label="Loading model activity" variant="text" rows={5} rowHeight={44} />
+      )}
       {error && <QueryState error={error} loading={loading} />}
 
       {!loading && !filtered.length && !error && (

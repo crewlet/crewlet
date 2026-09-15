@@ -60,7 +60,7 @@ import {
 } from "react";
 import { plural } from "~/lib/format.ts";
 import { Canvas, type CanvasHandle } from "~/ui/Canvas.tsx";
-import { Avatar, Badge, Button, Empty, cx } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button, Empty } from "~/ui/primitives.tsx";
 import { layoutForest, type Layout, type TreeNode } from "~/ui/tidytree.ts";
 import {
   ancestors,
@@ -114,7 +114,7 @@ import {
   FolderGlyph,
   KeyboardArrowDownGlyph,
 } from "@crewlethq/icons/glyphs";
-import { Menu, type MenuEntry } from "@crewlethq/ui";
+import { Menu, cx, type MenuEntry } from "@crewlethq/ui";
 
 /**
  * The canvas of the Builder lens.

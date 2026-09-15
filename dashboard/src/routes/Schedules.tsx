@@ -4,11 +4,11 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, tsKey, plural } from "~/lib/format.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { CalendarClockGlyph, ErrorGlyph, ScheduleGlyph } from "@crewlethq/icons/glyphs";
 
 const OUTCOME_TONE: Record<string, "positive" | "caution" | "critical" | "neutral"> = {
@@ -61,7 +61,9 @@ export function Schedules() {
         </StatRow>
       </Panel>
 
-      {loading && !schedules.length && <Skeleton rows={4} />}
+      {loading && !schedules.length && (
+        <Skeleton label="Loading the schedules" variant="text" rows={4} />
+      )}
       <QueryState
         error={error}
         loading={loading}

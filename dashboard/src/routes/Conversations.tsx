@@ -19,13 +19,13 @@
 import { useCallback, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip, Section } from "~/components/common.tsx";
-import { Badge, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { tsKey } from "~/lib/format.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import { ChatGlyph, GroupGlyph, InfoGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 
 export function Conversations() {
@@ -76,7 +76,7 @@ export function Conversations() {
         </StatRow>
       </Panel>
 
-      {channels.loading && <Skeleton rows={4} />}
+      {channels.loading && <Skeleton label="Loading the conversations" variant="text" rows={4} />}
       {channels.data?.available === false ? (
         <div className="banner neutral">
           <LinkGlyph size="sm" />

@@ -26,7 +26,7 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useNavigator } from "~/app/router.tsx";
 import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Meter, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, Empty, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { ActivityStrip, BarList, Legend, phaseColor } from "~/ui/charts.tsx";
 import {
   useAgents,
@@ -42,7 +42,7 @@ import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg, runState } from "~/lib/seats.ts";
 import { fmtCount, plural, tsKey } from "~/lib/format.ts";
 import { MAX_EVENTS } from "~/protocol/index.ts";
-import { useNow } from "@crewlethq/ui";
+import { Meter, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   BoltGlyph,
@@ -358,14 +358,14 @@ export function Overview() {
             )}
             {orgMeter && orgMeter.max > 0 && (
               <Meter
-                used={orgMeter.used}
+                value={orgMeter.used}
                 max={orgMeter.max}
                 label={
                   <span title="a process-lifetime meter — not comparable to the spend window above">
                     Company budget meter
                   </span>
                 }
-                right={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
+                valueText={`${fmtCount(orgMeter.used)} / ${fmtCount(orgMeter.max)}`}
               />
             )}
           </div>

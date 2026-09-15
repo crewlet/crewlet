@@ -14,13 +14,13 @@ import { useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Button, KeyValue, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Button, KeyValue, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useSandboxes } from "~/lib/store-hooks.ts";
 import { fmtDateTime, fmtDuration, plural, tsKey } from "~/lib/format.ts";
 import type { SandboxRun } from "~/protocol/index.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   CloseGlyph,
   ErrorGlyph,
@@ -134,7 +134,9 @@ export function Runs() {
         </StatRow>
       </Panel>
 
-      {loading && !rows.length && <Skeleton rows={4} />}
+      {loading && !rows.length && (
+        <Skeleton label="Loading the coding runs" variant="text" rows={4} />
+      )}
       <QueryState
         error={error}
         loading={loading}

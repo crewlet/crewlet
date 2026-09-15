@@ -26,7 +26,7 @@ import {
 import { EnginePanel } from "./EnginePanel.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { Kbd } from "~/ui/Kbd.tsx";
-import { Badge, Button, ButtonLink, Segmented, cx } from "~/ui/primitives.tsx";
+import { Badge, Button, ButtonLink, Segmented } from "~/ui/primitives.tsx";
 import {
   useAgents,
   useClient,
@@ -39,6 +39,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { attentionQueue } from "~/lib/attention.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import {
+  cx,
   focusables,
   isComposing,
   isModalLayerOpen,

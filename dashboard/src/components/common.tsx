@@ -9,7 +9,7 @@
  */
 
 import type { ReactNode } from "react";
-import { Avatar, Badge, Button, cx } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button } from "~/ui/primitives.tsx";
 import { href } from "~/app/router.tsx";
 import { fmtDateTime, fmtTime, humanize } from "~/lib/format.ts";
 import { requestToken } from "~/protocol/index.ts";
@@ -24,7 +24,7 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentRow, FeedRow, SandboxEntry } from "~/protocol/index.ts";
 import type { Attention } from "~/lib/attention.ts";
-import { RelativeTime, formatRelative, useNow } from "@crewlethq/ui";
+import { RelativeTime, cx, formatRelative, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   ErrorGlyph,

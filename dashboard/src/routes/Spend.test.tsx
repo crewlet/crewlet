@@ -79,3 +79,32 @@ test("a seat with no live meter sorts below every measurement, zero included", a
   const unmetered = within(table).getByText("Unmetered").closest("tr")!;
   expect(within(unmetered).queryByText("0")).toBeNull();
 });
+
+// A METER SAYS WHAT IT MEASURES. The bar this replaces was a `role="meter"`
+// with its legend drawn as a sibling and nothing linking the two, so a screen
+// reader announced "meter, 62 percent" with no idea of what, and read the raw
+// number against the maximum where the value has a unit.
+test("every budget meter names what it measures and says its value in words", async () => {
+  location.hash = "#/spend";
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+    Promise.resolve(
+      what === "budgets"
+        ? {
+            ...budgets,
+            seats: [{ ...budgets.seats[0]!, max_tokens: 1000, durable_used: 250 }],
+          }
+        : null,
+    );
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <Router>
+        <Spend />
+      </Router>
+    </ClientContext.Provider>,
+  );
+
+  const meter = await screen.findByRole("meter", { name: "Unmetered budget" });
+  expect(meter.getAttribute("aria-valuetext")).toBe("250 / 1,000");
+});

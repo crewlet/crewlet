@@ -24,11 +24,12 @@ import { useCallback, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useParam } from "~/app/router.tsx";
 import { EventRow, QueryState } from "~/components/common.tsx";
-import { Badge, Button, Chip, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Chip, Panel, SearchInput } from "~/ui/primitives.tsx";
 import { useClient, useEvents } from "~/lib/store-hooks.ts";
 import { newestFirst, plural } from "~/lib/format.ts";
 import type { FeedRow } from "~/protocol/index.ts";
 import { CloseGlyph } from "@crewlethq/icons/glyphs";
+import { Skeleton } from "@crewlethq/ui";
 
 /**
  * The categories the engine assigns, as a CLOSED set.
@@ -238,7 +239,7 @@ export function Activity() {
           )}
         </footer>
       </Panel>
-      {paging && <Skeleton rows={3} />}
+      {paging && <Skeleton label="Loading more events" variant="text" rows={3} />}
     </>
   );
 }

@@ -9,12 +9,12 @@
 
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import { Badge, Empty, Panel, Skeleton, Stat, StatRow } from "~/ui/primitives.tsx";
+import { Badge, Empty, Panel, Stat, StatRow } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, fmtDuration, plural } from "~/lib/format.ts";
 import type { FleetNode } from "~/protocol/index.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DnsGlyph,
   ErrorGlyph,
@@ -109,7 +109,7 @@ export function Fleet() {
         </StatRow>
       </Panel>
 
-      {loading && !data && <Skeleton rows={4} />}
+      {loading && !data && <Skeleton label="Loading the fleet" variant="text" rows={4} />}
       <QueryState
         error={null}
         loading={loading}

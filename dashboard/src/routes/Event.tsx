@@ -8,12 +8,12 @@
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Badge, Button, Code, CopyButton, KeyValue, Panel, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Code, CopyButton, KeyValue, Panel } from "~/ui/primitives.tsx";
 import { PhaseCard } from "~/components/PhaseCard.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtDateTime, humanize } from "~/lib/format.ts";
 import { fromPhaseEvent } from "~/lib/phases.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   DatabaseGlyph,
   DescriptionGlyph,
@@ -75,7 +75,7 @@ export function EventScreen({ eventId }: { eventId: string }) {
         }
       />
 
-      {loading && <Skeleton rows={5} />}
+      {loading && <Skeleton label="Loading the event" variant="text" rows={5} />}
       <QueryState
         error={error === "not_found" ? null : error}
         loading={loading}

@@ -17,7 +17,7 @@ import { useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { href, useParam } from "~/app/router.tsx";
 import { QueryState, Section } from "~/components/common.tsx";
-import { Badge, Button, Empty, Panel, SearchInput, Skeleton } from "~/ui/primitives.tsx";
+import { Badge, Button, Empty, Panel, SearchInput } from "~/ui/primitives.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -32,6 +32,7 @@ import {
   SearchGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Skeleton } from "@crewlethq/ui";
 
 export function Knowledge() {
   const org = useOrg();
@@ -91,7 +92,7 @@ export function Knowledge() {
         />
       )}
 
-      {loading && <Skeleton rows={4} />}
+      {loading && <Skeleton label="Searching the knowledge base" variant="text" rows={4} />}
 
       {/* The search DID NOT RUN. `available: false` covers three states — no
           company, no backend, a backend with no org-wide read scope — so the

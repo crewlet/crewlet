@@ -34,9 +34,8 @@
 
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Problems } from "./Problems.tsx";
-import { cx } from "./primitives.tsx";
 import { CheckGlyph, CloseGlyph } from "@crewlethq/icons/glyphs";
-import { isComposing, useListbox } from "@crewlethq/ui";
+import { cx, isComposing, useListbox } from "@crewlethq/ui";
 
 export interface PickerOption {
   value: string;

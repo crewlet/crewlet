@@ -25,7 +25,7 @@
 import { type ComponentType, useCallback, useEffect, useMemo, useState } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Avatar, Badge, Button, ButtonLink, Empty, Skeleton } from "~/ui/primitives.tsx";
+import { Avatar, Badge, Button, ButtonLink, Empty } from "~/ui/primitives.tsx";
 import { useRecheck } from "./recheck.ts";
 import { VendorMark, type Vendor } from "@crewlethq/icons";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -48,6 +48,7 @@ import {
   TimelineGlyph,
   WarningGlyph,
 } from "@crewlethq/icons/glyphs";
+import { Skeleton } from "@crewlethq/ui";
 
 type Tone = "positive" | "caution" | "critical" | "info" | "neutral";
 
@@ -1782,7 +1783,9 @@ export function Integrations() {
 
       {/* BOTH HALVES, because a card drawn from one of them is a card with
           no buttons. See [useSetup]'s `loading`. */}
-      {((loading && !data) || setup.loading) && <Skeleton rows={6} />}
+      {((loading && !data) || setup.loading) && (
+        <Skeleton label="Loading the integrations" variant="text" rows={6} />
+      )}
       <QueryState error={error} loading={loading} empty={undefined}>
         {/* WHAT THIS COMPANY HAS, THEN WHAT IT COULD HAVE, each half
             alphabetical. One flat list rather than panels: a capability

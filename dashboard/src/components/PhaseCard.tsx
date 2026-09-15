@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Badge, Button, Code, Disclosure, PhaseTag, cx } from "~/ui/primitives.tsx";
+import { Badge, Button, Code, Disclosure, PhaseTag } from "~/ui/primitives.tsx";
 import { fmtCount, fmtDateTime, fmtDuration, tsKey } from "~/lib/format.ts";
 import {
   decisionLabel,
@@ -53,7 +53,7 @@ import {
 } from "~/lib/phases.ts";
 import { staleness } from "~/lib/seats.ts";
 import { href, useIsCurrent } from "~/app/router.tsx";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { RelativeTime, cx, useNow } from "@crewlethq/ui";
 import {
   ChevronRightGlyph,
   ErrorGlyph,

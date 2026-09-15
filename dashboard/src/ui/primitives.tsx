@@ -9,6 +9,7 @@
  * clicks. A typed prop cannot be forgotten.
  */
 
+import { cx } from "@crewlethq/ui";
 import {
   type AriaAttributes,
   type CSSProperties,
@@ -36,10 +37,6 @@ import {
 } from "@crewlethq/icons/glyphs";
 
 export type Tone = "neutral" | "positive" | "caution" | "critical" | "info" | "accent";
-
-export function cx(...parts: (string | false | null | undefined)[]): string {
-  return parts.filter(Boolean).join(" ");
-}
 
 // ---------------------------------------------------------------------------
 // Surface
@@ -654,44 +651,6 @@ export function Avatar({
 // Measure
 // ---------------------------------------------------------------------------
 
-export function Meter({
-  used,
-  max,
-  label,
-  right,
-  tone,
-}: {
-  used: number;
-  max: number;
-  label?: ReactNode;
-  right?: ReactNode;
-  tone?: "accent" | "positive" | "caution" | "critical" | "neutral";
-}) {
-  const pct = max > 0 ? Math.min(100, (used / max) * 100) : 0;
-  // The tone is DERIVED from the fill unless the caller overrides it, so a bar
-  // that is nearly full says so without every call site remembering to.
-  const auto = pct >= 100 ? "critical" : pct >= 75 ? "caution" : "accent";
-  return (
-    <div className="meter">
-      {(label || right) && (
-        <div className="meter-legend">
-          <span className="truncate">{label}</span>
-          <span className="t-num">{right}</span>
-        </div>
-      )}
-      <div
-        className="meter-track"
-        role="meter"
-        aria-valuenow={used}
-        aria-valuemin={0}
-        aria-valuemax={max}
-      >
-        <div className="meter-fill" data-tone={tone ?? auto} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
 export function StatRow({ cols, children }: { cols?: number; children: ReactNode }) {
   return (
     <div className="stat-row" style={{ "--stat-cols": cols ?? 4 } as CSSProperties}>
@@ -794,17 +753,6 @@ export function Banner({
       <Glyph size="sm" />
       <span style={{ flex: 1, minWidth: 0 }}>{children}</span>
       {action}
-    </div>
-  );
-}
-
-export function Skeleton({ rows = 3, height = 14 }: { rows?: number; height?: number }) {
-  return (
-    <div className="col" aria-busy="true" aria-live="polite">
-      {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="skeleton" style={{ height, width: `${100 - (i % 3) * 12}%` }} />
-      ))}
-      <span className="sr-only">Loading</span>
     </div>
   );
 }

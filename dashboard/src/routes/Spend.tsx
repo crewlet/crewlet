@@ -14,22 +14,13 @@ import { useId, useMemo } from "react";
 import { ScreenHead } from "~/app/Shell.tsx";
 import { useNavigator, useParam } from "~/app/router.tsx";
 import { QueryState, SeatChip } from "~/components/common.tsx";
-import {
-  Badge,
-  Meter,
-  Panel,
-  Segmented,
-  Skeleton,
-  Stat,
-  StatRow,
-  TabPanel,
-} from "~/ui/primitives.tsx";
+import { Badge, Panel, Segmented, Stat, StatRow, TabPanel } from "~/ui/primitives.tsx";
 import { DataTable } from "~/ui/DataTable.tsx";
 import { BarList, Legend, StackedBar, phaseColor, vizColor } from "~/ui/charts.tsx";
 import { useOrgBudget, useTokens } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { fmtCount, fmtDateTime, fmtExact, fmtPct, tsKey } from "~/lib/format.ts";
-import { RelativeTime, useNow } from "@crewlethq/ui";
+import { Meter, RelativeTime, Skeleton, useNow } from "@crewlethq/ui";
 import {
   ArrowForwardGlyph,
   AutorenewGlyph,
@@ -173,11 +164,11 @@ export function Spend() {
             actions={org.refused_at ? <Badge tone="critical">refusing charges</Badge> : undefined}
           >
             <Meter
-              used={org.used}
+              value={org.used}
               max={org.max}
               label={`${fmtPct(org.used, org.max, 1)} of the meter used`}
-              right={`${fmtExact(org.used)} / ${fmtExact(org.max)}`}
-              tone={org.refused_at ? "critical" : undefined}
+              valueText={`${fmtExact(org.used)} / ${fmtExact(org.max)}`}
+              tone={org.refused_at ? "danger" : undefined}
             />
             {org.refused_at && (
               <p className="t-caption" style={{ marginTop: "var(--spacing-2)" }}>
@@ -349,7 +340,9 @@ export function Spend() {
           subtitle="the fleet's shared ledger, not this process's meter"
           padding="none"
         >
-          {budgets.loading && !budgets.data && <Skeleton rows={3} />}
+          {budgets.loading && !budgets.data && (
+            <Skeleton label="Loading the durable budget counters" variant="text" rows={3} />
+          )}
           {budgets.data && budgets.data.durable === false ? (
             <div className="banner neutral" style={{ margin: "var(--spacing-3)" }}>
               <DatabaseGlyph size="sm" />
@@ -408,7 +401,14 @@ export function Spend() {
                     width: "160px",
                     cell: (s) =>
                       s.max_tokens ? (
-                        <Meter used={s.durable_used} max={s.max_tokens} />
+                        <Meter
+                          size="compact"
+                          value={s.durable_used}
+                          max={s.max_tokens}
+                          label={`${s.role} budget`}
+                          hideLabel
+                          valueText={`${fmtExact(s.durable_used)} / ${fmtExact(s.max_tokens)}`}
+                        />
                       ) : (
                         <span className="faint">—</span>
                       ),
