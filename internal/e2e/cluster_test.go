@@ -101,24 +101,47 @@ func startMesh(t *testing.T, mesh func(*testing.T, int) *jetstreamtest.Relays, n
 		// ports, and the next attempt is about to ask for a fresh set.
 		relays.Stop()
 
-		// ONLY A LOST PORT IS RETRIED. Everything else a member can fail
-		// on — a company config that does not parse, an engine that will
-		// not start, a projector that will not attach — fails the same
-		// way every time, so retrying it spends three attempts to reach
-		// the same place and then reports a race that never happened,
-		// which is worse than the first failure said on its own.
-		if !errors.Is(err, jetstream.ErrRoutePortTaken) {
+		// RETRY BY DEFAULT, AND NAME WHAT ACTUALLY FAILED.
+		//
+		// The default is the safe direction for this harness. Standing
+		// up n brokers on a shared machine fails for timing far more
+		// often than for anything else — a member that could not form
+		// its cluster inside the budget, a lost port, a metadata group
+		// that was still electing — and every one of those is what the
+		// attempts exist to absorb. Only a failure that is KNOWN to
+		// repeat identically is worth ending the test on, because for
+		// anything else the cost of guessing wrong is a case that would
+		// have passed.
+		//
+		// Measured by getting it backwards: gating the retry on a lost
+		// port alone ended three cluster cases on their first attempt,
+		// each on an `ensure stream ...: context deadline exceeded` that
+		// a second attempt had always absorbed.
+		//
+		// What the log must not do is call all of them a port race. That
+		// was the other half of the same defect: every attempt reported
+		// "lost a race" whatever had happened, so the one diagnostic a
+		// reader gets named a cause the run had no evidence for.
+		if errors.Is(err, errNotRetryable) {
 			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
 				"cannot fix: %v (relays: %s)",
 				attempt, clusterStartAttempts, err, relays.Describe())
 		}
-		t.Logf("cluster attempt %d/%d lost a port race: %v (relays: %s)",
-			attempt, clusterStartAttempts, err, relays.Describe())
+		t.Logf("cluster attempt %d/%d failed, retrying with a fresh mesh: %v "+
+			"(relays: %s)", attempt, clusterStartAttempts, err, relays.Describe())
 	}
-	t.Fatalf("no cluster came up in %d attempts — every one lost a port "+
-		"between reserving it and binding it", clusterStartAttempts)
+	t.Fatalf("no cluster came up in %d attempts", clusterStartAttempts)
 	return nil
 }
+
+// errNotRetryable marks a member failure that a fresh mesh cannot change: the
+// same input producing the same answer every time.
+//
+// DELIBERATELY SHORT, and everything not on it is retried. A harness that
+// guesses "deterministic" wrongly ends a case that would have passed, while
+// guessing "transient" wrongly costs some seconds and a log line — so the
+// burden is on proving a failure repeats, not on proving it might not.
+var errNotRetryable = errors.New("not fixable by another attempt")
 
 func startMeshOnce(t *testing.T, relays *jetstreamtest.Relays, n int) (*cluster, error) {
 	t.Helper()
@@ -236,7 +259,8 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 	stops = append(stops, model.close)
 	cfg, err := config.ParseCompany([]byte(fmt.Sprintf(companyDoc, model.url)))
 	if err != nil {
-		return fail(fmt.Errorf("company config: %w", err))
+		// THE SAME FILE PARSES THE SAME WAY on every attempt.
+		return fail(fmt.Errorf("%w: company config: %w", errNotRetryable, err))
 	}
 
 	port, peers, advertise := relays.Member(i)
@@ -258,8 +282,8 @@ func buildMember(t *testing.T, relays *jetstreamtest.Relays, i, n int) (
 		// NOT A RACE: an address this host does not have, or a probe
 		// that never ran. Retrying it would spend every attempt on a
 		// mistake that answers the same way each time.
-		return fail(fmt.Errorf("route port %d on %q cannot be probed for "+
-			"member %d: %w", port, clusterHost, i, err))
+		return fail(fmt.Errorf("%w: route port %d on %q cannot be probed for "+
+			"member %d: %w", errNotRetryable, port, clusterHost, i, err))
 	case !free:
 		return fail(fmt.Errorf("%w — route port %d went between this mesh "+
 			"reserving it and member %d starting",
