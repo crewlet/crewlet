@@ -17,7 +17,7 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { QueryState, SeatChip, Section } from "~/components/common.tsx";
+import { QueryState, SeatChip } from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useParam } from "~/app/router.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -33,6 +33,7 @@ import {
   type FilterValues,
   PageHeader,
   RelativeTime,
+  Section,
   Skeleton,
   StatCard,
   StatGroup,

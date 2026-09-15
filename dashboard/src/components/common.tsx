@@ -305,30 +305,6 @@ export function EventRow({
   );
 }
 
-export function Section({
-  title,
-  hint,
-  actions,
-  children,
-}: {
-  title: ReactNode;
-  hint?: ReactNode;
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <section className="col gap-3">
-      <div className="row">
-        <span className="t-heading">{title}</span>
-        {hint && <span className="t-caption truncate">{hint}</span>}
-        <span className="spacer" />
-        {actions}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 /**
  * What an empty or failed answer means, said precisely.
  *

@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { href, useParam } from "~/app/router.tsx";
-import { QueryState, Section } from "~/components/common.tsx";
+import { QueryState } from "~/components/common.tsx";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
@@ -38,6 +38,7 @@ import {
   InlineCode,
   Input,
   PageHeader,
+  Section,
   Skeleton,
   Stack,
   Tag,
@@ -203,7 +204,7 @@ export function Knowledge() {
 
       <Section
         title="What each seat has learned for itself"
-        hint="private to the seat — its diary, its past turns, the skills it drafted"
+        description="private to the seat — its diary, its past turns, the skills it drafted"
       >
         <div className="grid grid-auto">
           {index.seats

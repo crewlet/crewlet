@@ -9,7 +9,6 @@
 import { useCallback, useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
-import { Section } from "~/components/common.tsx";
 import { useTools } from "~/lib/store-hooks.ts";
 import type { ToolRow } from "~/protocol/index.ts";
 import { BuildGlyph, CableGlyph, Package2Glyph } from "@crewlethq/icons/glyphs";
@@ -22,6 +21,7 @@ import {
   type FilterValues,
   InlineCode,
   PageHeader,
+  Section,
   StatCard,
   StatGroup,
   Tag,

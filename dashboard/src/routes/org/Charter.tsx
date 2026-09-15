@@ -7,10 +7,9 @@
  * a seat did something needs to read the standing instructions it was given.
  */
 
-import { Section } from "~/components/common.tsx";
 import type { OrgIndex } from "~/lib/seats.ts";
 import type { OrgProjection } from "~/protocol/index.ts";
-import { Card, EmptyState } from "@crewlethq/ui";
+import { Card, EmptyState, Section } from "@crewlethq/ui";
 import { ExploreGlyph, ShieldGlyph, TargetGlyph } from "@crewlethq/icons/glyphs";
 
 export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex }) {
@@ -55,7 +54,7 @@ export function Charter({ org, index }: { org: OrgProjection; index: OrgIndex })
         )}
       </Card>
       {index.units.length > 0 && (
-        <Section title="Unit goals" hint="what each team is for">
+        <Section title="Unit goals" description="what each team is for">
           <div className="grid grid-auto">
             {index.units.map((u) => (
               <Card key={u.key} as="section">

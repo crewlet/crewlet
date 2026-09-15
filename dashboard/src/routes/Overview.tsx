@@ -24,7 +24,7 @@
 
 import { useMemo } from "react";
 import { href, useNavigator } from "~/app/router.tsx";
-import { AttentionRow, EventRow, SeatCard, Section } from "~/components/common.tsx";
+import { AttentionRow, EventRow, SeatCard } from "~/components/common.tsx";
 import {
   useAgents,
   useEvents,
@@ -50,6 +50,7 @@ import {
   Legend,
   Meter,
   PageHeader,
+  Section,
   Stack,
   StatCard,
   StatGroup,
@@ -416,7 +417,7 @@ export function Overview() {
 
       <Section
         title="Getting more out of this"
-        hint="every one of these is a real screen backed by a real answer"
+        description="every one of these is a real screen backed by a real answer"
       >
         <div className="grid grid-auto">
           {[

@@ -15,7 +15,7 @@
 import { useId, useMemo } from "react";
 import { plural } from "~/lib/format.ts";
 import { useParam } from "~/app/router.tsx";
-import { SeatCard, Section } from "~/components/common.tsx";
+import { SeatCard } from "~/components/common.tsx";
 import { useAgents, useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { indexOrg, runState, type Seat } from "~/lib/seats.ts";
 import type { AgentRow } from "~/protocol/index.ts";
@@ -25,6 +25,7 @@ import {
   EmptyState,
   Input,
   PageHeader,
+  Section,
   SegmentedControl,
   TabPanel,
   Tag,
@@ -163,7 +164,7 @@ export function People() {
 
         {groups.map((g) =>
           g.label ? (
-            <Section key={g.key} title={g.label} hint={`${g.rows.length}`}>
+            <Section key={g.key} title={g.label} description={`${g.rows.length}`}>
               <AutoGrid min="lg" gap={3}>
                 {g.rows.map(({ seat, agent }) => (
                   <SeatCard key={seat.key} seat={seat} agent={agent} sandboxes={sandboxes} />

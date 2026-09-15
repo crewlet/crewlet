@@ -17,7 +17,7 @@
 
 import { useId, useMemo, useRef, type ReactNode } from "react";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { QueryState, recordTable, SeatChip, Section, StateBadge } from "~/components/common.tsx";
+import { QueryState, recordTable, SeatChip, StateBadge } from "~/components/common.tsx";
 import { TurnCard } from "~/components/TurnCard.tsx";
 import { useSettled } from "~/lib/settled.ts";
 import { useAgents, useOrg, usePhaseEvents, useSandboxes, useTokens } from "~/lib/store-hooks.ts";
@@ -68,6 +68,7 @@ import {
   NewItemsNotice,
   PageHeader,
   RelativeTime,
+  Section,
   Skeleton,
   Stack,
   StatCard,
@@ -524,7 +525,7 @@ export function SeatScreen({ handle }: { handle: string }) {
             </div>
 
             {reports.length > 0 && (
-              <Section title="Direct reports" hint={`${reports.length}`}>
+              <Section title="Direct reports" description={`${reports.length}`}>
                 <AutoGrid min="lg" gap={3}>
                   {reports.map((r) => (
                     <Card
