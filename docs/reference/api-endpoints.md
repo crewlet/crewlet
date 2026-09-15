@@ -1261,12 +1261,18 @@ The answer is `{bucket, since, until, bars, total, by_category}`. `bars`
 is **every** bucket in the window including the empty ones, so a quiet
 hour is a gap of full width rather than a bar the chart squeezed out.
 
-`by_category` is how many rows each category would give, counted over the
-same window with the **category filter lifted** and every other one
-applied. That is the only meaning a facet count can have: counted through
-its own filter, every value but the selected one reads zero. A category
-with no rows is absent from the map, so a caller rendering the closed set
-reads a missing key as the zero it is.
+`by_category` is how many rows each category would give, with the
+**category filter lifted** and every other one applied. That is the only
+meaning a facet count can have: counted through its own filter, every value
+but the selected one reads zero. A category with no rows is absent from the
+map, so a caller rendering the closed set reads a missing key as the zero it
+is.
+
+It is counted over the window **that was asked for**, not the snapped one
+`since` and `until` report: a chip says how many rows choosing it would
+show, and the rows come from `GET /events`, which takes the caller's own
+edges. So the chips need not sum to `total` — `total` describes the bars,
+which are whole buckets.
 
 Two refusals, both **400** rather than a smaller answer:
 

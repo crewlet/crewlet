@@ -137,8 +137,9 @@ type EventHistogram struct {
 	// bars, and the alternative is every caller writing that sum.
 	Total int `json:"total"`
 
-	// ByCategory is how many rows each category would give, counted over
-	// the window with every filter applied EXCEPT the category itself.
+	// ByCategory is how many rows each category would give, counted over the
+	// window THAT WAS ASKED FOR — not the snapped one Since and Until report
+	// — with every filter applied EXCEPT the category itself.
 	//
 	// WITHOUT THE CATEGORY, because that is the only meaning a facet count
 	// can have: a chip says how many rows CHOOSING IT would show, and one
@@ -244,7 +245,13 @@ func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistog
 		return EventHistogram{}, fmt.Errorf("store: event histogram: %w", err)
 	}
 
-	byCategory, err := l.countBy(ctx, filters, "category")
+	// OVER THE WINDOW THAT WAS ASKED FOR, not the snapped one the bars
+	// cover. A facet count's whole job is to say how many rows CHOOSING it
+	// would show, and the rows come from the listing — which takes the
+	// caller's own edges. Counted over the snapped window it would include
+	// up to two buckets the list will never show, and on a busy hour that
+	// is thousands of rows a chip claims and the list does not have.
+	byCategory, err := l.countBy(ctx, q.ListQuery, "category")
 	if err != nil {
 		return EventHistogram{}, err
 	}
