@@ -22,8 +22,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { RAIL, workspaceOf, type Workspace } from "./nav.ts";
-import { useNavigator, useRoute } from "./router.tsx";
+import { DESTINATIONS, RAIL, workspaceOf, type Workspace } from "./nav.ts";
+import { samePath, useNavigator, useRoute } from "./router.tsx";
+import { remember } from "~/lib/recents.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { TokenDialog } from "./TokenDialog.tsx";
 import { AppRail, useRailCollapsed, useWorkspaceChords, type RailBadge } from "./frame/AppRail.tsx";
@@ -244,10 +245,26 @@ export function Shell({ children }: { children: ReactNode }) {
 
   // THE TAB SAYS WHERE YOU ARE. It said "Crewlet" on every screen, so a reader
   // with four tabs open had four identical ones.
+  const where = titleOf(crumbs);
   useEffect(() => {
-    const where = titleOf(crumbs);
     document.title = where === "Crewlet" ? "Crewlet" : `${where} · Crewlet`;
-  }, [crumbs]);
+  }, [where]);
+
+  // AND THE PALETTE REMEMBERS THE OBJECTS, so an empty palette has something
+  // to offer before the reader types.
+  //
+  // OBJECTS ONLY — anything the rail or a sidebar already lists is left out,
+  // because a recents list repeating the navigation beside it costs a reader
+  // a scan and tells them nothing. The label is the one the SCREEN resolved:
+  // it lands a render after the route, which is why this depends on the title
+  // rather than on the path.
+  const path = route.path;
+  useEffect(() => {
+    if (path.length < 2) return;
+    if (DESTINATIONS.some((d) => samePath(d.path, path))) return;
+    if (where === "Crewlet") return;
+    remember({ path, label: where, workspace: workspaceOf(path) || "" });
+  }, [path, where]);
 
   const page: PageContext = useMemo(
     () => ({ setLabels, setCoverage, setActions }),

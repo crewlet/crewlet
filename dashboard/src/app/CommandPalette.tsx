@@ -12,7 +12,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DESTINATIONS } from "./nav.ts";
-import { useNavigator } from "./router.tsx";
+import { useNavigator, useRoute, type Navigator, type Route } from "./router.tsx";
+import { useQuery } from "~/lib/useQuery.ts";
+import { useRecents, forgetAll } from "~/lib/recents.ts";
+import { DENSITIES, THEMES, useAppearance, type Appearance } from "~/lib/theme.ts";
+import { requestToken } from "~/protocol/index.ts";
 import { useAgents, useOrg, useTools } from "~/lib/store-hooks.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { Icon, type IconName } from "~/ui/Icon.tsx";
@@ -25,6 +29,27 @@ interface Hit {
   hint: string;
   go: () => void;
 }
+
+/**
+ * The palette's scopes, as the sigil that opens one.
+ *
+ * A LAUNCHER WITH ONE INDEX answers "where do I go", and three questions do
+ * not fit that shape: searching the company's WORK is a server query and
+ * cannot be ranked against a list of screens; finding a PERSON wants the
+ * roster and nothing else, so a colleague is not buried under four tools
+ * whose names happen to match; and running a COMMAND has no name to search
+ * for at all.
+ *
+ * A SIGIL rather than a mode switch, because it is typed in the same box in
+ * the same keystroke — and because the reader can see which scope they are
+ * in from the character they just typed, which a mode indicator elsewhere on
+ * the screen cannot claim.
+ */
+const SCOPES = [
+  { sigil: "#", label: "work items", hint: "search the company's work" },
+  { sigil: "@", label: "people", hint: "seats and units only" },
+  { sigil: ">", label: "commands", hint: "theme, density, this page" },
+] as const;
 
 /** Is this the shape of an id somebody pasted out of a log? */
 const UUIDISH = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
@@ -40,11 +65,58 @@ function score(text: string, q: string): number {
   return (i === 0 ? 0 : 100 + i) + t.length / 100;
 }
 
+/**
+ * The commands the `>` scope offers.
+ *
+ * WHAT HAS NO NAME TO SEARCH FOR. Every one of these is either a preference
+ * with no page of its own, or an action on the page the reader is already on
+ * — neither of which an index of screens and seats can hold, which is why the
+ * scope exists rather than these being ranked beside a seat called "dark".
+ *
+ * Built per call rather than held as a constant, because each closes over the
+ * current preference and the current route: a command that says "switch to
+ * dark" while the page is already dark is a control that does not know what it
+ * is looking at.
+ */
+function commands(prefs: Appearance, nav: Navigator, route: Route): Hit[] {
+  const out: Hit[] = [];
+  const add = (id: string, icon: IconName, label: string, hint: string, go: () => void) =>
+    out.push({ id: `cmd-${id}`, group: "Commands", icon, label, hint, go });
+
+  for (const choice of THEMES) {
+    if (choice === prefs.theme) continue;
+    add(
+      `theme-${choice}`,
+      choice === "dark" ? "moon" : choice === "light" ? "sun" : "monitor",
+      `Theme: ${choice}`,
+      choice === "system" ? "follow this machine's setting" : `always ${choice}`,
+      () => prefs.setTheme(choice),
+    );
+  }
+  for (const choice of DENSITIES) {
+    if (choice === prefs.density) continue;
+    add(`density-${choice}`, "layers", `Density: ${choice}`, "how much air every list has", () =>
+      prefs.setDensity(choice),
+    );
+  }
+  add("copy-link", "link", "Copy link to this page", route.hash, () => {
+    // THE WHOLE URL, not the hash: a link is pasted into a message and the
+    // fragment alone resolves against whatever the reader has open.
+    void navigator.clipboard?.writeText(window.location.href);
+  });
+  add("token", "key", "Set the API token", "for the operator-only screens", requestToken);
+  add("clear-recents", "clock", "Clear recents", "this browser only", forgetAll);
+  return out;
+}
+
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const nav = useNavigator();
   const agents = useAgents();
   const org = useOrg();
   const tools = useTools();
+  const recents = useRecents();
+  const prefs = useAppearance();
+  const route = useRoute();
   const [q, setQ] = useState("");
   const [cursor, setCursor] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -56,14 +128,96 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   const index = useMemo(() => indexOrg(org), [org]);
 
+  // WHICH SCOPE, AND WHAT IS LEFT OF THE QUERY. Read off the first character
+  // so the reader sees the scope they are in as the thing they typed.
+  const sigil = SCOPES.find((s) => q.startsWith(s.sigil))?.sigil ?? "";
+  const term = sigil ? q.slice(1).trim() : q.trim();
+
+  // THE WORK SCOPE IS A SERVER QUERY, which is why it is a scope at all: a
+  // ranked search over the company's items cannot be folded into an index of
+  // screens and seats, and running it on every keystroke of an unscoped query
+  // would put a search on the wire for somebody typing "settings".
+  const work = useQuery(
+    "work_search",
+    { q: term, limit: 8 },
+    { enabled: sigil === "#" && term.length >= 2 },
+  );
+
   const hits = useMemo<Hit[]>(() => {
-    const query = q.trim().toLowerCase();
+    const query = term.toLowerCase();
     const out: { hit: Hit; rank: number }[] = [];
     const push = (hit: Hit, rank: number) => out.push({ hit, rank });
 
+    // RECENTS WHEN THERE IS NOTHING TO SEARCH. An empty palette is a blank box
+    // asking a question the reader answered by opening it: they want to go
+    // somewhere, and the likeliest somewhere is where they just were.
+    if (!sigil && query === "") {
+      recents.forEach((r, i) =>
+        push(
+          {
+            id: `recent-${r.path.join("/")}`,
+            group: "Recent",
+            icon: "clock",
+            label: r.label,
+            hint: r.workspace || r.path.join(" / "),
+            go: () => nav.to(r.path),
+          },
+          -100 + i,
+        ),
+      );
+    }
+
+    if (sigil === "#") {
+      for (const [i, item] of (work.data?.hits ?? []).entries()) {
+        push(
+          {
+            id: `work-${item.key}`,
+            group: "Work",
+            icon: "check",
+            label: `${item.key} — ${item.title}`,
+            hint: [item.status, item.assignee && `@${item.assignee}`].filter(Boolean).join(" · "),
+            go: () => nav.to(["work", item.key]),
+          },
+          i,
+        );
+      }
+      if (term.length >= 2 && !work.loading && (work.data?.hits ?? []).length === 0) {
+        push(
+          {
+            id: "work-none",
+            group: "Work",
+            icon: "search",
+            label: `Nothing matches “${term}”`,
+            // THE INDEX IS ITS OWN STATE. A search that answers nothing
+            // because the index is still building is not a company with no
+            // such work, and the reader has to be able to tell them apart.
+            hint:
+              work.data?.available === false
+                ? "the search index is still building"
+                : "open the full search",
+            go: () => nav.to(["work", "search"], { q: term }),
+          },
+          500,
+        );
+      }
+      return out.sort((a, b) => a.rank - b.rank).map((r) => r.hit);
+    }
+
+    if (sigil === ">") {
+      for (const command of commands(prefs, nav, route)) {
+        const s = query ? score(command.label, query) : 0;
+        if (s < 0) continue;
+        push(command, s);
+      }
+      return out
+        .sort((a, b) => a.rank - b.rank)
+        .slice(0, 40)
+        .map((r) => r.hit);
+    }
+
     // A pasted id is a destination, not a search term — offer it first and
     // exactly, rather than making the reader guess which screen takes it.
-    if (UUIDISH.test(query) || HEXISH.test(query)) {
+    if (!sigil && (UUIDISH.test(query) || HEXISH.test(query))) {
       push(
         {
           id: `event-${query}`,
@@ -103,7 +257,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       );
     }
 
-    for (const item of DESTINATIONS) {
+    for (const item of sigil === "@" ? [] : DESTINATIONS) {
       const s = query ? score(item.label, query) : 0;
       if (s < 0) continue;
       push(
@@ -162,7 +316,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       );
     }
 
-    if (query) {
+    if (query && !sigil) {
       for (const tool of tools) {
         const s = score(tool.name, query);
         if (s < 0) continue;
@@ -206,7 +360,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       .sort((a, b) => a.rank - b.rank)
       .slice(0, 40)
       .map((r) => r.hit);
-  }, [q, index, agents, tools, nav]);
+  }, [term, sigil, index, agents, tools, nav, recents, work.data, work.loading, prefs, route]);
 
   useEffect(() => setCursor(0), [q]);
   useEffect(() => {
@@ -252,15 +406,29 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Search screens, seats, units, tools — or paste an event, trace or turn id"
+          placeholder="Search — or # work, @ people, > commands"
           aria-label="Search"
           autoComplete="off"
           spellCheck={false}
         />
         <div className="palette-results" ref={listRef} role="listbox">
-          {!hits.length && (
+          {/* A SCOPE THAT IS WAITING IS NOT A SCOPE THAT FOUND NOTHING, and
+              the work scope is the only one that can be either: it is a
+              server query, so "no hits yet" covers a query in flight, a term
+              too short to run one, and a company with no such work. */}
+          {!hits.length && sigil === "#" && term.length < 2 && (
             <div className="palette-item" style={{ color: "var(--text-muted)" }}>
-              Nothing matches “{q}”.
+              Type at least two characters to search the company&rsquo;s work.
+            </div>
+          )}
+          {!hits.length && sigil === "#" && term.length >= 2 && work.loading && (
+            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
+              Searching…
+            </div>
+          )}
+          {!hits.length && !(sigil === "#" && (term.length < 2 || work.loading)) && (
+            <div className="palette-item" style={{ color: "var(--text-muted)" }}>
+              Nothing matches “{term || q}”.
             </div>
           )}
           {groups.map(([group, items]) => (
@@ -291,6 +459,15 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <div className="palette-foot">
+          {/* THE SCOPES ARE IN THE FOOTER, because a sigil nobody is told
+              about is a feature that does not exist. The one in use is
+              marked, so the reader can see which scope they typed into. */}
+          {SCOPES.map((s) => (
+            <span key={s.sigil} className={sigil === s.sigil ? "is-on" : undefined}>
+              <kbd>{s.sigil}</kbd> {s.label}
+            </span>
+          ))}
+          <span className="spacer" />
           <span>
             <kbd>↑</kbd> <kbd>↓</kbd> move
           </span>

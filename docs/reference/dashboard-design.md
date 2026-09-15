@@ -422,6 +422,34 @@ look like one rewritten in the middle. "This save did not change the body" is
 its own answer, because a title, a label and a move are saved beside a body
 and a pane of unmarked lines reads as one that failed to load.
 
+## The palette has scopes, and remembers
+
+A launcher with one index answers "where do I go", and three questions do not
+fit that shape. Each gets a **sigil**, typed in the same box in the same
+keystroke:
+
+| Typed | Searches |
+|---|---|
+| *(nothing)* | screens, seats, units, tools, and any event / trace / turn id pasted out of a log |
+| `#` | the company's **work**, ranked — a server query, which is why it cannot be folded into the index above |
+| `@` | **people** — seats and units only, so a colleague is not buried under four tools whose names happen to match |
+| `>` | **commands** — theme, density, copy link, set token — which have no name to search for at all |
+
+The scopes are named in the palette's footer with the one in use marked: a
+sigil nobody is told about is a feature that does not exist.
+
+An empty palette offers **recents** — the last few objects this reader opened,
+newest first, per browser. Objects only: anything the rail or a sidebar
+already lists is left out, because a recents list repeating the navigation
+beside it costs a reader a scan and tells them nothing. The label stored is
+the one the **screen** resolved, which lands a render after the route.
+
+A `>` command that would change nothing is not offered: the list omits the
+theme and the density already in use, because a control that says "switch to
+dark" while the page is already dark does not know what it is looking at.
+
+---
+
 ## A cron expression is read, not printed
 
 The schedules screen printed `0 9 * * 1-5` and nothing else. A reader who
