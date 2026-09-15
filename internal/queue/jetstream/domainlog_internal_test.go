@@ -295,3 +295,69 @@ func TestTheAlignmentGetsTheProvisioningBudget(t *testing.T) {
 			"WithTimeout is supposed to only ever shorten", left)
 	}
 }
+
+// heldCreateJS is the shape a clustered boot actually produces: the create is
+// HELD by the server while the metadata group settles, outlives its deadline,
+// and comes back a timeout — with the consumer there all the same.
+type heldCreateJS struct {
+	jetstream.JetStream
+	lookups int
+}
+
+func (f *heldCreateJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
+	f.lookups++
+	if f.lookups == 1 {
+		// The propagation window: this node made it on an earlier boot
+		// and has not been told about it yet.
+		return nil, jetstream.ErrConsumerNotFound
+	}
+	return staleConsumer{}, nil
+}
+
+func (f *heldCreateJS) CreateConsumer(context.Context, string,
+	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	return nil, context.DeadlineExceeded
+}
+
+func (f *heldCreateJS) UpdateConsumer(context.Context, string,
+	jetstream.ConsumerConfig) (jetstream.Consumer, error) {
+
+	return staleConsumer{}, nil
+}
+
+// A HELD CREATE THAT TIMED OUT IS READ BACK, not just an explicit
+// already-exists.
+//
+// # Why the tidy error is the one that matters least
+//
+// The state-log consumer's name carries the node id, so no peer races it —
+// but this node's OWN create meets the consumer it made on an earlier boot,
+// and the create announces that in two shapes. ErrConsumerExists is the tidy
+// one and needs the configs to differ. The other is a TIMEOUT: the server
+// holds the request while the metadata group settles and the deadline runs
+// out underneath it, with the consumer perfectly well placed.
+//
+// That second shape is what a clustered boot produces, and gating the
+// read-back on ErrConsumerExists alone left it reporting the timeout — a boot
+// failing over a consumer that was there, which is the failure this whole
+// change exists to remove and the one [Queue.ensureDurableConsumer] has always
+// handled for mailbox consumers.
+func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
+	t.Parallel()
+	js := &heldCreateJS{}
+	q := &Queue{js: js, cfg: Config{ClusterName: "crewlet-test"}, log: slog.Default()}
+
+	cons, err := q.DomainConsumer(t.Context(), "CREWLET_TRACKER_LOG", "node-a", 0)
+	if err != nil {
+		t.Fatalf("a create that was held and timed out failed the boot, even "+
+			"though the read-back found the consumer: %v", err)
+	}
+	if cons == nil {
+		t.Fatal("no consumer came back")
+	}
+	if js.lookups < 2 {
+		t.Errorf("the consumer was looked up %d time(s); the read-back after "+
+			"the timed-out create never ran", js.lookups)
+	}
+}

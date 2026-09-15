@@ -147,48 +147,66 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 	// below must not inherit a deadline this create may have spent.
 	createCtx, cancel := context.WithTimeout(ctx, q.provisionBudget())
 	defer cancel()
+	// STOPPED WHERE THE CREATE ENDS rather than where this function does,
+	// because the line NAMES the create: left armed across the read-back
+	// and the alignment below it, a slow Info or UpdateConsumer reports a
+	// consumer "still being created" after the create has finished, and
+	// sends whoever is diagnosing a clustered boot at the wrong call.
 	stop := jsprovision.WhenSlow(createCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_slow", "stream", stream,
 			"consumer", name, "waited", after,
 			"detail", "this state-log consumer is still being created; on a "+
 				"fleet that is a metadata group that has not settled")
 	})
-	defer stop()
 
 	cons, err := q.js.Consumer(createCtx, stream, name)
 	switch {
 	case errors.Is(err, jetstream.ErrConsumerNotFound):
 		cons, err = q.js.CreateConsumer(createCtx, stream, config)
-		if errors.Is(err, jetstream.ErrConsumerExists) {
+		stop()
+		if err != nil && !jsprovision.Unplaceable(err) {
 			// THE LOOKUP ABOVE WAS INSIDE THE PROPAGATION WINDOW, so
-			// this consumer is one THIS NODE made on an earlier boot
-			// and has not been told about yet — the name carries the
-			// node id, so no peer can have made it.
+			// the consumer this create met is one THIS NODE made on an
+			// earlier boot and has not been told about yet — the name
+			// carries the node id, so no peer can have made it.
 			//
-			// It reaches here rather than passing silently because
-			// the config differs: nats.go returns the existing
-			// consumer when the two match and ErrConsumerExists when
-			// they do not, and OptStartSeq moves with this node's
-			// checkpoint between every boot. So on a clustered
-			// restart the reply is the error, and treating it as
-			// terminal fails a boot over a consumer that is
-			// perfectly good.
+			// EVERY ERROR BUT AN UNPLACEABLE ONE, not just
+			// ErrConsumerExists, because the create announces this in
+			// two shapes and the tidy one is the rarer. nats.go returns
+			// the existing consumer when the configs MATCH and
+			// ErrConsumerExists when they differ — but a create the
+			// server HELD while the metadata group settled outlives the
+			// deadline and comes back a timeout, with the consumer
+			// there all the same. That is the shape a clustered boot
+			// actually produces, and it is the one
+			// [Queue.ensureDurableConsumer] has always read back.
+			// Unplaceable is excluded for its own reason: nothing was
+			// placed, so there is nothing to become visible.
 			//
 			// Read it back and take it as it is, which is the same
 			// rule the err == nil branch below applies and the one
 			// the comment above states: an existing consumer's start
 			// sequence is immutable and the applier resumes from its
 			// own checkpoint regardless.
+			createErr := err
 			err = jsprovision.Settle(ctx, func(ctx context.Context) error {
 				var e error
 				cons, e = q.js.Consumer(ctx, stream, name)
 				return e
 			})
-			if err == nil {
+			switch {
+			case err == nil:
 				cons, err = q.alignDomainConsumer(ctx, stream, cons)
+			default:
+				// THE CREATE'S ERROR IS WHAT IS REPORTED, with the
+				// read-back's beside it: the first says what went
+				// wrong and the second only confirms the consumer
+				// really is absent.
+				err = fmt.Errorf("%w (and it is not there: %w)", createErr, err)
 			}
 		}
 	case err == nil:
+		stop()
 		// THE IN-FLIGHT CEILING IS BROUGHT UP TO DATE on a consumer
 		// that already exists, because it is the count bound on every
 		// pull and a consumer created by an earlier build carries the
@@ -198,6 +216,8 @@ func (q *Queue) DomainConsumer(ctx context.Context, stream, nodeID string,
 		// from this build's defaults would reset the start policy the
 		// broker refuses to move.
 		cons, err = q.alignDomainConsumer(ctx, stream, cons)
+	default:
+		stop()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("jetstream: open the domain consumer %s on %s: %w",
