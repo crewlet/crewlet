@@ -1,40 +1,39 @@
 package procgroup
 
 import (
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"unicode"
 )
 
-// inspect reads /proc/<pid>/stat; see [parseProcStat] for what it takes from
-// it and why.
-//
-// A missing entry is a process that does not exist, and so is ESRCH, which a
-// read reports when the process is reaped between the open and the read.
-func inspect(pid int) (Process, bool, error) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
-		return Process{}, false, nil
-	}
-	if err != nil {
-		return Process{}, false, err
-	}
-	boot, err := bootID()
-	if err != nil {
-		return Process{}, false, err
-	}
-	proc, err := parseProcStat(string(raw), boot)
-	if err != nil {
-		return Process{}, false, fmt.Errorf("/proc/%d/stat: %w", pid, err)
-	}
-	return proc, true, nil
+// procfs is the kernel's own process table; [procTable] holds everything
+// done with what it reads, so that runs on every platform's suite too.
+var procfs = procTable{
+	list: func() ([]string, error) {
+		dir, err := os.Open("/proc")
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = dir.Close() }()
+		// Unsorted names and no per-entry stat: the scan runs on every
+		// poll of a teardown and needs nothing but the pids.
+		return dir.Readdirnames(-1)
+	},
+	stat: func(pid int) ([]byte, error) {
+		return os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	},
+	boot: bootID,
 }
+
+// inspect reads /proc/<pid>/stat; see [procTable.inspect].
+func inspect(pid int) (Process, bool, error) { return procfs.inspect(pid) }
+
+// groupLiving scans /proc for a member of pgid that has not exited; see
+// [procTable.groupLiving].
+func groupLiving(pgid int) (bool, error) { return procfs.groupLiving(pgid) }
 
 // bootID is this boot's identifier, read once: it cannot change while the
 // process that read it is running.

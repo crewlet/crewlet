@@ -55,11 +55,16 @@ func Stop(pid int) error { return signal(pid, sigStop) }
 // Continue resumes a group suspended by [Stop] (SIGCONT).
 func Continue(pid int) error { return signal(pid, sigCont) }
 
-// Exists reports whether the group led by pid has anything in it.
+// Exists reports whether the group led by pid has anything in it, zombies
+// included.
 //
-// A pid is not proof of identity, because pids are reused, so a caller that
-// needs "and it is MINE" asks [Leader.Current] instead. This answers only
-// whether something is there.
+// It is the signal-0 probe, so it answers exactly what a signal to the group
+// would reach: a group whose only members have exited and wait to be reaped is
+// still there. That is the question a caller asks when it wants to know that a
+// process was REAPED rather than merely that it exited. A caller asking whether
+// a job is still running asks [Leader.Current], which counts only members that
+// can run and also checks that the group is still the one recorded: pids are
+// reused, and this answers only whether something is there.
 func Exists(pid int) bool { return exists(pid) }
 
 // Terminate sends SIGTERM to the group led by pid, giving the tree a chance

@@ -2,6 +2,7 @@ package procgroup
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 
 	"golang.org/x/sys/unix"
@@ -32,8 +33,32 @@ func inspect(pid int) (Process, bool, error) {
 	micros := started.Sec*1_000_000 + int64(started.Usec)
 	return Process{
 		Start:  StartTime(strconv.FormatInt(micros, 10)),
+		Group:  int(kinfo.Eproc.Pgid),
 		Zombie: kinfo.Proc.P_stat == sZomb,
 	}, true, nil
+}
+
+// groupLiving reports whether any member of process group pgid can still run,
+// reading the group's members through sysctl kern.proc.pgrp.
+//
+// The same kinfo_proc record [inspect] reads, so "a zombie" means one thing in
+// this package on this platform. The kernel filters by group itself and lists
+// every user's processes, so there is no record here the engine may not read.
+// The group id is compared again anyway: the answer licenses keeping or
+// dropping a job's state, and a record that is not the group's must not
+// decide it. An empty listing is a group with no members at all, which the
+// wrapper reports as a nil slice rather than an error.
+func groupLiving(pgid int) (bool, error) {
+	members, err := unix.SysctlKinfoProcSlice("kern.proc.pgrp", pgid)
+	if err != nil {
+		return false, fmt.Errorf("sysctl kern.proc.pgrp for group %d: %w", pgid, err)
+	}
+	for i := range members {
+		if int(members[i].Eproc.Pgid) == pgid && members[i].Proc.P_stat != sZomb {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // sZomb is XNU's SZOMB process state (sys/proc.h): exited and awaiting a

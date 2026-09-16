@@ -49,6 +49,133 @@ func TestAnIdentifiedGroupIsCurrentUntilItIsGone(t *testing.T) {
 	}
 }
 
+// awaitZombie waits for pid, a process this test holds unreaped, to have
+// exited, and returns its record. Nothing here hopes for a reaper to be slow:
+// the caller is the only thing that can reap pid, so once it has exited it
+// stays a zombie until the caller says otherwise, and the wait is only for the
+// signal to land.
+func awaitZombie(t *testing.T, pid int) Process {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		proc, found, err := Inspect(pid)
+		if err != nil || !found {
+			t.Fatalf("Inspect of the unreaped pid %d = %+v, found %v, %v; want its record", pid, proc, found, err)
+		}
+		if proc.Zombie {
+			return proc
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pid %d never exited", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// assertZombieOnlyGroupIsNotCurrent is the check both zombie-member cases
+// make: the signal-0 probe still finds the group (so the case is really the
+// one a probe gets wrong), and Current does not.
+func assertZombieOnlyGroupIsNotCurrent(t *testing.T, leader Leader, zombie int) {
+	t.Helper()
+	if proc := awaitZombie(t, zombie); proc.Group != leader.PID {
+		t.Fatalf("the zombie %d is in group %d, want %d: the case under test was not built", zombie, proc.Group, leader.PID)
+	}
+	if !Exists(leader.PID) {
+		t.Fatalf("Exists(%d) = false with a zombie member held: the probe no longer sees corpses, "+
+			"so this test no longer reproduces the case it guards", leader.PID)
+	}
+	if current, err := leader.Current(); err != nil || current {
+		t.Fatalf("Current of a group whose only member is a zombie = %v, %v; want false: a finished "+
+			"job would keep its box and read as running for as long as nobody reaps the corpse", current, err)
+	}
+}
+
+// A group whose leader has been reaped and whose last member has exited is
+// over, although that member has not been reaped yet. This is the shape the
+// Linux CI runner produced by accident, where a killed grandchild is an orphan
+// nothing reaps at once; here the member is the test's own child, held
+// unreaped on purpose, so the case is built on every platform rather than
+// depending on who the kernel reparents an orphan to.
+func TestAGroupWhoseOnlyMemberIsAZombieIsNotCurrent(t *testing.T) {
+	leaderCmd := startLeader(t, "sleep 300")
+	leader, err := Identify(leaderCmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("Identify: %v", err)
+	}
+	member := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300")
+	member.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: leader.PID}
+	if err := member.Start(); err != nil {
+		t.Fatalf("starting a member of group %d: %v", leader.PID, err)
+	}
+	t.Cleanup(func() {
+		_ = member.Process.Kill()
+		_ = member.Wait()
+	})
+	if current, err := leader.Current(); err != nil || !current {
+		t.Fatalf("Current of a live group = %v, %v; want true", current, err)
+	}
+
+	if err := Kill(leader.PID); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	_ = leaderCmd.Wait()
+	assertZombieOnlyGroupIsNotCurrent(t, leader, member.Process.Pid)
+
+	_ = member.Wait()
+	if Exists(leader.PID) {
+		t.Fatal("the group still exists after its last member was reaped")
+	}
+	if current, err := leader.Current(); err != nil || current {
+		t.Fatalf("Current of a reaped group = %v, %v; want false", current, err)
+	}
+}
+
+// A leader that has exited unreaped, with nothing else in its group, is the
+// same case with the corpse in the leader's place: its record still carries the
+// recorded start time, so the identity matches, and there is still no job.
+func TestAGroupOfOnlyAnUnreapedLeaderIsNotCurrent(t *testing.T) {
+	cmd := startLeader(t, "exit 0")
+	leader, err := Identify(cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("Identify: %v", err)
+	}
+	if proc := awaitZombie(t, leader.PID); proc.Start != leader.Start {
+		t.Fatalf("the zombie leader's start time %q is not the one identified, %q", proc.Start, leader.Start)
+	}
+	assertZombieOnlyGroupIsNotCurrent(t, leader, leader.PID)
+}
+
+// A zombie leader does not end a group a living member still runs in: the
+// liveness rule counts members, not the leader.
+func TestAGroupWithAZombieLeaderAndALivingMemberIsCurrent(t *testing.T) {
+	cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", "sleep 300 >/dev/null 2>&1 & echo $!")
+	Set(cmd)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
+	leader, err := Identify(cmd.Process.Pid)
+	if err != nil {
+		t.Fatalf("Identify: %v", err)
+	}
+	buf := make([]byte, 32)
+	n, _ := stdout.Read(buf)
+	if _, err := strconv.Atoi(strings.TrimSpace(string(buf[:n]))); err != nil {
+		t.Fatalf("reading the member pid from %q: %v", buf[:n], err)
+	}
+	awaitZombie(t, leader.PID)
+	if current, err := leader.Current(); err != nil || !current {
+		t.Fatalf("Current of a group with a zombie leader and a living member = %v, %v; want true", current, err)
+	}
+}
+
 // THE PROPERTY THE TYPE EXISTS FOR. A recorded pid that now leads somebody
 // else's group is not this group, however alive that group is. A live group
 // with a start time that is not its own is exactly what a recycled pid looks

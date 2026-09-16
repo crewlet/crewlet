@@ -17,6 +17,12 @@ const (
 	sigCont = syscall.SIGCONT
 )
 
+// errNoProcess is the error a read of a process's record fails with when the
+// process was reaped under it. A variable rather than a direct use of
+// syscall.ESRCH so that [procTable], which is portable, compiles where the
+// syscall package has no such constant.
+var errNoProcess error = syscall.ESRCH
+
 // set makes the child a group leader. A zero Pgid with Setpgid means "your
 // own group", so the group id equals the child's pid and the caller needs no
 // second lookup to address it.

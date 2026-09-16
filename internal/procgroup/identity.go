@@ -49,6 +49,9 @@ type Process struct {
 	// life, including after it exits and until its parent reaps it.
 	Start StartTime
 
+	// Group is the id of the process group the process belongs to.
+	Group int
+
 	// Zombie is true for a process that has exited and not been reaped. It
 	// runs nothing and holds nothing but its table entry, so a caller
 	// waiting for a process to be gone treats it as gone.
@@ -111,29 +114,65 @@ func Identify(pid int) (Leader, error) {
 // do; see the callers in the sandbox package, which keep a directory on an
 // unknown answer and withhold a signal on one.
 //
-// A group whose leader has exited while its members run on is still current.
-// The kernel does not hand out a pid while a process group still carries it as
-// its id (Linux keeps the pid allocated for as long as anything references it
-// as a group, and XNU's allocator skips every live group and session id), so
-// the pid cannot have been reused while this group lives. The one sequence
-// this cannot see through is a recycled pid that became a group leader and
-// then exited leaving members behind, which needs a full pid wrap, a
-// setsid or setpgid by the stranger, and its early exit, all between two
-// readings of the same record.
+// A GROUP IS CURRENT ONLY WHILE ONE OF ITS MEMBERS HAS NOT EXITED. A zombie
+// keeps its place in its group until its parent reaps it, and kill(2) with
+// signal 0 answers such a group as present: that is [Exists], and it is the
+// wrong question here. A job whose last worker has exited is over, whether or
+// not somebody has collected the corpse yet, and nothing guarantees anybody
+// will do so promptly. An orphan is reaped by whatever the kernel reparents it
+// to, which in a container is often a first process that never waits, so a
+// finished run read through the probe alone would keep its box directory and
+// its "running" status for as long as that corpse lingers. So the members are
+// read from the kernel's own process record (see [groupLiving]) and only a
+// member that has not exited counts.
+//
+// The leader is read first, because while it has not exited it answers the
+// question alone: the pid and start time name this very process, and it still
+// leads the group. That is every poll of a running job, which then costs one
+// record rather than a scan of the process table.
+//
+// Otherwise a group whose leader has exited while a living member runs on is
+// still current. The kernel does not hand out a pid while a process group
+// still carries it as its id (Linux keeps the pid allocated for as long as
+// anything references it as a group, and XNU's allocator skips every live
+// group and session id), so the pid cannot have been reused while this group
+// lives. The members are read BEFORE the leader is read again for that
+// reason: a pid reissued between the two readings shows up in the later one as
+// a leader with another start time. The one sequence this cannot see through
+// is a recycled pid that became a group leader and then exited leaving members
+// behind, which needs a full pid wrap, a setsid or setpgid by the stranger,
+// and its early exit, all between two readings of the same record.
 func (l Leader) Current() (bool, error) {
 	if !addressable(l.PID) || !validStartTime(l.Start) {
-		return false, nil
-	}
-	if !exists(l.PID) {
 		return false, nil
 	}
 	proc, found, err := inspect(l.PID)
 	if err != nil {
 		return false, fmt.Errorf("procgroup: reading the start time of pid %d: %w", l.PID, err)
 	}
+	if found && proc.Start == l.Start && !proc.Zombie && proc.Group == l.PID {
+		return true, nil
+	}
+	// The probe is one system call and its "no" is definitive (an empty
+	// group has no zombies either), so it spares the member scan for the
+	// common case of a group that is plainly gone.
+	if !exists(l.PID) {
+		return false, nil
+	}
+	living, err := groupLiving(l.PID)
+	if err != nil {
+		return false, fmt.Errorf("procgroup: reading the members of process group %d: %w", l.PID, err)
+	}
+	if !living {
+		return false, nil
+	}
+	proc, found, err = inspect(l.PID)
+	if err != nil {
+		return false, fmt.Errorf("procgroup: reading the start time of pid %d: %w", l.PID, err)
+	}
 	if !found {
-		// The group answered and its leader is gone: see the paragraph
-		// above for why that group can only be this one.
+		// A living member answered and its leader is gone: see the
+		// paragraph above for why that group can only be this one.
 		return true, nil
 	}
 	return proc.Start == l.Start, nil
