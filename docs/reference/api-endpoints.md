@@ -1374,6 +1374,7 @@ reconnect restores every field without a second round trip.
   "started_at": "2026-04-01T12:00:00Z",
   "queue": "jetstream-embedded",
   "clients": 3,
+  "event_history_seconds": 2592000,
   "in_flight": 2,
   "shutting_down": false,
   "posture": "serve",
@@ -1393,6 +1394,7 @@ reconnect restores every field without a second round trip.
 | `started_at` | When the **API** was built. Deliberately separate from `engine_started_at`: the listener binds before the engine starts, so the two differ even in one process, and one merged "uptime" would be wrong for at least one of them. |
 | `queue` | The event queue's backend — `jetstream-embedded` (a NATS server inside this process), `jetstream` (an external NATS cluster this node dialled), or `memory`. Read off the `EventQueue` contract's own `Backend()`, never sniffed from a type name. Display only; nothing may branch on it. |
 | `clients` | Dashboards currently connected to this API process. |
+| `event_history_seconds` | How far back the event log can be read — the hard bottom of [paging](#paging-the-event-history): once a cursor crosses it every page is empty forever, so a client that cannot name the floor draws the store's own horizon as "the org went quiet". The store's constant, not a number this API picked, so a change to the retention reaches every screen without an edit. Seconds rather than days, because the retention is a duration and a client re-deriving the unit is a second place the number can be wrong. Carried by `GET /health`, the snapshot's `health` section and the `stream` query; the 5-second push does not repeat it, because it does not change. |
 | `in_flight` | Handler invocations mid-flight (embedded API only). |
 | `shutting_down` | `true` from the first moment of a graceful stop, so a dashboard shows the drain while it happens; the API server keeps serving until the engine has fully stopped. |
 | `posture` | The node's [config posture](../concepts/control-plane.md#posture-what-a-lagging-node-does): `serve`, `wait`, `shed`, `isolated` or `stuck` (embedded API only). |
@@ -1430,13 +1432,16 @@ the `agent` filter, which over-fetches and post-filters (it also pulls in
 every event sharing a trace with a direct match, so a caller must dedupe
 by id); that surface only knows it is done when a page returns zero rows.
 
-The persistent store retains 30 days. Once a cursor crosses that floor
-every page is empty — which is why a client must distinguish it from
-quiet, rather than drawing the gap as silence. A process with no event
-store does not register the `events` question at all, so `GET /events`
-answers **404** with `unknown_query` (the same code on the query channel)
-rather than an empty page, for the same reason: "there is nothing older"
-and "I cannot answer" are different facts.
+The persistent store retains 30 days, and
+[`event_history_seconds`](#the-health-envelope) on the health envelope is
+that floor on the wire — read it rather than restating the number, which
+is the store's own constant and not a promise this page makes. Once a
+cursor crosses that floor every page is empty — which is why a client
+must distinguish it from quiet, rather than drawing the gap as silence.
+A process with no event store does not register the `events` question at
+all, so `GET /events` answers **404** with `unknown_query` (the same code
+on the query channel) rather than an empty page, for the same reason:
+"there is nothing older" and "I cannot answer" are different facts.
 
 `category` is a filter for the same reason paging exists at all —
 filtering a paged list client-side silently excludes, because a 100-row
