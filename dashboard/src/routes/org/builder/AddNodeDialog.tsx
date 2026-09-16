@@ -58,6 +58,27 @@ const DEFAULT_NAMES: Record<AddKind, string> = {
   human: "New human seat",
 };
 
+/**
+ * WHERE AN ADD OPENS: on the KIND, in both shells.
+ *
+ * It is the question the add is asking, and everything else in the form
+ * follows from the answer. The name is pre-filled with one that is free FOR
+ * THAT KIND and changes when the kind does; the unit type exists only for a
+ * unit and the contact identity only for a human seat. A reader who wants
+ * exactly what was offered presses the primary control and is done without
+ * touching the name at all.
+ *
+ * SO THE NAME ASKS FOR NOTHING. It carried `autoFocus`, which was a second
+ * answer to the same question and the two shells resolved it differently:
+ * in the dialog nothing is hidden, so the field took the focus, and in the
+ * chart the ghost is not laid out on the tick the form mounts, a hidden
+ * element cannot be focused at all, and the request was lost. One set of
+ * fields opening on two different controls is worse than either answer, and
+ * a request in the markup that nothing can honour is what made that hard to
+ * see. Where the chart is the shell, the design system's canvas puts focus on
+ * the first control once the card is placed, which is the same one.
+ */
+
 /** What either shell is given. */
 export interface AddProps {
   /** A unit's key, or `null` for the company root. */
@@ -206,7 +227,6 @@ function AddNodeFields({ form }: { form: AddForm }) {
         label="Name"
         value={form.name}
         onChange={form.setName}
-        autoFocus
         help={UNIQUE_NAME_HELP[form.kind === "unit" ? "unit" : "seat"]}
       />
       {/* BESIDE THE FIELD, NOT INSIDE ITS DESCRIPTION: the way out of a

@@ -19,6 +19,7 @@ import { countingKeys } from "./model/testkit.ts";
 import { builderSurfaces } from "./surfaces.ts";
 import { company, Engine, mountBuilder } from "./testkit.tsx";
 import { LayoutObserver } from "./viewTestkit.tsx";
+import { focusables } from "@crewlethq/ui";
 import { drawnPart, menuEntryLabel, orgNodeParts, orgTableParts } from "~/testing.tsx";
 
 beforeEach(() => {
@@ -405,6 +406,54 @@ test("a unit says the same word and wears the same mark on the chart and in the 
   expect(onChart.caption).toBe("Department");
   expect(onRow.caption).toBe(onChart.caption);
   expect(onRow.mark).toBe(onChart.mark);
+});
+
+/*
+ * BOTH SHELLS OPEN ON THE SAME CONTROL, and it is the kind: the question the
+ * add is asking, and the one everything else in the form follows from. They
+ * did not, and the reason they did not is the kind of thing only a case
+ * mounting the real lens can see: the name carried `autoFocus`, the dialog is
+ * not hidden on the tick it mounts so the field took the focus, and the chart
+ * ghost IS hidden until the layout places it, so the same request was refused
+ * and the chart's own answer landed instead. One set of fields opening on two
+ * different controls is worse than either answer.
+ */
+test("an add opens on the kind, in the dialog and in the chart alike", async () => {
+  const restore = LayoutObserver.install();
+  onTeardown.push(restore);
+  mountBuilder({
+    engine: new Engine(company()),
+    surfaces: builderSurfaces,
+    hash: "#/org?lens=builder&view=table",
+  });
+  await screen.findByText("No problems");
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Add agent seat" }));
+  const dialog = await screen.findByRole("dialog", { name: "Add to the company" });
+  expect(document.activeElement).toBe(within(dialog).getByRole("radio", { name: "Agent seat" }));
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  fireEvent.click(screen.getByRole("tab", { name: "Visualization" }));
+  await screen.findByRole("tree", { name: "Structure chart" });
+  act(() => LayoutObserver.settle());
+  // The Add on the company's own branch, which is where a pointer asks.
+  fireEvent.click(await screen.findByRole("button", { name: "Add to Acme", hidden: true }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Add agent seat to Acme", hidden: true }),
+  );
+  act(() => LayoutObserver.settle());
+  const form = screen.getByRole("group", { name: "Add to Acme" });
+  /*
+   * THE SAME CONTROL, asserted as the first one a keyboard reaches rather than
+   * as the one holding focus. Which of the two wins the tick a ghost opens is
+   * settled between the chart and the control that opened it, and jsdom
+   * commits them in an order a browser does not: `CanvasView.test.tsx` holds
+   * the chart's own answer where that ordering is controlled, and this case
+   * holds the thing the two shells must agree about, which is WHICH control it
+   * is.
+   */
+  expect(focusables(form)[0]).toBe(within(form).getByRole("radio", { name: "Agent seat" }));
 });
 
 /*
